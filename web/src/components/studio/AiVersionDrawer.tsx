@@ -51,6 +51,8 @@ import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDeriv
 import {
   buildReferenceRequestBody,
   classifyAnalysisError,
+  creativeRequestErrorFromResponse,
+  creativeRequestErrorFromThrown,
   dailySeed,
   deriveAnalysisState,
   djb2Hex,
@@ -59,9 +61,12 @@ import {
   mergeExcludeIds,
   mergeRefreshedRecommendations,
   parseRetryAfter,
+  sanitizeCreativeErrorCode,
   resolveBasis,
   type AnalysisErrorCode,
+  type CreativeRequestError,
 } from "@/lib/studio/recommendationRequest";
+import { saveCreativeSetup } from "@/lib/studio/creativeSetupStore";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import {
   MAX_SELECTED_REFERENCES,
@@ -358,6 +363,31 @@ function imageTitle(url: string, assets: assetStore.AssetItem[], fallback: strin
   return assets.find(a => a.imageUrl === url)?.title || fallback;
 }
 
+function ReferenceImage({ src, alt, loading }: { src: string; alt: string; loading?: "lazy" | "eager" }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src) {
+    return (
+      <span role="img" aria-label={`${alt} — image unavailable`} data-testid="reference-image-fallback"
+        style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#20242B", color: "#A8B0BE", fontSize: 9, fontWeight: 750, textAlign: "center", padding: 6, boxSizing: "border-box" }}>
+        Image unavailable
+      </span>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={toProxyUrl(src)} alt={alt} loading={loading} onError={() => setFailed(true)}
+    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", background: "#20242B" }} />;
+}
+
+function RequestErrorEvidence({ error }: { error: CreativeRequestError }) {
+  return (
+    <p data-testid={`${error.stage}-error-evidence`} style={{ margin: 0, fontSize: 10.5, lineHeight: 1.45, color: BUI.textSec, overflowWrap: "anywhere" }}>
+      Stage: {error.stage} · Code: {error.code}
+      {error.httpStatus != null ? ` · HTTP ${error.httpStatus}` : ""}
+      {` · Request ${error.requestId}`}
+    </p>
+  );
+}
+
 function selectedTagPayload(tags: CreativeTag[], ids: string[]): SelectedCreativeTag[] {
   const selected = new Set(ids);
   return tags
@@ -461,8 +491,7 @@ function AssetStrip({
       <div data-testid={`${testIdBase}-selected`} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {urls.map(url => (
           <div key={url} style={{ position: "relative", width: 58, height: 74, borderRadius: 10, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={toProxyUrl(url)} alt={imageTitle(url, assets, tr("pinDrawer.asset.selectedImage"))} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            <ReferenceImage src={url} alt={imageTitle(url, assets, tr("pinDrawer.asset.selectedImage"))} />
             <button type="button" aria-label={tr("pinDrawer.asset.removeImage")} onClick={() => onRemove(url)}
               style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: 999, border: "none", background: "rgba(15,23,42,0.76)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <X style={{ width: 11, height: 11 }} />
@@ -525,6 +554,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>(() => initialSetup?.selectedTagIds ?? []);
   const [directionBrief, setDirectionBrief] = useState(() => initialSetup?.directionBrief ?? "");
   const [briefManuallyEdited, setBriefManuallyEdited] = useState(() => initialSetup?.briefManuallyEdited ?? false);
+  const [directionBriefDirty, setDirectionBriefDirty] = useState(false);
   // ── Phase B: product-aware recommended references (inspiration only) ──────────
   const [recommendedRefs, setRecommendedRefs] = useState<ReferenceRecommendation[]>([]);
   const [recommendationBasis, setRecommendationBasis] = useState<RecommendationBasis>("category_fallback");
@@ -534,6 +564,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // because an eligible drawer always fetches on open; the fetch effect resolves it
   // to idle/error. (Set in render on product change, not in an effect body.)
   const [recStatus, setRecStatus] = useState<"idle" | "loading" | "error">("loading");
+  const [recError, setRecError] = useState<CreativeRequestError | null>(null);
   const [recReloadKey, setRecReloadKey] = useState(0);
   // Ids the NEXT request must not serve again ("Show different ideas"). Empty for a
   // normal load; non-empty only after the user asked for a refresh, which is also what
@@ -577,8 +608,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string };
     /** Why the analysis failed — the UI offers a retry for most codes but never for a rate limit. */
     error?: AnalysisErrorCode;
+    exactCode?: string;
     /** Seconds the server asked us to wait (429 Retry-After), when it sent one. */
     retryAfter?: number;
+    httpStatus?: number;
+    requestId?: string;
   } | null>(null);
   const [recDraftId, setRecDraftId] = useState<string | undefined>(draft?.id);
   if (draft?.id !== recDraftId) {
@@ -659,6 +693,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     draftStatus: liveDraft?.imageAnalysisStatus,
     draftError: liveDraft?.imageAnalysisError,
     draftRetryAfter: liveDraft?.imageAnalysisRetryAfter,
+    draftHttpStatus: liveDraft?.imageAnalysisHttpStatus,
+    draftRequestId: liveDraft?.imageAnalysisRequestId,
+    draftExactCode: liveDraft?.imageAnalysisErrorCode,
     swapped: swappedProductAnalysis,
     primaryUrl: primaryProductUrl,
   });
@@ -721,12 +758,14 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // only the response carries the status and the Retry-After the server sent.
     void (async () => {
       let res: Response | undefined;
+      const requestId = newRequestId();
       try {
         res = await fetch("/api/ai-copy/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
+            requestId,
             imageUrl: requestUrl,
             category: sel?.category || asset?.category || undefined,
             productTitle: sel?.title || asset?.title || undefined,
@@ -734,6 +773,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
             productTags: tags.length ? tags : undefined,
           }),
         });
+        const data = await res.json().catch(() => ({})) as { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } };
         if (!res.ok) {
           if (isStale()) return; // product changed while this was in flight
           // Record the attempt (keyed by url) so we don't retry in a loop — now WITH the
@@ -742,17 +782,19 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           setSwappedProductAnalysis({
             url: requestUrl,
             error: classifyAnalysisError(new Error(String(res.status)), res.status),
+            exactCode: sanitizeCreativeErrorCode((data as { error?: unknown }).error) || classifyAnalysisError(new Error(String(res.status)), res.status),
             retryAfter: res.status === 429 ? parseRetryAfter(res.headers.get("retry-after")) : undefined,
+            httpStatus: res.status,
+            requestId,
           });
           return;
         }
-        const data = await res.json() as { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } };
         if (isStale()) return; // product changed while this was in flight
-        setSwappedProductAnalysis({ url: requestUrl, analysis: data.analysis });
+        setSwappedProductAnalysis({ url: requestUrl, analysis: data.analysis, requestId });
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         if (isStale()) return;
-        setSwappedProductAnalysis({ url: requestUrl, error: classifyAnalysisError(e) });
+        setSwappedProductAnalysis({ url: requestUrl, error: classifyAnalysisError(e), exactCode: classifyAnalysisError(e), requestId });
       }
     })();
     // Abort a still-inflight analysis when the product changes — its result is stale.
@@ -811,6 +853,24 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     return () => { if (timer) clearTimeout(timer); };
   }, [analysisRateLimited, rateLimitTotal, rateLimitKey]);
 
+  const recRateLimitTotal = recError?.httpStatus === 429 ? Math.max(0, Math.floor(recError.retryAfter ?? 0)) : 0;
+  const recRateLimitKey = recError?.httpStatus === 429 ? `${recError.requestId}:${recRateLimitTotal}` : "";
+  const [recCountdown, setRecCountdown] = useState<{ key: string; secondsLeft: number | null }>({ key: "", secondsLeft: null });
+  if (recCountdown.key !== recRateLimitKey) setRecCountdown({ key: recRateLimitKey, secondsLeft: null });
+  const recRetrySeconds = recError?.httpStatus === 429 ? (recCountdown.secondsLeft ?? recRateLimitTotal) : 0;
+  useEffect(() => {
+    if (!recRateLimitKey || recRateLimitTotal <= 0) return;
+    const endsAt = Date.now() + recRateLimitTotal * 1000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      setRecCountdown({ key: recRateLimitKey, secondsLeft: left });
+      if (left > 0) timer = setTimeout(tick, 1000);
+    };
+    timer = setTimeout(tick, 1000);
+    return () => { if (timer) clearTimeout(timer); };
+  }, [recRateLimitKey, recRateLimitTotal]);
+
   useEffect(() => {
     // No draft requirement: recommendations follow the PRIMARY PRODUCT, which exists
     // for a scratch/Select-product drawer too. The draft is optional context.
@@ -847,18 +907,41 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // Non-empty ONLY after "Show different ideas", which is also what tells the response
     // handler to merge into the current grid instead of replacing it.
     const excludeIds = pendingExcludeIds;
-    // Transient failures (dev recompile 500s, flaky network) must not permanently blank
-    // the section for this drawer session — retry a couple of times before giving up.
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = (retriesLeft: number, body: ReturnType<typeof buildReferenceRequestBody>) => {
-      fetch("/api/reference-candidates", {
+    // One user action produces one request. Failures stay visible and retry ONLY after
+    // an explicit click; automatic retries can duplicate cost and hide the first
+    // requestId/HTTP evidence.
+    const attempt = async (body: ReturnType<typeof buildReferenceRequestBody>, requestId: string) => {
+      setRecError(null);
+      try {
+        const response = await fetch("/api/reference-candidates", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
         signal: controller.signal,
         body: JSON.stringify(body),
-      })
-        .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis; served?: { ids?: string[] } }) => {
+        });
+        const data = await response.json().catch(() => ({})) as {
+          items?: ReferenceRecommendation[];
+          recommendationBasis?: RecommendationBasis;
+          served?: { ids?: string[] };
+          error?: unknown;
+          code?: unknown;
+        };
+        if (!response.ok) {
+          if (isStale()) return;
+          const failure = creativeRequestErrorFromResponse({ stage: "recommendation", requestId, response, body: data });
+          setRecommendedRefs([]);
+          setRecError(failure);
+          setRecStatus("error");
+          track(response.status === 429 ? "reference_recs_rate_limited" : "reference_recs_failed", {
+            draftId: draft?.id ?? null,
+            requestId,
+            stage: failure.stage,
+            code: failure.code,
+            httpStatus: failure.httpStatus ?? null,
+            retryAfterSeconds: failure.retryAfter ?? null,
+          });
+          return;
+        }
           // Guard: the product changed while this was in flight → discard (§4).
           if (isStale()) return;
           const items = Array.isArray(data.items) ? data.items : [];
@@ -883,16 +966,21 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           // can never carry a product-level claim with nothing to back it.
           setRecommendationBasis(resolveBasis(data.recommendationBasis, items.length));
           setRecStatus("idle");
-        })
-        .catch((e: unknown) => {
-          if (e instanceof DOMException && e.name === "AbortError") return;
-          if (isStale()) return;
-          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1, body), 1500); return; }
-          // Exhausted retries: surface an error+retry state rather than showing an
-          // empty grid that looks like a legitimate "no recommendations" (§4.9).
-          setRecommendedRefs([]);
-          setRecStatus("error");
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (isStale()) return;
+        const failure = creativeRequestErrorFromThrown("recommendation", requestId, error);
+        setRecommendedRefs([]);
+        setRecError(failure);
+        setRecStatus("error");
+        track("reference_recs_failed", {
+          draftId: draft?.id ?? null,
+          requestId,
+          stage: failure.stage,
+          code: failure.code,
+          httpStatus: null,
         });
+      }
     };
     void (async () => {
       // Serving context (contract §1.1): who asked, for which image, under which analysis
@@ -941,11 +1029,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         analysisSource: analysisState.source,
         analysisStatus: analysisState.status,
       });
-      attempt(2, body);
+      await attempt(body, requestId);
     })();
     // Aborting on product change guarantees the previous product's late response
     // cannot write recommendedRefs / basis / status for the new product.
-    return () => { controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
+    return () => { controller.abort(); };
     // swappedProductAnalysis is a dep so recommendations upgrade in place once the
     // new product's analysis lands (product_analysis instead of category_fallback).
     // recReloadKey lets the Retry button re-run this effect on demand.
@@ -999,6 +1087,15 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const showAnalyzeCta = !showRateLimitedNotice
     && (analysisState.status === "none" || analysisState.status === "failed");
   const showNoStrongMatch = analysisState.status === "ready" && recommendationBasis === "category_fallback";
+  const analysisErrorEvidence: CreativeRequestError | null = analysisState.status === "failed" && analysisState.requestId
+    ? {
+        stage: "analysis",
+        code: analysisState.exactCode ?? analysisState.errorCode ?? "other",
+        requestId: analysisState.requestId,
+        ...(analysisState.httpStatus != null ? { httpStatus: analysisState.httpStatus } : {}),
+        ...(analysisState.retryAfter != null ? { retryAfter: analysisState.retryAfter } : {}),
+      }
+    : null;
   /**
    * Toggle a recommended Pin as a real Style Reference.
    *
@@ -1062,7 +1159,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       keyword: draft.keyword || undefined,
       sourceContext: "uploaded",
     });
-  }, [open, draft?.imageUrl, draft?.title, draft?.category, draft?.keyword]);
+  }, [open, draft?.imageUrl, draft?.title, draft?.category, draft?.keyword, tr]);
 
   const selectedAssets = useMemo(() => buildSelectedCreativeAssets({
     productUrls,
@@ -1191,7 +1288,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     briefManuallyEdited,
   };
 
-  const saveSetup = () => onSetupChange?.(currentSetup);
+  const setupPersistenceKey = draft?.id ?? "scratch";
+  const saveSetup = () => {
+    saveCreativeSetup(setupPersistenceKey, currentSetup);
+    onSetupChange?.(currentSetup);
+  };
 
   const closeDrawer = () => {
     saveSetup();
@@ -1288,6 +1389,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   };
 
   const doGenerate = () => {
+    // Freeze the committed setup before handing it to StudioBoard's existing
+    // generation lifecycle. This store never creates a job/placeholder/toast/usage.
+    saveSetup();
     const snapshot = buildSnapshot({
       selectedDirection,
       recommendations,
@@ -1420,9 +1524,16 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
             {recsEligible && recStatus === "error" && recommendedRefs.length === 0 && (
               <section data-testid="recommended-references-error" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.text }}>{tr("pinDrawer.recommended.loadError")}</p>
+                {recError && <RequestErrorEvidence error={recError} />}
+                {recRetrySeconds > 0 && (
+                  <p data-testid="recommendation-retry-countdown" style={{ margin: 0, fontSize: 11, color: BUI.textSec }}>
+                    Retry available in {recRetrySeconds}s.
+                  </p>
+                )}
                 <button type="button" data-testid="recommended-retry"
-                  onClick={() => { setRecStatus("loading"); setRecReloadKey(k => k + 1); }}
-                  style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                  disabled={recRetrySeconds > 0}
+                  onClick={() => { setRecStatus("loading"); setRecError(null); setRecReloadKey(k => k + 1); }}
+                  style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 11, fontWeight: 800, cursor: recRetrySeconds > 0 ? "default" : "pointer", opacity: recRetrySeconds > 0 ? 0.55 : 1, fontFamily: "inherit" }}>
                   {tr("pinDetails.retry")}
                 </button>
               </section>
@@ -1465,6 +1576,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                     {tr("pinDrawer.recommended.rateLimited").replace("{seconds}", String(analysisRetrySeconds))}
                   </p>
                 )}
+                {analysisErrorEvidence && <RequestErrorEvidence error={analysisErrorEvidence} />}
                 {showAnalyzeCta && (
                   <button type="button" data-testid="recommended-analyze-cta" onClick={handleAnalyzeCta}
                     style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`,
@@ -1501,9 +1613,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                             style={{ position: "relative", width: "100%", aspectRatio: "2 / 3", borderRadius: 10, overflow: "hidden", padding: 0,
                               border: `${sel ? 2 : 1}px solid ${sel ? BUI.purple : BUI.border}`, background: BUI.surface3,
                               cursor: atCap ? "default" : "pointer", opacity: atCap ? 0.5 : 1 }}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={toProxyUrl(ref.imageUrl)} alt={ref.title} loading="lazy"
-                              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                            <ReferenceImage src={ref.imageUrl} alt={ref.title} loading="lazy" />
                             <span style={{ position: "absolute", bottom: 4, left: 4, padding: "1px 6px", borderRadius: 5, background: "rgba(15,23,42,0.72)", color: "#fff", fontSize: 8.5, fontWeight: 800, letterSpacing: "0.02em" }}>Pinterest</span>
                             {sel && (
                               <span style={{ position: "absolute", top: 4, right: 4, width: 17, height: 17, borderRadius: 999, background: BUI.purple, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900 }}>✓</span>
@@ -1539,11 +1649,34 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {recommendations.map(direction => {
                   const active = selectedDirection?.id === direction.id;
+                  const evidence = [
+                    ...(direction.influencedBy?.includes("products") ? productUrls.slice(0, 1).map(url => ({ url, label: "Product" })) : []),
+                    ...(direction.influencedBy?.includes("references") ? selectedReferences.slice(0, 2).map(ref => ({ url: ref.imageUrl, label: ref.source === "recommended_pin" ? "Pinterest reference" : "Style reference" })) : []),
+                  ];
                   return (
                     <button key={direction.id} type="button" onClick={() => handleSelectDirection(direction)}
                       style={{ textAlign: "left", border: `1px solid ${active ? BUI.purple : BUI.border}`, background: active ? "rgba(124,58,237,0.08)" : BUI.surface2, borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                      <span style={{ display: "block", fontSize: 12, fontWeight: 850, color: active ? BUI.purple : BUI.text }}>{direction.title}</span>
-                      {active && <span style={{ display: "block", marginTop: 3, fontSize: 11, lineHeight: 1.4, color: BUI.textSec }}>{direction.summary}</span>}
+                      <span style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                        {evidence.length > 0 && (
+                          <span data-testid="direction-evidence-images" style={{ display: "flex", flexShrink: 0 }}>
+                            {evidence.map((item, index) => (
+                              <span key={`${item.url}:${index}`} title={item.label} style={{ width: 34, height: 44, marginLeft: index ? -8 : 0, borderRadius: 7, overflow: "hidden", border: `1px solid ${BUI.border}`, background: "#20242B" }}>
+                                <ReferenceImage src={item.url} alt={item.label} loading="lazy" />
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: "block", fontSize: 12, fontWeight: 850, color: active ? BUI.purple : BUI.text }}>{direction.title}</span>
+                          <span style={{ display: "block", marginTop: 3, fontSize: 11, lineHeight: 1.4, color: BUI.textSec }}>{direction.shortDescription ?? direction.summary}</span>
+                          <span data-testid="direction-why-it-fits" style={{ display: "block", marginTop: 4, fontSize: 10.5, lineHeight: 1.4, color: BUI.textSec }}>
+                            <strong style={{ color: BUI.text }}>Why it fits:</strong> {direction.whyThisDirection ?? direction.whyRecommended ?? direction.summary}
+                          </span>
+                          <span data-testid="direction-provenance" style={{ display: "block", marginTop: 3, fontSize: 9.5, color: BUI.purple }}>
+                            Based on {(direction.influencedBy?.length ? direction.influencedBy : ["category"]).map(source => source === "products" ? "product" : source === "references" ? "references" : source).join(" · ")}
+                          </span>
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
@@ -1560,6 +1693,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
               setSelectedTagIds(prev => toggleTagSelection(creativeTags, prev.length ? prev : effectiveSelectedTagIds, id));
             }}
             onBriefChange={value => { setDirectionBrief(value); setBriefManuallyEdited(true); }}
+            onDirtyChange={setDirectionBriefDirty}
             onUpdateBriefFromTags={() => { setDirectionBrief(derivedBrief); setBriefManuallyEdited(false); }}
           />
 
@@ -1612,13 +1746,18 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
               PRD §31, it may only be enabled after verification against the live image model.
               Until then the button stays disabled with no product selected (Section B's
               "product optional" clause is conditional on that verification). */}
-          <button type="button" data-testid="ai-version-generate" disabled={generating || productUrls.length === 0}
+          <button type="button" data-testid="ai-version-generate" disabled={generating || productUrls.length === 0 || directionBriefDirty}
             onClick={doGenerate}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px 16px", borderRadius: 11, border: "none", background: BUI.gradient, color: "#fff", fontSize: 13, fontWeight: 850, cursor: generating || productUrls.length === 0 ? "default" : "pointer", opacity: generating || productUrls.length === 0 ? 0.65 : 1, fontFamily: "inherit" }}>
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px 16px", borderRadius: 11, border: "none", background: BUI.gradient, color: "#fff", fontSize: 13, fontWeight: 850, cursor: generating || productUrls.length === 0 || directionBriefDirty ? "default" : "pointer", opacity: generating || productUrls.length === 0 || directionBriefDirty ? 0.65 : 1, fontFamily: "inherit" }}>
             {generating
               ? <><Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> {generatingLabel}</>
               : <><Sparkles style={{ width: 15, height: 15 }} /> {(batchTotal === 1 ? tr("pinDrawer.footer.generateCountSingular") : tr("pinDrawer.footer.generateCountPlural")).replace("{n}", String(batchTotal))}</>}
           </button>
+          {directionBriefDirty && (
+            <p data-testid="direction-dirty-gate" style={{ margin: "7px 0 0", fontSize: 10.5, textAlign: "center", color: BUI.textSec }}>
+              Save or cancel the direction edit before generating.
+            </p>
+          )}
           {/* Make the multiplication explicit so "Generate 9 Pins" is never a surprise. */}
           {selectedReferences.length > 0 && (
             <p data-testid="ai-version-batch-math" style={{ margin: "7px 0 0", fontSize: 10.5, textAlign: "center", color: BUI.textSec }}>

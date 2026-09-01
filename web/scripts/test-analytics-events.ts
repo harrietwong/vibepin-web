@@ -49,6 +49,26 @@ async function main() {
   const ingest = await import("../src/lib/analyticsIngest");
   const analytics = await import("../src/lib/analytics");
 
+  test("client analytics bounds long values and total payload before dispatch", () => {
+    const safe = analytics.sanitizeAnalyticsProps(Object.fromEntries(
+      Array.from({ length: 80 }, (_, i) => [`field_${i}`, "四".repeat(2_000)]),
+    ));
+    const bytes = new TextEncoder().encode(JSON.stringify(safe)).byteLength;
+    assert.ok(bytes <= analytics.MAX_ANALYTICS_PAYLOAD_BYTES, `${bytes} must be <= ${analytics.MAX_ANALYTICS_PAYLOAD_BYTES}`);
+    assert.ok(Object.keys(safe).length <= 24, "key count is bounded");
+  });
+
+  test("client analytics never accepts raw image/prompt-sized strings", () => {
+    const safe = analytics.sanitizeAnalyticsProps({
+      requestId: "req-1",
+      imageBytes: "data:image/png;base64," + "x".repeat(20_000),
+      directionText: "private prompt ".repeat(2_000),
+    });
+    assert.equal(safe.requestId, "req-1");
+    assert.equal(safe.imageBytes, undefined);
+    assert.equal(safe.directionText, undefined);
+  });
+
   // ── normalizeAnalyticsEvents ────────────────────────────────────────────────
 
   test("normalize: accepts { events: [...] } and a bare array alike", () => {

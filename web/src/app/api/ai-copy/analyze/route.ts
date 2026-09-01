@@ -32,6 +32,7 @@ export const runtime = "nodejs";
 
 type Body = {
   draftId?: string;
+  requestId?: string;
   imageUrl?: string;
   category?: string;
   boardName?: string;
@@ -49,13 +50,14 @@ const UNAUTHENTICATED_MESSAGE = "Please sign in to analyze images.";
 
 export async function POST(req: Request) {
   const started = performance.now();
+  const headerRequestId = (req.headers.get("x-request-id") ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
 
   // AUTHENTICATION FIRST — before body parsing, provider configuration, the image
   // fetch and the vision call. An anonymous caller reaches no outbound request.
   const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!userId) {
     return NextResponse.json(
-      { ok: false, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { ok: false, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE, requestId: headerRequestId },
       { status: 401 },
     );
   }
@@ -67,12 +69,13 @@ export async function POST(req: Request) {
   const limit = await consumeRateLimit(userId, "ai_copy_analyze");
   if (!limit.allowed) {
     return NextResponse.json(
-      { ok: false, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE },
+      { ok: false, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE, requestId: headerRequestId },
       { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
     );
   }
 
   const body = await req.json() as Body;
+  const requestId = headerRequestId || (body.requestId ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
   const cfg = providerConfig();
   // Reuse the identity that already passed verified authentication. A second,
   // weaker session lookup could attribute provider cost to a different account.
@@ -94,6 +97,7 @@ export async function POST(req: Request) {
     const analysisLatencyMs = elapsed(started);
     devLog("analyze.image", {
       draftId: body.draftId,
+      requestId,
       model: cfg.visionModel,
       imageBytes: img.bytes,
       imageSummary: analysis.imageSummary,
@@ -119,6 +123,7 @@ export async function POST(req: Request) {
     const keywordLatencyMs = elapsed(kwStart);
     devLog("analyze.keywords", {
       draftId: body.draftId,
+      requestId,
       queryTerms: kw.queryTerms,
       poolSize: kw.poolSize,
       recommended: kw.recommended,
@@ -132,6 +137,7 @@ export async function POST(req: Request) {
       recommendedKeywords: kw.recommended,
       keywordSource: "pinterest_high_search" as const,
       timingsMs: { analysis: analysisLatencyMs, keywords: keywordLatencyMs, total: elapsed(started) },
+      requestId,
       diagnostics: isDev ? { queryTerms: kw.queryTerms, poolSize: kw.poolSize, rejected: kw.rejected } : undefined,
     });
   } catch (err) {
@@ -139,7 +145,7 @@ export async function POST(req: Request) {
     const status = isCopyErr ? err.status : 502;
     const code = isCopyErr ? err.code : (err as Error)?.message || "analyze_failed";
     const userMessage = isCopyErr ? err.userMessage : PROVIDER_MESSAGE;
-    if (isDev) console.warn("[ai-copy/analyze] failure", JSON.stringify({ draftId: body.draftId, status, code }));
-    return NextResponse.json({ ok: false, error: code, userMessage }, { status });
+    if (isDev) console.warn("[ai-copy/analyze] failure", JSON.stringify({ draftId: body.draftId, requestId, status, code }));
+    return NextResponse.json({ ok: false, error: code, userMessage, requestId }, { status });
   }
 }

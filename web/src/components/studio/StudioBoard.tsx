@@ -31,7 +31,8 @@ import { getCachedConnections } from "@/lib/social/connectionsCache";
 import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
-import { uploadPinImage } from "@/lib/studio/uploadPinImage";
+import { uploadPinImage, UploadPinImageError } from "@/lib/studio/uploadPinImage";
+import type { CreativeRequestError } from "@/lib/studio/recommendationRequest";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
@@ -46,6 +47,7 @@ import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard, type PublishEntryIssue } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
+import { loadCreativeSetup } from "@/lib/studio/creativeSetupStore";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI, STUDIO_UI, canDockStudioPlan } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
@@ -293,6 +295,8 @@ export function StudioBoard() {
   const [uploading, setUploading] = useState(false);
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploadFailures, setUploadFailures] = useState<Array<{ fileName: string; detail: CreativeRequestError }>>([]);
+  const [uploadRetry, setUploadRetry] = useState<{ files: File[]; mode: MultiUploadMode } | null>(null);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -422,23 +426,40 @@ export function StudioBoard() {
     if (!arr.length) return;
     const seedDestinations = defaultDestinationsForNewContent();
     setUploading(true);
+    setUploadFailures([]);
+    setUploadRetry(null);
     setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     let ok = 0;
     const failedNames: string[] = [];
+    const failedFiles: File[] = [];
+    const failedDetails: Array<{ fileName: string; detail: CreativeRequestError }> = [];
     const uploaded: Array<{ publicUrl: string; file: File; index: number; width?: number; height?: number }> = [];
     for (let i = 0; i < arr.length; i++) {
       try {
-        const { publicUrl } = await uploadPinImage(arr[i]);
+        const { publicUrl, requestId } = await uploadPinImage(arr[i]);
+        track("creative_upload_succeeded", { requestId, stage: "upload", bytes: arr[i].size, mediaType: arr[i].type });
         // Measured from the File while we still hold the bytes — the hosted URL
         // cannot be measured without a second network round trip, and without
         // dimensions the carousel ratio rules can only say "unverified".
         const { width, height } = await measureImageFile(arr[i]);
         uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
         ok++;
-      } catch {
+      } catch (error) {
         // A failed file never blocks or rolls back the successful ones.
         failedNames.push(arr[i].name);
+        failedFiles.push(arr[i]);
+        const detail = error instanceof UploadPinImageError
+          ? error.detail
+          : { stage: "upload" as const, code: "other", requestId: `upload-${batchId}-${i}` };
+        failedDetails.push({ fileName: arr[i].name, detail });
+        track("creative_upload_failed", {
+          requestId: detail.requestId,
+          stage: detail.stage,
+          code: detail.code,
+          httpStatus: detail.httpStatus ?? null,
+          retryAfterSeconds: detail.retryAfter ?? null,
+        });
       }
       setUploadProgress({ done: i + 1, total: arr.length });
     }
@@ -474,6 +495,8 @@ export function StudioBoard() {
     }
     setUploading(false);
     setUploadProgress(null);
+    setUploadFailures(failedDetails);
+    if (failedFiles.length) setUploadRetry({ files: failedFiles, mode });
     if (ok) { toast.success(ok === 1 ? tr("studioBoard.toast.uploadedOne") : tr("studioBoard.toast.uploadedMany").replace("{n}", String(ok))); flashSaved(); }
     if (failedNames.length) {
       const shown = failedNames.slice(0, 3).join(", ");
@@ -1256,6 +1279,25 @@ export function StudioBoard() {
       <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
 
+      {uploadFailures.length > 0 && (
+        <section data-testid="upload-error-evidence" role="status"
+          style={{ margin: "10px 22px 0", padding: "10px 12px", borderRadius: 10, border: `1px solid ${BUI.border}`, background: "#20242B", color: BUI.text, display: "flex", flexDirection: "column", gap: 5 }}>
+          <strong style={{ fontSize: 12 }}>Some uploads need attention</strong>
+          {uploadFailures.slice(0, 3).map(({ fileName, detail }) => (
+            <span key={`${fileName}:${detail.requestId}`} style={{ fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
+              {fileName} · Stage: upload · Code: {detail.code}{detail.httpStatus != null ? ` · HTTP ${detail.httpStatus}` : ""} · Request {detail.requestId}
+            </span>
+          ))}
+          {uploadRetry && (
+            <button type="button" data-testid="upload-retry" disabled={uploading}
+              onClick={() => { const retry = uploadRetry; setUploadRetry(null); void processFiles(retry.files, retry.mode); }}
+              style={{ alignSelf: "flex-start", marginTop: 3, padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: uploading ? "default" : "pointer" }}>
+              Retry failed uploads
+            </button>
+          )}
+        </section>
+      )}
+
       {/* Header */}
       <div style={{ padding: "16px 22px 10px", display: "flex", flexDirection: "column", gap: 12, background: BUI.surface, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
@@ -1469,7 +1511,7 @@ export function StudioBoard() {
           // run's reference + products). Only a FRESH Select-product scratch — which
           // has a product but no cached setup — starts clean, so a previous scratch
           // session's settings are not inherited by a different product.
-          initialSetup={aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
+          initialSetup={aiSetupKey ? (aiSetupCache[aiSetupKey] ?? loadCreativeSetup(aiSetupKey)) : undefined}
           // Both modes may carry a product: scratch from Select product, version from
           // a retry restoring the failed draft's own product.
           initialProductSelection={aiDrawer.product ?? null}

@@ -24,6 +24,61 @@ export type AnalysisStatus = "ready" | "pending" | "failed" | "none";
 /** Why an image analysis failed, in the only shapes the UI reacts to differently. */
 export type AnalysisErrorCode = "rate_limited" | "unauthenticated" | "timeout" | "network" | "other";
 
+export type CreativeRequestStage = "upload" | "analysis" | "recommendation" | "generation_setup";
+
+/** Safe, user-supportable failure metadata. Provider bodies and prompts never enter it. */
+export type CreativeRequestError = {
+  stage: CreativeRequestStage;
+  code: string;
+  requestId: string;
+  httpStatus?: number;
+  retryAfter?: number;
+};
+
+export function sanitizeCreativeErrorCode(raw: unknown): string {
+  return typeof raw === "string" ? raw.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 48) : "";
+}
+
+function safeBodyCode(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const record = body as Record<string, unknown>;
+  const nested = record.error && typeof record.error === "object"
+    ? (record.error as Record<string, unknown>).code
+    : undefined;
+  const raw = nested ?? record.code;
+  return sanitizeCreativeErrorCode(raw);
+}
+
+/** Convert a failed HTTP response into the bounded public contract used by the drawer. */
+export function creativeRequestErrorFromResponse(input: {
+  stage: CreativeRequestStage;
+  requestId: string;
+  response: Pick<Response, "status" | "headers">;
+  body?: unknown;
+}): CreativeRequestError {
+  const { stage, requestId, response, body } = input;
+  const classified = classifyAnalysisError(undefined, response.status);
+  const bodyCode = safeBodyCode(body);
+  const code = bodyCode || (classified !== "other" ? classified : "http_error");
+  const retryAfter = response.status === 429 ? parseRetryAfter(response.headers.get("retry-after")) : undefined;
+  return {
+    stage,
+    code,
+    requestId: requestId.slice(0, 128),
+    httpStatus: response.status,
+    ...(retryAfter != null ? { retryAfter } : {}),
+  };
+}
+
+/** Network/timeout counterpart to creativeRequestErrorFromResponse. */
+export function creativeRequestErrorFromThrown(
+  stage: CreativeRequestStage,
+  requestId: string,
+  error: unknown,
+): CreativeRequestError {
+  return { stage, code: classifyAnalysisError(error), requestId: requestId.slice(0, 128) };
+}
+
 /** Hard cap on `excludeIds` (the server truncates too — this keeps the payload small). */
 export const EXCLUDE_IDS_CAP = 72;
 
@@ -190,6 +245,9 @@ export type AnalysisState = {
   source: AnalysisSource;
   errorCode?: AnalysisErrorCode;
   retryAfter?: number;
+  httpStatus?: number;
+  requestId?: string;
+  exactCode?: string;
 };
 
 /**
@@ -212,7 +270,10 @@ export function deriveAnalysisState(args: {
   draftStatus?: "pending" | "ready" | "failed";
   draftError?: AnalysisErrorCode;
   draftRetryAfter?: number;
-  swapped?: { url: string; analysis?: unknown; error?: AnalysisErrorCode; retryAfter?: number } | null;
+  draftHttpStatus?: number;
+  draftRequestId?: string;
+  draftExactCode?: string;
+  swapped?: { url: string; analysis?: unknown; error?: AnalysisErrorCode; exactCode?: string; retryAfter?: number; httpStatus?: number; requestId?: string } | null;
   primaryUrl?: string;
 }): AnalysisState {
   if (args.draftImageSelected) {
@@ -221,6 +282,9 @@ export function deriveAnalysisState(args: {
     if (typeof args.draftRetryAfter === "number" && Number.isFinite(args.draftRetryAfter)) {
       state.retryAfter = args.draftRetryAfter;
     }
+    if (typeof args.draftHttpStatus === "number" && Number.isFinite(args.draftHttpStatus)) state.httpStatus = args.draftHttpStatus;
+    if (args.draftRequestId) state.requestId = args.draftRequestId;
+    if (args.draftExactCode) state.exactCode = args.draftExactCode;
     return state;
   }
 
@@ -239,6 +303,9 @@ export function deriveAnalysisState(args: {
   if (typeof swapped.retryAfter === "number" && Number.isFinite(swapped.retryAfter)) {
     state.retryAfter = swapped.retryAfter;
   }
+  if (typeof swapped.httpStatus === "number" && Number.isFinite(swapped.httpStatus)) state.httpStatus = swapped.httpStatus;
+  if (swapped.requestId) state.requestId = swapped.requestId;
+  if (swapped.exactCode) state.exactCode = swapped.exactCode;
   return state;
 }
 

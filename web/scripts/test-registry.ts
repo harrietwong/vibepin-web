@@ -236,6 +236,7 @@ export const STUDIO: string[] = [
   "test-product-selection",
   "test-canonical-picker",
   "test-recommendation-request",
+  "test-creative-setup-persistence",
   "test-drawer-product-state",
   "test-generation-product-link",
   "test-ai-generation-run",

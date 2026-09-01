@@ -30,6 +30,7 @@ import { track, trackLatency } from "@/lib/analytics";
 import {
   classifyAnalysisError,
   parseRetryAfter,
+  sanitizeCreativeErrorCode,
   shouldApplyAnalysis,
 } from "@/lib/studio/recommendationRequest";
 
@@ -89,8 +90,17 @@ async function runImageAnalysis(draftId: string): Promise<void> {
   // out, the result describes a picture the draft no longer has and must be dropped.
   const startedImageUrl = draft.imageUrl;
   const started = performance.now();
-  pinDraftStore.updateDraft(draftId, { imageAnalysisStatus: "pending", keywordStatus: "pending" });
-  track("image_analysis_started", { draftId });
+  const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  pinDraftStore.updateDraft(draftId, {
+    imageAnalysisStatus: "pending",
+    keywordStatus: "pending",
+    imageAnalysisError: undefined,
+    imageAnalysisErrorCode: undefined,
+    imageAnalysisRetryAfter: undefined,
+    imageAnalysisHttpStatus: undefined,
+    imageAnalysisRequestId: requestId,
+  });
+  track("image_analysis_started", { draftId, requestId, stage: "analysis" });
 
   // Best-effort linked-product context for keyword relevance. `title` is always on a
   // LinkedProduct; `productType`/`tags` ride along only on richer (Shopify) snapshots
@@ -106,16 +116,18 @@ async function runImageAnalysis(draftId: string): Promise<void> {
   // Hoisted so the catch can classify the failure from the real HTTP status /
   // Retry-After header instead of guessing from the error message alone.
   let res: Response | undefined;
+  let responseBody: AnalyzeResponse | undefined;
   try {
     res = await fetch("/api/ai-copy/analyze", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
       cache: "no-store",
       // Explicit (the fetch default): the route authenticates this same-origin
       // caller from the Supabase SSR session cookies.
       credentials: "same-origin",
       body: JSON.stringify({
         draftId,
+        requestId,
         imageUrl: draft.imageUrl,
         category: draft.category || undefined,
         boardName: draft.boardName || undefined,
@@ -126,6 +138,7 @@ async function runImageAnalysis(draftId: string): Promise<void> {
       }),
     });
     const body = await res.json() as AnalyzeResponse;
+    responseBody = body;
     if (!res.ok || !body.ok || !body.analysis?.imageSummary) {
       // 401 = signed out / expired session, NOT a provider or image problem. This
       // helper is fire-and-forget with no UI surface of its own, so it keeps the
@@ -171,7 +184,10 @@ async function runImageAnalysis(draftId: string): Promise<void> {
       // A success clears any previous failure reason — a "ready" draft never carries
       // a stale error code / countdown into the UI.
       imageAnalysisError:      undefined,
+      imageAnalysisErrorCode:  undefined,
       imageAnalysisRetryAfter: undefined,
+      imageAnalysisHttpStatus: undefined,
+      imageAnalysisRequestId: requestId,
       imageSummary:           a.imageSummary,
       visibleObjects:         Array.isArray(a.visibleObjects) ? a.visibleObjects : [],
       colors:                 Array.isArray(a.colors) ? a.colors : [],
@@ -187,7 +203,7 @@ async function runImageAnalysis(draftId: string): Promise<void> {
     });
 
     const latencyMs = performance.now() - started;
-    track("image_analysis_ready", { draftId, model: a.model ?? null });
+    track("image_analysis_ready", { draftId, requestId, stage: "analysis", model: a.model ?? null });
     trackLatency("upload_to_analysis_ready", latencyMs, { draftId });
     track("recommended_keywords_ready", { draftId, count: recommended.length });
     trackLatency("upload_to_keywords_ready", latencyMs, { draftId, count: recommended.length });
@@ -196,6 +212,7 @@ async function runImageAnalysis(draftId: string): Promise<void> {
     // re-fire against a rate limit (that is a cost loop), and it can only say "try again
     // in Ns" if the Retry-After the server actually sent is kept.
     const errorCode = classifyAnalysisError(err, res?.status);
+    const exactCode = sanitizeCreativeErrorCode(responseBody?.error) || errorCode;
     const retryAfter = res?.status === 429 ? parseRetryAfter(res.headers.get("retry-after")) : undefined;
     const cur = pinDraftStore.getDraft(draftId);
     // Same guard as the success path: the draft's image may have been swapped while
@@ -216,9 +233,19 @@ async function runImageAnalysis(draftId: string): Promise<void> {
         imageAnalysisStatus:     "failed",
         keywordStatus:           "failed",
         imageAnalysisError:      errorCode,
+        imageAnalysisErrorCode:  exactCode,
         imageAnalysisRetryAfter: retryAfter,
+        imageAnalysisHttpStatus: res?.status,
+        imageAnalysisRequestId:  requestId,
       });
     }
-    track("image_analysis_failed", { draftId, error: (err as Error)?.message?.slice(0, 120) ?? "unknown" });
+    track("image_analysis_failed", {
+      draftId,
+      requestId,
+      stage: "analysis",
+      code: errorCode,
+      exactCode,
+      httpStatus: res?.status ?? null,
+    });
   }
 }

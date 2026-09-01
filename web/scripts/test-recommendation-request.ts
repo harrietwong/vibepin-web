@@ -11,6 +11,8 @@ import assert from "node:assert";
 import {
   buildReferenceRequestBody,
   classifyAnalysisError,
+  creativeRequestErrorFromResponse,
+  creativeRequestErrorFromThrown,
   dailySeed,
   deriveAnalysisState,
   djb2Hex,
@@ -304,6 +306,54 @@ test("Retry-After: whole seconds, or nothing at all", () => {
   assert.equal(parseRetryAfter(""), undefined);
   assert.equal(parseRetryAfter("-5"), undefined);
   assert.equal(parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT"), undefined, "the date form is not seconds");
+});
+
+test("failed recommendation preserves stage, safe code, HTTP, requestId and Retry-After", () => {
+  const failure = creativeRequestErrorFromResponse({
+    stage: "recommendation",
+    requestId: "req-visible-429",
+    response: { status: 429, headers: new Headers({ "retry-after": "19" }) },
+    body: { error: { code: "reference_pool_unavailable" }, userMessage: "provider detail must not be copied" },
+  });
+  assert.deepEqual(failure, {
+    stage: "recommendation", code: "reference_pool_unavailable", requestId: "req-visible-429", httpStatus: 429, retryAfter: 19,
+  });
+  assert.ok(!JSON.stringify(failure).includes("provider detail"), "provider message/body is never copied into public evidence");
+});
+
+test("network recommendation failure keeps request identity without inventing HTTP", () => {
+  const failure = creativeRequestErrorFromThrown("recommendation", "req-network", new TypeError("Failed to fetch"));
+  assert.deepEqual(failure, { stage: "recommendation", code: "network", requestId: "req-network" });
+});
+
+test("upload failure keeps the route's safe exact code and request identity", () => {
+  const failure = creativeRequestErrorFromResponse({
+    stage: "upload",
+    requestId: "upload-req-1",
+    response: { status: 415, headers: new Headers() },
+    body: { code: "invalid_type", error: "Unsupported image type" },
+  });
+  assert.deepEqual(failure, { stage: "upload", code: "invalid_type", requestId: "upload-req-1", httpStatus: 415 });
+  assert.ok(!JSON.stringify(failure).includes("Unsupported image type"), "human/provider messages do not enter the evidence payload");
+});
+
+test("analysis state carries exact support evidence through draft and stateless paths", () => {
+  assert.deepEqual(deriveAnalysisState({
+    draftImageSelected: true,
+    draftStatus: "failed",
+    draftError: "other",
+    draftHttpStatus: 502,
+    draftRequestId: "analysis-draft-1",
+  }), {
+    status: "failed", source: "draft", errorCode: "other", httpStatus: 502, requestId: "analysis-draft-1",
+  });
+  assert.deepEqual(deriveAnalysisState({
+    draftImageSelected: false,
+    primaryUrl: "https://cdn/B.jpg",
+    swapped: { url: "https://cdn/B.jpg", error: "rate_limited", retryAfter: 8, httpStatus: 429, requestId: "analysis-swap-1" },
+  }), {
+    status: "failed", source: "stateless", errorCode: "rate_limited", retryAfter: 8, httpStatus: 429, requestId: "analysis-swap-1",
+  });
 });
 
 // ── Daily seed: stable within a UTC day, different across it ────────────────

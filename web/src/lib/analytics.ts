@@ -10,6 +10,8 @@
 
 export type AnalyticsEvent =
   | "image_analysis_started"
+  | "creative_upload_succeeded"
+  | "creative_upload_failed"
   | "image_analysis_ready"
   | "image_analysis_failed"
   | "recommended_keywords_ready"
@@ -35,7 +37,10 @@ export type AnalyticsEvent =
   // served list was produced under, which is what makes a category_fallback rate
   // attributable to a missing analysis rather than to a thin library.
   | "reference_recs_requested"
+  | "reference_recs_failed"
+  | "reference_recs_rate_limited"
   | "reference_refreshed"
+  | "creative_direction_saved"
   // The analysis came back for an image the draft no longer has, so it was dropped
   // instead of written — counted so a silent discard is visible rather than looking
   // like an analysis that never finished.
@@ -96,12 +101,52 @@ const REPORT_ENDPOINT = "/api/analytics/events";
 const FLUSH_AT = 15;          // flush once the buffer reaches this (server cap is 20)
 const MAX_BATCH = 20;         // never send more than the server accepts per request
 const FLUSH_DEBOUNCE_MS = 2_000;
+export const MAX_ANALYTICS_PAYLOAD_BYTES = 4_096;
+const MAX_ANALYTICS_KEYS = 24;
+const MAX_ANALYTICS_STRING = 160;
 
 interface BufferedEvent { event: string; payload: AnalyticsProps; draftId?: string }
 
 let _buffer: BufferedEvent[] = [];
 let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 let _lifecycleBound = false;
+
+function byteLength(value: unknown): number {
+  const json = JSON.stringify(value);
+  return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(json).byteLength : json.length;
+}
+
+/** Bound every client event before it reaches CustomEvent, memory, beacon or fetch. */
+export function sanitizeAnalyticsProps(props: AnalyticsProps): AnalyticsProps {
+  const out: AnalyticsProps = {};
+  const entries = Object.entries(props).slice(0, MAX_ANALYTICS_KEYS);
+  for (const [rawKey, value] of entries) {
+    const key = rawKey.slice(0, 64);
+    if (!key || value === undefined) continue;
+    // Analytics gets identifiers and coarse state, never content. Dropping these
+    // keys is safer than truncating them: even a prefix can contain image bytes or
+    // a merchant's full creative instruction.
+    if (/(?:base64|imagebytes|imagedata|rawimage|prompt|directiontext|directionbrief)/i.test(key)) continue;
+    if (typeof value === "string") out[key] = value.slice(0, MAX_ANALYTICS_STRING);
+    else if (typeof value === "number") out[key] = Number.isFinite(value) ? value : null;
+    else if (typeof value === "boolean" || value === null) out[key] = value;
+    else if (key === "versions" && value && typeof value === "object") {
+      const versions = value as EventVersions;
+      out.versions = {
+        ...(versions.promptVersion ? { promptVersion: versions.promptVersion.slice(0, 96) } : {}),
+        ...(versions.judgeVersion ? { judgeVersion: versions.judgeVersion.slice(0, 96) } : {}),
+        ...(versions.modelVersion ? { modelVersion: versions.modelVersion.slice(0, 96) } : {}),
+      };
+    }
+  }
+  const protectedKeys = new Set(["draftId", "requestId", "stage", "code", "httpStatus", "versions"]);
+  while (byteLength(out) > MAX_ANALYTICS_PAYLOAD_BYTES) {
+    const removable = Object.keys(out).reverse().find(key => !protectedKeys.has(key));
+    if (!removable) break;
+    delete out[removable];
+  }
+  return byteLength(out) <= MAX_ANALYTICS_PAYLOAD_BYTES ? out : {};
+}
 
 function bindLifecycleFlush(): void {
   if (_lifecycleBound || typeof window === "undefined") return;
@@ -165,9 +210,10 @@ function flushReports(): void {
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function track(event: AnalyticsEvent, props: AnalyticsProps = {}): void {
-  const payload = { event, props, ts: Date.now() };
+  const safeProps = sanitizeAnalyticsProps(props);
+  const payload = { event, props: safeProps, ts: Date.now() };
   if (isDev) {
-    console.info(`[analytics] ${event}`, props);
+    console.info(`[analytics] ${event}`, safeProps);
   }
   if (typeof window !== "undefined") {
     try {
@@ -175,7 +221,7 @@ export function track(event: AnalyticsEvent, props: AnalyticsProps = {}): void {
     } catch { /* CustomEvent unsupported — non-fatal */ }
   }
   try {
-    enqueueReport(event, props);
+    enqueueReport(event, safeProps);
   } catch { /* reporting must never affect the caller */ }
 }
 

@@ -8,6 +8,11 @@
  */
 
 import { createBrowserClient } from "@supabase/ssr";
+import {
+  creativeRequestErrorFromResponse,
+  creativeRequestErrorFromThrown,
+  type CreativeRequestError,
+} from "./recommendationRequest";
 
 let _client: ReturnType<typeof createBrowserClient> | null = null;
 function browser() {
@@ -30,23 +35,37 @@ export type UploadedPinImage = {
   publicUrl: string;
   /** In‑app display URL that works even if the bucket is private. */
   proxyUrl: string;
+  /** Client id joining upload UI/analytics/support evidence. */
+  requestId: string;
 };
 
+export class UploadPinImageError extends Error {
+  readonly detail: CreativeRequestError;
+  constructor(detail: CreativeRequestError) {
+    super(`Upload failed (${detail.code})`);
+    this.name = "UploadPinImageError";
+    this.detail = detail;
+  }
+}
+
 export async function uploadPinImage(file: File): Promise<UploadedPinImage> {
+  const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/api/studio/upload", {
-    method: "POST",
-    headers: await bearer(),
-    body: fd,
-  });
-  if (!res.ok) {
-    let message = "Upload failed. Please try again.";
-    try {
-      const body = await res.json() as { error?: string };
-      if (body?.error) message = body.error;
-    } catch { /* non‑JSON */ }
-    throw new Error(message);
+  fd.append("requestId", requestId);
+  try {
+    const res = await fetch("/api/studio/upload", {
+      method: "POST",
+      headers: { ...(await bearer()), "X-Request-Id": requestId },
+      body: fd,
+    });
+    const body = await res.json().catch(() => ({})) as UploadedPinImage & { code?: unknown; error?: unknown };
+    if (!res.ok) {
+      throw new UploadPinImageError(creativeRequestErrorFromResponse({ stage: "upload", requestId, response: res, body }));
+    }
+    return { ...body, requestId };
+  } catch (error) {
+    if (error instanceof UploadPinImageError) throw error;
+    throw new UploadPinImageError(creativeRequestErrorFromThrown("upload", requestId, error));
   }
-  return res.json() as Promise<UploadedPinImage>;
 }

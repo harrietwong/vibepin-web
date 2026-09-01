@@ -17,8 +17,8 @@
  * hidden prompts here.
  */
 
-import { useState } from "react";
-import { Info, ChevronDown, Pencil, RotateCw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Info, ChevronDown, Pencil, RotateCw, X } from "lucide-react";
 import { TAG_GROUP_LABEL, type CreativeTag, type TagGroup } from "@/lib/studio/creativeControls";
 
 const UI = {
@@ -43,6 +43,7 @@ export function CreativeChips({
   briefStale,
   onToggleTag,
   onBriefChange,
+  onDirtyChange,
   onUpdateBriefFromTags,
 }: {
   tags: CreativeTag[];
@@ -51,11 +52,23 @@ export function CreativeChips({
   briefStale?: boolean;
   onToggleTag: (id: string) => void;
   onBriefChange: (value: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
   onUpdateBriefFromTags?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [draftBrief, setDraftBrief] = useState(briefValue);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
+
+  const dirty = editing && draftBrief !== briefValue;
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+
+  const beginEdit = () => { setDraftBrief(briefValue); setEditing(true); };
+  const cancelEdit = () => { setDraftBrief(briefValue); setEditing(false); };
+  const saveEdit = () => {
+    onBriefChange(draftBrief.trim());
+    setEditing(false);
+  };
 
   if (tags.length === 0) return null;
 
@@ -104,21 +117,31 @@ export function CreativeChips({
         </div>
 
         {editing ? (
-          <textarea
-            id="direction-brief"
-            data-testid="direction-brief-input"
-            value={briefValue}
-            onChange={e => onBriefChange(e.target.value.slice(0, 800))}
-            placeholder="e.g. outdoor street-style outfit, natural movement, no studio background"
-            rows={3}
-            autoFocus
-            style={{
-              width: "100%", boxSizing: "border-box", border: `1px solid ${UI.border}`,
-              borderRadius: 9, resize: "vertical", minHeight: 70, maxHeight: 180,
-              padding: "8px 9px", background: UI.elev, color: UI.text,
-              fontFamily: "inherit", fontSize: 12, lineHeight: 1.5, outline: "none",
-            }}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <label htmlFor="direction-brief" style={{ fontSize: 10.5, fontWeight: 750, color: UI.muted }}>
+              Direction instructions
+            </label>
+            <textarea
+              id="direction-brief"
+              data-testid="direction-brief-input"
+              value={draftBrief}
+              onChange={e => setDraftBrief(e.target.value.slice(0, 800))}
+              onKeyDown={e => { if (e.key === "Escape") cancelEdit(); }}
+              aria-describedby="direction-brief-helper"
+              placeholder="e.g. outdoor street-style outfit, natural movement, no studio background"
+              rows={3}
+              autoFocus
+              style={{
+                width: "100%", boxSizing: "border-box", border: `1px solid ${dirty ? UI.purple : UI.border}`,
+                borderRadius: 9, resize: "vertical", minHeight: 70, maxHeight: 180,
+                padding: "8px 9px", background: UI.elev, color: UI.text,
+                fontFamily: "inherit", fontSize: 12, lineHeight: 1.5, outline: "none",
+              }}
+            />
+            <span id="direction-brief-helper" style={{ fontSize: 10, color: UI.subtle }}>
+              Save to use these instructions for generation, or Cancel to keep the current direction.
+            </span>
+          </div>
         ) : (
           <p data-testid="creative-direction-summary" style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: UI.text, fontWeight: 500 }}>
             {summary || "A creative direction will be generated from your products and reference."}
@@ -132,18 +155,23 @@ export function CreativeChips({
         </p>
 
         <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          <button
-            type="button"
-            data-testid="edit-direction-btn"
-            onClick={() => setEditing(v => !v)}
-            style={{
-              display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 999,
-              border: `1px solid ${editing ? UI.purple : UI.border}`, background: editing ? UI.purpleBg : UI.elev,
-              color: editing ? "#DDD6FE" : UI.text, fontSize: 10.5, fontWeight: 700, cursor: "pointer",
-            }}
-          >
-            <Pencil style={{ width: 11, height: 11 }} /> {editing ? "Done" : "Edit direction"}
-          </button>
+          {editing ? (
+            <>
+              <button type="button" data-testid="save-direction-btn" onClick={saveEdit}
+                style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 999, border: `1px solid ${UI.purple}`, background: UI.purpleBg, color: "#DDD6FE", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
+                <Check style={{ width: 11, height: 11 }} /> Save
+              </button>
+              <button type="button" data-testid="cancel-direction-btn" onClick={cancelEdit}
+                style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: UI.elev, color: UI.text, fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
+                <X style={{ width: 11, height: 11 }} /> Cancel
+              </button>
+            </>
+          ) : (
+            <button type="button" data-testid="edit-direction-btn" onClick={beginEdit}
+              style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: UI.elev, color: UI.text, fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
+              <Pencil style={{ width: 11, height: 11 }} /> Edit direction
+            </button>
+          )}
           {onUpdateBriefFromTags && (
             <button
               type="button"

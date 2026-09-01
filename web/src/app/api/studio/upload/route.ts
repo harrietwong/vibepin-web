@@ -41,31 +41,34 @@ function genName(ext: string): string {
 }
 
 export async function POST(req: Request) {
+  const requestId = (req.headers.get("x-request-id") ?? "")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 128);
   const uid = await getUserIdFromBearer(req);
   if (!uid) {
-    return Response.json({ error: "Unauthorized", code: "unauthorized" }, { status: 401 });
+    return Response.json({ error: "Unauthorized", code: "unauthorized", requestId }, { status: 401 });
   }
   if (!SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return Response.json({ error: "Storage is not configured", code: "config_error" }, { status: 500 });
+    return Response.json({ error: "Storage is not configured", code: "config_error", requestId }, { status: 500 });
   }
 
   let form: FormData;
   try {
     form = await req.formData();
   } catch {
-    return Response.json({ error: "Expected multipart/form-data", code: "bad_request" }, { status: 400 });
+    return Response.json({ error: "Expected multipart/form-data", code: "bad_request", requestId }, { status: 400 });
   }
 
   const file = form.get("file");
   if (!(file instanceof File)) {
-    return Response.json({ error: "Missing file", code: "bad_request" }, { status: 400 });
+    return Response.json({ error: "Missing file", code: "bad_request", requestId }, { status: 400 });
   }
   const ext = EXT_BY_TYPE[file.type];
   if (!ext) {
-    return Response.json({ error: "Unsupported image type", code: "invalid_type" }, { status: 415 });
+    return Response.json({ error: "Unsupported image type", code: "invalid_type", requestId }, { status: 415 });
   }
   if (file.size <= 0 || file.size > MAX_BYTES) {
-    return Response.json({ error: "Image too large (max 12MB)", code: "too_large" }, { status: 413 });
+    return Response.json({ error: "Image too large (max 12MB)", code: "too_large", requestId }, { status: 413 });
   }
 
   const path = `studio/uploads/${uid}/${genName(ext)}`;
@@ -80,11 +83,11 @@ export async function POST(req: Request) {
     });
     if (error) {
       console.error("[studio/upload] storage upload failed:", error.message);
-      return Response.json({ error: "Upload failed. Please try again.", code: "upload_failed" }, { status: 502 });
+      return Response.json({ error: "Upload failed. Please try again.", code: "upload_failed", requestId }, { status: 502 });
     }
   } catch (err) {
     console.error("[studio/upload] unexpected error:", (err as Error)?.message);
-    return Response.json({ error: "Upload failed. Please try again.", code: "internal_error" }, { status: 500 });
+    return Response.json({ error: "Upload failed. Please try again.", code: "internal_error", requestId }, { status: 500 });
   }
 
   return Response.json(
@@ -93,6 +96,7 @@ export async function POST(req: Request) {
       path,
       publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`,
       proxyUrl: `/api/storage-image?path=${encodeURIComponent(path)}`,
+      requestId,
     },
     { status: 201 },
   );

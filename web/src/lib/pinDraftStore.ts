@@ -265,8 +265,14 @@ export interface PinDraft {
   imageAnalysisStatus?:    "pending" | "ready" | "failed";
   /** Why the last analysis failed (only meaningful with status "failed"); cleared on success. */
   imageAnalysisError?:     AnalysisErrorCode;
+  /** Sanitized route/provider error code for support; never a provider message/body. */
+  imageAnalysisErrorCode?: string;
   /** Seconds from the 429 `Retry-After` header, so the UI can say when to try again. */
   imageAnalysisRetryAfter?: number;
+  /** Exact HTTP status for the last analysis failure; absent for network failures. */
+  imageAnalysisHttpStatus?: number;
+  /** Client request id joining UI, analytics and server evidence for the last analysis attempt. */
+  imageAnalysisRequestId?: string;
   /** 1-2 sentence description of what is visible in the image. */
   imageSummary?:           string;
   visibleObjects?:         string[];
