@@ -932,8 +932,6 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   }, [pins, rowEdits, boards, tr]);
   usePublishAssistantContext(assistantBatchContext, open, [assistantBatchContext]);
 
-  if (!open) return null;
-
   const checkedCount = checkedRows.size;
   const allChecked   = checkedCount === pins.length && pins.length > 0;
   const checkedPins  = pins.filter(p => checkedRows.has(p.pinId));
@@ -1023,6 +1021,11 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     else toast.error(tr("studioModals.genCopy.failedCount").replace("{n}", String(failed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genProgress, pins, checkedRows, rowEdits, boards, tr]);
+
+  // Keep the closed render on the exact same hook path as the open render.
+  // Returning before handleGenerateCopyBatch used to add one hook only when the
+  // drawer opened, which crashed React with error #310 on closed -> open.
+  if (!open) return null;
 
   function toggleCheck(pinId: string) {
     setCheckedRows(prev => { const n = new Set(prev); if (n.has(pinId)) n.delete(pinId); else n.add(pinId); return n; });

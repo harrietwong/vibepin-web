@@ -133,20 +133,21 @@ test("referenceImageUrls preserves selection order for group assignment", () => 
 
 // ── Section G: batch arithmetic ─────────────────────────────────────────────
 
-test("pinsPerReference offers only 1, 2, 3", () => {
-  assert.deepEqual([...PINS_PER_REFERENCE_OPTIONS], [1, 2, 3]);
+test("pinsPerReference offers 1, 2, 3, 4", () => {
+  assert.deepEqual([...PINS_PER_REFERENCE_OPTIONS], [1, 2, 3, 4]);
 });
 
-test("totalPins = max(refs,1) × pinsPerReference — the PRD's four examples", () => {
+test("totalPins = max(refs,1) × pinsPerReference — including 2 refs × 4", () => {
   assert.equal(totalPins(0, 3), 3, "0 refs, qty 3 -> 3");
   assert.equal(totalPins(1, 3), 3, "1 ref,  qty 3 -> 3");
   assert.equal(totalPins(2, 3), 6, "2 refs, qty 3 -> 6");
   assert.equal(totalPins(3, 3), 9, "3 refs, qty 3 -> 9");
+  assert.equal(totalPins(2, 4), 8, "2 refs, qty 4 -> 8");
 });
 
-test("batch never exceeds 9 Pins", () => {
+test("batch never exceeds 12 Pins", () => {
   const max = Math.max(...PINS_PER_REFERENCE_OPTIONS.map(q => totalPins(MAX_SELECTED_REFERENCES, q)));
-  assert.equal(max, 9);
+  assert.equal(max, 12);
 });
 
 test("groupCount is 1 when no references are selected", () => {
@@ -164,6 +165,15 @@ test("each group requests pinsPerReference, NOT totalPins", () => {
   const summed = plan.reduce((n, g) => n + g.requestCount, 0);
   assert.equal(summed, totalPins(list.length, 3), "groups sum to totalPins");
   assert.equal(summed, 9);
+});
+
+test("2 references x 4 plans exactly 8 Pins in two independent groups", () => {
+  const plan = planReferenceGroups([pin("a"), pin("b")], 4);
+  assert.equal(plan.length, 2);
+  assert.deepEqual(plan.map(group => group.requestCount), [4, 4]);
+  assert.deepEqual(plan.map(group => group.reference?.id), ["a", "b"]);
+  assert.equal(plan.reduce((sum, group) => sum + group.requestCount, 0), 8);
+  assert.equal(totalPins(2, 4), 8);
 });
 
 test("no references still produces exactly one group", () => {

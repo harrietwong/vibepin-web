@@ -40,8 +40,8 @@ export type SelectedReference = {
 /** PRD §4.1.10 — never more than 3 style references in one batch. */
 export const MAX_SELECTED_REFERENCES = 3;
 
-/** pinsPerReference is limited to 1..3, so one batch never exceeds 9 Pins. */
-export const PINS_PER_REFERENCE_OPTIONS = [1, 2, 3] as const;
+/** pinsPerReference is limited to 1..4, matching the generation route's hard cap. */
+export const PINS_PER_REFERENCE_OPTIONS = [1, 2, 3, 4] as const;
 export type PinsPerReference = (typeof PINS_PER_REFERENCE_OPTIONS)[number];
 
 /**

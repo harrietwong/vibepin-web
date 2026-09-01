@@ -13,6 +13,10 @@ const studioSource  = readFileSync("src/app/app/studio/page.tsx", "utf8");
 const batchSource   = readFileSync("src/components/studio/BatchEditDrawer.tsx", "utf8");
 const planSource    = readFileSync("src/components/plan/WeeklyPlanWorkspace.tsx", "utf8");
 const actionsSource = readFileSync("src/components/studio/PinCardActions.tsx", "utf8");
+const batchStart = batchSource.indexOf("export function BatchEditDrawer");
+const batchEnd = batchSource.indexOf("// ── Detail drawer", batchStart);
+assert.ok(batchStart >= 0 && batchEnd > batchStart, "BatchEditDrawer component must remain discoverable");
+const batchComponent = batchSource.slice(batchStart, batchEnd);
 
 // Helper: extract a status' matrix block from PinCardActions MATRIX.
 function matrixBlock(status: string): string {
@@ -152,6 +156,20 @@ test("More menu items only: Regenerate / Download / Save as Reference", () => {
 });
 
 // ── Batch Edit header (unchanged behavior, kept regression-green) ────────────
+test("Batch Edit closed -> open -> closed keeps one stable Hook order", () => {
+  const earlyReturn = batchComponent.indexOf("if (!open) return null;");
+  assert.ok(earlyReturn >= 0, "closed-state early return must remain explicit");
+  const hookOffsets = [...batchComponent.matchAll(/\buse[A-Z][A-Za-z0-9_]*\s*\(/g)].map(match => match.index ?? -1);
+  assert.ok(hookOffsets.length > 0, "BatchEditDrawer must expose its Hook path to this guard");
+  assert.ok(
+    hookOffsets.every(offset => offset < earlyReturn),
+    "no Hook may be added after the closed-state return; opening would otherwise change Hook order",
+  );
+  assert.ok(
+    batchComponent.indexOf("const handleGenerateCopyBatch = useCallback") < earlyReturn,
+    "the AI-copy callback Hook must run for both closed and open renders",
+  );
+});
 test("Batch Edit primary CTA renders 'Schedule', not 'Schedule selected (N)'", () => {
   assert.match(batchSource, /data-testid="batch-edit-schedule-selected"[\s\S]*?CalendarClock[\s\S]*?tr\("studioModals\.header\.schedule"\)/);
   assert.doesNotMatch(batchSource, /Schedule selected/);

@@ -159,8 +159,8 @@ export type AiVersionDrawerProps = {
 };
 
 const FORMATS = ["Pinterest 2:3", "Pinterest 4:5", "Square 1:1", "Story 9:16"];
-// Output count now comes from PINS_PER_REFERENCE_OPTIONS (1..3): the value is
-// per-reference and the batch is capped at 3 references × 3 Pins = 9.
+// Output count now comes from PINS_PER_REFERENCE_OPTIONS (1..4): the value is
+// per-reference and the batch is capped at 3 references × 4 Pins = 12.
 const MODEL_OPTIONS = [
   { value: "gemini_image", label: MODEL_KEY_TO_LABEL.gemini_image ?? "Gemini Image" },
   { value: "gpt_image", label: MODEL_KEY_TO_LABEL.gpt_image ?? "GPT Image" },

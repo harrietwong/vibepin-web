@@ -111,6 +111,18 @@ async function main() {
     assert.equal(r.placeholders.length, 6);
   });
 
+  await test("2 references × 4 each → 2 calls and exactly 8 attributed Pins", async () => {
+    const r = await runBatch({ references: [ref("a"), ref("b")], pinsPerReference: 4, generate: okGenerator() });
+    assert.equal(r.calls.length, 2, "one generation call per reference group");
+    assert.deepEqual(r.calls.map(call => call.count), [4, 4]);
+    assert.equal(r.placeholdersAtStart, 8, "all eight placeholders exist before generation starts");
+    assert.equal(r.placeholders.length, 8);
+    assert.equal(r.placeholders.filter(p => p.referenceId === "a").length, 4);
+    assert.equal(r.placeholders.filter(p => p.referenceId === "b").length, 4);
+    assert.equal(r.placeholders.filter(p => p.status === "done").length, 8);
+    assert.equal(r.placeholders.length, totalPins(2, 4));
+  });
+
   await test("1 reference × 3 each → 3 Pins, one call", async () => {
     const r = await runBatch({ references: [ref("a")], pinsPerReference: 3, generate: okGenerator() });
     assert.equal(r.calls.length, 1);
