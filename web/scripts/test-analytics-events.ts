@@ -185,6 +185,125 @@ async function main() {
     (globalThis as unknown as { navigator: { sendBeacon?: unknown } }).navigator.sendBeacon = savedBeacon;
   });
 
+  // -- direction_rejected (AiVersionDrawer.tsx handleSelectDirection) ---------
+  // Fired when the user switches to a DIFFERENT recommended direction than the one
+  // currently selected -- the direction being left behind is the negative sample.
+  // Mirrors the try/catch the call site wraps track() in.
+  function trackDirectionSwitchBestEffort(props: { draftId?: string; previous: { id: string; kind?: string } | null; next: { id: string; kind?: string } }): void {
+    if (props.previous && props.previous.id !== props.next.id) {
+      try {
+        analytics.track("direction_rejected", {
+          draftId: props.draftId ?? null,
+          directionId: props.previous.id,
+          directionKind: props.previous.kind ?? null,
+        });
+      } catch { /* analytics must never affect direction selection */ }
+    }
+    analytics.track("direction_selected", {
+      draftId: props.draftId ?? null,
+      directionId: props.next.id,
+      directionKind: props.next.kind ?? null,
+    });
+  }
+
+  test("direction_rejected: switching directions reports the PREVIOUS direction as rejected, then the new one as selected", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDirectionSwitchBestEffort({
+      draftId: "pd_7",
+      previous: { id: "dir_warm", kind: "lifestyle" },
+      next: { id: "dir_cool", kind: "product_focused" },
+    });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ event: string; payload?: Record<string, unknown> }> };
+    assert.equal(sent.events.length, 2, "one rejected + one selected");
+    assert.equal(sent.events[0].event, "direction_rejected");
+    assert.equal(sent.events[0].payload!.directionId, "dir_warm");
+    assert.equal(sent.events[1].event, "direction_selected");
+    assert.equal(sent.events[1].payload!.directionId, "dir_cool");
+  });
+
+  test("direction_rejected: the FIRST pick (no previous direction) never fires rejected", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDirectionSwitchBestEffort({ draftId: "pd_8", previous: null, next: { id: "dir_only", kind: "lifestyle" } });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ event: string }> };
+    assert.equal(sent.events.length, 1, "only direction_selected fires on the first pick");
+    assert.equal(sent.events[0].event, "direction_selected");
+  });
+
+  test("direction_rejected: re-clicking the SAME already-selected direction never fires rejected", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDirectionSwitchBestEffort({
+      draftId: "pd_9",
+      previous: { id: "dir_same", kind: "lifestyle" },
+      next: { id: "dir_same", kind: "lifestyle" },
+    });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ event: string }> };
+    assert.equal(sent.events.length, 1, "no rejected event when the direction did not actually change");
+    assert.equal(sent.events[0].event, "direction_selected");
+  });
+
+  // -- draft_scheduled (DraftDetailsDrawer.tsx handleSchedulePrimary) ---------
+  // Fires once persistDraft() has ACTUALLY succeeded, and only when the draft was NOT
+  // already scheduled before this action (so re-saving an already-scheduled Pin's time
+  // does not re-fire it). Mirrors the call site's try/catch.
+  function trackDraftScheduledBestEffort(props: { wasScheduled: boolean; persistSucceeded: boolean; draftId?: string; generationSessionId?: string; plannedAt?: string | null }): void {
+    if (!props.persistSucceeded) return; // persistDraft() returned null -- never fires
+    if (props.wasScheduled) return; // re-save of an already-scheduled Pin -- never fires
+    try {
+      analytics.track("draft_scheduled", {
+        draftId: props.draftId ?? null,
+        ...(props.generationSessionId ? { generationSessionId: props.generationSessionId } : {}),
+        plannedAt: props.plannedAt ?? null,
+      });
+    } catch { /* analytics must never affect scheduling */ }
+  }
+
+  test("draft_scheduled: a Pin scheduled for the first time reports draftId + plannedAt (generationSessionId omitted when unknown)", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: true, draftId: "pd_50", plannedAt: "2026-09-05T09:00" });
+    analytics.__flushAnalyticsForTests();
+    assert.equal(beacons.length, 1);
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ event: string; payload?: Record<string, unknown> }> };
+    assert.equal(sent.events.length, 1, "fires exactly once per newly-scheduled Pin");
+    assert.equal(sent.events[0].event, "draft_scheduled");
+    assert.equal(sent.events[0].payload!.draftId, "pd_50");
+    assert.equal(sent.events[0].payload!.plannedAt, "2026-09-05T09:00");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+  });
+
+  test("draft_scheduled: includes generationSessionId (sourceGenerationId) when the draft carries one", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: true, draftId: "pd_51", generationSessionId: "gen_req_5", plannedAt: "2026-09-06T09:00" });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
+    assert.equal(sent.events[0].payload!.generationSessionId, "gen_req_5");
+  });
+
+  test("draft_scheduled: re-saving an ALREADY-scheduled Pin never re-fires the event", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDraftScheduledBestEffort({ wasScheduled: true, persistSucceeded: true, draftId: "pd_52", plannedAt: "2026-09-07T09:00" });
+    analytics.__flushAnalyticsForTests();
+    assert.equal(analytics.__getAnalyticsBufferForTests().length, 0);
+    assert.equal(beacons.length, 0, "no duplicate event when the Pin was already scheduled");
+  });
+
+  test("draft_scheduled: a FAILED persist never triggers the event", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: false, draftId: "pd_53", plannedAt: "2026-09-08T09:00" });
+    analytics.__flushAnalyticsForTests();
+    assert.equal(analytics.__getAnalyticsBufferForTests().length, 0);
+    assert.equal(beacons.length, 0, "no event reported when persistDraft() failed");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }

@@ -34,7 +34,11 @@ export type AnalyticsEvent =
   | "generation_deleted"
   | "generation_judged"
   | "regenerate_clicked"
-  | "draft_published";
+  | "draft_published"
+  // P0-3 (0831 feedback-loop research §2.2): the "被排期" implicit signal — a strong
+  // near-commitment even before the Pin actually goes out. Never fired for bulk/auto
+  // rebalance or drag-reschedule; only the explicit user-confirmed Schedule action.
+  | "draft_scheduled";
 
 /**
  * Optional version stamps for an event's payload (PRD v0.2 — "events carry versions").

@@ -852,13 +852,29 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // A1.4: record the picked creative direction on the source draft (minimal summary)
   // and emit direction_selected. This ONLY persists the choice + analytics — it never
   // changes generation/prompt behavior (that still flows through onGenerate as before).
+  //
+  // P0-3 (0831 feedback-loop research): when the user picks a DIFFERENT direction than
+  // the one currently selected, the direction they are leaving behind is an explicit
+  // negative signal — they looked at it and chose something else. Fire direction_rejected
+  // for that PREVIOUS direction right before recording the new selection. The very first
+  // pick (selectedDirectionId is null/none of the recommendations) has nothing to reject.
   const handleSelectDirection = (direction: CreativeDirectionRecommendation) => {
+    const previousDirection = recommendations.find(r => r.id === selectedDirectionId);
     setSelectedDirectionId(direction.id);
     setBriefManuallyEdited(false);
     const summary = summarizeDirection(direction);
     if (draft?.id) {
       const prev = pinDraftStore.getDraft(draft.id)?.creativeSelections ?? {};
       pinDraftStore.updateDraft(draft.id, { creativeSelections: { ...prev, selectedDirection: summary } });
+    }
+    if (previousDirection && previousDirection.id !== direction.id) {
+      try {
+        track("direction_rejected", {
+          draftId: draft?.id ?? null,
+          directionId: previousDirection.id,
+          directionKind: previousDirection.kind ?? null,
+        });
+      } catch { /* analytics must never affect direction selection */ }
     }
     track("direction_selected", {
       draftId: draft?.id ?? null,

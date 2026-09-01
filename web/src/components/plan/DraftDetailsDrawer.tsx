@@ -1590,9 +1590,24 @@ export function PinDetailsModal({
     if (customTimeChosen) setCustomTimeConfirmed(true);
     setCustomTimeBoardChangedNotice(false);
     flushSave();
+    const wasScheduled = isScheduled;
     const updated = persistDraft();
     setSaveState(updated ? "saved" : "failed");
-    if (updated) toast.success(isScheduled ? t("pinDetails.toast.scheduleUpdated") : t("pinDetails.toast.pinScheduled"));
+    if (updated) {
+      toast.success(wasScheduled ? t("pinDetails.toast.scheduleUpdated") : t("pinDetails.toast.pinScheduled"));
+      // P0-3: fire only on a genuinely NEW schedule (not every re-save of an already-
+      // scheduled Pin's date/time), and only once persistDraft() has actually succeeded.
+      // Best-effort — analytics must never affect the confirmed schedule.
+      if (!wasScheduled) {
+        try {
+          track("draft_scheduled", {
+            draftId: updated.id,
+            ...(updated.sourceGenerationId ? { generationSessionId: updated.sourceGenerationId } : {}),
+            plannedAt: updated.plannedAt || null,
+          });
+        } catch { /* analytics must never affect scheduling */ }
+      }
+    }
   }
 
   return (
