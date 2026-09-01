@@ -274,6 +274,65 @@ async function main() {
     );
   });
 
+  await test("all four pricing cards and the accounts comparison row use the canonical visible platform icons", async () => {
+    const pp = await import("../src/lib/pricingPlans");
+    const platforms = await import("../src/lib/social/platforms");
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../src/app/pricing/pricing-client.tsx", import.meta.url), "utf8");
+
+    assertEq(pp.PRICING_TIERS.length, 4, "pricing page still has exactly four plan cards");
+    for (const plan of pp.PRICING_TIERS) {
+      assert(
+        plan.bullets.some((bullet) => /\baccounts? per platform\b/i.test(bullet)),
+        `${plan.id} card must contain an accounts-per-platform row`,
+      );
+    }
+    assertEq(
+      JSON.stringify(platforms.VISIBLE_SOCIAL_PROVIDERS),
+      JSON.stringify(["pinterest", "instagram", "facebook"]),
+      "pricing icons must use the canonical customer-visible provider subset",
+    );
+    assert(
+      !platforms.VISIBLE_SOCIAL_PROVIDERS.includes("tiktok"),
+      "TikTok must not appear in the customer-visible pricing icon set",
+    );
+    assert(
+      /import \{ PlatformIcon \} from "@\/components\/social\/PlatformIcon"/.test(source),
+      "pricing must reuse the canonical PlatformIcon component",
+    );
+    assert(
+      /import \{ PLATFORMS, VISIBLE_SOCIAL_PROVIDERS \} from "@\/lib\/social\/platforms"/.test(source),
+      "pricing must reuse canonical provider metadata and visibility",
+    );
+    assertEq(
+      (source.match(/<PricingPlatformIcons \/>/g) ?? []).length,
+      2,
+      "the shared icon group must be wired once inside the four-card loop and once in comparison",
+    );
+    assert(
+      /isAccountsPerPlatformFeature\(f\) && <PricingPlatformIcons \/>/.test(source),
+      "each card account row must render the platform icon group",
+    );
+    assert(
+      /isAccountsPerPlatformFeature\(row\.label\) && <PricingPlatformIcons \/>/.test(source),
+      "the comparison account label must render the same platform icon group",
+    );
+    assert(!/tiktok/i.test(source), "Pricing UI must not hard-code or render TikTok");
+    assert(
+      source.includes('aria-hidden="true"') && source.includes('className="sr-only"'),
+      "icons must stay decorative while screen readers retain supported-platform text",
+    );
+    assert(
+      source.includes('className="inline-flex max-w-full flex-wrap items-center gap-1"'),
+      "the three-icon group must wrap or shrink within a 390px viewport",
+    );
+    assert(
+      source.includes('className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch"') &&
+        source.includes('className="max-w-full overflow-x-auto rounded-2xl border"'),
+      "390px layout must keep cards single-column and contain comparison overflow",
+    );
+  });
+
   // ── Text numbers ARE now published (step 6A, decision 8/9) ─────────────────
   await test("published text-generation numbers (20/500/2,000/10,000) appear in the AI titles/descriptions/hashtags row and matching bullets", async () => {
     const pp = await import("../src/lib/pricingPlans");

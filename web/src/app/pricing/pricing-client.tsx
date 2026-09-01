@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { ArrowRight, Check, Minus } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
+import { PlatformIcon } from "@/components/social/PlatformIcon";
 import {
   ACCOUNTS_HELPER_TEXT,
   EXTRA_ACCOUNT_HELPER_TEXT,
@@ -24,10 +25,34 @@ import {
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
+import { PLATFORMS, VISIBLE_SOCIAL_PROVIDERS } from "@/lib/social/platforms";
 
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
 };
+
+function isAccountsPerPlatformFeature(value: string): boolean {
+  return /\baccounts? per platform\b/i.test(value);
+}
+
+function PricingPlatformIcons() {
+  const accessibleNames = VISIBLE_SOCIAL_PROVIDERS.map(provider => PLATFORMS[provider].name).join(", ");
+
+  return (
+    <>
+      <span className="sr-only">Supported platforms: {accessibleNames}.</span>
+      <span
+        aria-hidden="true"
+        data-pricing-platform-icons="true"
+        className="inline-flex max-w-full flex-wrap items-center gap-1"
+      >
+        {VISIBLE_SOCIAL_PROVIDERS.map(provider => (
+          <PlatformIcon key={provider} provider={provider} size={16} />
+        ))}
+      </span>
+    </>
+  );
+}
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -164,7 +189,13 @@ function PlanCards({
                     className="mt-0.5 h-3.5 w-3.5 shrink-0"
                     style={{ color: plan.highlighted ? "#A855F7" : "#10B981" }}
                   />
-                  <span style={{ color: "#C8CDD6" }}>{f}</span>
+                  <span
+                    className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
+                    style={{ color: "#C8CDD6" }}
+                  >
+                    <span>{f}</span>
+                    {isAccountsPerPlatformFeature(f) && <PricingPlatformIcons />}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -286,7 +317,7 @@ function CellValue({ value, highlighted }: { value: string; highlighted: boolean
 
 function ComparisonTable({ yearly }: { yearly: boolean }) {
   return (
-    <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+    <div className="max-w-full overflow-x-auto rounded-2xl border" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
       <table className="w-full min-w-[760px] border-collapse" style={{ background: "var(--surface-2)" }}>
         <thead>
           <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
@@ -324,7 +355,10 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
             {section.rows.map(row => (
               <tr key={row.label} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                 <td className="px-5 py-3 text-[13px]" style={{ color: "#C8CDD6" }}>
-                  {row.label}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span>{row.label}</span>
+                    {isAccountsPerPlatformFeature(row.label) && <PricingPlatformIcons />}
+                  </span>
                   {row.note && (
                     <span className="block text-[11px] mt-0.5" style={{ color: "#6B7280" }}>
                       {row.note}
