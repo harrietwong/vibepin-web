@@ -104,6 +104,7 @@ export const CORE: string[] = [
   "test-creem-billing-status",
   "test-predeploy-guard",
   "test-moderate-prompt",
+  "test-hidden-prompt-best-practices",
   "test-generation-moderation-gate",
   "test-generation-metering",
   "test-text-metering",
