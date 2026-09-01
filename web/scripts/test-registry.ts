@@ -108,6 +108,7 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-plan-entitlements",
+  "test-pricing-auth-p0p1",
   "test-usage-period-math",
   "test-billing-usage-api",
   "test-entitlements-security",

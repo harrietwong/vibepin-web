@@ -1,27 +1,15 @@
 "use client";
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
+import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
-
-function safeNextPath(value: string | null): string {
-  if (
-    value &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    !value.includes("\\") &&
-    !value.startsWith("/login") &&
-    !value.startsWith("/signup") &&
-    !value.startsWith("/auth")
-  ) return value;
-  return "/app/studio";
-}
 
 function LoginContent() {
   const router = useRouter();
@@ -32,7 +20,7 @@ function LoginContent() {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
+  const [error,    setError]    = useState(() => authUiErrorMessage(params.get("error")) ?? "");
 
   const signUpHref = (() => {
     const qs = new URLSearchParams();
@@ -41,18 +29,14 @@ function LoginContent() {
     return `/signup?${qs.toString()}`;
   })();
 
-  useEffect(() => {
-    if (params.get("error")) setError("Authentication failed. Please try again.");
-  }, [params]);
-
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setError(error.message);
+    const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+    if (loginError) {
+      setError(authUiErrorMessage("authentication_failed") as string);
       setLoading(false);
     } else {
       router.push(next);
@@ -64,10 +48,19 @@ function LoginContent() {
     setLoading(true);
     setError("");
     document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
-    });
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
+      });
+      if (oauthError) {
+        setError(authUiErrorMessage("oauth_unavailable") as string);
+        setLoading(false);
+      }
+    } catch {
+      setError(authUiErrorMessage("oauth_unavailable") as string);
+      setLoading(false);
+    }
   }
 
   return (

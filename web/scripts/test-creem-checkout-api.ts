@@ -27,6 +27,7 @@ process.env.CREEM_PRODUCT_BUSINESS_YEARLY = "prod_business_y";
 process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY = "prod_extra_m";
 process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY = "prod_extra_y";
 process.env.CREEM_API_KEY = "creem_test_fake";
+process.env.CREEM_WEBHOOK_SECRET = "creem_test_webhook_fake";
 // Billing mode: "test" is usable in a non-production runtime (VERCEL_ENV unset,
 // NODE_ENV not "production"), so the happy-path checkout tests exercise the real
 // route logic. Individual guard tests override CREEM_MODE / runtime env locally.
@@ -141,6 +142,22 @@ async function main() {
     fakes.uid = null;
     const res = await route.POST(makeReq({ plan: "pro", interval: "month" }) as never);
     assertEq(res.status, 401, "status");
+    fakes.uid = "user-123";
+  });
+
+  await test("unauthenticated checkout is rejected before body parsing", async () => {
+    fakes.uid = null;
+    let jsonCalls = 0;
+    const req = {
+      headers: new Headers(),
+      json: async () => {
+        jsonCalls++;
+        throw new Error("malformed body must not be read");
+      },
+    } as unknown as Request;
+    const res = await route.POST(req as never);
+    assertEq(res.status, 401, "status");
+    assertEq(jsonCalls, 0, "auth must run before req.json()");
     fakes.uid = "user-123";
   });
 
@@ -277,6 +294,21 @@ async function main() {
       process.env.CREEM_MODE = savedMode;
       if (savedVercel === undefined) delete process.env.VERCEL_ENV;
       else process.env.VERCEL_ENV = savedVercel;
+    }
+  });
+
+  await test("preview + mode=test rejects a non-test key before checkout", async () => {
+    const savedKey = process.env.CREEM_API_KEY;
+    process.env.CREEM_API_KEY = "creem_live_fake";
+    try {
+      fakes.lastCheckoutInput = undefined;
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 500, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_misconfigured", "test mode + non-test key → misconfigured");
+      assertEq(fakes.lastCheckoutInput, undefined, "no Creem checkout call");
+    } finally {
+      process.env.CREEM_API_KEY = savedKey;
     }
   });
 

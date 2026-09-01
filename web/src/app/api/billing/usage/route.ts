@@ -44,6 +44,7 @@
  * Response contract (the Settings usage UI depends on this shape):
  *   {
  *     plan: "free" | "starter" | "pro" | "business",
+ *     state: "metered" | "unmetered", // 5xx is the unavailable state
  *     metered: boolean,              // false => no usage_accounts row yet
  *     periodStart: ISO | null,       // null when unmetered (no real period yet)
  *     periodEnd:   ISO | null,
@@ -139,6 +140,7 @@ export async function GET(req: Request) {
       // included allowances and say so — never fabricate measured zeros.
       return NextResponse.json({
         plan,
+        state: "unmetered" as const,
         metered: false,
         periodStart: null,
         periodEnd: null,
@@ -151,6 +153,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       plan,
+      state: "metered" as const,
       metered: true,
       periodStart: account.period_start,
       periodEnd: account.period_end,

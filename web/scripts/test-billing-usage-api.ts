@@ -199,6 +199,7 @@ async function main() {
     const body = await res.json();
 
     assertEq(body.plan, "pro", "plan");
+    assertEq(body.state, "metered", "explicit metered state");
     assertEq(body.metered, true, "metered");
     assertEq(body.periodStart, "2026-07-01T00:00:00.000Z", "periodStart");
     assertEq(body.periodEnd, "2026-08-01T00:00:00.000Z", "periodEnd");
@@ -279,6 +280,7 @@ async function main() {
     const body = await res.json();
 
     assertEq(body.plan, "starter", "plan");
+    assertEq(body.state, "unmetered", "explicit unmetered state");
     assertEq(body.metered, false, "metered must be false when no account exists");
     assertEq(body.periodStart, null, "no real period exists yet");
     assertEq(body.periodEnd, null, "no real period exists yet");

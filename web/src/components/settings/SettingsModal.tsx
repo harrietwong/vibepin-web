@@ -320,6 +320,8 @@ type UsageBucket = {
 
 type BillingUsage = {
   plan: "free" | "starter" | "pro" | "business";
+  /** Explicit success state. A non-2xx response is represented as unavailable in UI state. */
+  state: "metered" | "unmetered";
   /** false = no usage_accounts row yet (metering is lazy/shadow) → show allowances only. */
   metered: boolean;
   periodStart: string | null;
@@ -341,14 +343,17 @@ type BillingUsage = {
  *     "Unlimited"/"No monthly limit"; a progress bar has no meaning without a cap.
  *  3. METERED WITH A CAP — used/limit, a bar, and the remainder.
  */
-function UsageRow({ icon: Icon, label, bucket, t }: {
+function UsageRow({ icon: Icon, label, bucket, state, t }: {
   icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   label: string;
   bucket: UsageBucket;
+  state: "metered" | "unmetered";
   t: (key: MessageKey) => string;
 }) {
   const { used, limit, included } = bucket;
-  const measured = used !== null;
+  // The response-level state wins over bucket values. A malformed/stale payload
+  // can never make an explicitly unmetered account look like a measured zero.
+  const measured = state === "metered" && used !== null;
   const pct = measured && limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   const remaining = measured && limit !== null ? Math.max(0, limit - used) : null;
 
@@ -394,17 +399,38 @@ type CreemBillingStatus = {
   /** The newest historical plan, shown only when accessGranted is false. */
   previousPlan?: string | null;
   /** True only when a live subscription currently grants access. */
-  accessGranted?: boolean;
+  accessGranted: boolean;
   interval?: "month" | "year" | null;
   status?: string | null;
   currentPeriodEnd?: string | null;
   scheduledCancel?: boolean;
 };
 
+function isCreemBillingStatus(value: unknown): value is CreemBillingStatus {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.hasBillingAccount === "boolean" &&
+    typeof candidate.effectivePlan === "string" &&
+    typeof candidate.accessGranted === "boolean"
+  );
+}
+
+function isBillingUsage(value: unknown): value is BillingUsage {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<BillingUsage>;
+  return (
+    (candidate.state === "metered" || candidate.state === "unmetered") &&
+    typeof candidate.metered === "boolean" &&
+    !!candidate.aiImages &&
+    !!candidate.aiTextGenerations &&
+    !!candidate.scheduledPosts
+  );
+}
+
 function BillingTab() {
   const { t } = useLocale();
   const [summary, setSummary] = useState<AccountBillingSummary>(() => deriveAccountBillingSummary(null));
-  const [loaded, setLoaded] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [billing, setBilling] = useState<CreemBillingStatus | null>(null);
   // Sync error is tracked separately from "billing is null before the first
@@ -419,7 +445,6 @@ function BillingTab() {
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       setSummary(deriveAccountBillingSummary(data.user));
-      setLoaded(true);
     });
   }, []);
 
@@ -429,7 +454,6 @@ function BillingTab() {
   // billing data" state and NEVER falls back to displaying Free.
   useEffect(() => {
     let active = true;
-    setBillingSyncError(false);
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -441,7 +465,8 @@ function BillingTab() {
           if (active) setBillingSyncError(true);
           return;
         }
-        const json = (await res.json()) as CreemBillingStatus;
+        const json: unknown = await res.json();
+        if (!isCreemBillingStatus(json)) throw new Error("invalid billing status response");
         if (active) setBilling(json);
       } catch {
         if (active) setBillingSyncError(true);
@@ -457,7 +482,6 @@ function BillingTab() {
   // and an unmetered account renders allowances rather than fabricated usage.
   useEffect(() => {
     let active = true;
-    setUsageSyncError(false);
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -469,7 +493,8 @@ function BillingTab() {
           if (active) { setUsageSyncError(true); setUsageLoaded(true); }
           return;
         }
-        const json = (await res.json()) as BillingUsage;
+        const json: unknown = await res.json();
+        if (!isBillingUsage(json)) throw new Error("invalid billing usage response");
         if (active) { setUsage(json); setUsageLoaded(true); }
       } catch {
         if (active) { setUsageSyncError(true); setUsageLoaded(true); }
@@ -481,18 +506,35 @@ function BillingTab() {
   }, [retryTick]);
 
   function handleRetrySync() {
+    setBilling(null);
+    setBillingSyncError(false);
+    setUsage(null);
+    setUsageLoaded(false);
+    setUsageSyncError(false);
     setRetryTick(v => v + 1);
   }
 
-  // Current plan = the EFFECTIVE plan (what the user has access to right now);
-  // fall back to the metadata-derived name only before the live status loads.
-  const planName   = normalizePlanName(billing?.effectivePlan ?? summary.planName);
-  const paid       = isPaidPlan(planName);
+  const billingState: "loading" | "available" | "unavailable" = billingSyncError
+    ? "unavailable"
+    : billing
+      ? "available"
+      : "loading";
+  const usageState: "loading" | "metered" | "unmetered" | "unavailable" = usageSyncError
+    ? "unavailable"
+    : !usageLoaded
+      ? "loading"
+      : usage?.state ?? "unavailable";
+
+  // Only the verified Creem status may name the current plan. Auth metadata is
+  // useful for account identity, but it is not billing truth and must not fill a
+  // sync-error gap with a plausible-looking Free/paid state.
+  const planName = billing ? normalizePlanName(billing.effectivePlan) : null;
+  const paid = planName ? isPaidPlan(planName) : false;
   const hasBillingAccount = billing?.hasBillingAccount ?? false;
   // accessGranted decides the badge colour — never trust the raw status to be green.
   // Before the live status loads, fall back to "granted" so a paying user isn't
   // briefly shown as lapsed.
-  const accessGranted = billing ? (billing.accessGranted ?? false) : true;
+  const accessGranted = billing ? billing.accessGranted : true;
   const rawStatus = (billing?.status ?? "").toLowerCase();
   const scheduledCancel = billing?.scheduledCancel ?? false;
   const intervalLabel = billing?.interval
@@ -512,12 +554,24 @@ function BillingTab() {
   // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
   // status (canceled/expired/past_due/paused/unpaid) → grey/red, never green.
   const isActiveGreen =
-    accessGranted && (rawStatus === "active" || rawStatus === "trialing" || rawStatus === "");
+    billingState === "available" &&
+    accessGranted &&
+    (rawStatus === "active" || rawStatus === "trialing" || rawStatus === "");
   let badgeLabel: string;
   let badgeColor: string;
   let badgeBg: string;
   let badgeBorder: string;
-  if (scheduledCancel) {
+  if (billingState === "loading") {
+    badgeLabel = "…";
+    badgeColor = UI.textSec;
+    badgeBg = "rgba(148,163,184,0.10)";
+    badgeBorder = "rgba(148,163,184,0.25)";
+  } else if (billingState === "unavailable") {
+    badgeLabel = t("billing.usageSyncError");
+    badgeColor = UI.warning;
+    badgeBg = "rgba(245,158,11,0.12)";
+    badgeBorder = "rgba(245,158,11,0.3)";
+  } else if (scheduledCancel) {
     badgeLabel = periodEnd
       ? `${t("billing.cancelsOn")} ${periodEnd}`
       : t("billing.statusScheduledCancel");
@@ -588,7 +642,7 @@ function BillingTab() {
           <div>
             <p style={{ margin: "0 0 2px", fontSize: 11, color: UI.textSec, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("billing.currentPlan")}</p>
             <h2 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: UI.text }}>
-              {loaded ? planName : "…"}
+              {billingState === "unavailable" ? "—" : billingState === "available" ? planName : "…"}
               {intervalLabel && (
                 <span style={{ fontSize: 13, fontWeight: 600, color: UI.textSec, marginLeft: 8 }}>{intervalLabel}</span>
               )}
@@ -609,7 +663,11 @@ function BillingTab() {
           </p>
         )}
         <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
-          {paid ? t("billing.paidDesc") : t("billing.freeDesc")}
+          {billingState === "unavailable"
+            ? t("billing.usageSyncErrorDesc")
+            : billingState === "available"
+              ? paid ? t("billing.paidDesc") : t("billing.freeDesc")
+              : ""}
         </p>
         {periodEnd && (
           <p style={{ margin: "0 0 4px", fontSize: 12, color: UI.textSec }}>
@@ -621,7 +679,7 @@ function BillingTab() {
             {t("billing.scheduledCancelNotice")}
           </p>
         )}
-        {hasBillingAccount ? (
+        {billingState !== "available" ? null : hasBillingAccount ? (
           <button
             type="button"
             data-testid="billing-manage-button"
@@ -668,7 +726,7 @@ function BillingTab() {
             </span>
           )}
         </div>
-        {usageSyncError ? (
+        {usageState === "unavailable" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
             <p data-testid="billing-usage-sync-error" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
               {t("billing.usageSyncError")}
@@ -682,16 +740,16 @@ function BillingTab() {
               {t("billing.usageRetry")}
             </button>
           </div>
-        ) : !usageLoaded ? (
+        ) : usageState === "loading" ? (
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec, display: "flex", alignItems: "center", gap: 7 }}>
             <Loader2 size={13} className="animate-spin" /> {t("billing.usageLoading")}
           </p>
         ) : usage ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} t={t} />
-            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} t={t} />
-            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} t={t} />
-            {!usage.metered && (
+            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} state={usageState} t={t} />
+            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} state={usageState} t={t} />
+            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} state={usageState} t={t} />
+            {usageState === "unmetered" && (
               <p data-testid="billing-usage-not-metered" style={{ margin: 0, fontSize: 11, color: UI.textMuted, lineHeight: 1.5 }}>
                 {t("billing.usageNotMetered")}
               </p>

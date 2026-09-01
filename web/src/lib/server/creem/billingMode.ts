@@ -73,6 +73,7 @@ export class BillingMisconfiguredError extends Error {
  * or incomplete configuration:
  *
  *   - prod + mode "test"      → a test key on production. HARD fail.
+ *   - mode "test" without a creem_test_ key → fail before any checkout call.
  *   - prod + mode "live" but the config is not a real live config (missing key,
  *     a test key, any missing product env, or missing webhook secret) → fail.
  *   - preview/local           → "test" and "live" both allowed; only the shape is
@@ -94,7 +95,12 @@ export function assertBillingModeUsable(): void {
         "CREEM_MODE=test on a production runtime — a test-mode Creem key must never open real checkout. Set CREEM_MODE=live (with a live key) or CREEM_MODE=disabled.",
       );
     }
-    return; // preview/local test mode is fine
+    if (!apiKey || !isTestApiKey(apiKey)) {
+      throw new BillingMisconfiguredError(
+        "CREEM_MODE=test requires a creem_test_ API key. Refusing to risk a live-key checkout from Preview/local.",
+      );
+    }
+    return; // preview/local + an explicitly test-class key is safe
   }
 
   // mode === "live"

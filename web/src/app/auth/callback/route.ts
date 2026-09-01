@@ -1,19 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
-function safeNextPath(value: string | null | undefined): string {
-  if (
-    value &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    !value.includes("\\") &&
-    !value.startsWith("/login") &&
-    !value.startsWith("/signup") &&
-    !value.startsWith("/auth")
-  ) return value;
-  return "/app/studio";
-}
+import { authFailureRedirect, safeNextPath } from "@/lib/authRedirects";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -47,5 +35,7 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.redirect(`${origin}/login?error=1`);
+  const response = NextResponse.redirect(`${origin}${authFailureRedirect(next)}`);
+  response.cookies.set("vp_next", "", { path: "/", maxAge: 0 });
+  return response;
 }

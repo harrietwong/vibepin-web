@@ -17,6 +17,23 @@ export type CreemProductMapping = {
   interval: "month" | "year";
 };
 
+/**
+ * Publicly auditable Test-product contract. IDs remain environment-only; this
+ * table records only the expected env name, product kind, interval and amount.
+ * A deployment verifier can compare Creem's read-only product objects against
+ * this contract without logging a product id or secret.
+ */
+export const CREEM_PRODUCT_REQUIREMENTS = [
+  { envVar: "CREEM_PRODUCT_STARTER_MONTHLY", kind: "plan", plan: "starter", interval: "month", expectedUsdCents: 1_900 },
+  { envVar: "CREEM_PRODUCT_STARTER_YEARLY", kind: "plan", plan: "starter", interval: "year", expectedUsdCents: 18_000 },
+  { envVar: "CREEM_PRODUCT_PRO_MONTHLY", kind: "plan", plan: "pro", interval: "month", expectedUsdCents: 4_900 },
+  { envVar: "CREEM_PRODUCT_PRO_YEARLY", kind: "plan", plan: "pro", interval: "year", expectedUsdCents: 46_800 },
+  { envVar: "CREEM_PRODUCT_BUSINESS_MONTHLY", kind: "plan", plan: "business", interval: "month", expectedUsdCents: 9_900 },
+  { envVar: "CREEM_PRODUCT_BUSINESS_YEARLY", kind: "plan", plan: "business", interval: "year", expectedUsdCents: 94_800 },
+  { envVar: "CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY", kind: "extra_account", plan: null, interval: "month", expectedUsdCents: 700 },
+  { envVar: "CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY", kind: "extra_account", plan: null, interval: "year", expectedUsdCents: 6_000 },
+] as const;
+
 // (env var name → resolved plan/interval). Values are prod_… ids at runtime.
 const ENV_TO_MAPPING: ReadonlyArray<
   readonly [envVar: string, plan: PlanKey, interval: "month" | "year"]

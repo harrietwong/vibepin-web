@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
+import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,19 +18,6 @@ const PLAN_LABELS: Record<string, string> = {
   creator: "Starter · $19/mo", growth: "Pro · $49/mo",
 };
 
-function safeNextPath(value: string | null): string {
-  if (
-    value &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    !value.includes("\\") &&
-    !value.startsWith("/login") &&
-    !value.startsWith("/signup") &&
-    !value.startsWith("/auth")
-  ) return value;
-  return "/app/studio";
-}
-
 function SignupContent() {
   const params = useSearchParams();
   const plan   = params.get("plan") ?? "free";
@@ -38,7 +26,7 @@ function SignupContent() {
   const [email,     setEmail]     = useState("");
   const [password,  setPassword]  = useState("");
   const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState("");
+  const [error,     setError]     = useState(() => authUiErrorMessage(params.get("error")) ?? "");
   const [done,      setDone]      = useState(false);
 
   const signInHref = (() => {
@@ -51,10 +39,19 @@ function SignupContent() {
   async function handleGoogle() {
     setLoading(true);
     setError("");
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
-    });
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
+      });
+      if (oauthError) {
+        setError(authUiErrorMessage("oauth_unavailable") as string);
+        setLoading(false);
+      }
+    } catch {
+      setError(authUiErrorMessage("oauth_unavailable") as string);
+      setLoading(false);
+    }
   }
 
   async function handleSignup(e: React.FormEvent) {
@@ -67,15 +64,15 @@ function SignupContent() {
     // authorization → anyone could self-grant a paid plan. The plan lives only
     // in the URL as purchase intent; entitlements come from the Creem billing
     // mirror (app_metadata cache), refreshed by the webhook after real payment.
-    const { error } = await supabase.auth.signUp({
+    const { error: signupError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
       },
     });
-    if (error) {
-      setError(error.message);
+    if (signupError) {
+      setError(authUiErrorMessage("authentication_failed") as string);
       setLoading(false);
     } else {
       setDone(true);
