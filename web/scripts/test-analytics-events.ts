@@ -125,16 +125,19 @@ async function main() {
   // DraftDetailsDrawer.tsx / BatchEditDrawer.tsx) ─────────────────────────────
   // These components render React and aren't unit-tested here; instead this locks
   // down the CONTRACT those call sites rely on: track() with the exact payload keys
-  // they send (draftId, generationSessionId when available, remotePinId), fired only
-  // on success and wrapped so a publish that succeeds is never affected by analytics.
+  // they send (draftId or sourcePinId, sourceGenerationId when available, remotePinId),
+  // fired only on success and wrapped so a publish that succeeds is never affected by
+  // analytics. `sourceGenerationId` is the server's generation_request_id — NOT the
+  // draft's separate client-side `generationSessionId` batch id; the payload key names
+  // the field the value actually came from (see the call sites' own comments).
 
   /** Mirrors the try/catch each publish-success call site wraps track() in. */
-  function trackPublishSuccessBestEffort(props: { draftId?: string; generationSessionId?: string; remotePinId?: string }): void {
+  function trackPublishSuccessBestEffort(props: { draftId?: string; sourcePinId?: string; sourceGenerationId?: string; remotePinId?: string }): void {
     try { analytics.track("draft_published", props); }
     catch { /* analytics must never affect publish */ }
   }
 
-  test("draft_published: publish success reports draftId + remotePinId (generationSessionId omitted when unknown)", () => {
+  test("draft_published: publish success reports draftId + remotePinId (sourceGenerationId omitted when unknown)", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
     trackPublishSuccessBestEffort({ draftId: "pd_42", remotePinId: "pin_123" });
@@ -145,17 +148,35 @@ async function main() {
     assert.equal(sent.events[0].event, "draft_published");
     assert.equal(sent.events[0].draftId, "pd_42");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_123");
-    assert.equal("generationSessionId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("sourceGenerationId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "the client-side batch id is a DIFFERENT field and must never leak into this payload");
   });
 
-  test("draft_published: includes generationSessionId (sourceGenerationId) when the draft carries one", () => {
+  test("draft_published: includes sourceGenerationId when the draft carries one (never under the old generationSessionId key)", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
-    trackPublishSuccessBestEffort({ draftId: "pd_43", generationSessionId: "gen_req_9", remotePinId: "pin_456" });
+    trackPublishSuccessBestEffort({ draftId: "pd_43", sourceGenerationId: "gen_req_9", remotePinId: "pin_456" });
     analytics.__flushAnalyticsForTests();
     const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
-    assert.equal(sent.events[0].payload!.generationSessionId, "gen_req_9");
+    assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_9");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_456");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must be sent under sourceGenerationId, not the old key name");
+  });
+
+  test("draft_published: BatchEditDrawer's sourcePinId fallback when the id can't be proven to be a draft id", () => {
+    // Mirrors BatchEditDrawer.tsx: p.pinId is only a real pinDraftStore draft id in the
+    // Weekly-Plan context. When a SUCCESSFUL getDraft can't confirm that (Studio
+    // context), the value is reported under the neutral `sourcePinId` key instead of
+    // asserting it is a `draftId` that joins to nothing.
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackPublishSuccessBestEffort({ sourcePinId: "studio_pin_7", sourceGenerationId: "gen_req_11", remotePinId: "pin_789" });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ draftId?: string; payload?: Record<string, unknown> }> };
+    assert.equal(sent.events[0].draftId, undefined, "not asserted as a draftId when unproven");
+    assert.equal(sent.events[0].payload!.sourcePinId, "studio_pin_7");
+    assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_11");
+    assert.equal(sent.events[0].payload!.remotePinId, "pin_789");
   });
 
   test("draft_published: a failed publish never triggers the event", () => {
