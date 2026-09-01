@@ -341,6 +341,19 @@ export function buildHiddenPrompt(input: HiddenPromptInput): string {
   const kw = clean(input.opportunityKeyword);
   if (kw) blocks.push(section("OPPORTUNITY CONTEXT", `Market angle / keyword context: ${kw}.`));
 
+  // Pinterest official Creative Best Practices (source: Pinterest Business —
+  // https://business.pinterest.com/creative-best-practices/ — see report §1.3 of
+  // docs/调研报告/0831-用户反馈驱动的视觉生成闭环-调研与方案.md). A0-tier: zero user
+  // data required, applies to every generation. Re-check this section against the
+  // live page if Pinterest revises its guidance; the source link is the thing to
+  // re-verify, not this comment's paraphrase.
+  blocks.push(section("PINTEREST CREATIVE BEST PRACTICES", [
+    `Prefer a vertical ${fmt} aspect ratio close to Pinterest's recommended 2:3 (1000x1500px) — the format that performs best in-feed.`,
+    "Keep any text overlay small relative to the frame — Pinterest recommends text covering less than 20% of the image so the photo itself stays the focus.",
+    "Make the main subject large, centered, and unmistakable — it must read clearly even at Pinterest's small in-feed thumbnail size.",
+    "Favor a single clear focal point over a cluttered or busy composition.",
+  ]));
+
   blocks.push(section("OUTPUT GOAL", [
     referenceLeads
       ? `Create an original Pinterest-native vertical ${fmt} image that FOLLOWS the reference's scene, location, framing, and composition while clearly showing the selected products.`
