@@ -1255,9 +1255,20 @@ async function main() {
     assert.ok(/effectivePlan:\s*usage\?\.plan/.test(loader), "the list column comes from the shared resolution");
     const client = readFileSync(join(process.cwd(), "src/app/admin/users/UsersTableClient.tsx"), "utf8");
     assert.ok(
-      /planFilter\s*!==\s*"all"\s*&&\s*r\.effectivePlan\s*!==\s*planFilter/.test(client),
-      "the plan FILTER must use effectivePlan too, or a row can be filtered under one plan and shown as another",
+      client.includes("matchesPlanFilter(r, planFilter)"),
+      "the plan FILTER must run through the exported matchesPlanFilter predicate, or a row can be filtered under one plan and shown as another",
     );
+  });
+
+  test("matchesPlanFilter: an unrecognized plan_key/app_metadata.plan must not be swept into the Free filter", async () => {
+    // Behavioral counterpart to the source-shape check above: effectivePlan floors
+    // an unrecognized plan value to "free" for DISPLAY, but the filter predicate
+    // must treat that row as its own "unknown" bucket, not as a genuine free user.
+    const { matchesPlanFilter } = await import("../src/app/admin/users/UsersTableClient");
+    assert.equal(matchesPlanFilter({ effectivePlan: "free", planUnknown: false }, "free"), true);
+    assert.equal(matchesPlanFilter({ effectivePlan: "free", planUnknown: true }, "free"), false);
+    assert.equal(matchesPlanFilter({ effectivePlan: "free", planUnknown: true }, "unknown"), true);
+    assert.equal(matchesPlanFilter({ effectivePlan: "pro", planUnknown: false }, "unknown"), false);
   });
 
   await Promise.all(pending);

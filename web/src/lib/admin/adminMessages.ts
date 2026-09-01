@@ -239,9 +239,11 @@ const en = {
 
   "users.col.plan": "Plan",
   "users.filter.plan.all": "All plans",
+  "users.filter.plan.unknown": "Unknown plan",
   "users.plan.unmetered": "not metered",
   "users.plan.unavailable": "unknown",
   "users.plan.drift": "mismatch",
+  "users.plan.unknown": "unrecognized plan value",
 
   "today.quotaWatch.title": "Quota Watch",
   "today.quotaWatch.subtitle": "Metered users at or above {pct}% of a finite allowance. An upgrade signal, not a fault — these users are not blocked.",
@@ -458,9 +460,11 @@ const zh: Record<keyof typeof en, string> = {
 
   "users.col.plan": "套餐",
   "users.filter.plan.all": "全部套餐",
+  "users.filter.plan.unknown": "未知套餐",
   "users.plan.unmetered": "未计量",
   "users.plan.unavailable": "未知",
   "users.plan.drift": "不一致",
+  "users.plan.unknown": "套餐值无法识别",
 
   "today.quotaWatch.title": "配额关注",
   "today.quotaWatch.subtitle": "已计量且某项有限额度用量达到 {pct}% 及以上的用户。这是升级信号，不是故障 —— 这些用户并未被阻塞。",

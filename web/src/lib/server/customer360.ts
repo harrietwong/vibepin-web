@@ -53,6 +53,15 @@ export type UserListRow = {
   usageState: UsageState;
   /** true when the account snapshot and app_metadata name different plans. */
   planDrift: boolean;
+  /**
+   * true when the account snapshot or app_metadata carried a plan value this
+   * module's vocabulary does not recognize (adminUsage's `unknown_plan:*` /
+   * `unknown_app_metadata_plan:*` anomalies). `effectivePlan` still floors to
+   * "free" for DISPLAY, but that floor must never look identical to a genuine
+   * free user — this flag is what lets the list say so instead of silently
+   * mis-reporting a whole tier as free.
+   */
+  planUnknown: boolean;
   totalWorkspaces: number | null;
   activeWorkspaces: number | null;
   totalGenerations: number | null; // within the recent scan window
@@ -278,6 +287,7 @@ export async function getUsersOverview(): Promise<UsersOverview> {
       effectivePlan: usage?.plan ?? "free",
       usageState: usage?.state ?? "unavailable",
       planDrift: usage?.planDrift ?? false,
+      planUnknown: usage?.anomalies.some(a => a.startsWith("unknown_plan:") || a.startsWith("unknown_app_metadata_plan:")) ?? false,
       totalWorkspaces: ws ? ws.categories.size : 0,
       activeWorkspaces: ws ? ws.activeCategories.size : 0,
       totalGenerations: gen ? gen.total : 0,

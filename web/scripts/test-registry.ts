@@ -62,6 +62,7 @@ export const CORE: string[] = [
   // Facebook Page OAuth
   "test-facebook-pages",
   "test-customer360-plan",
+  "test-admin-users-plan-filter",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",

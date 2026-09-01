@@ -96,8 +96,25 @@ function PlanCell({ row }: { row: UserListRow }) {
           <AdminT k="users.plan.drift" />
         </span>
       )}
+      {row.planUnknown && (
+        <span className="text-[10.5px] font-semibold" style={{ color: "#B91C1C" }}>
+          <AdminT k="users.plan.unknown" />
+        </span>
+      )}
     </div>
   );
+}
+
+/**
+ * Pure plan-filter predicate, exported for unit coverage (scripts/test-admin-users-plan-filter.ts).
+ * "unknown" is its own bucket: an unrecognized plan_key/app_metadata.plan floors to
+ * "free" for DISPLAY (effectivePlan), but must never be swept in by the "Free" filter
+ * — that would silently hide the exact rows this flag exists to surface.
+ */
+export function matchesPlanFilter(row: Pick<UserListRow, "effectivePlan" | "planUnknown">, planFilter: PlanKey | "all" | "unknown"): boolean {
+  if (planFilter === "all") return true;
+  if (planFilter === "unknown") return row.planUnknown;
+  return row.effectivePlan === planFilter && !row.planUnknown;
 }
 
 export default function UsersTableClient({ overview }: { overview: UsersOverview }) {
@@ -109,7 +126,11 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
   // Filters on effectivePlan — the SAME resolution Customer 360 displays — so a
   // user can never show up under "Pro" here and read "Starter" on their page.
-  const [planFilter, setPlanFilter] = useState<PlanKey | "all">("all");
+  // "unknown" is a DISTINCT filter value, not folded into "free": effectivePlan
+  // floors an unrecognized plan_key to "free" for display, but selecting "Free"
+  // here must not silently sweep those rows in — they need their own bucket so
+  // an operator can find them.
+  const [planFilter, setPlanFilter] = useState<PlanKey | "all" | "unknown">("all");
   const [toggles, setToggles] = useState<Record<Toggle, boolean>>({
     failedGen: false,
     integrationIssue: false,
@@ -124,7 +145,7 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
     return overview.rows.filter(r => {
       if (q && !(r.email ?? "").toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) return false;
       if (statusFilter !== "all" && r.accountStatus !== statusFilter) return false;
-      if (planFilter !== "all" && r.effectivePlan !== planFilter) return false;
+      if (!matchesPlanFilter(r, planFilter)) return false;
       if (toggles.failedGen && !r.hasFailedGeneration) return false;
       if (toggles.integrationIssue && !r.integration.hasIssue) return false;
       if (toggles.recentlyActive && !isRecentlyActive(r.latestActivityAt)) return false;
@@ -209,7 +230,7 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
           </select>
           <select
             value={planFilter}
-            onChange={e => setPlanFilter(e.target.value as PlanKey | "all")}
+            onChange={e => setPlanFilter(e.target.value as PlanKey | "all" | "unknown")}
             className="rounded-lg border px-2.5 py-2 text-[12px] font-bold capitalize"
             style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#374151" }}
           >
@@ -217,6 +238,7 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
             {PLAN_KEYS_IN_ORDER.map(p => (
               <option key={p} value={p} className="capitalize">{p}</option>
             ))}
+            <option value="unknown">{adminT("users.filter.plan.unknown")}</option>
           </select>
           {chip("failedGen", "Has failed generation")}
           {chip("integrationIssue", "Has integration issue")}
