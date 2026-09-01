@@ -14,8 +14,10 @@ import {
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getUserDetail, type UserDetail } from "@/lib/server/customer360";
-import { getUserBlockers, type BlockerType, type UserHealth } from "@/lib/server/adminActionCenter";
-import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY } from "@/lib/admin/adminConsoleKeys";
+import { getUserBlockers, type BlockerItem, type UserHealth } from "@/lib/server/adminActionCenter";
+import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
+import type { AccountKind } from "@/lib/server/adminAccountKind";
+import { BlockerReason } from "../../_components/BlockerReason";
 import SupportNotesClient from "./SupportNotesClient";
 import { AdminT } from "../../AdminT";
 
@@ -94,7 +96,38 @@ const HEALTH_TONE: Record<UserHealth["band"], { bg: string; fg: string }> = {
   red: { bg: "rgba(239,68,68,0.12)", fg: "#B91C1C" },
 };
 
-function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; dataQuality: "exact" | "inferred" }> }) {
+/**
+ * Marks a non-customer account next to the title, using the SAME classifier the
+ * cockpit filters with — so a user who is missing from /admin/today is visibly
+ * a test/internal account here instead of looking overlooked. Real customers
+ * get no chip.
+ */
+function AccountKindChip({ kind }: { kind: AccountKind }) {
+  const key = ACCOUNT_KIND_KEY[kind];
+  if (!key) return null;
+  const tone = kind === "internal"
+    ? { bg: "rgba(99,102,241,0.12)", fg: "#4338CA" }
+    : { bg: "rgba(245,158,11,0.14)", fg: "#B45309" };
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase align-middle"
+      style={{ background: tone.bg, color: tone.fg }}
+    >
+      <AdminT k={key} />
+    </span>
+  );
+}
+
+/**
+ * Per-blocker chips, each followed by the SAME reason line the /admin/today list
+ * renders (shared BlockerReason component) — an operator opening a customer's
+ * page should not have to go back to the list to find out WHY they are blocked.
+ *
+ * Chips stack vertically rather than wrapping inline now that each carries a
+ * reason underneath; a row of chips with prose hanging off them wrapped into an
+ * unreadable mess.
+ */
+function AlertStrip({ blockers }: { blockers: BlockerItem[] }) {
   if (blockers.length === 0) {
     return (
       <div className="mb-2 flex items-center gap-2">
@@ -106,16 +139,21 @@ function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; 
     );
   }
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+    <div className="mb-2 flex flex-col gap-1.5">
       {blockers.map((b, i) => (
-        <span key={i} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(239,68,68,0.10)", color: "#B91C1C" }}>
-          <AdminT k={BLOCKER_LABEL_KEY[b.blockerType]} />
-          {b.dataQuality === "inferred" && (
-            <span className="ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-black normal-case" style={{ background: "rgba(107,114,128,0.14)", color: "#6B7280" }}>
-              <AdminT k="today.dataQuality.inferred" />
-            </span>
-          )}
-        </span>
+        <div key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(239,68,68,0.10)", color: "#B91C1C" }}>
+            <AdminT k={BLOCKER_LABEL_KEY[b.blockerType]} />
+            {b.dataQuality === "inferred" && (
+              <span className="ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-black normal-case" style={{ background: "rgba(107,114,128,0.14)", color: "#6B7280" }}>
+                <AdminT k="today.dataQuality.inferred" />
+              </span>
+            )}
+          </span>
+          <span className="text-[12px] text-gray-600">
+            <BlockerReason item={b} />
+          </span>
+        </div>
       ))}
     </div>
   );
@@ -190,7 +228,10 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               <Lock className="h-3.5 w-3.5" />
               Super Admin only · Internal
             </div>
-            <h1 className="text-[23px] font-black tracking-tight text-gray-950">{a.email ?? "(no email)"}</h1>
+            <h1 className="text-[23px] font-black tracking-tight text-gray-950">
+              {a.email ?? "(no email)"}
+              <AccountKindChip kind={a.accountKind} />
+            </h1>
           </div>
         </div>
 
@@ -214,7 +255,6 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               <Field label="Last login" value={fmtRelative(a.lastLoginAt)} />
               <Field label="Plan" value={na(a.plan)} />
               <Field label="Status" value={a.status} />
-              <Field label="Token balance" value={na(a.tokenBalance !== null ? a.tokenBalance.toLocaleString() : null)} />
               <Field label="Internal tags" value={a.internalTags.length ? a.internalTags.join(", ") : na(null)} />
               <Field label="Support notes" value={<span className="text-gray-500">See section below</span>} />
             </dl>

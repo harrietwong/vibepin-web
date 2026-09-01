@@ -34,6 +34,10 @@ const MOCK_SETUP: AiVersionOptions = {
   hiddenPrompt: "",
   productImages: ["https://cdn/product.jpg"],
   referenceImages: [],
+  // Required since the create-pin lineage introduced canonical reference selection
+  // (lib/studio/selectedReferences). Empty = a product/prompt-only run, which is
+  // what this worker-path fixture exercises.
+  selectedReferences: [],
   count: 3,
   format: "vertical 2:3",
   modelKey: "gemini_image",

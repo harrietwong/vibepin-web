@@ -42,3 +42,19 @@ export function setCachedConnections(platforms: PlatformConnectionSummary[]): vo
 export function invalidateConnectionsCache(): void {
   cache = null;
 }
+
+/**
+ * Broadcast that a social connection changed (connected / disconnected / Page
+ * re-selected). Any mounted surface — the Settings panel and the publish
+ * destination rows both — refetches, so they can never disagree about whether
+ * a platform is connected. Pinterest already had a dedicated disconnect event;
+ * this is its provider-agnostic counterpart.
+ */
+export const SOCIAL_CONNECTIONS_CHANGED_EVENT = "vp:social_connections_changed";
+
+export function notifyConnectionsChanged(): void {
+  cache = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SOCIAL_CONNECTIONS_CHANGED_EVENT));
+  }
+}

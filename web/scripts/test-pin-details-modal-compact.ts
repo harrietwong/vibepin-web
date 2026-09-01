@@ -11,7 +11,7 @@ const root = process.cwd();
 const modal   = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 const shared  = readFileSync(join(root, "src/components/pin-details/PinDetailsModal.tsx"), "utf8");
 const product = readFileSync(join(root, "src/components/pin-details/PinProductLinksSection.tsx"), "utf8");
-const plan    = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+const plan    = readFileSync(join(root, "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const studio  = readFileSync(join(root, "src/app/app/studio/page.tsx"), "utf8");
 const history = readFileSync(join(root, "src/app/app/history/page.tsx"), "utf8");
 

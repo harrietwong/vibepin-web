@@ -3,6 +3,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import ContactForm from "./ContactForm";
+import { LEGAL_ENTITY_NAME, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
 
 const CONTACT = "support@vibepin.co";
 
@@ -78,6 +79,13 @@ export default function ContactPage() {
             <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
             <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
+          </div>
+
+          <div className="mt-6 pt-6 border-t text-[11px] leading-relaxed" style={{ borderColor: "rgba(255,255,255,0.07)", color: "#4B5563" }}>
+            <p className="mb-0.5">Legal entity: {LEGAL_ENTITY_NAME}</p>
+            <p className="mb-0.5">Brand: VibePin</p>
+            <p className="mb-0.5">Website: {LEGAL_WEBSITE_URL}</p>
+            <p>Support: {CONTACT}</p>
           </div>
         </div>
       </div>

@@ -93,13 +93,77 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
   return "transient";
 }
 
-/** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner). */
-export function countPublishFailures(drafts: Pick<PinDraft, "failureType" | "publishError">[]): number {
-  let n = 0;
-  for (const d of drafts) {
-    if (d.failureType === "publish" && sanitizeHandoffField(d.publishError)) n++;
-  }
-  return n;
+/** THE single, source-agnostic predicate for an *actionable* publish failure.
+ *  A draft counts iff its last failure was a PUBLISH failure, it still carries a
+ *  publish error, and it is NOT archived. Source is deliberately NOT part of this:
+ *  the Plan drawer / cron can fail non-board-source drafts too, and those are real
+ *  failures the user can Retry from Plan — so we must not filter them out by source.
+ *  Plan and Create Pins are one workspace (PRD v1.1 §6.3) and share this one set;
+ *  the Plan week view only layers a time-range filter on top (see …InWeek below). */
+export function isActionablePublishFailure(
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+): boolean {
+  return d.failureType === "publish"
+    && !!sanitizeHandoffField(d.publishError)
+    && !d.archivedAt;
+}
+
+/** Full-population actionable publish failures (Plan and Create Pins use this set). */
+export function listActionablePublishFailures<
+  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+>(drafts: T[]): T[] {
+  return drafts.filter(isActionablePublishFailure);
+}
+
+type PublishFailureSchedule = Pick<
+  PinDraft,
+  "failureType" | "publishError" | "archivedAt" | "previousScheduledTime" | "scheduledDate" | "plannedAt"
+>;
+
+function datePart(value?: string): string | null {
+  const clean = sanitizeHandoffField(value);
+  const match = clean?.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
+}
+
+/** Plan scope uses the time that failed, falling back to the current scheduled date. */
+export function isActionablePublishFailureInWeek(d: PublishFailureSchedule, weekStart: string): boolean {
+  if (!isActionablePublishFailure(d) || !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return false;
+  const failureDate = datePart(d.previousScheduledTime) ?? datePart(d.scheduledDate) ?? datePart(d.plannedAt);
+  if (!failureDate) return false;
+  const start = new Date(`${weekStart}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  const value = new Date(`${failureDate}T00:00:00`);
+  return value >= start && value < end;
+}
+
+export function listActionablePublishFailuresInWeek<T extends PublishFailureSchedule>(
+  drafts: T[],
+  weekStart: string,
+): T[] {
+  return drafts.filter(d => isActionablePublishFailureInWeek(d, weekStart));
+}
+
+/** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner).
+ *  Now equivalent to listActionablePublishFailures().length — it additionally excludes
+ *  archived drafts, which is the intended fix (archived failures are off the board). */
+export function countPublishFailures(
+  drafts: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">[],
+): number {
+  return listActionablePublishFailures(drafts).length;
+}
+
+/** Stable identity of the currently actionable set. A retry failure on the same Pin
+ * changes updatedAt, so a genuinely new failure resurfaces the banner even when the
+ * total count did not increase. */
+export function publishFailureSetIdentity(
+  drafts: Pick<PinDraft, "id" | "updatedAt" | "failureType" | "publishError" | "archivedAt">[],
+): string {
+  return listActionablePublishFailures(drafts)
+    .map(d => `${d.id}:${d.updatedAt}`)
+    .sort()
+    .join("|");
 }
 
 // ── Failed-view sub-filter entry signal (PRD "失败情况优化" §4) ─────────────────

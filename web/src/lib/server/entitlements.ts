@@ -68,11 +68,24 @@ const PRO_EMAIL_WHITELIST: string[] = [
 
 const PLAN_RANK: Record<PlanKey, number> = { free: 0, starter: 1, pro: 2, business: 3 };
 
+/**
+ * Legacy plan aliases → current PlanKey. The pre-rename tiers (creator / growth /
+ * agency) can still appear in old creem_subscriptions.plan values and cached
+ * app_metadata.plan; mapping them here keeps a legacy sub from silently resolving
+ * to free. Mirrors CANONICAL_PLAN_NAMES in web/src/lib/accountSummary.ts.
+ */
+const LEGACY_PLAN_ALIASES: Record<string, PlanKey> = {
+  creator: "starter",
+  growth: "pro",
+  agency: "business",
+};
+
 /** Parse an unknown value into a PlanKey, or null when unrecognized. */
 export function normalizePlanKey(value: unknown): PlanKey | null {
   if (typeof value !== "string") return null;
   const v = value.trim().toLowerCase();
   if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
+  if (v in LEGACY_PLAN_ALIASES) return LEGACY_PLAN_ALIASES[v];
   return null;
 }
 

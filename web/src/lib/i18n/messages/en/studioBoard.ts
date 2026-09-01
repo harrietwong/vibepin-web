@@ -51,6 +51,8 @@ export const studioBoardMessages = {
   "studioBoard.toast.createdPinFromProduct": "Created a Pin from your product.",
   "studioBoard.toast.generatingOne": "Generating 1 Pin…",
   "studioBoard.toast.generatingMany": "Generating {n} Pins…",
+  // Serial reference-group queue: one /api/generate call per reference.
+  "studioBoard.toast.generatingReferenceProgress": "Generating reference {current} of {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generated, {failCount} failed.",
   "studioBoard.toast.createdAiPinsKeptOriginal": "Created {n} AI Pin{plural}. Original upload kept as a separate Pin.",
   "studioBoard.toast.createdAiPins": "Created {n} AI Pin{plural}.",
@@ -83,8 +85,25 @@ export const studioBoardMessages = {
   "studioBoard.card.removeKeywordAria": "Remove keyword {keyword}",
   "studioBoard.card.moreActionsAria": "More actions",
   "studioBoard.card.pinImageAlt": "Pin image",
-  "studioBoard.card.noImage": "No image",
+  // Alt text for the neutral placeholder shown when no image candidate resolves.
+  "studioBoard.card.pinImageUnavailable": "Pin image unavailable",
+  // Shown only when EVERY real source in the fallback chain is unrecoverable.
+  // Deliberately not "No image" (PRD 0816 §13): that reads as a bare technical
+  // absence, and a publish failure in particular means the image did exist.
+  "studioBoard.card.noImage": "Image unavailable",
   "studioBoard.card.generationFailedPlaceholder": "Generation failed",
+  // Badge on a failed card that is showing an INPUT image (product / reference /
+  // parent) instead of a generated result — it must not read as a success.
+  "studioBoard.card.originalImageFallback": "Original image",
+
+  // ── PinBoardCard: user-facing publish-failure reason (NEVER the raw API error) ──
+  "studioBoard.card.publishError.auth": "Pinterest connection expired. Reconnect and retry.",
+  "studioBoard.card.publishError.content": "This Pin's board, image, or link has a problem. Edit the Pin and retry.",
+  "studioBoard.card.publishError.transient": "Publishing failed due to a temporary error. You can retry.",
+  "studioBoard.card.publishError.unknown": "Publishing failed, but detailed error information was not recorded.",
+
+  // ── PinBoardCard: user-facing GENERATION-failure reason (image never finished) ──
+  "studioBoard.card.generationError.generic": "We couldn't generate this image. Review the source images and try again.",
 
   // ── PinBoardCard: recommended fix copy ──
   "studioBoard.card.fix.auth": "Your Pinterest connection needs to be reconnected before this Pin can publish.",
@@ -114,7 +133,11 @@ export const studioBoardMessages = {
 
   // ── PinBoardCard: expanded card ──
   "studioBoard.expanded.collapseAria": "Collapse",
+  // Retained for the aiDrawer title (a NEW generation from an existing pin).
   "studioBoard.expanded.generateAiImage": "Generate AI Image",
+  // Existing-draft action: replaces THIS draft's image. "Generate AI Image" read as
+  // if it created another Pin (PRD Section I naming).
+  "studioBoard.expanded.regenerateImage": "Regenerate image",
   "studioBoard.expanded.moreDetails": "More details",
   "studioBoard.expanded.productOptional": "Product · Optional",
   "studioBoard.expanded.noLinkedProduct": "No linked product",
@@ -131,4 +154,21 @@ export const studioBoardMessages = {
   "studioBoard.expanded.tryAgain": "Try again",
   "studioBoard.expanded.posted": "Posted",
   "studioBoard.expanded.schedule": "Schedule",
+
+  // ── Publish target: which connected Pinterest account this Pin publishes to ──
+  // Only ever rendered when the user has more than one connected account (a single
+  // account has nothing to choose, so the picker stays invisible).
+  "studioBoard.target.accountLabel": "Pinterest account",
+  "studioBoard.target.publishingTo": "Publishing to {account}",
+  // Shown the moment the account is switched: board ids belong to one account, so the
+  // previously chosen Board cannot carry over and is cleared.
+  "studioBoard.target.switchClearsBoard": "Changing the Pinterest account will clear the selected Board.",
+  // ── Retry guards (PRD §17) ──
+  // The Pin is pinned to an account that is no longer connected. It is NOT re-routed to
+  // another account — that would publish to the wrong Pinterest profile.
+  "studioBoard.target.reconnectToRetry": "Reconnect {account} to retry publishing.",
+  // The Pin's Board no longer exists on the target account (deleted / made secret).
+  "studioBoard.target.boardUnavailable": "This Board is no longer available. Choose another Board before retrying.",
+  // Fallback when the pinned account's username is unknown (identity never synced).
+  "studioBoard.target.thisAccount": "this account",
 } as const;

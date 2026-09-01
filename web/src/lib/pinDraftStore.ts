@@ -18,6 +18,9 @@ import {
   sanitizeHandoffField,
   type WeeklyPlanItemPayload,
 } from "./weeklyPlanHandoff";
+// Type-only edge in the other direction (pinLifecycle imports `type PinDraft` from
+// here), so this value import creates no runtime cycle.
+import { isActionablePublishFailure } from "./studio/pinLifecycle";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
@@ -112,6 +115,17 @@ export interface PinDraft {
   parentDraftId?:      string;
   /** Snapshot of the parent's image at generation time — display only, NOT the link. */
   sourceImageUrl?:     string;
+  // ── Reference → result association (create-pin PRD Section G2) ─────────────
+  // Each generation group uses exactly one style reference; these record WHICH
+  // reference produced this Pin so History/Retry/Regenerate and the failure
+  // fallback can resolve it. Absent on drafts generated before 2026-07-21 and on
+  // reference-less (product/prompt-only) generations — always treat as optional.
+  /** Stable id of the style reference for this Pin's generation group. */
+  referenceId?:        string;
+  /** That reference's image URL — also the generation-failure fallback image. */
+  referenceImageUrl?:  string;
+  /** Provenance of the reference, e.g. "recommended_pin" | "upload" | "saved". */
+  referenceSource?:    string;
   /** User‑approved tags/hashtags. `metadataDraft.topics` stays the raw AI result. */
   tags?:               string[];
   /** Server-side generation id (generateAiVersions → generation_request_id) captured when
@@ -121,11 +135,26 @@ export interface PinDraft {
   /** Stable per-asset key for this generated card (the card's idempotencyKey), so a draft
    *  keeps a durable handle to which generated asset it is even if its imageUrl changes. */
   sourceAssetKey?:     string;
+
+  // ── Publish target (PRD §13/§14 — Phase C) ─────────────────────────────────
+  // The account this Pin publishes to, pinned onto the draft the moment a target is
+  // decided. Changing the default account/board, or connecting another account, must
+  // never re-route an already-targeted Pin. Both ride the pin_drafts payload sync
+  // (whole draft is serialized) — no migration.
+  /** social_connections row id of the target Pinterest account. */
+  targetConnectionId?:  string;
+  /** Username snapshot of that account at selection time (display only, never a key). */
+  targetAccountLabel?:  string;
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
    *  before this field existed) fall back to reconstructing the URL from remotePinId. */
   remotePinUrl?:       string;
+  /** Results of the non-Pinterest fan-out publish (/api/publish/social), captured
+   *  at publish time so the Posted view can link straight to each live post.
+   *  Only successful destinations are recorded. Rides the v38 payload sync
+   *  automatically (whole draft is serialized) — no migration. */
+  socialPosts?:        SocialPostRef[];
   /** Last publish error message. Present ⇒ lifecycle is "failed" until retried. */
   publishError?:       string;
   // ── Failure semantics (PRD WP-B §11.5) ──────────────────────────────────────
@@ -187,6 +216,31 @@ export interface PinDraft {
   // payload sync automatically — no migration. Scores/reasons are INTERNAL (never
   // shown to users); only an `invalid` verdict changes the card (collapsed/dimmed).
   qualityJudge?:           QualityJudge;
+}
+
+/**
+ * A successfully published post on a non-Pinterest platform, as returned by
+ * /api/publish/social. Display-safe only: a remote id, a public permalink, and a
+ * timestamp — never a token, connection id, or any credential-adjacent value.
+ */
+export interface SocialPostRef {
+  /** "facebook" | "instagram" | ... — the SocialProvider that published it. */
+  provider:   string;
+  /** Remote post id on that platform (Facebook: `{page-id}_{post-id}`). */
+  postId:     string;
+  /** Public permalink to the live post. May be empty if the platform gave none. */
+  postUrl:    string;
+  /** ISO timestamp of when we recorded the successful publish. */
+  publishedAt: string;
+  /**
+   * Handle this went out as — the Facebook Page name, the Instagram username.
+   * Publishing to several platforms at once says nothing about WHICH account
+   * received each post, and a merchant with more than one connected account
+   * cannot tell from a permalink alone. Display-only and public by nature (it is
+   * the visible name on the post itself). Optional: refs recorded before this
+   * field existed simply omit the line.
+   */
+  accountName?: string;
 }
 
 /**
@@ -455,6 +509,10 @@ export function createBoardDraft(input: {
   destinationUrl?:  string;
   parentDraftId?:   string;
   sourceImageUrl?:  string;
+  /** Style reference that produced this Pin (PRD Section G2). */
+  referenceId?:        string;
+  referenceImageUrl?:  string;
+  referenceSource?:    string;
   keyword?:         string;
   category?:        string;
   model?:           string;
@@ -504,6 +562,9 @@ export function createBoardDraft(input: {
     source:              input.source,
     parentDraftId:       input.parentDraftId,
     sourceImageUrl:      input.sourceImageUrl,
+    referenceId:         input.referenceId,
+    referenceImageUrl:   input.referenceImageUrl,
+    referenceSource:     input.referenceSource,
     tags:                input.tags,
     idempotencyKey:      input.idempotencyKey,
     model:               input.model,
@@ -829,6 +890,9 @@ export function duplicateDraft(id: string): PinDraft | null {
     postedAt:          undefined,
     remotePinId:       undefined,
     remotePinUrl:      undefined,
+    // A copy has published nothing — it must never inherit the original's live
+    // Facebook/Instagram posts (they belong to the source Pin, not the duplicate).
+    socialPosts:       undefined,
     publishError:      undefined,
     archivedAt:        undefined,
     scheduledDate:     "",
@@ -957,14 +1021,46 @@ export function isDraftAddedToWeeklyPlan(draft: PinDraft): boolean {
  *  calendar, so it must not also appear here.
  *  Create Pins v2 board drafts (uploads / AI pins) live on the Studio board, not the
  *  Weekly Plan tray, until explicitly added — so board‑origin unadded drafts are
- *  excluded here (prevents fresh uploads from leaking into Weekly Plan). */
+ *  excluded here (prevents fresh uploads from leaking into Weekly Plan).
+ *
+ *  Lifecycle exclusions (PRD 0816 §7.1): "unscheduled" is a LIFECYCLE state, not
+ *  "happens to have no date right now". Both publish outcomes CLEAR the scheduling
+ *  fields — payloadAfterSuccess and payloadAfterFailure blank scheduledDate/
+ *  scheduledTime/plannedAt so the row drops out of the due scan. A posted or failed
+ *  Pin therefore has no date, no plan membership and no archive flag, and used to
+ *  satisfy every condition above and reappear in the tray. The date checks cannot
+ *  carry this: the state has to be read from the lifecycle fields themselves.
+ *
+ *  Fixed HERE, in the canonical selector, rather than at the render sites — a
+ *  `filter(status !== "posted")` in the sidebar would hide the symptom while every
+ *  other consumer of this predicate kept the wrong set. */
 export function isUnaddedGeneratedDraft(d: PinDraft, category?: string): boolean {
   if (category && d.category !== category) return false;
   if (d.archivedAt) return false;
   if (sanitizeHandoffField(d.scheduledDate)) return false;
   if (isDraftAddedToWeeklyPlan(d)) return false;
   if (isBoardSource(d)) return false;
+  if (isPublishedDraft(d)) return false;
+  if (isFailedDraft(d)) return false;
   return true;
+}
+
+/** Published: the publish succeeded and the remote post exists. `postedAt` is the
+ *  canonical marker (written by payloadAfterSuccess and by the client publish path);
+ *  `remotePinId` covers legacy rows that recorded the Pin without the timestamp. */
+export function isPublishedDraft(d: Pick<PinDraft, "postedAt" | "remotePinId">): boolean {
+  return !!sanitizeHandoffField(d.postedAt) || !!sanitizeHandoffField(d.remotePinId);
+}
+
+/** Failed: either publish attempt or generation left this Pin needing attention.
+ *  Publish failures delegate to isActionablePublishFailure so this agrees with the
+ *  Plan banner and the calendar badge — one rule, three surfaces. Generation
+ *  failures are flagged separately and never carry a publishError. */
+export function isFailedDraft(
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "generationStatus">,
+): boolean {
+  if (isActionablePublishFailure(d)) return true;
+  return d.generationStatus === "failed" && !d.archivedAt;
 }
 
 export function getUnaddedGeneratedDrafts(category?: string): PinDraft[] {

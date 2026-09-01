@@ -1,6 +1,14 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-export const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+import { resolveSupabaseTarget } from "./supabaseTarget";
+
+/**
+ * The Supabase origin these tests intercept. Resolved through the shared guard so
+ * production can never be the target and an unset env fails loudly rather than
+ * defaulting. allowMock: specs using this helper are pure route-interception mocks,
+ * so with no env they intercept the mock placeholder origin.
+ */
+export const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true });
 
 export const TINY_RED_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==",
@@ -182,8 +190,10 @@ export async function setupStudioMocks(page: Page, opts: StudioMockOptions = {})
   });
 
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
+    // ABORT writes rather than continue(): an unmocked mutation must never escape to
+    // a real origin. GETs return an empty result set.
     if (route.request().method() !== "GET") {
-      await route.continue();
+      await route.abort();
       return;
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });

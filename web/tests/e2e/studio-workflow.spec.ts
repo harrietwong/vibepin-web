@@ -7,6 +7,7 @@ import {
   openReferencePicker,
   uploadReferenceInPicker,
   confirmAssetPicker,
+  SUPABASE_URL,
 } from "./helpers/studio";
 
 /**
@@ -24,8 +25,6 @@ import {
  * Run:  npx playwright test studio-workflow.spec.ts
  * Env:  E2E_TEST_MODE=true  (set in .env.local to bypass auth redirect)
  */
-
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
 
 const MOCK_TREND_KEYWORDS = [
   { id: "t0001", keyword: "cozy bedroom decor", category: "home-decor", priority_score: 90, yearly_change: 40, status: "active" },
@@ -52,7 +51,7 @@ const MOCK_GENERATED_URLS = [
 async function setupMocks(page: Page) {
   await prepareStudioPage(page);
   await page.route(`${SUPABASE_URL}/rest/v1/trend_keywords*`, async (route) => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({
       status: 200,
       headers: { "Content-Type": "application/json", "Content-Range": `0-${MOCK_TREND_KEYWORDS.length - 1}/${MOCK_TREND_KEYWORDS.length}` },

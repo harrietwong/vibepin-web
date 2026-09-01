@@ -20,6 +20,8 @@
 // that DO exist (generations, publishes, connections, last login). Both are
 // clearly labeled as derived in the UI.
 
+import { classifyAccount, type AccountKind } from "./adminAccountKind";
+
 type Db = ReturnType<typeof import("@/lib/supabase").createServerClient>;
 type PgError = { code?: string; message?: string } | null;
 
@@ -89,11 +91,13 @@ function accountStatusOf(u: AuthUserLite): AccountStatus {
   return "active";
 }
 
-function planOf(u: AuthUserLite): string | null {
+// Exported for regression testing (test-customer360-plan.ts). Pure function.
+export function planOf(u: AuthUserLite): string | null {
+  // Trust ONLY app_metadata.plan — the service-role-writable cache the Creem webhook
+  // refreshes. user_metadata is user-editable, so reading its plan would let a user
+  // self-display as paid (the trust boundary security(billing) e2543f6 closed elsewhere).
   const fromApp = u.app_metadata?.["plan"];
-  const fromUser = u.user_metadata?.["plan"];
-  const plan = typeof fromApp === "string" ? fromApp : typeof fromUser === "string" ? fromUser : null;
-  return plan;
+  return typeof fromApp === "string" ? fromApp : null;
 }
 
 // pinterest connection → safe summary (never selects token ciphertext).
@@ -181,13 +185,32 @@ export async function getUsersOverview(): Promise<UsersOverview> {
   }
 
   // 4. Pinterest connections (safe columns only — no tokens).
+  //    Reads social_connections since v59 — `pinterest_connections` is frozen
+  //    rollback state and stops receiving writes, so scanning it here would show a
+  //    snapshot of the world at migration time and quietly go staler every day.
+  //    A user with several Pinterest accounts collapses to one flag per user (this
+  //    map feeds a per-user list column): needs_reconnect if ANY connection does,
+  //    disconnected only when the user has no live connection left.
   const pinByUser = new Map<string, { needs_reconnect?: boolean; disconnected_at?: string | null }>();
   try {
-    const { data, error } = await db.from("pinterest_connections").select("vibepin_user_id,needs_reconnect,disconnected_at");
+    const { data, error } = await db
+      .from("social_connections")
+      .select("user_id,needs_reconnect,disconnected_at")
+      .eq("provider", "pinterest");
     if (error) {
-      if (!isMissingSchema(error)) warnings.push(`pinterest_connections scan failed: ${error.message}`);
+      if (!isMissingSchema(error)) warnings.push(`pinterest connections scan failed: ${error.message}`);
     } else {
-      for (const r of data ?? []) pinByUser.set(r.vibepin_user_id as string, r);
+      for (const r of data ?? []) {
+        const uid = r.user_id as string;
+        const prev = pinByUser.get(uid);
+        const disconnectedAt = (r.disconnected_at as string | null) ?? null;
+        pinByUser.set(uid, {
+          needs_reconnect: !!prev?.needs_reconnect || !!r.needs_reconnect,
+          // Any live row means the user is connected; only keep a timestamp while
+          // every row seen so far is disconnected.
+          disconnected_at: prev && prev.disconnected_at === null ? null : disconnectedAt,
+        });
+      }
     }
   } catch {
     /* optional */
@@ -296,8 +319,15 @@ export type UserDetail = {
     lastLoginAt: string | null;
     plan: string | null;
     status: AccountStatus;
-    tokenBalance: number | null;
     internalTags: string[];
+    /**
+     * customer / test / internal, derived from the SAME classifier the cockpit
+     * filters with, so a user hidden from /admin/today is visibly labelled here
+     * rather than looking like a customer the operator forgot about. Computed
+     * from the auth row already in hand — no extra query, and raw app_metadata
+     * never leaves this layer.
+     */
+    accountKind: AccountKind;
   } | null;
   workspaces: { available: boolean; derived: boolean; rows: WorkspaceRow[] };
   integrations: IntegrationRow[];
@@ -353,8 +383,6 @@ export async function getUserDetail(userId: string): Promise<UserDetail> {
     };
   }
 
-  const tokenMeta = authUser.user_metadata?.["tokens"] ?? authUser.app_metadata?.["tokens"];
-  const tokenBalance = typeof tokenMeta === "number" ? tokenMeta : null;
   const tagsMeta = authUser.app_metadata?.["internal_tags"] ?? authUser.user_metadata?.["internal_tags"];
   const internalTags = Array.isArray(tagsMeta) ? tagsMeta.filter((t): t is string => typeof t === "string") : [];
 
@@ -378,8 +406,8 @@ export async function getUserDetail(userId: string): Promise<UserDetail> {
       lastLoginAt: authUser.last_sign_in_at,
       plan: planOf(authUser),
       status: accountStatusOf(authUser),
-      tokenBalance,
       internalTags,
+      accountKind: classifyAccount(authUser),
     },
     workspaces,
     integrations,
@@ -472,27 +500,39 @@ function freshnessOf(iso: string | null): "fresh" | "stale" | "unknown" {
 async function loadIntegrations(db: Db, userId: string, warnings: string[]): Promise<IntegrationRow[]> {
   const out: IntegrationRow[] = [];
 
-  // Pinterest (dedicated table). Select SAFE columns only — never tokens.
+  // Pinterest — from social_connections since v59 (the old dedicated table is frozen
+  // rollback state and no longer written). SAFE columns only, never tokens.
+  //
+  // Listed, not `.maybeSingle()`: that used to be correct because the storage had a
+  // unique index on the user, and once a user can hold several Pinterest accounts it
+  // would turn a legitimate second account into a query error that empties this
+  // admin row. One IntegrationRow is emitted per connection.
   try {
     const { data, error } = await db
-      .from("pinterest_connections")
-      .select("pinterest_username,pinterest_account_type,needs_reconnect,scopes,access_token_expires_at,updated_at,disconnected_at")
-      .eq("vibepin_user_id", userId)
-      .is("disconnected_at", null)
-      .maybeSingle();
+      .from("social_connections")
+      .select("provider_account_username,provider_account_name,needs_reconnect,scopes,token_expires_at,updated_at,disconnected_at,metadata")
+      .eq("user_id", userId)
+      .eq("provider", "pinterest")
+      .is("disconnected_at", null);
     if (error) {
-      if (!isMissingSchema(error)) warnings.push(`pinterest_connections query failed: ${error.message}`);
-    } else if (data) {
-      out.push({
-        provider: "pinterest",
-        connected: true,
-        status: data.needs_reconnect ? "reauth required" : "connected",
-        accountLabel: (data.pinterest_username as string) ?? (data.pinterest_account_type as string) ?? null,
-        tokenExpiresAt: (data.access_token_expires_at as string) ?? null,
-        lastSyncAt: (data.updated_at as string) ?? null,
-        lastSyncError: null,
-        reauthRequired: !!data.needs_reconnect,
-      });
+      if (!isMissingSchema(error)) warnings.push(`pinterest connections query failed: ${error.message}`);
+    } else if (data && data.length > 0) {
+      for (const row of data) {
+        const accountType = (row.metadata as { accountType?: string } | null)?.accountType ?? null;
+        out.push({
+          provider: "pinterest",
+          connected: true,
+          status: row.needs_reconnect ? "reauth required" : "connected",
+          accountLabel:
+            (row.provider_account_username as string) ??
+            (row.provider_account_name as string) ??
+            accountType,
+          tokenExpiresAt: (row.token_expires_at as string) ?? null,
+          lastSyncAt: (row.updated_at as string) ?? null,
+          lastSyncError: null,
+          reauthRequired: !!row.needs_reconnect,
+        });
+      }
     } else {
       out.push({ provider: "pinterest", connected: false, status: "not connected", accountLabel: null, tokenExpiresAt: null, lastSyncAt: null, lastSyncError: null, reauthRequired: false });
     }
@@ -500,12 +540,16 @@ async function loadIntegrations(db: Db, userId: string, warnings: string[]): Pro
     /* optional */
   }
 
-  // Other social providers (unified table). Safe columns only.
+  // Other social providers (same unified table). Safe columns only.
+  // Pinterest is excluded here because the block above already emitted its rows with
+  // Pinterest-specific fields (needs_reconnect, account type); without the filter the
+  // same connection would appear twice in the admin view — once per reader.
   try {
     const { data, error } = await db
       .from("social_connections")
       .select("provider,provider_account_username,provider_account_name,connection_status,token_expires_at,updated_at")
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .neq("provider", "pinterest");
     if (error) {
       if (!isMissingSchema(error)) warnings.push(`social_connections query failed: ${error.message}`);
     } else {

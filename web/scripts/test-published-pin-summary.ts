@@ -1,21 +1,21 @@
 /**
  * Published-Pin state experience in "Edit scheduled Pin".
  *
- * Only pin status === published changes. The simple "Published" label is replaced
- * with a compact publish summary (platform, published time, board, account when
- * available) plus a "View on Pinterest" link — shown ONLY when a real published
- * Pin URL exists. Draft / Scheduled / Needs-details states are untouched.
+ * Only pin status === published changes; Draft / Scheduled / Needs-details are untouched.
  *
- * Data comes from EXISTING PinDraft fields — no new storage:
- *   - postedAt      (existing; already gated isPosted)
- *   - remotePinId   (existing field, already used by Studio's PinBoardCard.tsx to
- *                    build the same "https://www.pinterest.com/pin/<id>/" URL) —
- *                    this drawer's own publish handler just wasn't writing it yet.
- *   - boardName     (existing field, already persisted by the board-selection autosave)
- *   - pinterestAccount.username (existing component state from fetchPinterestStatus)
+ * The published view is now per-destination (PRD 0809 §6): one row per platform the Pin
+ * actually reached, each naming its own account and offering its own view action. It
+ * replaced a Pinterest-primary summary with a single "View on Pinterest", which was wrong
+ * as soon as a Pin could also go to Instagram and a Facebook Page.
+ *
+ * Data still comes from EXISTING PinDraft fields — no new storage:
+ *   - postedAt / remotePinId / remotePinUrl / boardName   (Pinterest)
+ *   - targetAccountLabel   (the account that RECEIVED it — not the live connection)
+ *   - socialPosts[]        (every other platform, with its own permalink and handle)
  */
 
 import { readFileSync } from "node:fs";
+import { publishResultRows, canViewExternally } from "../src/lib/studio/publishResults";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -41,9 +41,9 @@ test("remotePinUrl exists on PinDraft alongside remotePinId", () => {
 });
 
 test("publish handler now persists remotePinId (the actual data gap) alongside postedAt", () => {
-  const i = drawer.indexOf("pinDraftStore.updateDraft(activeDraft.id, {");
+  const i = drawer.indexOf("postedAt: new Date().toISOString()");
   assert(i >= 0, "publish handler must call updateDraft with the publish result");
-  const body = drawer.slice(i, i + 300);
+  const body = drawer.slice(Math.max(0, i - 300), i + 300);
   assert(/postedAt: new Date\(\)\.toISOString\(\)/.test(body), "postedAt must still be set on publish");
   assert(/remotePinId: res\.pin\.id/.test(body), "remotePinId must be captured from the publish result");
   assert(/remotePinUrl: res\.pin\.url/.test(body), "remotePinUrl must be captured from the publish result");
@@ -59,7 +59,11 @@ test("published Pin URL prefers remotePinUrl; reconstructs from remotePinId only
 
 test("compact publish summary only renders when isPosted (draft/scheduled/needs-details untouched)", () => {
   const i = drawer.indexOf('data-testid="draft-planned-summary"');
-  const block = drawer.slice(i, i + 2200);
+  // Window sized to the whole three-branch ternary, not to how long it happened to be
+  // when this test was written: the published branch now also renders the target
+  // account badge (multi-account work), which pushed the scheduled/draft branches past
+  // the old 2200-char slice and failed the assertion while the markup was correct.
+  const block = drawer.slice(i, i + 3600);
   assert(/isPosted \? \(/.test(block), "isPosted branch missing from draft-planned-summary");
   assert(block.includes('data-testid="draft-published-summary"'), "compact published summary block missing");
   // The non-posted branches must still exist unmodified in the same ternary.
@@ -67,35 +71,59 @@ test("compact publish summary only renders when isPosted (draft/scheduled/needs-
   assert(block.includes('data-testid="draft-not-scheduled"'), "not-scheduled (draft) branch must remain");
 });
 
-test("summary shows platform, published time (existing date/time util), and board", () => {
+// The Posted detail moved from a Pinterest-primary summary (platform line + board row +
+// account row + one primary "View on Pinterest") to the same per-destination rows the
+// publish result uses (PRD 0809 §6). These assert the GUARANTEES those tests protected,
+// against the shape that now provides them, rather than the markup that used to.
+test("the Posted detail renders per-destination rows, not a Pinterest-primary summary", () => {
   const i = drawer.indexOf('data-testid="draft-published-summary"');
-  const block = drawer.slice(i, i + 900);
-  assert(/platformName\(\"pinterest\"\)/.test(block), "platform name missing");
-  assert(/formatEnglishDateTime\(activeDraft\.postedAt\)/.test(block), "published time must use the existing shared date/time formatter");
-  assert(block.includes('data-testid="draft-published-board"'), "board row missing");
-  assert(/activeDraft\.boardName\?\.trim\(\)/.test(block), "board row must be conditional on a real board name");
+  assert(i >= 0, "published summary block missing");
+  const block = drawer.slice(i, i + 1200);
+  assert(block.includes("PublishResults"), "must render the shared per-destination view");
+  assert(/formatEnglishDateTime\(activeDraft\.postedAt\)/.test(block), "published time must use the shared formatter");
 });
 
-test("account row is conditional — never invented when no live Pinterest account is known", () => {
+test("each destination carries its own platform, account and board", () => {
+  const rows = publishResultRows({
+    postedAt: "2026-08-10T02:00:00Z", remotePinId: "9", remotePinUrl: "https://www.pinterest.com/pin/9/",
+    boardName: "家居", targetAccountLabel: "harrietstudio",
+    socialPosts: [{ provider: "facebook", postId: "f1", postUrl: "https://www.facebook.com/f1", accountName: "vibepin.co" }],
+  });
+  assert(rows.map(r => r.provider).join(",") === "pinterest,facebook", "one row per destination, Pinterest first");
+  assert(rows[0].boardName === "家居", "board must ride the Pinterest row");
+  assert(rows[0].accountName === "harrietstudio", "Pinterest account must be the stored target");
+  assert(rows[1].accountName === "vibepin.co", "each platform names its own account");
+  assert(!!rows[0].publishedAt, "published time must be carried");
+});
+
+test("the account is the one that RECEIVED the post, never the currently connected one", () => {
+  // The old block read pinterestAccount?.username — whichever account happens to be
+  // connected now, which is wrong the moment a merchant switches or adds accounts.
   const i = drawer.indexOf('data-testid="draft-published-summary"');
   const block = drawer.slice(i, i + 1200);
-  assert(/pinterestAccount\?\.username &&/.test(block), "account row must be gated on pinterestAccount.username");
-  assert(block.includes('data-testid="draft-published-account"'), "account row testid missing");
+  assert(!/pinterestAccount\?\.username/.test(block), "must not read the live connection for a historical result");
+  assert(/targetAccountLabel/.test(block), "must use the target stored on the draft");
 });
 
-test("'View on Pinterest' only renders with a real URL — no button, no broken link otherwise", () => {
-  const i = drawer.indexOf('data-testid="draft-view-on-pinterest"');
-  assert(i >= 0, "View on Pinterest control missing");
-  const before = drawer.slice(Math.max(0, i - 250), i);
-  assert(/isPosted && publishedPinUrl &&/.test(before), "View on Pinterest must be gated on isPosted && publishedPinUrl");
+test("account and board are omitted when unknown — never invented", () => {
+  const rows = publishResultRows({ postedAt: "2026-08-10T02:00:00Z", remotePinId: "9" });
+  assert(rows[0].accountName === null, "unknown account must stay empty, not a placeholder");
+  assert(rows[0].boardName === null, "unknown board must stay empty, not a placeholder");
 });
 
-test("'View on Pinterest' opens safely in a new tab (target=_blank, rel=noopener noreferrer)", () => {
-  const i = drawer.indexOf('data-testid="draft-view-on-pinterest"');
-  const tag = drawer.slice(i, i + 260);
-  assert(tag.includes('target="_blank"'), "must open in a new tab");
-  assert(tag.includes('rel="noopener noreferrer"'), "must set rel=noopener noreferrer");
-  assert(tag.includes("href={publishedPinUrl}"), "href must be the derived published Pin URL");
+test("a view action requires a real permalink, and opens safely", () => {
+  assert(canViewExternally({ status: "published", postUrl: "https://www.pinterest.com/pin/9/" }) === true, "a real permalink earns a view action");
+  assert(canViewExternally({ status: "published", postUrl: "" }) === false, "no URL ⇒ no button, never a broken link");
+  assert(canViewExternally({ status: "published", postUrl: "javascript:alert(1)" }) === false, "non-http scheme must never be linked");
+  const results = readFileSync("src/components/social/PublishResults.tsx", "utf8");
+  assert(results.includes('target="_blank"'), "must open in a new tab");
+  assert(results.includes('rel="noopener noreferrer"'), "must set rel=noopener noreferrer");
+});
+
+test("no platform is the primary action any more", () => {
+  const i = drawer.indexOf('data-testid="draft-published-summary"');
+  const block = drawer.slice(i, i + 2000);
+  assert(!block.includes("draft-view-on-pinterest"), "the single primary Pinterest action must be gone");
 });
 
 test("no broken-link / error state exists for a published Pin without a URL", () => {
@@ -113,23 +141,22 @@ test("published header: 'Published Pin' title, no overflow menu (X remains the o
   assert(drawer.includes('data-testid="draft-details-close"'), "header X close must remain");
 });
 
-test("published: View on Pinterest is the single primary action; muted fallback when URL missing", () => {
-  const i = drawer.indexOf('data-testid="draft-view-on-pinterest"');
-  const tag = drawer.slice(i, i + 300);
-  assert(tag.includes("...primaryBtn"), "View on Pinterest must be primary-styled in the published view");
-  const j = drawer.indexOf('data-testid="draft-pin-url-unavailable"');
-  assert(j >= 0, "muted URL-unavailable text missing");
-  const before = drawer.slice(Math.max(0, j - 200), j);
-  assert(/isPosted && !publishedPinUrl &&/.test(before), "URL-unavailable text must only render for a published Pin with no URL");
-});
-
 test("published: entire editable form is hidden (AI copy, inputs, boards, products, alt text)", () => {
   const gate = drawer.indexOf("{!isPosted && (<>");
   assert(gate >= 0, "editable form must be gated on !isPosted");
   const block = drawer.slice(gate, drawer.indexOf("</>)}", gate));
-  for (const marker of ["PinAICopyPanel", 'data-testid="draft-edit-description"', 'data-testid="draft-edit-destination-url"', "PinBoardSection", "PinProductLinksSection", "PinAltTextSection"]) {
+  for (const marker of ["PinAICopyPanel", 'data-testid="draft-edit-description"', 'data-testid="draft-edit-destination-url"', "PinProductLinksSection", "PinAltTextSection"]) {
     assert(block.includes(marker), `${marker} must live inside the !isPosted editable-form gate`);
   }
+  // The board moved into the Publish destinations block (PRD 0809 §3 — a Board list only
+  // means something inside the account it belongs to). What matters for THIS test is the
+  // guarantee, not the location: it must still be hidden once the Pin is published. Its
+  // new home is gated on `!isPosted && !result`, which is stricter than the gate above,
+  // so assert that rather than a position the layout is allowed to change.
+  const destGate = drawer.indexOf("{!isPosted && !result && (");
+  assert(destGate >= 0, "publish destinations must stay gated on !isPosted && !result");
+  const boardAt = drawer.indexOf("PinBoardSection", drawer.indexOf('data-testid="pinterest-destination-details"'));
+  assert(boardAt > destGate, "PinBoardSection must sit inside the !isPosted && !result destinations block");
 });
 
 test("published: read-only content preview uses plain text, never inputs", () => {

@@ -3,8 +3,19 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export async function proxy(request: NextRequest) {
-  // E2E test bypass — skip auth when running Playwright tests locally
-  if (process.env.E2E_TEST_MODE === "true") {
+  // E2E test bypass — skip auth when running Playwright tests locally.
+  //
+  // ⚠️ SECURITY: this makes every /app/** route reachable with no session, so it
+  // is double-gated exactly like e2eTestModeEnabled()/localAdminBypassEnabled()
+  // in src/lib/server/superAdmin.ts: NODE_ENV must not be "production" AND
+  // E2E_TEST_MODE must be explicitly "true". A mis-set env var on a deployed
+  // build is therefore inert. (This check is inlined rather than imported
+  // because middleware runs on the edge runtime and must not pull in the
+  // next/headers + supabase-admin server module.)
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.E2E_TEST_MODE === "true"
+  ) {
     return NextResponse.next();
   }
 

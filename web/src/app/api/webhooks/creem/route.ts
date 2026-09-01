@@ -41,6 +41,7 @@ import {
   defaultGetActiveSubscriptions,
   highestPlanFromGrants,
 } from "@/lib/server/entitlements";
+import { ensureUsageAccount } from "@/lib/server/usage/ensureAccount";
 import type { PlanKey } from "@/lib/pricingPlans";
 
 export const runtime = "nodejs";
@@ -190,6 +191,40 @@ async function refreshUserPlanCache(userId: string): Promise<void> {
   const grants = await defaultGetActiveSubscriptions(userId);
   const plan = highestPlanFromGrants(grants); // "free" when nothing grants
   await setUserPlan(userId, plan);
+}
+
+/**
+ * Establish / roll the user's usage_accounts row for the current subscription cycle,
+ * AFTER refreshUserPlanCache (so resolvePlan inside ensureUsageAccount sees the plan
+ * this event just mirrored). The subscription's own period dates are passed straight
+ * from the event — we do NOT persist a start column; the account's anchor (set to the
+ * start on first init) owns every subsequent rollover, so pass-through is sufficient
+ * and cannot drift from a second stored period-of-record.
+ *
+ * EXACTLY-ONCE across webhook retries is the v56 RPC's job: its period-scoped
+ * idempotency key on usage_events makes a replayed renewal a no-op. So this is safe to
+ * run on every applied active/paid/trialing/scheduled_cancel/update event.
+ *
+ * A failure here PROPAGATES (the caller's try/catch → 500 → Creem retries): the retry
+ * is idempotent, and a silently-swallowed allocation error would leave a paying member
+ * without a usable ledger. userId is always non-null at every call site (each returns
+ * earlier when it cannot resolve a user), so allocation never runs for a deferred user.
+ */
+async function allocateUsageForCycle(
+  userId: string,
+  periodStartIso: string | null,
+  periodEndIso: string | null,
+): Promise<void> {
+  const outcome = await ensureUsageAccount(userId, {
+    hint: {
+      currentPeriodStart: periodStartIso,
+      currentPeriodEnd: periodEndIso,
+    },
+  });
+  console.log(
+    `[creem/webhook] usage account for ${userId}: ${outcome.action} ` +
+      `(plan ${outcome.planKey}, period ${outcome.periodStart}→${outcome.periodEnd}, v${outcome.version}).`,
+  );
 }
 
 /**
@@ -411,6 +446,7 @@ async function handleSubscriptionActive(
   }
   const plan: PlanKey | null = mapping?.plan ?? null;
   const interval = mapping?.interval ?? null;
+  const currentPeriodStart = asString(o.current_period_start_date);
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
@@ -459,6 +495,9 @@ async function handleSubscriptionActive(
   // Recompute from ALL subscriptions (the mirror row is written above). Handles a
   // grant/upgrade correctly and never clobbers another still-active sub.
   await refreshUserPlanCache(userId);
+
+  // Establish / roll the usage ledger for this cycle (idempotent; see helper).
+  await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
 }
 
 /**
@@ -490,6 +529,7 @@ async function handleScheduledCancel(
   // itself says "scheduled to cancel", not a status="active"+flag combination that
   // resolvePlan's active/trialing query would (incorrectly) treat as unconditional.
   const status = "scheduled_cancel";
+  const currentPeriodStart = asString(o.current_period_start_date);
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
@@ -529,6 +569,8 @@ async function handleScheduledCancel(
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId) {
     await refreshUserPlanCache(userId);
+    // Still entitled until period end — keep/roll the ledger for the current cycle.
+    await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
   }
 }
 
@@ -617,6 +659,7 @@ async function handleSubscriptionUpdate(
   }
   const plan: PlanKey | null = mapping?.plan ?? null;
   const status = asString(o.status) ?? "active";
+  const currentPeriodStart = asString(o.current_period_start_date);
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
@@ -656,5 +699,8 @@ async function handleSubscriptionUpdate(
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId) {
     await refreshUserPlanCache(userId);
+    // An update may be an UPGRADE (raise limits, preserve used) or a downgrade;
+    // ensureUsageAccount resolves the true current plan and lands it idempotently.
+    await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
   }
 }

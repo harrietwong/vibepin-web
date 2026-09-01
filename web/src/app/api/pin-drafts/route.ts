@@ -16,10 +16,13 @@
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
+import { resolvePlan } from "@/lib/server/entitlements";
+import { checkAllowance, recordUsage } from "@/lib/server/usage";
 import {
   buildPromotedColumns,
   PROMOTED_COLUMN_KEYS,
   buildScheduleColumns,
+  buildScheduledAt,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
 
@@ -201,29 +204,63 @@ export async function PUT(req: Request) {
   const db = createServerClient();
   const ids = incoming.map(d => d.draftId);
 
-  const { data: existing, error: selectError } = await db
-    .from(TABLE)
-    .select("draft_id, updated_at")
-    .eq("vibepin_user_id", userId)
-    .in("draft_id", ids);
+  // Select scheduled_at too so we can detect a draft going from NOT-scheduled to
+  // scheduled (the metering transition). If the v42 column is not applied yet the
+  // select fails with a missing-column error → retry without it and skip scheduled
+  // metering entirely (scheduledAtAvailable=false).
+  type ExistingRow = { draft_id: string; updated_at: string; scheduled_at?: string | null };
+  let scheduledAtAvailable = !_scheduleColumnsMissing;
+  let existing: ExistingRow[] = [];
+  {
+    // Dynamic column string → run the select through an untyped view of the client
+    // so PostgREST's compile-time column parser doesn't reject the runtime string.
+    const selectCols = async (cols: string) =>
+      (await db
+        .from(TABLE)
+        .select(cols)
+        .eq("vibepin_user_id", userId)
+        .in("draft_id", ids)) as unknown as { data: ExistingRow[] | null; error: { code?: string; message?: string } | null };
 
-  if (selectError) {
-    if (isMissingTableError(selectError)) return deferred();
-    console.error("[pin-drafts PUT] select error:", selectError.message);
-    return jsonError(503, "database_unavailable", "Draft storage is unavailable");
+    let { data, error: selectError } = await selectCols(
+      scheduledAtAvailable ? "draft_id, updated_at, scheduled_at" : "draft_id, updated_at",
+    );
+    if (selectError && scheduledAtAvailable && isMissingColumnError(selectError)) {
+      _scheduleColumnsMissing = true;
+      scheduledAtAvailable = false;
+      ({ data, error: selectError } = await selectCols("draft_id, updated_at"));
+    }
+    if (selectError) {
+      if (isMissingTableError(selectError)) return deferred();
+      console.error("[pin-drafts PUT] select error:", selectError.message);
+      return jsonError(503, "database_unavailable", "Draft storage is unavailable");
+    }
+    existing = data ?? [];
   }
 
   const existingMs = new Map<string, number>(
-    (existing ?? []).map(r => [r.draft_id as string, parseMs(r.updated_at as string) ?? 0]),
+    existing.map(r => [r.draft_id, parseMs(r.updated_at) ?? 0]),
+  );
+  // draftId → whether a scheduled_at was ALREADY set on the stored row.
+  const existingScheduled = new Map<string, boolean>(
+    existing.map(r => [r.draft_id, !!(r.scheduled_at)]),
   );
 
   const rows: Record<string, unknown>[] = [];
   let skippedStale = 0;
+  // Drafts transitioning from NOT-scheduled → scheduled in THIS request (each is
+  // one scheduled_post metered event). Only tracked when the scheduled_at column
+  // exists; skipped entirely otherwise.
+  const newlyScheduledDraftIds: string[] = [];
   for (const d of incoming) {
     const rowMs = existingMs.get(d.draftId);
     const incMs = parseMs(d.updatedAt)!;
     if (rowMs !== undefined && incMs < rowMs) { skippedStale++; continue; } // server LWW
     const p = d.payload;
+    if (scheduledAtAvailable) {
+      const incomingScheduledAt = buildScheduledAt(p);
+      const wasScheduled = existingScheduled.get(d.draftId) ?? false;
+      if (incomingScheduledAt && !wasScheduled) newlyScheduledDraftIds.push(d.draftId);
+    }
     rows.push({
       vibepin_user_id: userId,
       draft_id:        d.draftId,
@@ -241,6 +278,32 @@ export async function PUT(req: Request) {
       // publish_claimed_at leaves any existing lock on the row untouched.
       ...(_scheduleColumnsMissing ? {} : buildScheduleColumns(p)),
     });
+  }
+
+  // ── Scheduled-post quota gate ─────────────────────────────────────────────
+  // Enforce BEFORE the upsert so an over-limit schedule is never persisted. Only
+  // when this batch introduces new schedules. Publish-now is a different path
+  // (this endpoint only stores scheduled_at derived from plannedAt/scheduledDate)
+  // and is never metered here. Fails OPEN on a metering error.
+  if (newlyScheduledDraftIds.length > 0) {
+    try {
+      const plan = await resolvePlan(userId);
+      const allowance = await checkAllowance(userId, "scheduled_post", newlyScheduledDraftIds.length, plan);
+      if (!allowance.allowed) {
+        return Response.json(
+          {
+            error: "quota_exceeded",
+            code: "quota_exceeded",
+            quota: { used: allowance.used, limit: allowance.limit },
+            userMessage:
+              "You've reached this month's scheduled-post limit for your plan. Upgrade your plan or wait until next month to schedule more.",
+          },
+          { status: 429 },
+        );
+      }
+    } catch (err) {
+      console.error("[pin-drafts PUT] scheduled_post allowance error:", (err as Error)?.message ?? String(err));
+    }
   }
 
   if (rows.length > 0) {
@@ -272,6 +335,28 @@ export async function PUT(req: Request) {
       return jsonError(503, "database_unavailable", "Draft storage is unavailable");
     }
     await enforceDraftCap(db, userId);
+
+    // Meter each newly-scheduled draft AFTER a successful persist. Idempotency key
+    // = scheduled_post:<userId>:<draftId> (userId-scoped so a client-generated
+    // draftId cannot collide across users) — one metered schedule per draft ever
+    // (re-scheduling / retrying the same draft never double-counts). Skip if the
+    // upsert fallback dropped the scheduled_at column (schedule not persisted).
+    // Awaited so the inserts complete before the serverless response returns.
+    if (scheduledAtAvailable && !_scheduleColumnsMissing && newlyScheduledDraftIds.length > 0) {
+      await Promise.all(
+        newlyScheduledDraftIds.map(draftId =>
+          recordUsage({
+            ownerId: userId,
+            usageType: "scheduled_post",
+            operation: "consume",
+            quantity: 1,
+            referenceType: "pin_draft",
+            referenceId: draftId,
+            idempotencyKey: `scheduled_post:${userId}:${draftId}`,
+          }),
+        ),
+      );
+    }
   }
 
   return Response.json({ applied: rows.length, skippedStale });

@@ -50,6 +50,8 @@ export type AssetItem = {
   price?:        string;
   currency?:     string;
   canonicalUrl?: string;
+  /** Server-side commerce id (e.g. Shopify store_products.id). NEVER the local asset id. */
+  shopifyProductId?: string;
   store?:        string;
   allImages?:    string[];
   status?:       "ready" | "import_issue";
@@ -125,11 +127,41 @@ export function subscribe(fn: () => void): () => void {
 export function saveAsset(item: Omit<AssetItem, "id" | "createdAt" | "lastUsedAt">): AssetItem {
   const items = read();
   // Deduplicate by imageUrl + role
-  const existing = items.find(x => x.imageUrl === item.imageUrl && x.role === item.role);
-  if (existing) {
-    existing.lastUsedAt = new Date().toISOString();
-    write([...items]);
-    return existing;
+  const existingIdx = items.findIndex(x => x.imageUrl === item.imageUrl && x.role === item.role);
+  if (existingIdx >= 0) {
+    const existing = items[existingIdx];
+    // Backfill fields the stored record is MISSING. Returning it untouched meant an
+    // asset saved before a field existed (e.g. shopifyProductId) could never acquire
+    // it, so the same product produced two different productKeys depending on when it
+    // was first saved — and add/dedupe/remove then treated it as two products.
+    // Only absent values are filled: a user's existing data is never overwritten.
+    //
+    // Build a NEW object rather than mutating in place: read() hands back the shared
+    // _cache array, so mutating a member would retroactively change an object a
+    // previous caller is still holding — an order-dependent surprise.
+    const nowIso = new Date().toISOString();
+    const merged: AssetItem = { ...existing, lastUsedAt: nowIso };
+    let backfilled = false;
+    for (const [key, value] of Object.entries(item)) {
+      // Identity/audit fields are owned by the store and are never taken from input.
+      if (key === "id" || key === "createdAt" || key === "updatedAt") continue;
+      if (value === undefined || value === null || value === "") continue;
+      const current = (merged as Record<string, unknown>)[key];
+      if (current === undefined || current === null || current === "") {
+        (merged as Record<string, unknown>)[key] = value;
+        backfilled = true;
+      }
+    }
+    // A backfill is a real content change, so it must advance the LWW timestamp the
+    // sync adapter reads — assetTs() prefers `updatedAt`, so leaving it stale would
+    // let the server's older copy win and silently undo the migration on other
+    // devices. `lastUsedAt` alone is not enough. Only bump when something actually
+    // changed, so a plain re-selection stays a no-op for sync purposes.
+    if (backfilled) merged.updatedAt = nowIso;
+    const next = [...items];
+    next[existingIdx] = merged;
+    write(next);
+    return merged;
   }
   const now = new Date().toISOString();
   const asset: AssetItem = { ...item, id: uid(), createdAt: now, lastUsedAt: now };

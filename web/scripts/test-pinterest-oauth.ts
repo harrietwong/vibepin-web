@@ -66,18 +66,20 @@ await test("authorization URL has correct params, exact redirect URI, and scopes
   assertEq(url.searchParams.get("response_type"), "code", "response_type");
   assertEq(url.searchParams.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "exact redirect URI");
   assertEq(url.searchParams.get("state"), "STATE123", "state");
-  // Default env resolves to production → minimum scopes, NO boards:write.
-  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,pins:read,pins:write", "production scopes");
+  // Default env resolves to production. boards:write IS included: Pinterest v5
+  // POST /pins rejects a token without it (401 code 3 "Missing: ['boards:write']"),
+  // so it is part of the minimum publish set — see PRODUCTION_SCOPES in config.ts.
+  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,boards:write,pins:read,pins:write", "production scopes");
 });
 
-await test("production requests minimum scopes; no boards:write, no forbidden / secret scopes", () => {
+await test("production requests the minimum publish set; no forbidden / secret scopes", () => {
   const s = config.pinterestScopeString();
   for (const bad of ["ads:", "catalogs:", "_secret"]) {
     assert(!s.includes(bad), `scope string must not include ${bad}`);
   }
   assert(s.includes("pins:write"), "pins:write required for publishing");
-  assert(!s.includes("boards:write"), "production must NOT request boards:write");
-  assertEq(config.PRODUCTION_SCOPES.length, 4, "exactly 4 production scopes");
+  assert(s.includes("boards:write"), "boards:write required — POST /pins rejects tokens without it");
+  assertEq(config.PRODUCTION_SCOPES.length, 5, "exactly 5 production scopes");
 });
 
 await test("sandbox requests boards:write for the demo-board helper", () => {
@@ -101,7 +103,9 @@ await test("VERCEL_ENV=production forces production regardless of PINTEREST_API_
   try {
     assertEq(config.getPinterestApiEnv(), "production", "prod deploy forces production");
     assertEq(config.getPinterestApiBase(), "https://api.pinterest.com/v5", "prod uses production base, NOT api-sandbox");
-    assert(!config.pinterestScopeString().includes("boards:write"), "prod scopes even with sandbox flag");
+    // The point of this test is env forcing, not scope contents: prove the scope
+    // string is the PRODUCTION set (not sandbox's) even with a stray sandbox flag.
+    assertEq(config.pinterestScopeString(), config.PRODUCTION_SCOPES.join(","), "prod scopes even with sandbox flag");
   } finally {
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
@@ -425,12 +429,38 @@ await test("concurrent refreshes for one user coalesce into a single refresh + a
 });
 
 // 15. debug-status contract: only booleans / non-secret host; never a token or secret.
-await test("debug-status returns booleans + non-secret host only (never secrets)", async () => {
-  const oldV = process.env.VERCEL_ENV; const oldE = process.env.PINTEREST_API_ENV;
-  process.env.VERCEL_ENV = "production"; process.env.PINTEREST_API_ENV = "sandbox";
+await test("debug-status is super-admin only — a signed-in customer gets 404, not the diagnostics", async () => {
+  // PRD §7: server configuration is operator detail. The endpoint answers 404 rather
+  // than 403 so its existence isn't advertised to the customer probing for it.
+  const oldE2E = process.env.E2E_TEST_MODE;
+  delete process.env.E2E_TEST_MODE; // no bypass → the real gate decides
   try {
     const route = await import("../src/app/api/pinterest/debug-status/route");
     const res = await route.GET(new Request("https://vibepin.co/api/pinterest/debug-status"));
+    assertEq(res.status, 404, "a non-super-admin must get 404");
+    const body = await res.json() as Record<string, unknown>;
+    // The 404 body must carry NO configuration detail at all.
+    for (const leaked of ["apiEnv", "baseUrl", "sandboxTokenPresent", "standardAccessRequired"]) {
+      assert(!(leaked in body), `404 body must not include ${leaked}`);
+    }
+  } finally {
+    if (oldE2E === undefined) delete process.env.E2E_TEST_MODE; else process.env.E2E_TEST_MODE = oldE2E;
+  }
+});
+
+await test("debug-status returns booleans + non-secret host only (never secrets)", async () => {
+  const oldV = process.env.VERCEL_ENV; const oldE = process.env.PINTEREST_API_ENV;
+  const oldE2E = process.env.E2E_TEST_MODE;
+  process.env.VERCEL_ENV = "production"; process.env.PINTEREST_API_ENV = "sandbox";
+  // Authorize via the existing E2E super-admin header so this asserts the payload
+  // (its real subject) without standing up a cookie/session scope.
+  process.env.E2E_TEST_MODE = "true";
+  try {
+    const route = await import("../src/app/api/pinterest/debug-status/route");
+    const res = await route.GET(new Request("https://vibepin.co/api/pinterest/debug-status", {
+      headers: { "x-e2e-super-admin": "true" },
+    }));
+    assertEq(res.status, 200, "a super admin must get the diagnostics");
     const body = await res.json() as Record<string, unknown>;
     assertEq(body.apiEnv, "production", "prod deploy => production");
     assertEq(body.apiBaseIsProduction, true, "base is api.pinterest.com");
@@ -447,6 +477,7 @@ await test("debug-status returns booleans + non-secret host only (never secrets)
   } finally {
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
+    if (oldE2E === undefined) delete process.env.E2E_TEST_MODE; else process.env.E2E_TEST_MODE = oldE2E;
   }
 });
 
@@ -510,6 +541,77 @@ await test("refresh CAS: invalid_grant with NO version bump is a real reconnect"
   });
   await expectThrow(() => client.getCurrentPinterestUser(), "genuinely-dead token must throw NeedsReconnect");
   assert(marked, "a real invalid_grant (no concurrent refresh) MUST mark needs_reconnect");
+});
+
+// ── continuous_refresh (Standard Access token-renewal fix, 2026-08-01) ─────────
+// Apps created before 2025-09-25 get a FIXED-lifetime refresh token unless the code
+// exchange asks for a continuous one. Without the flag, publishing works until that
+// token expires and then fails with invalid_grant → needs_reconnect forever.
+
+/** Capture the form body of the next token POST without hitting the network. */
+async function captureTokenBody(run: () => Promise<unknown>): Promise<URLSearchParams> {
+  const realFetch = globalThis.fetch;
+  let captured: URLSearchParams | null = null;
+  let sawAuthHeader = false;
+  globalThis.fetch = (async (_input: string | URL, init?: RequestInit) => {
+    captured = new URLSearchParams(String(init?.body ?? ""));
+    const h = new Headers(init?.headers as HeadersInit);
+    sawAuthHeader = !!h.get("Authorization");
+    return new Response(JSON.stringify({
+      access_token: "AT_new", refresh_token: "RT_new",
+      expires_in: 3600, refresh_token_expires_in: 31536000,
+      scope: "boards:read pins:read pins:write",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try { await run(); } finally { globalThis.fetch = realFetch; }
+  assert(captured, "token endpoint was not called");
+  assert(sawAuthHeader, "token request must use Basic auth header (secret never in body)");
+  return captured!;
+}
+
+await test("authorization_code exchange sends continuous_refresh=true (+ code, redirect_uri)", async () => {
+  const body = await captureTokenBody(() => service.exchangeCodeForTokens("AUTH_CODE_123"));
+  assertEq(body.get("grant_type"), "authorization_code", "grant_type");
+  assertEq(body.get("code"), "AUTH_CODE_123", "code");
+  assertEq(body.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "redirect_uri");
+  assertEq(body.get("continuous_refresh"), "true", "continuous_refresh must be requested");
+  // The app secret must ride in the Basic auth header, never the form body.
+  assert(!body.get("client_secret"), "client_secret must NOT be in the token request body");
+});
+
+await test("refresh_token grant does NOT send continuous_refresh", async () => {
+  const body = await captureTokenBody(() => service.refreshAccessToken("RT_old"));
+  assertEq(body.get("grant_type"), "refresh_token", "grant_type");
+  assertEq(body.get("refresh_token"), "RT_old", "refresh_token");
+  assert(body.get("continuous_refresh") === null, "refresh grant must NOT include continuous_refresh");
+});
+
+await test("successful exchange parses access/refresh tokens, both expiries, and granted scopes", async () => {
+  type Tokens = Awaited<ReturnType<typeof service.exchangeCodeForTokens>>;
+  const box: { t?: Tokens } = {};
+  await captureTokenBody(async () => { box.t = await service.exchangeCodeForTokens("AUTH_CODE_123"); });
+  assert(box.t, "exchange returned nothing");
+  const t = box.t as Tokens;
+  assertEq(t.accessToken, "AT_new", "access token");
+  assertEq(t.refreshToken, "RT_new", "rotated refresh token");
+  assert(t.accessTokenExpiresAt, "access_token_expires_at must be derived from expires_in");
+  assert(t.refreshTokenExpiresAt, "refresh_token_expires_at must be derived");
+  assertEq(t.scopes.join(","), "boards:read,pins:read,pins:write", "granted scopes captured");
+});
+
+await test("token exchange failure never echoes code/secret/token in the error message", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ error: "invalid_grant", error_description: "Refresh token is invalid" }),
+    { status: 400, headers: { "Content-Type": "application/json" } },
+  )) as typeof fetch;
+  let msg = "";
+  try { await service.exchangeCodeForTokens("SUPER_SECRET_CODE"); }
+  catch (e) { msg = `${(e as Error).message}`; }
+  finally { globalThis.fetch = realFetch; }
+  assert(msg.length > 0, "a 400 must throw");
+  assert(!msg.includes("SUPER_SECRET_CODE"), "error must not leak the authorization code");
+  assert(!msg.includes("test-app-secret"), "error must not leak the app secret");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

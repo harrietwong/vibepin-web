@@ -34,7 +34,10 @@ import { isBlobUrl } from "@/lib/mediaUrl";
 import type { PinDraft } from "@/lib/pinDraftStore";
 
 /** Draft fields this resolver needs — kept minimal so tests don't need a full PinDraft. */
-export type FailureMediaDraft = Pick<PinDraft, "imageUrl" | "sourceImageUrl" | "parentDraftId" | "setupSnapshot">;
+export type FailureMediaDraft = Pick<
+  PinDraft,
+  "imageUrl" | "sourceImageUrl" | "parentDraftId" | "setupSnapshot" | "referenceImageUrl"
+>;
 
 /**
  * A `data:` URL whose total length is suspiciously short to hold a real photo/render.
@@ -77,6 +80,11 @@ export function resolveFailureMediaUrl(
   const product = draft.setupSnapshot?.selectedProducts?.[0]?.imageUrl;
   if (usable(product)) return product;
 
+  // THIS card's own generation group reference (set since 2026-07-21). Preferred over
+  // the batch-wide setupSnapshot list, which only records the first reference of the
+  // batch and would show the wrong image for groups 2..N.
+  if (usable(draft.referenceImageUrl)) return draft.referenceImageUrl;
+
   const reference = draft.setupSnapshot?.selectedReferences?.[0]?.imageUrl;
   if (usable(reference)) return reference;
 
@@ -92,6 +100,7 @@ export function resolveFailureMediaUrl(
       if (usable(parent.sourceImageUrl)) return parent.sourceImageUrl;
       const parentProduct = parent.setupSnapshot?.selectedProducts?.[0]?.imageUrl;
       if (usable(parentProduct)) return parentProduct;
+      if (usable(parent.referenceImageUrl)) return parent.referenceImageUrl;
       const parentReference = parent.setupSnapshot?.selectedReferences?.[0]?.imageUrl;
       if (usable(parentReference)) return parentReference;
     }

@@ -31,6 +31,7 @@ import {
   type SupabaseLikeDb,
   type AuthUserLite,
 } from "./adminQueryUtils";
+import { classifyAccount, emptyExcluded, type ExcludedCounts } from "./adminAccountKind";
 
 // ── contract types ────────────────────────────────────────────────────────────
 
@@ -72,6 +73,17 @@ export interface ActivationFunnel {
   warnings: string[];
   stages: StageCount[];
   publishSplit: PublishSourceSplit[];
+  /**
+   * Users dropped from the COHORT (i.e. counted only among signups inside the
+   * 30d window) because they are test / internal accounts. Zero on both counts
+   * when `includeNonCustomers` was set.
+   */
+  excluded: ExcludedCounts;
+}
+
+/** Shared options for the cockpit derivations. Default = real customers only. */
+export interface CockpitOptions {
+  includeNonCustomers?: boolean;
 }
 
 // ── per-user milestone bundle ─────────────────────────────────────────────────
@@ -308,8 +320,12 @@ export function rollUp(cohort: Milestones[]): { stages: StageCount[]; publishSpl
 
 // ── public entry point ─────────────────────────────────────────────────────────
 
-export async function getActivationFunnel(injectedDb?: SupabaseLikeDb): Promise<ActivationFunnel> {
+export async function getActivationFunnel(
+  injectedDb?: SupabaseLikeDb,
+  options: CockpitOptions = {},
+): Promise<ActivationFunnel> {
   const db = injectedDb ?? (await createAdminDb());
+  const includeNonCustomers = options.includeNonCustomers === true;
   const warnings: string[] = [];
   const since = isoHoursAgo(COHORT_WINDOW_DAYS * 24);
 
@@ -317,11 +333,25 @@ export async function getActivationFunnel(injectedDb?: SupabaseLikeDb): Promise<
   if (users === null) {
     return {
       available: false, generatedAt: new Date().toISOString(), cohortWindowDays: COHORT_WINDOW_DAYS,
-      cohortSize: 0, warnings, stages: [], publishSplit: [],
+      cohortSize: 0, warnings, stages: [], publishSplit: [], excluded: emptyExcluded(),
     };
   }
 
-  const cohortUsers = users.filter(u => u.created_at && u.created_at >= since);
+  // Cohort = signups inside the window. Non-customers are removed from the
+  // cohort itself (not merely hidden downstream), so every conversion rate below
+  // is computed over real customers only. The counters report how many cohort
+  // members that removed — deliberately NOT the whole user table, which would
+  // report founders who signed up years ago as "excluded from this cohort".
+  const excluded = emptyExcluded();
+  const inWindow = users.filter(u => u.created_at && u.created_at >= since);
+  const cohortUsers = includeNonCustomers
+    ? inWindow
+    : inWindow.filter(u => {
+        const kind = classifyAccount(u);
+        if (kind === "customer") return true;
+        excluded[kind] += 1;
+        return false;
+      });
 
   const [connByUser, genByUser, exactByUser, inferredByUser] = await Promise.all([
     loadEarliestConnection(db, warnings),
@@ -344,5 +374,6 @@ export async function getActivationFunnel(injectedDb?: SupabaseLikeDb): Promise<
     warnings,
     stages,
     publishSplit,
+    excluded,
   };
 }

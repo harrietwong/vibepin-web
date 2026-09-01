@@ -3,9 +3,9 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Sparkles, ClipboardList, Clock,
+  Sparkles, Clock,
   BarChart2, Compass, ShoppingBag, Settings, Target,
-  User, CreditCard, HelpCircle, LogOut, Moon, Sun, Monitor,
+  User, CreditCard, HelpCircle, LogOut, Moon, Sun, Monitor, Share2,
 } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { LocaleProvider, useLocale } from "@/lib/i18n/LocaleProvider";
@@ -45,7 +45,6 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "create-pins",    href: "/app/studio",               icon: Sparkles,      labelKey: "nav.createPins",     matchFn: (p) => p === "/app/studio" || p.startsWith("/app/studio/") },
-  { id: "weekly-plan",    href: "/app/plan",                 icon: ClipboardList, labelKey: "nav.weeklyPlan",     matchFn: (p) => p === "/app/plan" || p.startsWith("/app/plan/") },
   { id: "my-pins",        href: "/app/history",              icon: Clock,         labelKey: "nav.myPins",         matchFn: (p) => p === "/app/history" || p.startsWith("/app/history/") },
   // Opportunities = the keyword-opportunity workspace page. matchFn covers the full
   // /app/workspace/* prefix so the item stays highlighted on any category.
@@ -167,15 +166,6 @@ function DropdownItem({ icon: Icon, label, right, onClick, danger, testId }: {
   );
 }
 
-// Pinterest icon (lucide doesn't include it; use a small inline SVG wrapper)
-function PinterestMark({ style }: { style?: React.CSSProperties }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: 15, height: 15, color: "var(--app-dropdown-muted)", flexShrink: 0, ...style }}>
-      <path d="M12 0C5.373 0 0 5.373 0 12c0 5.084 3.163 9.426 7.627 11.174-.105-.949-.2-2.403.042-3.441.218-.937 1.407-5.965 1.407-5.965s-.359-.719-.359-1.782c0-1.668.967-2.914 2.171-2.914 1.023 0 1.518.769 1.518 1.69 0 1.029-.655 2.568-.994 3.995-.283 1.194.599 2.169 1.777 2.169 2.133 0 3.772-2.249 3.772-5.495 0-2.873-2.064-4.882-5.012-4.882-3.414 0-5.418 2.561-5.418 5.207 0 1.031.397 2.138.893 2.738a.36.36 0 01.083.345l-.333 1.36c-.053.22-.174.267-.402.161-1.499-.698-2.436-2.889-2.436-4.649 0-3.785 2.75-7.262 7.929-7.262 4.163 0 7.398 2.967 7.398 6.931 0 4.136-2.607 7.464-6.227 7.464-1.216 0-2.359-.631-2.75-1.378l-.748 2.853c-.271 1.043-1.002 2.35-1.492 3.146C9.57 23.812 10.763 24 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0z" />
-    </svg>
-  );
-}
-
 // ── User dropdown ──────────────────────────────────────────────────────────────
 
 const THEME_OPTS: { id: ThemePreference; Icon: React.ComponentType<{ style?: React.CSSProperties }> }[] = [
@@ -241,11 +231,13 @@ function UserDropdown({ email, onLogout, onClose, onOpenSettings }: {
 
           <div style={{ height: 1, background: "var(--app-border)", margin: "4px 0" }} />
 
+          {/* Pinterest is one platform among several now — the dropdown opens the
+              unified Social accounts tab rather than a Pinterest-only section. */}
           <DropdownItem
-            icon={PinterestMark}
-            label={t("account.pinterest")}
-            testId="account-menu-pinterest"
-            onClick={() => openSettings("pinterest")}
+            icon={Share2}
+            label={t("settings.tab.social")}
+            testId="account-menu-social"
+            onClick={() => openSettings("social")}
           />
 
           <DropdownItem
@@ -352,8 +344,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (path.startsWith("/app/settings/billing")) {
       setSettingsTab("billing"); setSettingsOpen(true);
-    } else if (path.startsWith("/app/settings/pinterest")) {
-      setSettingsTab("pinterest"); setSettingsOpen(true);
     } else if (path.startsWith("/app/settings/shopify")) {
       setSettingsTab("shopify"); setSettingsOpen(true);
     } else if (path.startsWith("/app/settings/social")) {
@@ -472,7 +462,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           </span>
           <span data-sidebar-label="" style={{ minWidth: 0, flex: 1 }}>
             <span data-sidebar-label="" style={{ display: "block", fontSize: 13, fontWeight: 700, lineHeight: 1.15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              Zoe
+              {t("account.billing")}
             </span>
           </span>
         </button>
@@ -481,7 +471,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* ── Main area ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
-        {/* App top bar (token + avatar) */}
+        {/* App top bar (sync status + language/theme + avatar) */}
         <div style={{
           height: 40, flexShrink: 0,
           display: "flex", alignItems: "center", justifyContent: "flex-end",

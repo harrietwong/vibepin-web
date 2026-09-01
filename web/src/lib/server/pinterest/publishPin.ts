@@ -36,6 +36,15 @@ export interface PublishPinInput {
   description?: unknown;
   link?: unknown;
   altText?: unknown;
+  /**
+   * The Pin's pinned publish target (social_connections row id, PRD §14). When present
+   * the publish runs on THAT account — the whole point of a fixed target: changing the
+   * default account must not re-route a Pin that already chose one. Omitted ⇒ resolve the
+   * user's single/default connection exactly as before (pre-v59 behaviour, unchanged for
+   * every single-account user). Ownership is proven by `forConnection`, which only
+   * resolves rows belonging to `uid`.
+   */
+  connectionId?: unknown;
 }
 
 /** A successful publish: the live Pinterest Pin, the board, and the environment. */
@@ -44,6 +53,13 @@ export interface PublishSuccess {
   pin: { id: string; url: string };
   board: { id: string; name: string };
   environment: "sandbox" | "production";
+  /**
+   * The connection this Pin actually published through. Callers persist it as the Pin's
+   * target so an adopted (previously untargeted) draft is pinned from its first publish
+   * on — adopt-once. Absent in sandbox mode, which publishes with the sandbox token
+   * rather than through a stored connection.
+   */
+  connectionId?: string;
 }
 
 /**
@@ -60,6 +76,14 @@ export interface PublishValidationFailure {
     | "invalid_link"
     | "board_not_owned";
   status: 400 | 403 | 422;
+  /**
+   * The connection this attempt authenticated as, when it got that far (board_not_owned
+   * is decided by Pinterest itself, so a connection WAS resolved). Callers pin it onto an
+   * untargeted draft so the retry goes to the same account this attempt used — the
+   * pre-check failures (bad board id / image / link) never reach a connection and leave
+   * this undefined.
+   */
+  connectionId?: string;
 }
 
 export type PublishResult = PublishSuccess | PublishValidationFailure;
@@ -99,9 +123,19 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
   // Sandbox mode publishes with the SANDBOX token against the sandbox API (the real
   // OAuth connection's production token is rejected there). Gated on
   // canAttemptSandboxPublish() → production is unchanged and uses the real connection.
+  //
+  // In production, an explicit connectionId is this Pin's pinned target and wins; without
+  // one we resolve the user's single/default connection exactly as before. Sandbox
+  // ignores the target because it doesn't publish through a user connection at all.
+  const targetConnectionId =
+    typeof input.connectionId === "string" && input.connectionId.trim()
+      ? input.connectionId.trim()
+      : "";
   const client = canAttemptSandboxPublish()
     ? await PinterestClient.forSandboxDemo(input.uid)
-    : await PinterestClient.forUser(input.uid);
+    : targetConnectionId
+      ? await PinterestClient.forConnection(input.uid, targetConnectionId)
+      : await PinterestClient.forUser(input.uid);
 
   // Ownership is enforced by Pinterest (same token creates the pin), so the board
   // lookup doesn't need to gate — and serialize a full Pinterest round trip in front
@@ -132,6 +166,7 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
           error: "Board not found on the connected Pinterest account",
           code: "board_not_owned",
           status: 403,
+          connectionId: canAttemptSandboxPublish() ? undefined : client.boundConnectionId,
         };
       }
     }
@@ -155,6 +190,9 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
     // prefers its locally-selected board name anyway.
     board: board ?? { id: boardId, name: "" },
     environment: getPinterestApiEnv(),
+    // The row that actually authenticated this publish, never the id the caller asked
+    // for; in sandbox mode there is no such row.
+    connectionId: canAttemptSandboxPublish() ? undefined : client.boundConnectionId,
   };
 }
 

@@ -65,10 +65,15 @@ def _banner(msg: str) -> None:
     print(f"{B}{C}  {msg}{X}")
     print(f"{B}{C}{'鈹€'*w}{X}\n")
 
-def _ok(msg: str)   -> None: print(f"{G}  鉁? {msg}{X}")
-def _info(msg: str) -> None: print(f"{C}  路  {msg}{X}")
-def _warn(msg: str) -> None: print(f"{Y}  !  {msg}{X}")
-def _err(msg: str)  -> None: print(f"{R}  鉁? {msg}{X}")
+# flush=True on all four: under systemd stdout is a pipe, so Python
+# block-buffers it. A long step then reports nothing until it exits, and a
+# step killed by the run timeout (pin-crawl, 2026-08-08) never flushes at
+# all -- its whole log is lost precisely when it is needed. Interactive
+# runs are unaffected.
+def _ok(msg: str)   -> None: print(f"{G}  鉁? {msg}{X}", flush=True)
+def _info(msg: str) -> None: print(f"{C}  路  {msg}{X}", flush=True)
+def _warn(msg: str) -> None: print(f"{Y}  !  {msg}{X}", flush=True)
+def _err(msg: str)  -> None: print(f"{R}  鉁? {msg}{X}", flush=True)
 
 
 # 鈹€鈹€ DB helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -251,7 +256,7 @@ async def step_trends(
     if flags.get("L3"):
         providers.append("pinterest_trends_l3")
 
-    from trend_provider_health import run_provider_health  # noqa: E402
+    from trend_provider_health import run_provider_health, summarize_actual_run  # noqa: E402
 
     from official_v5_seed_quality import global_dedupe_job_seeds  # noqa: E402
 
@@ -274,7 +279,17 @@ async def step_trends(
     elif _tsp.SEED_RUN_ACCUMULATOR.get("queue_stats"):
         queue_totals.update(_tsp.SEED_RUN_ACCUMULATOR["queue_stats"])
 
-    provider_health = await run_provider_health(region=region)
+    # The health probe runs AFTER the fetch loop above, so by this point we already
+    # know exactly what every layer produced. Hand that evidence to the blocker so
+    # it judges the run on its actual output rather than on one trailing limit=5
+    # request — which, after 20+ interests of v5 calls, is the request most likely
+    # to be rate-limited. See trend_provider_health._compute_blocker.
+    actual_run = summarize_actual_run(
+        provider_run_summary=PROVIDER_RUN_SUMMARY,
+        authoritative_scored=authoritative_scored,
+        source_counts=source_counts,
+    )
+    provider_health = await run_provider_health(region=region, actual_run=actual_run)
 
     job_report = build_job_report(
         crawl_queue_entries_created=queue_totals.get("written", 0),
@@ -319,6 +334,13 @@ async def step_trends(
     job_report["blockerReason"] = provider_health.get("blockerReason")
     job_report["noUsableSeedsReason"] = no_usable_seeds_reason
     job_report["selectedPrimaryProvider"] = provider_health.get("selectedPrimaryProvider")
+    # Which evidence decided the blocker, and whether the probe's verdict was
+    # discarded because the run demonstrably got official data anyway.
+    job_report["blockerDecisionBasis"] = provider_health.get("blockerDecisionBasis")
+    job_report["probePrimaryProvider"] = provider_health.get("probePrimaryProvider")
+    job_report["probeTransientFailure"] = provider_health.get("probeTransientFailure")
+    job_report["probeOverride"] = provider_health.get("probeOverride")
+    job_report["authoritativeSeedsScored"] = authoritative_scored
     job_report["missingP0Categories"] = job_report.get("p0CategoriesMissing", [])
     job_report["queueVerification"] = None
     if dry_run:
@@ -337,6 +359,21 @@ async def step_trends(
     import json as _json
     _info("Seed job report:")
     print(_json.dumps(job_report, indent=2, ensure_ascii=False))
+
+    # Say out loud which path the blocker decision took, so a future failure can be
+    # read straight off the log instead of reconstructed from the JSON blob.
+    if provider_health.get("probeOverride"):
+        _info(f"PROVIDER PROBE OVERRIDDEN — {provider_health['probeOverride']}")
+    _info(
+        "Provider verdict: basis="
+        f"{provider_health.get('blockerDecisionBasis')} "
+        f"official_seeds_scored={authoritative_scored} "
+        f"l3_scored={source_counts.get('L3', 0)} "
+        f"probe_primary={provider_health.get('probePrimaryProvider')} "
+        f"probe_transient={provider_health.get('probeTransientFailure')} "
+        f"selected={provider_health.get('selectedPrimaryProvider')} "
+        f"blocker={bool(provider_health.get('blocker'))}"
+    )
 
     if provider_health.get("blocker") and not dry_run:
         reason = provider_health.get("blockerReason") or "Pinterest Trends provider unavailable"
@@ -359,15 +396,39 @@ async def replenish_crawl_queue_if_needed(
     dry_run:         bool = False,
     limit_interests: int = 0,
     min_pending:     int = 20,
+    limit_keywords:  int = 0,
 ) -> int:
     """
-    When pending crawl_queue count is below min_pending, run trends replenish.
-    Returns pending count after replenish attempt.
-    """
-    from crawl_queue_ops import count_pending_items, MIN_PENDING_FOR_CRAWL, fetch_due_crawl_items  # type: ignore
+    Top the crawl queue up to what THIS run will consume.
 
-    threshold = min_pending or MIN_PENDING_FOR_CRAWL
+    The threshold is max(min_pending, limit_keywords) — not a fixed 20. A run
+    that eats limit_keywords per pass must find at least that many due keywords,
+    otherwise the queue drains a little every day while every run still reports
+    success. That is exactly what happened 2026-08-08..10 (due pending
+    147 -> 150 -> 53 -> 0 against a 150/run consumption, replenish never fired
+    because 53 >= 20).
+
+    Returns due-pending count after the replenish attempt.
+    """
+    from crawl_queue_ops import (  # type: ignore
+        count_pending_items,
+        MIN_PENDING_FOR_CRAWL,
+        resolve_replenish_target,
+    )
+
+    threshold = resolve_replenish_target(
+        limit_keywords=limit_keywords,
+        min_pending=min_pending or MIN_PENDING_FOR_CRAWL,
+    )
     pending = count_pending_items(_db_select, due_only=True)
+    # Always log the decision. The 2026-08-10 run produced no replenish line at
+    # all, which read as "replenish never ran" when in fact it ran and silently
+    # returned at the gate. A skipped replenish must be as visible as a taken one.
+    _info(
+        f"[crawl] replenish check: pending_due={pending} target={threshold} "
+        f"(limit_keywords={limit_keywords or 'unbounded'}) -> "
+        f"{'skip (sufficient)' if pending >= threshold else 'replenish'}"
+    )
     if pending >= threshold:
         return pending
 
@@ -375,11 +436,16 @@ async def replenish_crawl_queue_if_needed(
     try:
         from db import update_where  # type: ignore
         from crawl_queue_ops import requeue_stale_completed_items  # type: ignore
-        requeued = requeue_stale_completed_items(_db_select, update_where)
+        # min_due_pending tracks the run's own appetite so the cheap stale-requeue
+        # path can satisfy a full run and the expensive trends run stays unused.
+        requeued = requeue_stale_completed_items(
+            _db_select, update_where, min_due_pending=threshold,
+        )
         if requeued:
             _info(f"Requeued {requeued} stale completed crawl_queue keywords")
         pending = count_pending_items(_db_select, due_only=True)
         if pending >= threshold:
+            _info(f"[crawl] replenish satisfied by stale requeue: pending_due={pending} target={threshold}")
             return pending
     except Exception as exc:
         _warn(f"Stale requeue failed: {exc}")
@@ -419,6 +485,67 @@ def _resolve_crawl_proxy(explicit: Optional[str]) -> Optional[str]:
     return (os.environ.get(CRAWL_PROXY_ENV) or "").strip() or None
 
 
+# ── Crawl progress observability ──────────────────────────────────────────────
+# Pure observability: these emit lines, they never change what gets crawled.
+#
+# Why bare print(..., flush=True) and not _info(): _info() prints WITHOUT flushing.
+# Under systemd/journald stdout is a pipe, so Python block-buffers it (4-8 KB) and
+# a long crawl can produce ZERO visible lines for hours while the buffer fills —
+# which is exactly what the 2026-08-08 12:05 run looked like from journald (only
+# the wrapper's own flushed start/kill lines showed up). Every progress line below
+# must flush so a stuck run is diagnosable while it is still stuck.
+_CRAWL_HEARTBEAT_SECS = 60  # patched small in tests; do not tune for behaviour
+
+
+def _resolve_keyword_timeout() -> float:
+    """Hard per-keyword wall-clock ceiling (seconds) for the crawl watchdog.
+
+    Env: PINTEREST_KEYWORD_TIMEOUT_SECONDS (default 300 ≈ 3x the observed 108s
+    median). Clamped to [30, 3600] so a typo cannot restore an unbounded wait.
+
+    This is the LAST line of defence, not the fix: on 2026-08-09 five keywords sat
+    in flight for 33+ minutes with zero I/O and never returned, so all five
+    concurrency slots were held forever and the run completed 48/150 and then
+    nothing. Whatever stalls a keyword — a known one is fixed in scraper_v2 — it
+    must never again be able to hold a slot indefinitely.
+    """
+    raw = os.environ.get("PINTEREST_KEYWORD_TIMEOUT_SECONDS", "300")
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        val = 300.0
+    return max(30.0, min(val, 3600.0))
+
+
+def _crawl_log(msg: str) -> None:
+    """Emit one crawl-progress line, unbuffered (journald-visible in real time)."""
+    print(msg, flush=True)
+
+
+async def _crawl_heartbeat(
+    started_at: float,
+    total: int,
+    done: list,           # single-element [int] counter, mutated by the workers
+    in_progress: dict,    # keyword -> monotonic start time (only sem-acquired ones)
+    interval: Optional[float] = None,
+) -> None:
+    """Print 'still alive' lines until cancelled.
+
+    Names the keywords currently in flight and how long each has been running, so a
+    hung run tells you WHICH keyword is hanging instead of just going silent.
+    """
+    tick = _CRAWL_HEARTBEAT_SECS if interval is None else interval
+    while True:
+        await asyncio.sleep(tick)
+        now = time.monotonic()
+        running = sorted(in_progress.items(), key=lambda kv: kv[1])
+        detail = ", ".join(f"{kw} ({now - t0:.0f}s)" for kw, t0 in running) or "none"
+        _crawl_log(
+            f"[crawl] heartbeat done={done[0]}/{total} "
+            f"elapsed={now - started_at:.0f}s in_flight={len(running)}: {detail}"
+        )
+
+
 async def step_crawl(
     concurrency:    int = 3,
     max_pins:       int = 75,
@@ -446,13 +573,16 @@ async def step_crawl(
             proxy=proxy,
             dry_run=dry_run,
             limit_interests=limit_interests,
+            # Replenish must know what this run will eat, or it tops the queue
+            # up to a floor far below one run's consumption and the queue drains.
+            limit_keywords=limit_keywords,
         )
         if pending == 0:
             _warn("No pending crawl items after trends replenish. Exiting cleanly.")
             return {"processed": 0, "pins": 0, "premium": 0, "skipped": True}
 
     from crawl_queue_ops import clamp_concurrency, count_pending_items, fetch_due_crawl_items  # type: ignore
-    from scraper_v2 import PinterestSession, process_queue_item  # type: ignore
+    from scraper_v2 import PinterestSession, mark_queue_item, process_queue_item  # type: ignore
     try:
         from interest_discovery import slug_to_category  # type: ignore
     except ImportError:
@@ -478,10 +608,29 @@ async def step_crawl(
 
     concurrency = clamp_concurrency(concurrency)
     _info(f"[crawl] selected_keywords={len(items)} pending_due_before={pending_due_before}")
+    # A run that silently processes 53 of a requested 150 looks identical in the
+    # summary to a healthy run (ok=53 failed=0 exit 0). Say it out loud instead:
+    # under-filling the batch is the queue-starvation symptom, not a success.
+    if limit_keywords and len(items) < limit_keywords:
+        _warn(
+            f"[crawl] queue short: running {len(items)} of {limit_keywords} requested keywords "
+            f"(due pending exhausted). Queue cannot sustain this run size — "
+            f"replenish could not close the gap."
+        )
     _info(f"{len(items)} due keywords to process (concurrency={concurrency})")
 
     sem = asyncio.Semaphore(concurrency)
-    stats = {"processed": 0, "pins": 0, "premium": 0, "errors": 0, "failed_keywords": 0}
+    stats = {"processed": 0, "pins": 0, "premium": 0, "errors": 0,
+             "failed_keywords": 0, "timed_out_keywords": 0}
+    keyword_timeout = _resolve_keyword_timeout()
+    _info(f"[crawl] per-keyword timeout={keyword_timeout:.0f}s")
+
+    # Observability state (no effect on crawl behaviour).
+    total = len(items)
+    done = [0]                       # completion counter, mutated by _process
+    in_progress: dict[str, float] = {}   # keyword -> monotonic start (in-flight only)
+    durations: list[tuple] = []      # (keyword, seconds, ok) for the closing summary
+    run_started = time.monotonic()
 
     async with PinterestSession(proxy=proxy, delay=1.2) as session:
         async def _process(item: dict) -> None:
@@ -492,33 +641,116 @@ async def step_crawl(
             out_dir  = ROOT / "vibe_library" / f"style_library_{safe_slug}"
 
             async with sem:
+                item_started = time.monotonic()
+                in_progress[keyword] = item_started
                 try:
                     await asyncio.sleep(random.uniform(0.3, 0.8))
-                    pins_saved, premium = await process_queue_item(
-                        keyword=keyword,
-                        source_interest=slug,
-                        category=cat,
-                        session=session,
-                        max_pins=max_pins,
-                        expand_related=True,
-                        write_db=not dry_run,
-                        out_dir=out_dir,
+                    # WATCHDOG: a keyword that stops making progress must lose its
+                    # slot. wait_for cancels the inner coroutine, so the semaphore is
+                    # released by the `async with sem` on the way out and the queued
+                    # keywords behind it keep flowing.
+                    pins_saved, premium = await asyncio.wait_for(
+                        process_queue_item(
+                            keyword=keyword,
+                            source_interest=slug,
+                            category=cat,
+                            session=session,
+                            max_pins=max_pins,
+                            expand_related=True,
+                            write_db=not dry_run,
+                            out_dir=out_dir,
+                        ),
+                        timeout=keyword_timeout,
                     )
                     stats["processed"] += 1
                     stats["pins"]      += pins_saved
                     stats["premium"]   += len(premium)
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, True))
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} ok "
+                        f"pins={pins_saved} premium={len(premium)} took={elapsed:.1f}s"
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    # A timed-out keyword is a FAILED keyword — never a silent skip.
+                    # It counts in errors/failed_keywords exactly like a raised
+                    # exception, plus its own counter so the summary can say how
+                    # many were killed by the watchdog rather than by an error.
+                    stats["errors"] += 1
+                    stats["failed_keywords"] += 1
+                    stats["timed_out_keywords"] += 1
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, False))
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} TIMEOUT "
+                        f"took={elapsed:.1f}s limit={keyword_timeout:.0f}s "
+                        f"— cancelled, slot released"
+                    )
+                    _err(f"  {keyword}: timed out after {keyword_timeout:.0f}s")
+                    # process_queue_item marked this row 'processing' before it hung
+                    # and its own except-handler cannot run (cancellation raises
+                    # CancelledError, a BaseException). Without this the row would
+                    # rot in 'processing' and never be retried.
+                    if not dry_run:
+                        try:
+                            mark_queue_item(
+                                keyword,
+                                "failed",
+                                f"watchdog timeout after {keyword_timeout:.0f}s",
+                            )
+                        except Exception as mark_exc:  # bookkeeping never kills the run
+                            _err(f"  {keyword}: could not mark queue item failed: {mark_exc}")
                 except Exception as exc:
                     stats["errors"] += 1
                     stats["failed_keywords"] += 1
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, False))
+                    # Failure must be explicit and named: type + message + timing, on
+                    # the same flushed channel as the successes, so a failing keyword
+                    # can never hide inside gather(return_exceptions=True).
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} FAILED "
+                        f"took={elapsed:.1f}s error={type(exc).__name__}: {exc}"
+                    )
                     _err(f"  {keyword}: {exc}")
+                finally:
+                    in_progress.pop(keyword, None)
 
         tasks = [_process(item) for item in items]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        heartbeat = asyncio.create_task(
+            _crawl_heartbeat(run_started, total, done, in_progress)
+        )
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # Never leave the heartbeat dangling — cancel and await it, even if the
+            # gather raised (e.g. the whole step was cancelled by the run timeout).
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+
+    total_elapsed = time.monotonic() - run_started
+    slowest = sorted(durations, key=lambda d: d[1], reverse=True)[:3]
+    slowest_txt = ", ".join(
+        f"{kw} {secs:.1f}s{'' if ok else ' (FAILED)'}" for kw, secs, ok in slowest
+    ) or "none"
+    _crawl_log(
+        f"[crawl] summary total={total} ok={stats['processed']} "
+        f"failed={stats['failed_keywords']} "
+        f"timed_out={stats['timed_out_keywords']} pins={stats['pins']} "
+        f"elapsed={total_elapsed:.1f}s slowest={slowest_txt}"
+    )
 
     _info(
         f"[crawl] completed keywords={stats['processed']} "
         f"inserted_total={stats['pins']} premium_total={stats['premium']} "
-        f"failed={stats['failed_keywords']}"
+        f"failed={stats['failed_keywords']} "
+        f"timed_out={stats['timed_out_keywords']}"
     )
     _ok(f"Crawl complete: {stats['processed']} keywords, "
         f"{stats['pins']} pins, {stats['premium']} premium")

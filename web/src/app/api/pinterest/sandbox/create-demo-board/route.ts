@@ -18,10 +18,12 @@ import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { PinterestClient } from "@/lib/server/pinterest/service";
 import { canAttemptSandboxPublish } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
+import { SANDBOX_DEMO_BOARD_NAME } from "@/lib/server/pinterest/config";
 
 export const dynamic = "force-dynamic";
 
-const DEMO_BOARD_NAME = "VibePin Sandbox Demo Board";
+// Single source of truth — the board LIST filters production by this same name.
+const DEMO_BOARD_NAME = SANDBOX_DEMO_BOARD_NAME;
 const DEMO_BOARD_DESCRIPTION = "Demo board for VibePin Pinterest API review video.";
 
 export async function POST(req: Request) {

@@ -20,8 +20,12 @@
  *     ok: boolean,                       // true when every destination published
  *     jobId: string | null,              // null if the v32 tables aren't applied
  *     status: SocialPublishJobStatus,
- *     destinations: Array<{ provider, status, externalPostUrl?, error? }>
+ *     destinations: Array<{ provider, status, externalPostId?, externalPostUrl?, accountName?, error? }>
  *   }
+ *
+ * A destination's externalPostId/externalPostUrl are persisted to
+ * social_publish_job_destinations (v32 columns) AND returned, so the UI can link
+ * straight to the live post ("View on Facebook").
  *
  * Pinterest is intentionally NOT published here — it keeps its dedicated,
  * tested flow (/api/pinterest/pins). If a pinterest destination is sent it is
@@ -30,7 +34,7 @@
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
-import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
+import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
@@ -51,6 +55,8 @@ type DestOutcome = {
   socialConnectionId: string | null;
   externalPostId?: string | null;
   externalPostUrl?: string | null;
+  /** Handle the post went out as — display-only, public on the post itself. */
+  accountName?: string | null;
   error?: string | null;
 };
 
@@ -154,6 +160,21 @@ export async function POST(req: Request) {
       continue;
     }
 
+    // Publishing capability is not the same thing as being connected (PRD 0809 §4).
+    // A platform we cannot publish to is refused HERE, before any provider call, so the
+    // provider's internal "not yet wired for this platform" string can never reach a
+    // customer as a publish result. The client already hides these rows; this is the
+    // server-side half, for stale selections and direct API calls.
+    if (!PLATFORMS[provider].liveConnect) {
+      outcomes.push({
+        provider,
+        status: "skipped",
+        socialConnectionId: null,
+        error: `Publishing to ${platformName(provider)} is coming soon.`,
+      });
+      continue;
+    }
+
     const requestedId =
       typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
         ? ((raw as { socialConnectionId: string }).socialConnectionId)
@@ -178,6 +199,11 @@ export async function POST(req: Request) {
         provider,
         connection,
         post,
+        // Providers backed by our OWN OAuth (Facebook) read server-only,
+        // per-user credentials (the encrypted PAGE token) that are deliberately
+        // absent from the client-safe SocialConnection projection. `uid` is the
+        // bearer-verified session user — never a client-supplied value.
+        userId: uid,
       });
       outcomes.push({
         provider,
@@ -185,7 +211,14 @@ export async function POST(req: Request) {
         socialConnectionId: connection.id,
         externalPostId: result.externalPostId ?? null,
         externalPostUrl: result.externalPostUrl ?? null,
-        error: result.ok ? null : result.error ?? "Publishing is not available for this platform yet.",
+        accountName: result.accountName ?? null,
+        // Never surface a provider's internal wording. `not_implemented` means we have
+        // no publish path for this platform — say that in the customer's terms.
+        error: result.ok
+          ? null
+          : result.status === "not_implemented"
+            ? `Publishing to ${platformName(provider)} is coming soon.`
+            : result.error ?? "Publishing is not available for this platform yet.",
       });
     } catch (err) {
       outcomes.push({
@@ -207,6 +240,10 @@ export async function POST(req: Request) {
     destinations: outcomes.map(o => ({
       provider: o.provider,
       status: o.status,
+      // The remote post id/url are the ONLY provider-side identifiers exposed to
+      // the client — never a token, never a connection secret. The UI needs both:
+      // the url powers "View on Facebook", the id is the durable reference.
+      externalPostId: o.externalPostId ?? null,
       externalPostUrl: o.externalPostUrl ?? null,
       error: o.error ?? null,
     })),

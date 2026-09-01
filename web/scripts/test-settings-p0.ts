@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { deriveAccountBillingSummary } from "../src/lib/accountSummary";
 import * as accountSummaryModule from "../src/lib/accountSummary";
 import { formatEnglishDateTime } from "../src/lib/dateTimeFormat";
-import { derivePinterestSettingsState } from "../src/lib/pinterest/pinterestSettingsState";
+import { accountUiState } from "../src/lib/social/accountUiState";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -15,34 +15,50 @@ function test(name: string, fn: () => void) {
 const settingsPaths = readFileSync("src/lib/settingsPaths.ts", "utf8");
 const billing = readFileSync("src/components/settings/SettingsModal.tsx", "utf8");
 const language = readFileSync("src/components/settings/LanguageRegionModal.tsx", "utf8");
-const pinterest = readFileSync("src/components/pinterest/PinterestSettingsPanel.tsx", "utf8");
+const social = readFileSync("src/components/social/SocialAccountsPanel.tsx", "utf8");
 const layout = readFileSync("src/app/app/layout.tsx", "utf8");
 
 test("Settings navigation exposes six real routes", () => {
-  for (const path of ["profile", "billing", "pinterest", "language", "workspace", "support"]) {
+  // Pinterest is no longer a section — Social accounts owns it (PRD §2).
+  for (const path of ["profile", "billing", "social", "language", "workspace", "support"]) {
     assert.match(settingsPaths, new RegExp(`/app/settings/${path}`));
   }
+  assert.doesNotMatch(settingsPaths, /id: "pinterest"/);
 });
 
-test("Billing has Current plan and Credits sections without fake subscription data", () => {
+test("Billing has Current plan and the three-quota usage section without fake subscription data", () => {
   assert.match(billing, /t\("billing\.currentPlan"\)/);
-  assert.match(billing, /t\("billing\.tokenBalance"\)/);
-  assert.match(billing, /t\("billing\.usageHistory"\)/);
+  // The old "Token balance" card was replaced by three independent quota meters
+  // (adapted from acb6810 onto the v55/v56 ledger). No aggregated token number
+  // may reappear — that was the fake-34 lesson.
+  assert.doesNotMatch(billing, /t\("billing\.tokenBalance"\)/);
+  assert.match(billing, /t\("billing\.usageAiImages"\)/);
+  assert.match(billing, /t\("billing\.usageAiText"\)/);
+  assert.match(billing, /t\("billing\.usageScheduledPosts"\)/);
   assert.match(billing, /t\("billing\.noUsage"\)/);
   assert.match(billing, /t\("billing\.manageBilling"\)/);
+  // The old fabricated token-balance card/keys must be gone.
+  assert.doesNotMatch(billing, /billing\.tokenBalance/);
+  assert.doesNotMatch(billing, /EXISTING_APP_TOKEN_BALANCE/);
+});
+
+test("Billing shows an explicit sync-error state and never falls back to Free on fetch failure", () => {
+  assert.match(billing, /t\("billing\.usageSyncError"\)/);
+  assert.match(billing, /t\("billing\.usageSyncErrorDesc"\)/);
+  assert.match(billing, /setBillingSyncError\(true\)/);
+  assert.match(billing, /setUsageSyncError\(true\)/);
+  assert.match(billing, /\/api\/billing\/usage/);
 });
 
 test("Billing reads the plan from app_metadata (trusted); other fields from merged metadata", () => {
   // Plan is security-sensitive: it must come from app_metadata (service-role
-  // writable), never user_metadata. Display fields (status, tokens) stay merged.
+  // writable), never user_metadata. Display fields (status) stay merged.
   const value = deriveAccountBillingSummary({
     app_metadata: { plan_name: "Pro" },
-    user_metadata: { subscription_status: "active", token_balance: 91, tokens_used_this_month: 9 },
+    user_metadata: { subscription_status: "active" },
   });
   assert.equal(value.planName, "Pro");
   assert.equal(value.planStatus, "active");
-  assert.equal(value.tokenBalance, 91);
-  assert.equal(value.usedThisMonth, 9);
 });
 
 test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)", () => {
@@ -56,7 +72,7 @@ test("Billing shows NO fabricated token balance when metadata is unavailable", (
   // must be null (an honest "unavailable" state), never a placeholder number.
   const value = deriveAccountBillingSummary(null);
   assert.equal(value.planName, null);
-  assert.equal(value.tokenBalance, null);
+  assert.equal("tokenBalance" in value, false, "tokenBalance must not be derived from metadata anymore");
 });
 
 test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => {
@@ -67,10 +83,7 @@ test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => 
   );
 });
 
-test("Billing card shows the honest no-usage state instead of a balance number", () => {
-  // The Token balance card must render billing.noUsage, not a numeric balance
-  // derived from summary.tokenBalance.
-  assert.match(billing, /t\("billing\.noUsage"\)/);
+test("Billing card never renders a metadata-derived balance number", () => {
   assert.doesNotMatch(billing, /summary\.tokenBalance/);
 });
 
@@ -78,24 +91,32 @@ test("The app chrome no longer renders a fabricated token balance", () => {
   assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
 });
 
-test("Pinterest derives all three safe states", () => {
-  assert.equal(derivePinterestSettingsState(null), "not_connected");
-  assert.equal(derivePinterestSettingsState({ connected: true, account: null, scopes: [], needsReconnect: false }), "limited_access");
-  assert.equal(derivePinterestSettingsState({ connected: true, account: null, scopes: ["boards:read", "pins:write"], needsReconnect: false }), "connected");
+
+test("Pinterest account state comes from the unified 4-state map", () => {
+  // The old 3-state Pinterest-only vocabulary is gone (PRD §5): every provider,
+  // Pinterest included, resolves through accountUiState.
+  assert.equal(accountUiState({ connectionStatus: "connected" }), "connected");
+  assert.equal(
+    accountUiState({
+      connectionStatus: "connected",
+      enforcePinterestScopes: true,
+      scopes: ["boards:read"],
+    }),
+    "needs_reconnect",
+  );
+  assert.equal(accountUiState({ connectionStatus: "connected", statusFetchFailed: true }), "needs_attention");
+  assert.equal(accountUiState({ connectionStatus: "revoked" }), "disconnected");
 });
 
-test("Pinterest page has state-specific actions and amber limited copy", () => {
-  assert.match(pinterest, /pinterest-state-not-connected/);
-  assert.match(pinterest, /pinterest-state-connected/);
-  assert.match(pinterest, /pinterest-state-limited-access/);
-  assert.match(pinterest, /Connect Pinterest/);
-  // Board sync is no longer a user-facing action — boards load automatically
-  // wherever they're needed (e.g. the publish drawer), so there's no "Sync boards"
-  // button to assert on anymore.
-  assert.match(pinterest, /Board sync is not a user-facing action/);
-  assert.match(pinterest, /Reconnect/);
-  assert.match(pinterest, /Disconnect/);
-  assert.match(pinterest, /publishing may be limited until Standard Access is approved/);
+test("Social accounts panel drives Pinterest state + actions (no dedicated Pinterest section)", () => {
+  assert.match(social, /accountUiState/);
+  assert.match(social, /social-account-state-/);
+  assert.match(social, /social-connect-/);
+  assert.match(social, /social-reconnect-/);
+  assert.match(social, /social-disconnect-/);
+  // The retired panel's internal access-tier wording must not reappear customer-side.
+  assert.doesNotMatch(social, /Standard Access/);
+  assert.doesNotMatch(social, /limited_access/);
 });
 
 test("English date formatting is deterministic", () => {
@@ -115,6 +136,11 @@ test("Account dropdown routes work and logout calls Supabase", () => {
   assert.match(layout, /openSettings\("account"\)/);
   assert.match(layout, /openSettings\("billing"\)/);
   assert.match(layout, /supabase\.auth\.signOut\(\)/);
+});
+
+test("Sidebar no longer shows a fabricated token count", () => {
+  assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
+  assert.doesNotMatch(layout, /\d+ Tokens/);
 });
 
 console.log(`\nSettings P0: ${passed} passed, 0 failed`);

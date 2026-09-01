@@ -13,14 +13,16 @@ import { ConfigurationError } from "./errors";
 // Requested scopes — read existing public boards + create public Pins only.
 // No ads:*, catalogs:*, or *_secret scopes.
 //
-// Production requests the MINIMUM needed to publish: read the profile + boards,
-// read + write Pins. It deliberately omits boards:write because the product does
-// not create or edit Pinterest boards for real users (only the sandbox demo-board
-// helper does, and only in the sandbox environment). Sandbox keeps boards:write so
-// the demo-board helper can run during the approval flow.
+// `boards:write` is REQUIRED to create a Pin, even though the Pin write itself looks
+// like a pins-only operation: Pinterest v5 POST /pins rejects a token without it with
+// 401 code 3 "Missing: ['boards:write']" (observed against api.pinterest.com on a
+// Standard-access app). An earlier revision dropped it here on the assumption that
+// publishing only needed pins:write — which silently broke every production publish,
+// so do NOT "minimize" it away again.
 export const PRODUCTION_SCOPES = [
   "user_accounts:read",
   "boards:read",
+  "boards:write",
   "pins:read",
   "pins:write",
 ] as const;
@@ -222,4 +224,28 @@ export function buildAuthorizeUrl(env: PinterestEnv, state: string): string {
 /** Public Pinterest URL for a created Pin. Centralized so callers never hand-build it. */
 export function pinterestPinUrl(pinId: string): string {
   return `https://www.pinterest.com/pin/${pinId}/`;
+}
+
+/**
+ * Name of the board created by the sandbox demo-board helper
+ * (api/pinterest/sandbox/create-demo-board). Shared so the board LIST can
+ * recognise it — see {@link isSandboxDemoBoard}.
+ */
+export const SANDBOX_DEMO_BOARD_NAME = "VibePin Sandbox Demo Board";
+
+/**
+ * Is this the sandbox demo board?
+ *
+ * Pinterest exposes no flag distinguishing a sandbox board from a real one — the
+ * API returns identical shapes — so the only signal is the name our own helper
+ * gave it. That helper is the sole way this board comes into existence, so the
+ * match is exact (not a substring), and a merchant's real board would have to be
+ * named character-for-character the same to be affected.
+ *
+ * This matters because the board is UNPUBLISHABLE in production: Pinterest
+ * rejects the publish with "Cannot add non-sandbox pins on sandbox boards"
+ * (code 15). Listing it in production offers a choice that can only fail.
+ */
+export function isSandboxDemoBoard(board: { name?: string | null }): boolean {
+  return (board.name ?? "").trim() === SANDBOX_DEMO_BOARD_NAME;
 }

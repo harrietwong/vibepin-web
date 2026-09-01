@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Smart Schedule v3 -?reactive preview, fresh-on-save, future-config, rebalance
  * (eligibility / full-repack / skip / overflow / undo) and manual schedule locking.
  * Maps to the spec's "Tests required" 1-?5.
@@ -259,6 +259,31 @@ test("17. Rebalance skips failed Pins", () => {
   assert(rebalancePlannedPins({ now }).changed === 0, "failed pin should not be rebalanced");
 });
 
+test("17b. Rebalance skips a PUBLISH failure too, not just a generation failure", () => {
+  // Reported from production QA: 13 Pins that failed to PUBLISH ("Board not found")
+  // still had generationStatus "completed" or unset — the image itself was fine, only
+  // publishing failed. isFailed() checked generationStatus alone, so these read as
+  // eligible, got swept into future slots, and kept their stale failureType/publishError
+  // — a Pin the merchant had never retried showed as "Failed" on a date it had not been
+  // attempted yet. The design contract (top-of-file comment) always said publish
+  // failures are FIXED; the implementation just did not honour it.
+  reset();
+  const now = new Date(2026, 5, 1, 0, 0, 0);
+  saveSmartScheduleConfig({ ...defaultSmartScheduleConfig(), weeklySlots: { [weekdayIdx(now)]: ["09:00"] } as Partial<Record<WeekdayIndex, string[]>> });
+  seed([{
+    id: "PF1",
+    scheduledDate: isoOf(addDays(now, 30)),
+    scheduledTime: "18:00",
+    // The generation itself succeeded — this is the exact shape a publish failure has.
+    generationStatus: "completed",
+    failureType: "publish",
+    publishError: "Board not found on the connected Pinterest account",
+  }]);
+  const before = pinDraftStore.getDraft("PF1")!.scheduledDate;
+  assert(rebalancePlannedPins({ now }).changed === 0, "a publish-failed pin must not be rebalanced");
+  assert(pinDraftStore.getDraft("PF1")!.scheduledDate === before, "its schedule must be untouched");
+});
+
 test("18. Rebalance skips manual / locked Pins", () => {
   reset();
   const now = new Date(2026, 5, 1, 0, 0, 0);
@@ -338,7 +363,7 @@ test("22. Manual date/time edit sets scheduleSource=manual + scheduleLocked=true
   const d2 = pinDraftStore.getDraft("MAN2")!;
   assert(d2.scheduleSource === "manual" && d2.scheduleLocked === true, "manual reschedule not locked");
   // wiring: the plan page routes drag/move/assign through source:manual
-  const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+  const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
   assert(/source: "manual"/.test(srcPlan), "plan page manual edit paths not marked manual");
   assert(/scheduleSource:\s*"manual"/.test(srcDraftStore), "assignDraftToDate not marking manual");
 });
@@ -413,7 +438,7 @@ test("M5. Inline validation hints exist (lightweight, not an error wall)", () =>
 
 // - Follow-up: saved-mode init, board removal, lock UI, lock behavior, toast copy -
 
-const srcPlan2 = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const srcPlan2 = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const srcDetails = readFileSync(join(process.cwd(), "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 
 test("F1. Smart Schedule form initializes from the SAVED canonical config", () => {

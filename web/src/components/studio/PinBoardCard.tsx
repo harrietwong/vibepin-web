@@ -20,11 +20,13 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { getSourceBadge, getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
+import { platformName, type SocialProvider } from "@/lib/social/platforms";
 import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 
@@ -57,11 +59,9 @@ function scheduledSummary(d: PinDraft): string {
   const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
   return `${day} · ${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
 }
-// Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin
-// (same "?modal=publish&pinId=…" contract the post-OAuth restore flow in
-// app/plan/page.tsx already parses — no new mechanism).
+// Deep link into the Plan view inside the canonical Create Pins workspace.
 function planDeepLink(draftId: string): string {
-  return `/app/plan?modal=publish&pinId=${encodeURIComponent(draftId)}`;
+  return `/app/studio?view=plan&modal=publish&pinId=${encodeURIComponent(draftId)}`;
 }
 // "Was scheduled: <time>" — reads the ISO snapshot WP-B captures right before a
 // failed publish clears the live schedule fields. Format per PRD "失败情况优化" §5:
@@ -305,8 +305,17 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
   // `status` so the badge override below can use it.
-  const isPublishFailure = !!draft.publishError?.trim();
+  const isPublishFailure = isActionablePublishFailure(draft);
   const failureCategory = draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(draft.publishErrorCode, draft.publishError) : undefined);
+  // SAFE reason line. `draft.publishError` holds the RAW upstream message (cron/batch
+  // paths store err.message straight from the Pinterest API) — it must never reach the
+  // DOM. We render a fixed, translated sentence instead; the raw string stays on the
+  // draft for internal diagnostics (support context / logs).
+  //   publish failure  → category-chosen sentence (publishErrorDisplay, never raw)
+  //   generation failure → its own fixed sentence (no upstream text to leak)
+  const failureReasonText = isPublishFailure || draft.publishError?.trim()
+    ? tr(getPublishErrorDisplayKey(draft))
+    : tr("studioBoard.card.generationError.generic");
 
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
@@ -324,6 +333,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
+  // Non-Pinterest platforms this Pin also went live on (Facebook Page today).
+  // Written by the publish fan-out (/api/publish/social → draft.socialPosts), so
+  // the links survive a reload. Entries without a real permalink are dropped —
+  // a missing URL renders no button rather than a dead link.
+  const socialPostRefs = (draft.socialPosts ?? []).filter(p => p.postUrl?.trim());
+  // "View on Facebook" etc. Reuses the existing "View on Pinterest" catalog string
+  // with the platform name swapped in, so no English-only key is added to the 18
+  // locale catalogs. Falls back to appending the platform if the string changes.
+  const viewOnLabel = (provider: string): string => {
+    const base = tr("pinDetails.viewOnPinterest");
+    const target = platformName(provider as SocialProvider);
+    const pinterest = platformName("pinterest");
+    return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
+  };
   const boardSummary = draft.boardName?.trim() || tr("studioBoard.card.noBoardYet");
   const schedLabel = scheduledSummary(draft);
   // Recommended high-search Pinterest keywords (only real, ready results — no empty
@@ -470,11 +493,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               shows in the expanded card. */}
           {failed && (
             <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 3, padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
-              {draft.publishError?.trim() && (
-                <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.35 }}>
-                  <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} /> {draft.publishError}
-                </p>
-              )}
+              <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.35 }}>
+                <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} /> {failureReasonText}
+              </p>
               {isPublishFailure && (
                 <p data-testid="card-failed-fix" style={{ margin: 0, fontSize: 10.5, color: BUI.textSec, lineHeight: 1.4 }}>{recommendedFix(tr, failureCategory)}</p>
               )}
@@ -564,6 +585,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {pinUrl && (
                   <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>{tr("studioBoard.action.details")}</button>
                 )}
+                {/* Also-published destinations (e.g. "View on Facebook"). Secondary —
+                    the Pinterest Pin stays the primary action on a Posted card. */}
+                {socialPostRefs.map(ref => (
+                  <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
+                    href={ref.postUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
+                  </a>
+                ))}
               </>
             ) : (
               <>
@@ -594,7 +624,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="noImage" />
           ) : (
-            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
+            // Nothing resolvable anywhere in the chain. Render the SAME placeholder
+            // component as every other exhausted path rather than a bare text div,
+            // so this state also carries the icon, the gradient and the aria label
+            // (PRD 0816 §13: never a blank grey block).
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" />
           )}
         </div>
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -629,11 +664,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             disabled={publishing}
             onBeforeGenerate={flush}
             onApplyCopy={applyCopy}
+            // Shares the Generate copy row so both actions stay compact and on one
+            // line (PRD Section I), wrapping naturally on narrow cards.
+            actionsSlot={(
+              <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
+                style={{ flex: "0 1 auto", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                <Layers style={{ width: 13, height: 13 }} /> {tr("studioBoard.expanded.regenerateImage")}
+              </button>
+            )}
           />
-          <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-            <Layers style={{ width: 13, height: 13 }} /> {tr("studioBoard.expanded.generateAiImage")}
-          </button>
         </div>
       </div>
 
@@ -680,11 +719,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             via Edit. PRD 13. */}
         {failed && (
           <div data-testid="card-failed-info-expanded" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", borderRadius: 9, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
-            {draft.publishError?.trim() && (
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4 }}>
-                <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} /> {draft.publishError}
-              </p>
-            )}
+            <p data-testid="card-failed-reason-expanded" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4 }}>
+              <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} /> {failureReasonText}
+            </p>
             {isPublishFailure && (
               <p style={{ margin: 0, fontSize: 11, color: BUI.textSec, lineHeight: 1.45 }}>{recommendedFix(tr, failureCategory)}</p>
             )}
@@ -737,15 +774,29 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           ) : posted ? (
             // Already published — re-scheduling makes no sense here. Same "View Pin"
             // affordance as the compact card, kept minimal (out of this task's scope
-            // to redesign the Posted footer further).
-            pinUrl ? (
-              <a data-testid="card-view-pin" href={pinUrl} target="_blank" rel="noopener noreferrer"
-                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
-                {tr("studioBoard.action.viewPin")} <ExternalLink style={{ width: 12, height: 12 }} />
-              </a>
-            ) : (
-              <span style={{ fontSize: 12, fontWeight: 700, color: BUI.textSec }}>{tr("studioBoard.expanded.posted")}</span>
-            )
+            // to redesign the Posted footer further), plus one link per non-Pinterest
+            // platform this Pin also went live on.
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+              {pinUrl ? (
+                <a data-testid="card-view-pin" href={pinUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
+                  {tr("studioBoard.action.viewPin")} <ExternalLink style={{ width: 12, height: 12 }} />
+                </a>
+              ) : (
+                <span style={{ fontSize: 12, fontWeight: 700, color: BUI.textSec }}>{tr("studioBoard.expanded.posted")}</span>
+              )}
+              {socialPostRefs.map(ref => (
+                <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
+                  href={ref.postUrl} target="_blank" rel="noopener noreferrer"
+                  // The handle rides the tooltip rather than the label: the button
+                  // row is tight, and the account matters when verifying a post,
+                  // not when scanning the card.
+                  title={ref.accountName ? `${viewOnLabel(ref.provider)} — ${ref.accountName}` : undefined}
+                  style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
+                </a>
+              ))}
+            </div>
           ) : (
             <button type="button" data-testid="card-schedule" onClick={doSchedule} disabled={publishing}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>

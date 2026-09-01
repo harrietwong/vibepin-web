@@ -193,6 +193,18 @@ const originalResolve = (Module as any)._resolveFilename;
   if (/[\\/]lib[\\/]supabase(\.ts)?$/.test(request) || request === "@/lib/supabase") {
     return { createServerClient: fakeServerClient };
   }
+  // Successful inline generations meter usage after dispatch. This suite exercises
+  // moderation and rate-limit ordering, not Supabase metering; keep it hermetic so
+  // the 40-request ceiling proof cannot wait on a fake endpoint.
+  if (/[\\/]lib[\\/]server[\\/]usage(\.ts)?$/.test(request) || request === "@/lib/server/usage") {
+    return {
+      checkAllowance: async () => ({ allowed: true, used: 0, limit: null }),
+      recordUsage: async () => {},
+    };
+  }
+  if (/[\\/]lib[\\/]server[\\/]entitlements(\.ts)?$/.test(request) || request === "@/lib/server/entitlements") {
+    return { resolvePlan: async () => "free" };
+  }
   if (/[\\/]creem[\\/]moderatePrompt(\.ts)?$/.test(request) || request === "@/lib/server/creem/moderatePrompt") {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const real = originalLoad.call(this, request, parent, isMain) as any;
@@ -1182,11 +1194,20 @@ async function main() {
     const userId = freshUser();
     let admitted = 0;
     let denialStatus = 0;
-    for (let i = 0; i < GEN_RULE.limit + 1; i++) {
-      const { status } = await runAs(userId, fullBody());
-      if (status === 200) { admitted++; continue; }
-      denialStatus = status;
-      break;
+    // This deliberately issues enough full handler requests to take several minutes
+    // on a slow machine. Pin the fixed-window clock: otherwise a real 5-minute
+    // boundary can roll over mid-proof and make a correct limiter look off by one.
+    const actualNow = Date.now;
+    Date.now = () => 1_700_000_000_000;
+    try {
+      for (let i = 0; i < GEN_RULE.limit + 1; i++) {
+        const { status } = await runAs(userId, fullBody());
+        if (status === 200) { admitted++; continue; }
+        denialStatus = status;
+        break;
+      }
+    } finally {
+      Date.now = actualNow;
     }
     assertEq(admitted, GEN_RULE.limit, "exactly `limit` requests were admitted");
     assertEq(denialStatus, 429, "request limit+1 is throttled");

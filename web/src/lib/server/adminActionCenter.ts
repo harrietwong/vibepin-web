@@ -20,9 +20,12 @@
 //
 // Efficiency: bounded, aggregate scans (a handful of round-trips), NOT per-user
 // query loops. auth listUsers is paginated (loop pages). Row scans that could
-// exceed supabase-js's silent 1000-row cap use paginated .range() loops.
+// exceed supabase-js's silent 1000-row cap use paginated .range() loops. Each of
+// pin_drafts / pin_generations also gets one extra all-time id-only existence scan
+// (no date filter) so connected_not_creating's "never created" check is not
+// truncated to the 30d window — still aggregate, never per-user.
 
-import type { SupabaseLikeDb, PgError } from "./adminQueryUtils";
+import type { SupabaseLikeDb, PgError, SelectBuilder } from "./adminQueryUtils";
 import {
   createAdminDb,
   isMissingSchema,
@@ -31,6 +34,13 @@ import {
   paginateRows,
   type AuthUserLite,
 } from "./adminQueryUtils";
+import type { PlanKey } from "./entitlements";
+import {
+  classifyAccount,
+  emptyExcluded,
+  type AccountKind,
+  type ExcludedCounts,
+} from "./adminAccountKind";
 
 // ── enums / contract types ───────────────────────────────────────────────────
 
@@ -59,8 +69,20 @@ export interface BlockerEvidence {
   draftId?: string | null;
   /** pinterest_disconnected: stable reason code. */
   disconnectReason?: PinterestDisconnectReason;
+  /**
+   * publish_failure: the sanitized human-readable message from the failed event
+   * (payload.errorMessage, already truncated to <=300 chars at write time) or,
+   * on the inferred path, the draft's payload.publishError text. The CODE tells
+   * the operator what class of failure it was; the MESSAGE is what they actually
+   * need to answer the user ("board not found: <name>").
+   */
+  publishErrorMessage?: string | null;
   /** generation_failures: failed generation count in the window. */
   failedGenerationCount?: number;
+  /** generation_failures: error_type of the MOST RECENT failure in the window. */
+  generationErrorType?: string | null;
+  /** generation_failures: error_message of that same failure, trimmed to <=200 chars. */
+  generationErrorMessage?: string | null;
   /** signup_not_connected / connected_not_creating: hours since the anchoring event. */
   ageHours?: number;
 }
@@ -68,6 +90,12 @@ export interface BlockerEvidence {
 export interface BlockerItem {
   userId: string;
   email: string | null;
+  /**
+   * Whether this row belongs to a real customer, a test account, or an internal
+   * (founder / support) login. Always populated — even when the caller asked to
+   * include non-customers, so the UI can label the rows it is showing.
+   */
+  accountKind: AccountKind;
   blockerType: BlockerType;
   /** When this blocker first became true (best available anchor timestamp, ISO). */
   firstSeenAt: string | null;
@@ -92,6 +120,17 @@ export interface ActionCenter {
   windowHours: number;
   warnings: string[];
   items: BlockerItem[];
+  /**
+   * How many USERS (not blockers) were left out of `items` because they are not
+   * real customers. Zero on both counts when `includeNonCustomers` was set.
+   */
+  excluded: ExcludedCounts;
+}
+
+/** Shared options for the cockpit derivations. Default = real customers only. */
+export interface CockpitOptions {
+  /** Include test + internal accounts in the result instead of filtering them out. */
+  includeNonCustomers?: boolean;
 }
 
 export interface UserBlockers {
@@ -110,6 +149,8 @@ interface PublishFacts {
   /** latest pinterest_publish_failed (exact) at/after windowStart. */
   lastFailedAt: string | null;
   lastFailedCode: string | null;
+  /** sanitized prose from the failed event's payload.errorMessage. */
+  lastFailedMessage: string | null;
   lastFailedDraftId: string | null;
   failedCountInWindow: number;
   /** latest pinterest_publish_succeeded (exact), any time in the scanned window. */
@@ -122,6 +163,8 @@ interface DraftFacts {
   /** a live draft carrying payload.publishError (inferred publish failure). */
   publishErrorDraftId: string | null;
   publishErrorCode: string | null;
+  /** the draft's payload.publishError prose (the inferred path's message). */
+  publishErrorMessage: string | null;
   /** a live draft whose scheduled_at passed with no postedAt (inferred stuck publish). */
   overdueDraftId: string | null;
   overdueScheduledAt: string | null;
@@ -129,8 +172,14 @@ interface DraftFacts {
   firstPostedAt: string | null;
   /** most recent postedAt (inferred recent publish activity). */
   lastPostedAt: string | null;
-  /** any live (non-deleted) draft exists at all. */
+  /** any live (non-deleted) draft touched in the recent scan window. */
   hasAnyDraft: boolean;
+  /**
+   * any live (non-deleted) draft exists AT ALL TIME (not window-bound). Drives
+   * the connected_not_creating "never created anything" existence check — a user
+   * who last touched a draft 45d ago has NOT "never created."
+   */
+  hasAnyDraftEver: boolean;
   /** most recent draft updated_at (activity signal). */
   lastDraftUpdatedAt: string | null;
 }
@@ -144,10 +193,19 @@ interface ConnFacts {
 
 interface GenFacts {
   lastFailedAt: string | null;
+  /** error_type / error_message of the failure at lastFailedAt (newest in-window). */
+  lastFailedType: string | null;
+  lastFailedMessage: string | null;
   lastSucceededAt: string | null;
   failedCountInWindow: number;
   lastCreatedAt: string | null;
+  /** generations created within the recent scan window. */
   totalCount: number;
+  /**
+   * any generation exists AT ALL TIME (not window-bound). Drives the
+   * connected_not_creating existence check alongside hasAnyDraftEver.
+   */
+  hasAnyGenEver: boolean;
 }
 
 interface UserFacts {
@@ -189,12 +247,31 @@ function hoursSince(iso: string | null): number | undefined {
 }
 
 /**
- * publish_failure. EXACT wins: a pinterest_publish_failed inside the window with
- * no LATER pinterest_publish_succeeded. INFERRED fallback (only when no exact
- * signal): a live draft with payload.publishError, or a scheduled time passed
- * with no postedAt.
+ * publish_failure. PRD §3 支柱1 predicate: "24h 内有失败的发布且此后无成功发布"
+ * — the failure evidence must fall inside the 24h window AND no success may have
+ * happened after it. EXACT wins: a pinterest_publish_failed inside the window
+ * with no LATER pinterest_publish_succeeded. INFERRED fallback (only when no
+ * exact signal) must honor the SAME window-and-later-success-clears-it shape:
+ *
+ *   - a live draft carrying payload.publishError. There is no dedicated
+ *     "when did the error happen" timestamp in payload — but payloadAfterFailure
+ *     (publishDueLogic.ts) always bumps payload.updatedAt = nowIso in the SAME
+ *     write that sets publishError, and that is mirrored onto the row's
+ *     updated_at column. So `lastDraftUpdatedAt` is an honest upper bound on the
+ *     failure's recency for that draft (it can only be later than the failure —
+ *     a subsequent unrelated edit to the same draft would also bump it — never
+ *     earlier). Approximation, documented per this codebase's inferred-data rule.
+ *   - a scheduled time (`overdueScheduledAt`) that passed with no postedAt on
+ *     that same draft — the scheduled instant IS the anchor, no approximation
+ *     needed there.
+ *
+ * Both inferred branches also clear if `lastPostedAt` (the user's most recent
+ * inferred publish success, across all their drafts) is later than the failure
+ * evidence — the same "later success clears it" rule the exact branch applies.
  */
-function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | null {
+type RawBlocker = Omit<BlockerItem, "accountKind">;
+
+function evalPublishFailure(f: UserFacts, windowStart: string): RawBlocker | null {
   const p = f.publish;
   const exactFailed =
     p.lastFailedAt &&
@@ -210,37 +287,55 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
       evidence: {
         failedPublishCount: p.failedCountInWindow || 1,
         publishErrorCode: p.lastFailedCode,
+        publishErrorMessage: p.lastFailedMessage,
         draftId: p.lastFailedDraftId,
       },
     };
   }
 
   const d = f.draft;
-  if (d.publishErrorDraftId) {
+  if (
+    d.publishErrorDraftId &&
+    d.lastDraftUpdatedAt &&
+    d.lastDraftUpdatedAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.lastDraftUpdatedAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
       blockerType: "publish_failure",
       firstSeenAt: d.lastDraftUpdatedAt,
       dataQuality: "inferred",
-      evidence: { failedPublishCount: 1, publishErrorCode: d.publishErrorCode, draftId: d.publishErrorDraftId },
+      evidence: {
+        failedPublishCount: 1,
+        publishErrorCode: d.publishErrorCode,
+        publishErrorMessage: d.publishErrorMessage,
+        draftId: d.publishErrorDraftId,
+      },
     };
   }
-  if (d.overdueDraftId) {
+  if (
+    d.overdueDraftId &&
+    d.overdueScheduledAt &&
+    d.overdueScheduledAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.overdueScheduledAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
       blockerType: "publish_failure",
       firstSeenAt: d.overdueScheduledAt,
       dataQuality: "inferred",
-      evidence: { failedPublishCount: 1, publishErrorCode: null, draftId: d.overdueDraftId },
+      // Overdue has no error text by construction: nothing reported a failure,
+      // the scheduled instant simply passed with no postedAt.
+      evidence: { failedPublishCount: 1, publishErrorCode: null, publishErrorMessage: null, draftId: d.overdueDraftId },
     };
   }
   return null;
 }
 
 /** pinterest_disconnected — needs_reconnect true OR disconnected_at non-null. */
-function evalPinterestDisconnected(f: UserFacts): BlockerItem | null {
+function evalPinterestDisconnected(f: UserFacts): RawBlocker | null {
   const c = f.conn;
   if (!c.hasRow) return null;
   if (c.disconnectedAt) {
@@ -267,7 +362,7 @@ function evalPinterestDisconnected(f: UserFacts): BlockerItem | null {
 }
 
 /** generation_failures — ≥2 failed generations in the window, no success after the last failure. */
-function evalGenerationFailures(f: UserFacts): BlockerItem | null {
+function evalGenerationFailures(f: UserFacts): RawBlocker | null {
   const g = f.gen;
   if (g.failedCountInWindow < 2) return null;
   // A success strictly after the last failure clears the block.
@@ -278,12 +373,16 @@ function evalGenerationFailures(f: UserFacts): BlockerItem | null {
     blockerType: "generation_failures",
     firstSeenAt: g.lastFailedAt,
     dataQuality: "exact",
-    evidence: { failedGenerationCount: g.failedCountInWindow },
+    evidence: {
+      failedGenerationCount: g.failedCountInWindow,
+      generationErrorType: g.lastFailedType,
+      generationErrorMessage: g.lastFailedMessage,
+    },
   };
 }
 
 /** signup_not_connected — auth user created >48h ago with no pinterest connection row. */
-function evalSignupNotConnected(f: UserFacts): BlockerItem | null {
+function evalSignupNotConnected(f: UserFacts): RawBlocker | null {
   if (f.conn.hasRow) return null;
   const created = f.user.created_at;
   if (!created) return null;
@@ -300,13 +399,15 @@ function evalSignupNotConnected(f: UserFacts): BlockerItem | null {
 }
 
 /** connected_not_creating — connection created >72h ago, zero generations AND zero drafts. */
-function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
+function evalConnectedNotCreating(f: UserFacts): RawBlocker | null {
   const c = f.conn;
   if (!c.hasRow || c.disconnectedAt || !c.createdAt) return null;
   const ageH = hoursSince(c.createdAt);
   if (ageH === undefined || ageH < CONNECTED_NOT_CREATING_HOURS) return null;
-  if (f.gen.totalCount > 0) return null;
-  if (f.draft.hasAnyDraft) return null;
+  // Existence must be ALL-TIME, not window-bound: a user who created content 45d
+  // ago (and nothing since) has NOT "never created" and must not be flagged.
+  if (f.gen.hasAnyGenEver) return null;
+  if (f.draft.hasAnyDraftEver) return null;
   return {
     userId: f.user.id,
     email: f.user.email,
@@ -317,8 +418,19 @@ function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
   };
 }
 
-/** Run every predicate for one user's facts. Exported ONLY for the shared paths. */
-export function evaluateBlockers(f: UserFacts, windowStart: string): BlockerItem[] {
+/**
+ * Run every predicate for one user's facts. Exported ONLY for the shared paths.
+ *
+ * `accountKind` is stamped here, once per user, rather than inside each
+ * predicate — the predicates answer "is this user stuck", never "who is this
+ * user". Callers that already classified the user (the list path classifies
+ * every auth user anyway) pass the kind in to avoid re-parsing the env per row.
+ */
+export function evaluateBlockers(
+  f: UserFacts,
+  windowStart: string,
+  accountKind: AccountKind = classifyAccount(f.user),
+): BlockerItem[] {
   const out: BlockerItem[] = [];
   for (const item of [
     evalPublishFailure(f, windowStart),
@@ -327,7 +439,7 @@ export function evaluateBlockers(f: UserFacts, windowStart: string): BlockerItem
     evalSignupNotConnected(f),
     evalConnectedNotCreating(f),
   ]) {
-    if (item) out.push(item);
+    if (item) out.push({ ...item, accountKind });
   }
   return out;
 }
@@ -380,6 +492,7 @@ async function loadPublishFacts(
   const empty = (): PublishFacts => ({
     lastFailedAt: null,
     lastFailedCode: null,
+    lastFailedMessage: null,
     lastFailedDraftId: null,
     failedCountInWindow: 0,
     lastSucceededAt: null,
@@ -420,6 +533,8 @@ async function loadPublishFacts(
           f.lastFailedAt = at;
           const p = r.payload ?? {};
           f.lastFailedCode = typeof p.errorCode === "string" ? p.errorCode : null;
+          // Already sanitized + capped at <=300 chars by the publish writer.
+          f.lastFailedMessage = clipMessage(p.errorMessage, 300);
           f.lastFailedDraftId = r.draft_id ?? null;
         }
       }
@@ -442,6 +557,22 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
 }
 
+/**
+ * Cap an error message before it enters the evidence bag.
+ *
+ * These strings are provider/DB prose, not our own copy, so they are the one
+ * place free text crosses into this data layer. Publish-event messages are
+ * already sanitized+capped at write time; generation error_message is raw DB
+ * content, so it is capped here. The UI shows the first line inline and puts
+ * the full value in a title attribute.
+ */
+function clipMessage(v: unknown, max: number): string | null {
+  const s = str(v);
+  if (!s) return null;
+  const t = s.trim();
+  return t.length <= max ? t : t.slice(0, max);
+}
+
 async function loadDraftFacts(
   db: SupabaseLikeDb,
   since: string,
@@ -451,11 +582,13 @@ async function loadDraftFacts(
   const empty = (): DraftFacts => ({
     publishErrorDraftId: null,
     publishErrorCode: null,
+    publishErrorMessage: null,
     overdueDraftId: null,
     overdueScheduledAt: null,
     firstPostedAt: null,
     lastPostedAt: null,
     hasAnyDraft: false,
+    hasAnyDraftEver: false,
     lastDraftUpdatedAt: null,
   });
   const nowIso = new Date().toISOString();
@@ -502,6 +635,9 @@ async function loadDraftFacts(
     if (publishError && !f.publishErrorDraftId) {
       f.publishErrorDraftId = r.draft_id ?? null;
       f.publishErrorCode = str(p.publishErrorCode);
+      // payload.publishError IS the message on this path — the code lives in a
+      // separate field, and older drafts carry only the prose.
+      f.publishErrorMessage = clipMessage(publishError, 300);
     }
     // Overdue: a scheduled instant in the past with no postedAt on the same draft.
     if (usedScheduled && !postedAt && r.scheduled_at && r.scheduled_at < nowIso && !f.overdueDraftId) {
@@ -510,7 +646,49 @@ async function loadDraftFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  // Cheap: id column only, mirrors loadConnFacts' unfiltered full scan.
+  await markEverExists(db, "pin_drafts", "vibepin_user_id", qb => qb.is("deleted_at", null), warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyDraftEver = true;
+    byUser.set(uid, f);
+  });
+
   return byUser;
+}
+
+/**
+ * Lightweight all-time existence scan: pages the id column only (no date filter)
+ * and calls `mark(uid)` for each distinct owner. Used to answer "has this user
+ * ever created a row of this kind?" without the per-user round-trips the header
+ * comment forbids. On missing table/error it warns and no-ops (existence stays
+ * false, which can only make connected_not_creating MORE eager — acceptable, and
+ * the same table would already have warned in the primary window scan).
+ */
+async function markEverExists(
+  db: SupabaseLikeDb,
+  table: string,
+  userColumn: string,
+  filters: (qb: SelectBuilder<Record<string, unknown>>) => SelectBuilder<Record<string, unknown>>,
+  warnings: string[],
+  mark: (uid: string) => void,
+): Promise<void> {
+  const { rows, error, missing } = await paginateRows<Record<string, unknown>>(db, table, {
+    columns: userColumn,
+    filters,
+    orderColumn: userColumn,
+    ascending: true,
+  });
+  if (missing || error) {
+    warnings.push(`${table} all-time existence scan unavailable — connected_not_creating may over-flag.`);
+    return;
+  }
+  for (const r of rows) {
+    const uid = r[userColumn];
+    if (typeof uid === "string" && uid) mark(uid);
+  }
 }
 
 interface ConnRow {
@@ -554,6 +732,8 @@ interface GenRow {
   user_id: string | null;
   created_at: string | null;
   status: string | null;
+  error_type?: string | null;
+  error_message?: string | null;
 }
 
 async function loadGenFacts(
@@ -565,29 +745,40 @@ async function loadGenFacts(
   const byUser = new Map<string, GenFacts>();
   const empty = (): GenFacts => ({
     lastFailedAt: null,
+    lastFailedType: null,
+    lastFailedMessage: null,
     lastSucceededAt: null,
     failedCountInWindow: 0,
     lastCreatedAt: null,
     totalCount: 0,
+    hasAnyGenEver: false,
   });
 
-  // Try with status; fall back to a status-less scan (older DBs) so totalCount /
-  // connected_not_creating still work even when the success/failure split can't.
+  // Column availability degrades in two independent steps, so the fallback has
+  // three layers rather than the usual two:
+  //   1. status + error_type/error_message — the full picture.
+  //   2. status only — older DBs without the error columns still get the
+  //      failure COUNT (the predicate) but no reason text.
+  //   3. neither — totalCount / connected_not_creating still work; the
+  //      success/failure split cannot.
+  // Collapsing 1 and 2 would mean a DB missing only the error columns loses the
+  // generation_failures blocker entirely, which is a regression, not a degrade.
   let statusAvailable = true;
-  let res = await paginateRows<GenRow>(db, "pin_generations", {
-    columns: "user_id,created_at,status",
+  const scan = (columns: string) => paginateRows<GenRow>(db, "pin_generations", {
+    columns,
     filters: qb => qb.gte("created_at", since),
     orderColumn: "created_at",
     ascending: false,
   });
+  let errorColumnsAvailable = true;
+  let res = await scan("user_id,created_at,status,error_type,error_message");
   if (res.error && isMissingSchema(res.error)) {
-    statusAvailable = false;
-    res = await paginateRows<GenRow>(db, "pin_generations", {
-      columns: "user_id,created_at",
-      filters: qb => qb.gte("created_at", since),
-      orderColumn: "created_at",
-      ascending: false,
-    });
+    errorColumnsAvailable = false;
+    res = await scan("user_id,created_at,status");
+    if (res.error && isMissingSchema(res.error)) {
+      statusAvailable = false;
+      res = await scan("user_id,created_at");
+    }
   }
   if (res.missing) {
     warnings.push("pin_generations unavailable — generation blockers disabled.");
@@ -607,6 +798,14 @@ async function loadGenFacts(
     if (statusAvailable && r.created_at && r.created_at >= windowStart) {
       if (r.status === "failed") {
         f.failedCountInWindow += 1;
+        // Rows arrive newest-first, so the FIRST failure seen in-window is the
+        // most recent one — capture its reason then, mirroring how
+        // loadPublishFacts pins lastFailedCode. Using newer() for the timestamp
+        // but a later row's text would pair a stale message with a fresh time.
+        if (!f.lastFailedAt) {
+          f.lastFailedType = errorColumnsAvailable ? str(r.error_type) : null;
+          f.lastFailedMessage = errorColumnsAvailable ? clipMessage(r.error_message, 200) : null;
+        }
         f.lastFailedAt = newer(f.lastFailedAt, r.created_at);
       } else if (r.status === "completed") {
         f.lastSucceededAt = newer(f.lastSucceededAt, r.created_at);
@@ -614,8 +813,19 @@ async function loadGenFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  await markEverExists(db, "pin_generations", "user_id", qb => qb, warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyGenEver = true;
+    byUser.set(uid, f);
+  });
+
   if (!statusAvailable) {
     warnings.push("pin_generations.status column not present — generation_failures blocker cannot fire.");
+  } else if (!errorColumnsAvailable) {
+    warnings.push("pin_generations.error_type/error_message columns not present — generation failures are counted but show no reason.");
   }
   return { byUser, statusAvailable };
 }
@@ -623,16 +833,16 @@ async function loadGenFacts(
 // ── assembly ──────────────────────────────────────────────────────────────────
 
 const EMPTY_PUBLISH: PublishFacts = {
-  lastFailedAt: null, lastFailedCode: null, lastFailedDraftId: null,
+  lastFailedAt: null, lastFailedCode: null, lastFailedMessage: null, lastFailedDraftId: null,
   failedCountInWindow: 0, lastSucceededAt: null, firstSucceededAt: null,
 };
 const EMPTY_DRAFT: DraftFacts = {
-  publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null,
+  publishErrorDraftId: null, publishErrorCode: null, publishErrorMessage: null, overdueDraftId: null,
   overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null,
-  hasAnyDraft: false, lastDraftUpdatedAt: null,
+  hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null,
 };
 const EMPTY_CONN: ConnFacts = { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false };
-const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0 };
+const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastFailedType: null, lastFailedMessage: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false };
 
 function assembleFacts(
   user: AuthUserLite,
@@ -650,25 +860,55 @@ function assembleFacts(
   };
 }
 
-/** paid = plan metadata present and not "free" (Creem tables absent — degrade silently). */
+/**
+ * Recognized plan vocabulary — mirrors entitlements.ts `normalizePlanKey`. Kept
+ * inline (not imported) so this file stays free of entitlements.ts's supabase
+ * import-time side effect; the `PlanKey` type import keeps the two in lockstep.
+ */
+function normalizePlanKey(value: unknown): PlanKey | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
+  return null;
+}
+
+/**
+ * paid = the trusted `app_metadata.plan` cache names a real (non-free) plan.
+ *
+ * SECURITY (mirrors entitlements.ts `resolvePlan`): `user_metadata` is USER-
+ * EDITABLE and is NEVER read here — trusting it would let a user self-grant a
+ * paid plan (the hole closed by `security(billing): remove user_metadata plan
+ * authorization`). We read ONLY `app_metadata.plan`, the service-role-writable
+ * cache the Creem webhook refreshes — the exact same cache `resolvePlan` falls
+ * back to — and validate it against the canonical plan vocabulary.
+ *
+ * TRADEOFF: this is a SORT-ORDER hint ("paid users first" in the blocker list),
+ * not an access-control gate, so it deliberately reads the cached plan rather
+ * than doing a live `creem_subscriptions` lookup per user (that would be an N+1
+ * this file's efficiency budget forbids). Slightly less live-authoritative than
+ * `resolvePlan`, but on the correct side of the trust boundary. Creem tables /
+ * cache absent → normalizePlanKey returns null → not paid (degrade silently).
+ */
 function isPaid(user: AuthUserLite): boolean {
-  const fromApp = user.app_metadata?.["plan"];
-  const fromUser = user.user_metadata?.["plan"];
-  const plan = typeof fromApp === "string" ? fromApp : typeof fromUser === "string" ? fromUser : null;
-  return !!plan && plan.trim().toLowerCase() !== "free";
+  const plan = normalizePlanKey(user.app_metadata?.["plan"]);
+  return plan !== null && plan !== "free";
 }
 
 // ── public entry points ────────────────────────────────────────────────────────
 
-export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<ActionCenter> {
+export async function getActionCenter(
+  injectedDb?: SupabaseLikeDb,
+  options: CockpitOptions = {},
+): Promise<ActionCenter> {
   const db = injectedDb ?? (await createAdminDb());
+  const includeNonCustomers = options.includeNonCustomers === true;
   const warnings: string[] = [];
   const since = isoHoursAgo(SCAN_WINDOW_HOURS);
   const windowStart = isoHoursAgo(WINDOW_HOURS);
 
   const users = await listAllAuthUsers(db, warnings);
   if (users === null) {
-    return { available: false, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items: [] };
+    return { available: false, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items: [], excluded: emptyExcluded() };
   }
 
   const [publish, draft, conn, gen] = await Promise.all([
@@ -680,10 +920,18 @@ export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<Acti
 
   const items: BlockerItem[] = [];
   const paidByUser = new Map<string, boolean>();
+  const excluded = emptyExcluded();
   for (const user of users) {
+    // Classify BEFORE running the predicates: a skipped user costs nothing, and
+    // the counters below report USERS filtered out, not blockers suppressed.
+    const kind = classifyAccount(user);
+    if (!includeNonCustomers && kind !== "customer") {
+      excluded[kind] += 1;
+      continue;
+    }
     const facts = assembleFacts(user, publish, draft, conn, gen);
     paidByUser.set(user.id, isPaid(user));
-    items.push(...evaluateBlockers(facts, windowStart));
+    items.push(...evaluateBlockers(facts, windowStart, kind));
   }
 
   // Sort: paid users first, then by blocker age (oldest firstSeenAt first — the
@@ -696,7 +944,7 @@ export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<Acti
     return (a.firstSeenAt ?? "").localeCompare(b.firstSeenAt ?? "");
   });
 
-  return { available: true, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items };
+  return { available: true, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items, excluded };
 }
 
 /**

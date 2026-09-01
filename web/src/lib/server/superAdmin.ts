@@ -41,6 +41,26 @@ function localAdminBypassEnabled(): boolean {
   );
 }
 
+/**
+ * E2E test-header bypass — same posture as localAdminBypassEnabled above.
+ *
+ * ⚠️ SECURITY — E2E_TEST_MODE lets a caller become super_admin (or support) by
+ * sending a plain request header. That is fine for a local Playwright run and
+ * catastrophic anywhere reachable from the internet, so it is double-gated:
+ *   1. process.env.NODE_ENV must NOT be "production", AND
+ *   2. E2E_TEST_MODE must be explicitly "true".
+ *
+ * scripts/predeploy-guard.mjs additionally refuses a production deploy when
+ * E2E_TEST_MODE is set at all — this helper is the runtime half of that guard,
+ * so a mis-set env var in a deployed build is inert rather than fatal.
+ */
+export function e2eTestModeEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.E2E_TEST_MODE === "true"
+  );
+}
+
 const LOCAL_DEV_ADMIN: AuthUser = {
   id: "00000000-0000-0000-0000-000000000000",
   email: "local-dev-admin@localhost",
@@ -48,12 +68,24 @@ const LOCAL_DEV_ADMIN: AuthUser = {
   user_metadata: {},
 };
 
+/**
+ * SECURITY — the ONLY trusted role sources are `app_metadata.role` (writable
+ * exclusively by the service role / Supabase admin API) and the
+ * SUPER_ADMIN_EMAILS allowlist.
+ *
+ * `user_metadata` is NOT trusted and must never be added back here: any signed-in
+ * user can write their own with a single client call —
+ * `supabase.auth.updateUser({ data: { role: "super_admin" } })` — so trusting it
+ * was a self-service privilege escalation into the whole internal admin console
+ * (customer list with real emails, generation logs, etc.). Browser-reproduced.
+ * Supabase's own docs say user_metadata must not be used for authorization.
+ * This mirrors the earlier `security(billing)` fix that removed
+ * `user_metadata.plan` from entitlement resolution (see server/entitlements.ts).
+ */
 export function isSuperAdminUser(user: AuthUser | null): boolean {
   if (!user) return false;
   const role =
-    typeof user.app_metadata?.role === "string" ? user.app_metadata.role :
-    typeof user.user_metadata?.role === "string" ? user.user_metadata.role :
-    null;
+    typeof user.app_metadata?.role === "string" ? user.app_metadata.role : null;
   if (role === "super_admin") return true;
 
   const email = user.email?.toLowerCase();
@@ -97,8 +129,9 @@ export async function getUserFromCookies(): Promise<AuthUser | null> {
 }
 
 export async function requireSuperAdminFromRequest(request: Request): Promise<AuthUser | null> {
+  // E2E header bypass (double-gated; never active in production). See helper above.
   if (
-    process.env.E2E_TEST_MODE === "true" &&
+    e2eTestModeEnabled() &&
     request.headers.get("x-e2e-super-admin") === "true"
   ) {
     return { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} };
@@ -111,8 +144,9 @@ export async function requireSuperAdminFromRequest(request: Request): Promise<Au
 
 export async function getCurrentSuperAdmin(): Promise<AuthUser | null> {
   const headerStore = await headers();
+  // E2E header bypass (double-gated; never active in production). See helper above.
   if (
-    process.env.E2E_TEST_MODE === "true" &&
+    e2eTestModeEnabled() &&
     headerStore.get("x-e2e-super-admin") === "true"
   ) {
     return { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} };
@@ -145,13 +179,18 @@ function supportEmails(): Set<string> {
   );
 }
 
+/**
+ * SECURITY — trusted sources only: `app_metadata.role` (service-role writable)
+ * and the SUPER_ADMIN_EMAILS / SUPPORT_ADMIN_EMAILS allowlists. `user_metadata`
+ * is user-writable and is deliberately NOT consulted; see isSuperAdminUser above
+ * for the full rationale (a forged user_metadata.role="support" reached
+ * /admin/generation-logs and read other users' generation logs and emails).
+ */
 export function adminRoleOf(user: AuthUser | null): AdminRole | null {
   if (!user) return null;
   if (isSuperAdminUser(user)) return "super_admin";
   const role =
-    typeof user.app_metadata?.role === "string" ? user.app_metadata.role :
-    typeof user.user_metadata?.role === "string" ? user.user_metadata.role :
-    null;
+    typeof user.app_metadata?.role === "string" ? user.app_metadata.role : null;
   if (role === "support") return "support";
   const email = user.email?.toLowerCase();
   return !!email && supportEmails().has(email) ? "support" : null;
@@ -161,7 +200,8 @@ export type AdminSession = { role: AdminRole; user: AuthUser };
 
 export async function getCurrentAdminRole(): Promise<AdminSession | null> {
   const headerStore = await headers();
-  if (process.env.E2E_TEST_MODE === "true") {
+  // E2E header bypass (double-gated; never active in production). See helper above.
+  if (e2eTestModeEnabled()) {
     if (headerStore.get("x-e2e-super-admin") === "true") {
       return { role: "super_admin", user: { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} } };
     }
@@ -176,7 +216,8 @@ export async function getCurrentAdminRole(): Promise<AdminSession | null> {
 }
 
 export async function requireAdminRoleFromRequest(request: Request): Promise<AdminSession | null> {
-  if (process.env.E2E_TEST_MODE === "true") {
+  // E2E header bypass (double-gated; never active in production). See helper above.
+  if (e2eTestModeEnabled()) {
     if (request.headers.get("x-e2e-super-admin") === "true") {
       return { role: "super_admin", user: { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} } };
     }

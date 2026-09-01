@@ -47,10 +47,20 @@ export const CORE: string[] = [
   "test-published-pin-summary",
   "test-social-provider-status",
   // Admin operator console (derivation layer + UI i18n)
+  "test-admin-auth-security",
+  "test-admin-account-kind",
   "test-admin-action-center",
   "test-activation-funnel",
   "test-ai-adoption",
   "test-admin-today-i18n",
+  "test-account-quota",
+  "test-account-identity",
+  "test-publish-capability",
+  "test-publish-results",
+  "test-per-account-disconnect",
+  // Facebook Page OAuth
+  "test-facebook-pages",
+  "test-customer360-plan",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",
@@ -64,7 +74,10 @@ export const CORE: string[] = [
   "test-ai-provider-rate-limit",
   "test-ai-copy-provider-boundary",
   "test-judge-verdict",
+  "test-ai-cost-log",
   "test-reference-scoring",
+  "test-reference-basis",
+  "test-product-evidence",
   "test-top-pick",
   // Products / opportunity
   "test-product-ideas-picker",
@@ -79,13 +92,20 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-plan-entitlements",
+  "test-usage-period-math",
+  "test-billing-usage-api",
   "test-entitlements-security",
+  "test-usage-metering",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
   "test-creem-billing-status",
   "test-predeploy-guard",
   "test-moderate-prompt",
+  "test-hidden-prompt-best-practices",
   "test-generation-moderation-gate",
+  "test-generation-metering",
+  "test-text-metering",
+  "test-scheduled-post-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -100,6 +120,7 @@ export const CORE: string[] = [
   "test-pin-draft-promote",
   "test-schedule-timezone",
   "test-publish-due-claim",
+  "test-expire-reservations-cron",
   "test-publish-events",
   "test-user-store-sync",
   "test-user-store-route",
@@ -107,6 +128,9 @@ export const CORE: string[] = [
   "test-user-store-media-adapters",
   "test-media-offload",
   // Shopify
+  "test-connection-limit",
+  "test-settle-generation-job",
+  "test-generation-job-route",
   "test-shopify-entitlements",
   "test-shopify-connection-store",
   "test-shopify-hmac",
@@ -126,6 +150,7 @@ export const STUDIO: string[] = [
   "test-asset-picker-ia",
   "test-create-pins-prefill",
   "test-batch-edit-planning",
+  "test-batch-board-target",
   "test-batch-edit-back-close",
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
@@ -135,10 +160,29 @@ export const STUDIO: string[] = [
   "test-pin-details-drawer",
   "test-pin-details-persistence",
   "test-failure-banner",
+  "test-publish-error-display",
+  "test-publish-failure-consistency",
+  // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
+  // Phase C pinned publish targets).
+  "test-account-ui-state",
+  "test-pinterest-callback-identity",
+  "test-social-connection-store",
+  "test-publish-target",
   "test-pin-readiness",
   "test-pin-display-context",
   "test-pin-details-model",
   "test-pin-details-phase2",
+  // Create Pin flow 2026-07-21 (selection/generation/URL/picker/recommendation).
+  "test-selected-references",
+  "test-reference-groups",
+  "test-destination-url-derivation",
+  "test-product-selection",
+  "test-canonical-picker",
+  "test-recommendation-request",
+  "test-drawer-product-state",
+  "test-generation-product-link",
+  "test-ai-generation-run",
+  "test-url-persistence",
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
   "test-optional-website-url",
@@ -155,8 +199,11 @@ export const PLAN: string[] = [
   "test-weekly-plan-multiselect",
   "test-weekly-plan-hover-images",
   "test-my-products-weekly-plan-ui",
+  "test-plan-card-status",
+  "test-unscheduled-lifecycle",
   "test-plan-tile-interactions",
   "test-plan-pinterest-connect",
+  "test-plan-account-filter",
   "test-hover-preview-image",
   "test-smart-schedule",
   "test-smart-schedule-sync",
@@ -184,6 +231,45 @@ export const EXCLUDED: Record<string, string> = {
     "explanation, because a green run that connected to nothing is the exact failure " +
     "mode this channel exists to prevent. See scripts/lib/test-db-config.ts for how the " +
     "target is pinned to the test project and can never resolve to production.",
+  "test-db-usage-lifecycle":
+    "REAL-POSTGRES integration test for the v56 usage-account LIFECYCLE RPC " +
+    "(usage_ensure_account: init / period rollover / plan change). Writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` rather " +
+    "than the hermetic `npm test` gate, for the same reasons as the rate-limit and " +
+    "usage-ledger DB tests. It fails loudly rather than skipping when credentials are " +
+    "absent. It proves the exactly-once guarantees the lifecycle lives on — a concurrent " +
+    "double-ensure yields ONE account + ONE init event, and a replayed rollover does not " +
+    "double-reset — which only real Postgres row locks + unique constraints can testify to.",
+  "test-db-usage-metering":
+    "REAL-POSTGRES integration test for Phase 4I image metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle the route " +
+    "and worker now depend on (usage_reserve_generation_job → the generation_jobs row " +
+    "carries usage_reservation_id → per-slot settle with the ['s0','s1',...] keys the " +
+    "TS module and worker both produce → reservation ends PARTIAL with counters exact), " +
+    "which only real Postgres can testify to. Fails loudly rather than skipping when " +
+    "credentials are absent, like the other test-db-* channels.",
+  "test-db-text-metering":
+    "REAL-POSTGRES integration test for Phase 4T TEXT metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle /api/ai-copy " +
+    "now depends on (usage_reserve with usage_type ai_text_generation + the single " +
+    "['s0'] slot the TS module produces → settle s0 succeeded bills the account exactly " +
+    "once → release returns capacity → a replayed settle bills exactly once), which only " +
+    "real Postgres can testify to. Fails loudly rather than skipping when credentials " +
+    "are absent, like the other test-db-* channels.",
+  "test-db-post-metering":
+    "REAL-POSTGRES integration test for Phase 5B SCHEDULED-POST metering — writes and " +
+    "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. usage_consume_scheduled_post is the only " +
+    "single-call consume in the ledger (no reserve/settle), so its correctness rests " +
+    "entirely on the database: the (user_id, idempotency_key) unique is what makes a cron " +
+    "re-claim of the same draft+scheduled_at charge once instead of twice, and an " +
+    "unlimited (NULL limit) plan must still write an event. It also pins a known v55 " +
+    "defect — the mismatched-quantity guard is swallowed by the function's own " +
+    "unique_violation handler — so a future fix is a visible change, not an accident. " +
+    "Fails loudly rather than skipping when credentials are absent, like the other " +
+    "test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +

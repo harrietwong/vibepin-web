@@ -54,9 +54,13 @@ test("Pin Ideas picker has loading and error states", () => {
   assert(pickerSource.includes("pin-ideas-retry"), "picker missing retry button");
 });
 
-test("fetchPinIdeas module uses viral-pins API", () => {
+test("fetchPinIdeas module prefers reference-candidates API, falls back to viral-pins", () => {
   const pinIdeasSource = readFileSync(join(process.cwd(), "src/lib/pinIdeas.ts"), "utf8");
-  assert(pinIdeasSource.includes("/api/viral-pins"), "pinIdeas should use viral-pins API");
+  const refIdx = pinIdeasSource.indexOf("/api/reference-candidates");
+  const viralIdx = pinIdeasSource.indexOf("/api/viral-pins");
+  assert(refIdx !== -1, "pinIdeas should try reference-candidates API");
+  assert(viralIdx !== -1, "pinIdeas should keep viral-pins as fallback");
+  assert(refIdx < viralIdx, "reference-candidates must be attempted before viral-pins");
   assert(pinIdeasSource.includes("PIN_IDEAS_SWR_KEY"), "pinIdeas missing SWR key");
 });
 

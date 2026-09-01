@@ -13,6 +13,8 @@ import {
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getAdminOverview, type AdminOverview, type OverallFreshness } from "@/lib/server/adminOverview";
 import type { FreshnessStatus } from "@/lib/server/productOpportunityAdminStatus";
+import { AdminTFmt } from "./AdminT";
+import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 export const dynamic = "force-dynamic";
 
@@ -31,17 +33,26 @@ function fmtDate(iso: string | null): string {
   }).format(new Date(t));
 }
 
-function fmtRelative(iso: string | null): string {
-  if (!iso) return "never";
+// Returns a catalog key + interpolation vars so the value renders in the admin
+// language via <AdminTFmt>, or null for an un-parseable/absent instant (caller
+// renders the em-dash placeholder). Never emits hardcoded English.
+function relativeParts(iso: string | null): { key: AdminMessageKey; vars: Record<string, number> } | null {
+  if (!iso) return { key: "time.relative.never", vars: {} };
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
+  if (!Number.isFinite(t)) return null;
   const diff = Date.now() - t;
   const mins = Math.round(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return { key: "time.relative.justNow", vars: {} };
+  if (mins < 60) return { key: "time.relative.minutesAgo", vars: { n: mins } };
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return { key: "time.relative.hoursAgo", vars: { n: hrs } };
+  return { key: "time.relative.daysAgo", vars: { n: Math.round(hrs / 24) } };
+}
+
+function Relative({ iso }: { iso: string | null }) {
+  const parts = relativeParts(iso);
+  if (!parts) return <>—</>;
+  return <AdminTFmt k={parts.key} vars={parts.vars} />;
 }
 
 function fmtNum(value: number | null | undefined): string {
@@ -78,7 +89,7 @@ function Card({
   );
 }
 
-function StatTile({ label, value, tone }: { label: string; value: string | number; tone?: "danger" | "muted" }) {
+function StatTile({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "danger" | "muted" }) {
   const color = tone === "danger" ? "#B91C1C" : tone === "muted" ? "#9CA3AF" : "#030712";
   return (
     <div className="rounded-lg border px-4 py-3" style={{ background: "#F9FAFB", borderColor: "#EEF0F3" }}>
@@ -184,7 +195,7 @@ export default async function AdminHomePage() {
           </div>
           <div className="flex flex-col items-end gap-2">
             <HealthPill overview={overview} />
-            <span className="text-[11px] text-gray-400">Snapshot {fmtRelative(overview.generatedAt)}</span>
+            <span className="text-[11px] text-gray-400">Snapshot <Relative iso={overview.generatedAt} /></span>
           </div>
         </div>
 
@@ -243,7 +254,7 @@ export default async function AdminHomePage() {
                   <StatTile label="Successful today" value={generation.statusAvailable ? fmtNum(generation.successToday) : "n/a"} tone={generation.statusAvailable ? undefined : "muted"} />
                   <StatTile label="Failed today" value={generation.statusAvailable ? fmtNum(generation.failedToday) : "n/a"} tone={(generation.failedToday ?? 0) > 0 ? "danger" : generation.statusAvailable ? undefined : "muted"} />
                   <StatTile label="Failure rate" value={generation.statusAvailable ? `${generation.failureRatePct ?? 0}%` : "n/a"} tone={generation.statusAvailable ? undefined : "muted"} />
-                  <StatTile label="Latest generation" value={fmtRelative(generation.latestCreatedAt)} />
+                  <StatTile label="Latest generation" value={<Relative iso={generation.latestCreatedAt} />} />
                 </StatGrid>
                 {!generation.statusAvailable && (
                   <p className="px-4 pb-3 text-[11px] text-gray-400">Success/failure split needs the <code>pin_generations.status</code> column.</p>
@@ -336,7 +347,7 @@ export default async function AdminHomePage() {
             )}
             {visualReview.available && (
               <p className="px-4 pb-3 text-[11px] text-gray-400">
-                Latest reviewed {fmtRelative(visualReview.latestReviewedAt)} · unreviewed is an estimate (candidate images minus reviewed).
+                Latest reviewed <Relative iso={visualReview.latestReviewedAt} /> · unreviewed is an estimate (candidate images minus reviewed).
               </p>
             )}
           </Card>
@@ -375,10 +386,10 @@ export default async function AdminHomePage() {
                                 {r.status ?? "—"}
                               </span>
                             </td>
-                            <td className="px-3 py-2.5 text-gray-600">{fmtRelative(r.startedAt)}</td>
+                            <td className="px-3 py-2.5 text-gray-600"><Relative iso={r.startedAt} /></td>
                             <td className="px-3 py-2.5 text-gray-700">{fmtNum(r.rowsProcessed)}</td>
                             <td className="px-3 py-2.5" style={{ color: (r.failedRows ?? 0) > 0 ? "#B91C1C" : "#6B7280" }}>{r.failedRows === null ? "—" : fmtNum(r.failedRows)}</td>
-                            <td className="px-3 py-2.5 text-gray-600">{fmtRelative(r.lastSuccessAt)}</td>
+                            <td className="px-3 py-2.5 text-gray-600"><Relative iso={r.lastSuccessAt} /></td>
                             <td className="max-w-[220px] truncate px-4 py-2.5 text-[11.5px] text-gray-500" title={r.errorMessage ?? undefined}>{r.errorMessage ?? "—"}</td>
                           </tr>
                         );
@@ -415,7 +426,7 @@ export default async function AdminHomePage() {
                       </div>
                       <p className="mt-0.5 truncate text-[12px] text-gray-500" title={e.message}>{e.message}</p>
                     </div>
-                    <span className="shrink-0 text-[11px] text-gray-400">{fmtRelative(e.at)}</span>
+                    <span className="shrink-0 text-[11px] text-gray-400"><Relative iso={e.at} /></span>
                   </li>
                 ))}
               </ul>

@@ -95,6 +95,14 @@ export interface PublishPostInput {
   provider: SocialProvider;
   connection: SocialConnection;
   post: SocialPostPayload;
+  /**
+   * Owner of the connection. Required by providers that read server-only,
+   * per-user credentials keyed on the user (Facebook's encrypted PAGE token lives
+   * in social_connections.metadata and is deliberately absent from the
+   * client-safe SocialConnection projection). Mirrors DisconnectInput.userId.
+   * Aggregator providers (Zernio/OneUp/mock) ignore it.
+   */
+  userId?: string;
 }
 
 export type PublishStatus = "published" | "failed" | "not_implemented";
@@ -104,6 +112,12 @@ export interface PublishResult {
   status: PublishStatus;
   externalPostId?: string | null;
   externalPostUrl?: string | null;
+  /**
+   * Handle the post went out as (Facebook Page name, Instagram username), so the
+   * published view can say WHICH account received it — a permalink alone does
+   * not, and a merchant may have several accounts connected.
+   */
+  accountName?: string | null;
   error?: string | null;
 }
 

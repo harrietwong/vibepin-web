@@ -7,6 +7,8 @@ import type {
   GenerationLogRow,
   GenerationDisplayStatus,
 } from "@/lib/server/generationLogs";
+import { useAdminChrome } from "../AdminChromeProvider";
+import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 // ── formatters ───────────────────────────────────────────────────────────────
 
@@ -17,16 +19,16 @@ function fmtDateTime(iso: string | null): string {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(t));
 }
 
-function fmtRelative(iso: string | null): string {
+function fmtRelative(iso: string | null, tFmt: (key: AdminMessageKey, vars: Record<string, string | number>) => string): string {
   if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
-  const mins = Math.round((Date.now() - t) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "—";
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return tFmt("time.relative.justNow", {});
+  if (mins < 60) return tFmt("time.relative.minutesAgo", { n: mins });
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return tFmt("time.relative.hoursAgo", { n: hrs });
+  return tFmt("time.relative.daysAgo", { n: Math.round(hrs / 24) });
 }
 
 function na(v: React.ReactNode): React.ReactNode {
@@ -74,6 +76,7 @@ type RevealState = { loading: boolean; text: string | null; audited: boolean | n
 // ── component ────────────────────────────────────────────────────────────────
 
 export default function GenerationLogsClient({ overview, canSeeFullPrompt }: { overview: GenerationLogsOverview; canSeeFullPrompt: boolean }) {
+  const { t, tFmt } = useAdminChrome();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [selected, setSelected] = useState<GenerationLogRow | null>(null);
   const [reveal, setReveal] = useState<RevealState>({ loading: false, text: null, audited: null, error: null });
@@ -142,14 +145,14 @@ export default function GenerationLogsClient({ overview, canSeeFullPrompt }: { o
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold" style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#4B5563" }}>
               <Lock className="h-3.5 w-3.5" />
-              {canSeeFullPrompt ? "Super Admin · Internal" : "Support · Internal"}
+              {canSeeFullPrompt ? t("genLogs.badge.superAdmin") : t("genLogs.badge.support")}
             </div>
-            <h1 className="text-[25px] font-black tracking-tight text-gray-950">Generation Logs</h1>
-            <p className="mt-1 text-[13px] text-gray-500">Debug AI generation failures, safety blocks, and irrelevant outputs. Read-only.</p>
+            <h1 className="text-[25px] font-black tracking-tight text-gray-950">{t("genLogs.title")}</h1>
+            <p className="mt-1 text-[13px] text-gray-500">{t("genLogs.subtitle")}</p>
           </div>
           <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-semibold text-gray-500" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
             <Sparkles className="h-4 w-4" />
-            {overview.rows.length.toLocaleString()} loaded
+            {tFmt("genLogs.loaded", { n: overview.rows.length.toLocaleString() })}
           </div>
         </div>
 
@@ -157,7 +160,7 @@ export default function GenerationLogsClient({ overview, canSeeFullPrompt }: { o
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <p className="text-[13px] font-semibold text-amber-900">Generation logs unavailable — pin_generations could not be read.</p>
+              <p className="text-[13px] font-semibold text-amber-900">{t("genLogs.unavailable")}</p>
             </div>
           </div>
         )}
@@ -201,12 +204,12 @@ export default function GenerationLogsClient({ overview, canSeeFullPrompt }: { o
           <table className="w-full text-[12px]" style={{ minWidth: 1400 }}>
             <thead>
               <tr className="border-b text-left text-[10px] uppercase text-gray-400" style={{ borderColor: "#EEF0F3" }}>
-                <th className="px-3 py-2.5 font-bold">Created</th>
-                <th className="px-3 py-2.5 font-bold">User</th>
-                <th className="px-3 py-2.5 font-bold">Workspace</th>
-                <th className="px-3 py-2.5 font-bold">Type</th>
-                <th className="px-3 py-2.5 font-bold">Status</th>
-                <th className="px-3 py-2.5 font-bold">Source</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.created")}</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.user")}</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.workspace")}</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.type")}</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.status")}</th>
+                <th className="px-3 py-2.5 font-bold">{t("genLogs.col.source")}</th>
                 <th className="px-3 py-2.5 font-bold">Trend kw</th>
                 <th className="px-3 py-2.5 font-bold">Idea id</th>
                 <th className="px-3 py-2.5 font-bold">Prompt v</th>
@@ -250,8 +253,8 @@ export default function GenerationLogsClient({ overview, canSeeFullPrompt }: { o
         </div>
 
         <p className="mt-3 text-[11px] text-gray-400">
-          Latency, token counts, cost, prompt version, copy/export/publish, and user feedback are not recorded on generations yet (shown as —).
-          {overview.windowSaturated && " Showing the most recent 500 generations."}
+          {t("genLogs.footer.notRecorded")}
+          {overview.windowSaturated && <> {t("genLogs.footer.windowSaturated")}</>}
         </p>
       </div>
 
@@ -296,6 +299,7 @@ function DetailDrawer({ row, canSeeFullPrompt, reveal, onReveal, onClose }: {
   onReveal: () => void;
   onClose: () => void;
 }) {
+  const { tFmt } = useAdminChrome();
   const s = row.inputSummary;
   const failed = row.displayStatus === "failed" || row.displayStatus === "blocked";
 
@@ -314,7 +318,7 @@ function DetailDrawer({ row, canSeeFullPrompt, reveal, onReveal, onClose }: {
           <div className="flex items-center gap-2">
             <StatusBadge status={row.displayStatus} />
             <span className="text-[13px] font-bold text-gray-800">{fmtDateTime(row.createdAt)}</span>
-            <span className="text-[11px] text-gray-400">· {fmtRelative(row.createdAt)}</span>
+            <span className="text-[11px] text-gray-400">· {fmtRelative(row.createdAt, tFmt)}</span>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100"><X className="h-4 w-4" /></button>
         </div>

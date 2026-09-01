@@ -24,6 +24,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase";
+import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
 import {
@@ -53,6 +54,8 @@ type DueRow = {
   vibepin_user_id: string;
   draft_id: string;
   payload: Record<string, unknown>;
+  /** The due instant — the stable half of the 5B metering idempotency key. */
+  scheduled_at: string | null;
 };
 
 function json(body: unknown, status = 200): Response {
@@ -98,7 +101,10 @@ export async function GET(req: Request): Promise<Response> {
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
   const { data: dueRows, error: scanError } = await db
     .from(TABLE)
-    .select("vibepin_user_id, draft_id, payload")
+    // scheduled_at is selected because it is the STABLE half of the metering
+    // idempotency key (Phase 5B). Claim time is not usable: it is regenerated on
+    // every run, so a stale re-claim would mint a new key and double-count.
+    .select("vibepin_user_id, draft_id, payload, scheduled_at")
     .lte("scheduled_at", nowIso)
     .not("scheduled_at", "is", null)
     .is("deleted_at", null)
@@ -129,7 +135,7 @@ export async function GET(req: Request): Promise<Response> {
       .eq("vibepin_user_id", row.vibepin_user_id)
       .eq("draft_id", row.draft_id)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
-      .select("vibepin_user_id, draft_id, payload");
+      .select("vibepin_user_id, draft_id, payload, scheduled_at");
 
     if (claimError) {
       // A schema hiccup mid-run: treat as un-claimable, don't crash the batch.
@@ -162,6 +168,8 @@ export async function GET(req: Request): Promise<Response> {
       const input = payloadToPublishInput(row.vibepin_user_id, row.payload);
       if (!input) {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
+        // NO metering here — the contract charges only actions that really attempt
+        // delivery, and this row never reaches Pinterest.
         await persistFailure(db, row, { message: "Missing image or board — cannot publish", code: "bad_request" }, nowIso);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "bad_request",
@@ -171,9 +179,29 @@ export async function GET(req: Request): Promise<Response> {
         continue;
       }
 
+      // ── Phase 5B: meter the scheduled post ────────────────────────────────────
+      // Keyed on (draft_id, scheduled_at), NOT on claim time and NOT on the success
+      // event. This route is at-least-once by construction (see the header): a death
+      // between the Pinterest create and persistSuccess leaves a stale claim that is
+      // re-claimed and re-published. Because scheduled_at is only cleared by
+      // persistSuccess, a re-claim of that same row derives the IDENTICAL key, and
+      // usage_consume_scheduled_post collapses the replay to one charge. Metering
+      // before the provider call also means a crash mid-publish still recorded the
+      // attempt the user really made. Fail-open in shadow: consumeScheduledPost never
+      // throws, so a ledger outage cannot stop a scheduled publish.
+      await consumeScheduledPost({
+        userId: row.vibepin_user_id,
+        key: deriveScheduledPostKey(row.vibepin_user_id, String(row.draft_id ?? ""), row.scheduled_at),
+        referenceId: typeof row.draft_id === "string" ? row.draft_id : null,
+        metadata: { source: "scheduled-cron" },
+      });
+
       const result = await publishPinForUser(input);
       if (result.ok) {
-        await persistSuccess(db, row, result.pin, nowIso);
+        // result.connectionId is the row that actually published — pinned onto the draft
+        // when it had no target yet (adopt-once, PRD §14). Already-targeted drafts are
+        // left untouched by withAdoptedTarget.
+        await persistSuccess(db, row, result.pin, nowIso, result.connectionId);
         void recordPublishEvent(db, PUBLISH_EVENT_SUCCEEDED, {
           ...eventBase,
           durationMs: Date.now() - rowStartedMs,
@@ -183,7 +211,7 @@ export async function GET(req: Request): Promise<Response> {
         published++;
       } else {
         // Typed validation failure (bad board / image / link) — NOT thrown.
-        await persistFailure(db, row, { message: result.error, code: result.code }, nowIso);
+        await persistFailure(db, row, { message: result.error, code: result.code }, nowIso, result.connectionId);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: result.code,
           message: result.error,
@@ -228,8 +256,9 @@ async function persistSuccess(
   row: DueRow,
   pin: { id: string; url: string },
   nowIso: string,
+  connectionId?: string | null,
 ): Promise<void> {
-  const payload = payloadAfterSuccess(row.payload, pin, nowIso);
+  const payload = payloadAfterSuccess(row.payload, pin, nowIso, connectionId);
   const { error } = await db
     .from(TABLE)
     .update({
@@ -250,8 +279,9 @@ async function persistFailure(
   row: DueRow,
   fail: { message: string; code?: string },
   nowIso: string,
+  connectionId?: string | null,
 ): Promise<void> {
-  const payload = payloadAfterFailure(row.payload, fail, nowIso);
+  const payload = payloadAfterFailure(row.payload, fail, nowIso, connectionId);
   const { error } = await db
     .from(TABLE)
     .update({

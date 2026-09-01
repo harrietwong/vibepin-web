@@ -14,7 +14,7 @@ function assert(value: unknown, message: string): asserts value {
 }
 
 const studio = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
-const plan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const plan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const history = readFileSync(join(process.cwd(), "src/app/app/history/page.tsx"), "utf8");
 const modal = readFileSync(join(process.cwd(), "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 const drawer = readFileSync(join(process.cwd(), "src/components/studio/PinDetailsDrawer.tsx"), "utf8");
@@ -42,10 +42,14 @@ test("Generation drawer has no visible Plan tab", () => {
 
 test("Debug requires env flag and internal role", () => {
   assert(!canViewGenerationDebug(null, true), "anonymous user can see debug");
-  assert(!canViewGenerationDebug({ user_metadata: { role: "user" } }, true), "normal user can see debug");
-  assert(!canViewGenerationDebug({ user_metadata: { role: "developer" } }, false), "role bypasses disabled env flag");
+  assert(!canViewGenerationDebug({ app_metadata: { role: "user" } }, true), "normal user can see debug");
+  assert(!canViewGenerationDebug({ app_metadata: { role: "developer" } }, false), "role bypasses disabled env flag");
   assert(canViewGenerationDebug({ app_metadata: { role: "admin" } }, true), "admin cannot see enabled debug");
-  assert(canViewGenerationDebug({ user_metadata: { role: "internal_tester" } }, true), "internal tester cannot see enabled debug");
+  assert(canViewGenerationDebug({ app_metadata: { role: "internal_tester" } }, true), "internal tester cannot see enabled debug");
+  // SECURITY: user_metadata is user-writable, so a self-set role must NEVER grant
+  // debug access (it exposes full internal prompts). See lib/generationDebugAccess.ts.
+  assert(!canViewGenerationDebug({ user_metadata: { role: "internal_tester" } }, true), "forged user_metadata role must not grant debug");
+  assert(!canViewGenerationDebug({ user_metadata: { role: "admin" } }, true), "forged user_metadata admin must not grant debug");
 });
 
 test("Publish readiness (WP1): only image + board block; copy/alt/URL are optional", () => {

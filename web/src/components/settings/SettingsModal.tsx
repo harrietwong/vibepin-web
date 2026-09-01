@@ -2,14 +2,11 @@
 
 import { useState, useEffect, useRef, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
+import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Clock, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
-import { PinterestSettingsPanel } from "@/components/pinterest/PinterestSettingsPanel";
-import { PinterestAdvancedSettings } from "@/components/pinterest/PinterestAdvancedSettings";
 import { SocialAccountsPanel } from "@/components/social/SocialAccountsPanel";
-import { isSocialDevToolsEnabled } from "@/lib/socialFeatureFlags";
 import {
   deriveAccountBillingSummary,
   normalizePlanName,
@@ -23,14 +20,6 @@ import {
   type NotificationPrefs,
 } from "@/lib/notificationPrefsStore";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
-import {
-  fetchPinterestStatus,
-  fetchPinterestDebugStatus,
-  type PinterestClientError,
-  type PinterestStatus,
-  type PinterestDebugStatus,
-} from "@/lib/pinterestClient";
-import { derivePinterestSettingsState } from "@/lib/pinterest/pinterestSettingsState";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -72,7 +61,6 @@ const supabase = createBrowserClient(
 export type SettingsTab =
   | "account"
   | "billing"
-  | "pinterest"
   | "social"
   | "publishing"
   | "amazon"
@@ -312,6 +300,85 @@ function AccountTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Pr
 
 // ── Billing Tab ───────────────────────────────────────────────────────────────
 
+/** One quota bucket as returned by GET /api/billing/usage. */
+type UsageBucket = {
+  /** Settled usage this period. `null` = never measured (no usage account yet). */
+  used: number | null;
+  /** The cap enforced on this account right now. `null` = unlimited OR unmetered. */
+  limit: number | null;
+  /** What the plan includes. `null` = unlimited. Always present. */
+  included: number | null;
+};
+
+type BillingUsage = {
+  plan: "free" | "starter" | "pro" | "business";
+  /** false = no usage_accounts row yet (metering is lazy/shadow) → show allowances only. */
+  metered: boolean;
+  periodStart: string | null;
+  periodEnd: string | null;
+  bonusImages: number | null;
+  aiImages: UsageBucket;
+  aiTextGenerations: UsageBucket;
+  scheduledPosts: UsageBucket;
+};
+
+/**
+ * One usage row. Three honest display states, in priority order:
+ *
+ *  1. NOT MEASURED (`used === null`, i.e. the API said metered:false) — the user
+ *     has no usage account yet, so we state the plan's included allowance and say
+ *     nothing about consumption. We deliberately do NOT render "0 / 10" here: a
+ *     zero would assert we measured and found nothing, which is false.
+ *  2. UNLIMITED (`limit === null` with a real `used`) — show the count used and
+ *     "Unlimited"/"No monthly limit"; a progress bar has no meaning without a cap.
+ *  3. METERED WITH A CAP — used/limit, a bar, and the remainder.
+ */
+function UsageRow({ icon: Icon, label, bucket, t }: {
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  label: string;
+  bucket: UsageBucket;
+  t: (key: MessageKey) => string;
+}) {
+  const { used, limit, included } = bucket;
+  const measured = used !== null;
+  const pct = measured && limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const remaining = measured && limit !== null ? Math.max(0, limit - used) : null;
+
+  // Right-hand summary text for each of the three states above.
+  let summary: string;
+  if (!measured) {
+    summary = included === null
+      ? t("billing.usageUnlimited")
+      : t("billing.usageIncluded").replace("{included}", String(included));
+  } else if (limit !== null) {
+    summary = t("billing.usageUsedOfLimit").replace("{used}", String(used)).replace("{limit}", String(limit));
+  } else {
+    summary = t("billing.usageUsedNoLimit").replace("{used}", String(used));
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <Icon size={13} style={{ color: UI.textSec }} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: UI.text, flex: 1 }}>{label}</span>
+        <span style={{ fontSize: 12, color: UI.textSec }}>{summary}</span>
+      </div>
+      {measured && limit !== null ? (
+        <>
+          <div style={{ height: 6, borderRadius: 999, background: UI.surface2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, borderRadius: 999, background: UI.gradient }} />
+          </div>
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted }}>
+            {t("billing.usageRemaining").replace("{remaining}", String(remaining))}
+          </p>
+        </>
+      ) : measured ? (
+        <p style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>{t("billing.usageNoLimit")}</p>
+      ) : null}
+    </div>
+  );
+}
+
 type CreemBillingStatus = {
   hasBillingAccount: boolean;
   /** The plan the user CURRENTLY has access to (highest granting sub, else free). */
@@ -332,7 +399,14 @@ function BillingTab() {
   const [loaded, setLoaded] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [billing, setBilling] = useState<CreemBillingStatus | null>(null);
+  // Sync error is tracked separately from "billing is null before the first
+  // response arrives" — a non-200/thrown fetch must NEVER be displayed as Free.
+  const [billingSyncError, setBillingSyncError] = useState(false);
   const [portalPending, setPortalPending] = useState(false);
+  const [usage, setUsage] = useState<BillingUsage | null>(null);
+  const [usageSyncError, setUsageSyncError] = useState(false);
+  const [usageLoaded, setUsageLoaded] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -342,8 +416,12 @@ function BillingTab() {
   }, []);
 
   // Live billing status from the Creem mirror (source of truth for plan/renewal).
+  // SYNC ERROR STATE: any non-ok response or thrown fetch sets billingSyncError
+  // and leaves `billing` as-is — the UI below renders an explicit "Couldn't sync
+  // billing data" state and NEVER falls back to displaying Free.
   useEffect(() => {
     let active = true;
+    setBillingSyncError(false);
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -351,17 +429,52 @@ function BillingTab() {
         const res = await fetch("/api/billing/creem/status", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (active) setBillingSyncError(true);
+          return;
+        }
         const json = (await res.json()) as CreemBillingStatus;
         if (active) setBilling(json);
       } catch {
-        /* leave billing null → fall back to metadata-derived display */
+        if (active) setBillingSyncError(true);
       }
     })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [retryTick]);
+
+  // Usage this period (AI images / AI text / scheduled posts) — same sync-error
+  // discipline as billing status: a failed fetch never silently renders zeros,
+  // and an unmetered account renders allowances rather than fabricated usage.
+  useEffect(() => {
+    let active = true;
+    setUsageSyncError(false);
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        const res = await fetch("/api/billing/usage", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          if (active) { setUsageSyncError(true); setUsageLoaded(true); }
+          return;
+        }
+        const json = (await res.json()) as BillingUsage;
+        if (active) { setUsage(json); setUsageLoaded(true); }
+      } catch {
+        if (active) { setUsageSyncError(true); setUsageLoaded(true); }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [retryTick]);
+
+  function handleRetrySync() {
+    setRetryTick(v => v + 1);
+  }
 
   // Current plan = the EFFECTIVE plan (what the user has access to right now);
   // fall back to the metadata-derived name only before the live status loads.
@@ -382,6 +495,10 @@ function BillingTab() {
   const previousPlanName = billing?.previousPlan
     ? normalizePlanName(billing.previousPlan)
     : null;
+  // NOTE: OURS's `lastActivity` (summary.lastCreditActivityAt) is deliberately
+  // dropped here — THEIRS removed the fabricated token-balance/credit card that
+  // was its only consumer (fake-34 removal), replacing it with the honest
+  // billing.noUsage state below.
 
   // Status badge: green ONLY when access is granted and the raw status is
   // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
@@ -435,6 +552,29 @@ function BillingTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {billingSyncError && (
+        <SectionCard testId="billing-sync-error">
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <AlertCircle size={16} style={{ color: UI.warning, flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: "0 0 3px", fontSize: 13, fontWeight: 700, color: UI.text }}>{t("billing.usageSyncError")}</p>
+              <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{t("billing.usageSyncErrorDesc")}</p>
+            </div>
+            <button
+              type="button"
+              data-testid="billing-sync-error-retry"
+              onClick={handleRetrySync}
+              style={{
+                flexShrink: 0, padding: "7px 13px", borderRadius: 9, border: `1px solid ${UI.border}`,
+                background: UI.surface2, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}
+            >
+              {t("billing.usageRetry")}
+            </button>
+          </div>
+        </SectionCard>
+      )}
+
       <SectionCard testId="billing-current-plan">
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
           <div>
@@ -503,31 +643,53 @@ function BillingTab() {
         )}
       </SectionCard>
 
-      <SectionCard testId="billing-token-balance">
+      {/*
+        Three independent quota meters, replacing the former fabricated
+        "token balance" card. Every number here comes from GET /api/billing/usage,
+        which reads the v55/v56 usage_accounts ledger. Nothing is invented: when
+        the user has no usage account yet the API says metered:false and each row
+        states only the plan's included allowance (see UsageRow), and when the
+        fetch fails we show an explicit sync error instead of zeros.
+      */}
+      <SectionCard testId="billing-usage-period">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <SectionTitle>{t("billing.tokenBalance")}</SectionTitle>
-          <Link href={PRICING_PATH} style={{ fontSize: 12, color: UI.blue, textDecoration: "none", fontWeight: 700 }}>
-            {t("billing.aboutTokens")} ↗
-          </Link>
+          <SectionTitle>{t("billing.usageThisPeriod")}</SectionTitle>
+          {usage?.metered && usage.periodEnd && !usageSyncError && formatEnglishDateTime(usage.periodEnd) && (
+            <span style={{ fontSize: 11, color: UI.textMuted }}>
+              {t("billing.usagePeriod").replace("{date}", formatEnglishDateTime(usage.periodEnd) as string)}
+            </span>
+          )}
         </div>
-        {/*
-          Balance intentionally NOT shown: no real usage ledger populates a
-          token balance yet, so any number here would be fabricated. Show the
-          honest "no usage data yet" state instead of a placeholder figure.
-          (Slice 1: fake-34 removal — the de-Credit copy sweep is slice 2.)
-        */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: "50%",
-            background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
-            <Zap size={16} style={{ color: "#60A5FA" }} />
+        {usageSyncError ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+            <p data-testid="billing-usage-sync-error" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
+              {t("billing.usageSyncError")}
+            </p>
+            <button
+              type="button"
+              data-testid="billing-usage-retry"
+              onClick={handleRetrySync}
+              style={{ padding: "7px 13px", borderRadius: 9, border: `1px solid ${UI.border}`, background: UI.surface2, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+            >
+              {t("billing.usageRetry")}
+            </button>
           </div>
-          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: UI.textSec }}>
-            {t("billing.noUsage")}
+        ) : !usageLoaded ? (
+          <p style={{ margin: 0, fontSize: 12, color: UI.textSec, display: "flex", alignItems: "center", gap: 7 }}>
+            <Loader2 size={13} className="animate-spin" /> {t("billing.usageLoading")}
           </p>
-        </div>
+        ) : usage ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} t={t} />
+            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} t={t} />
+            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} t={t} />
+            {!usage.metered && (
+              <p data-testid="billing-usage-not-metered" style={{ margin: 0, fontSize: 11, color: UI.textMuted, lineHeight: 1.5 }}>
+                {t("billing.usageNotMetered")}
+              </p>
+            )}
+          </div>
+        ) : null}
       </SectionCard>
 
       <SectionCard testId="billing-usage-history">
@@ -574,187 +736,13 @@ function BillingTab() {
   );
 }
 
-// ── Pinterest Tab ─────────────────────────────────────────────────────────────
+// ── Social accounts Tab ───────────────────────────────────────────────────────
 
-/**
- * Safe, non-secret sandbox / provider diagnostics — Developer tools only. Makes the
- * "provider configured vs user connected" distinction visible: a sandbox token can
- * make `canAttemptSandboxPublish` true without the user having any connection. Never
- * shows tokens (only presence booleans).
- */
-function SandboxDiagnostics() {
-  const [debug, setDebug] = useState<PinterestDebugStatus | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    fetchPinterestDebugStatus().then(setDebug).catch(() => setFailed(true));
-  }, []);
-
-  const rows: [string, string][] = debug
-    ? [
-        ["API environment", debug.apiEnv],
-        ["Sandbox token present", debug.sandboxTokenPresent ? "Yes" : "No"],
-        ["Can attempt sandbox publish", debug.canAttemptSandboxPublish ? "Yes" : "No"],
-        ["Standard access required", debug.standardAccessRequired ? "Yes" : "No"],
-      ]
-    : [];
-
-  return (
-    <section
-      data-testid="pinterest-sandbox-diagnostics"
-      style={{ border: `1px solid ${UI.border}`, borderRadius: 12, padding: "12px 14px", background: UI.surface2 }}
-    >
-      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.text }}>Provider diagnostics</p>
-      <p style={{ margin: "2px 0 10px", fontSize: 11, color: UI.textSec }}>
-        Sandbox / provider config only — this is not a user connection.
-      </p>
-      {failed ? (
-        <p style={{ margin: 0, fontSize: 12, color: UI.warning }}>Could not load diagnostics.</p>
-      ) : !debug ? (
-        <p style={{ margin: 0, display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: UI.textSec }}>
-          <Loader2 size={13} className="animate-spin" /> Loading…
-        </p>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {rows.map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: UI.textSec }}>{k}</span>
-              <span style={{ color: UI.text, fontWeight: 600 }}>{v}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * Safe connection diagnostics — Developer tools only. Surfaces the technical status
- * detail (env, connection source, last fetch time, and the raw safe fetch error)
- * that the normal Pinterest card deliberately hides. Never shows tokens/secrets.
- */
-function StatusDiagnostics({ status, statusError, lastFetchAt }: {
-  status: PinterestStatus | null;
-  statusError: string | null;
-  lastFetchAt: number | null;
-}) {
-  const rows: [string, string][] = [
-    ["API environment", status?.apiEnv ?? status?.environment ?? "unknown"],
-    ["Connection source", status?.connectionSource ?? "none"],
-    ["Needs reconnect", status?.needsReconnect ? "Yes" : "No"],
-    ["Last status fetch", lastFetchAt ? new Date(lastFetchAt).toLocaleTimeString() : "—"],
-    ["Status fetch error", statusError ?? "none"],
-  ];
-  return (
-    <section
-      data-testid="pinterest-status-diagnostics"
-      style={{ border: `1px solid ${UI.border}`, borderRadius: 12, padding: "12px 14px", background: UI.surface2 }}
-    >
-      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.text }}>Connection diagnostics</p>
-      <p style={{ margin: "2px 0 10px", fontSize: 11, color: UI.textSec }}>Technical status detail — not shown to normal users.</p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        {rows.map(([k, v]) => (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
-            <span style={{ color: UI.textSec }}>{k}</span>
-            <span style={{ color: k === "Status fetch error" && statusError ? UI.warning : UI.text, fontWeight: 600, textAlign: "right", wordBreak: "break-word" }}>{v}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function PinterestTabContent() {
-  const [pinterestStatus, setPinterestStatus] = useState<PinterestStatus | null>(null);
-  const [pinterestLoaded, setPinterestLoaded] = useState(false);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [lastFetchAt, setLastFetchAt] = useState<number | null>(null);
-  const [devToolsOpen, setDevToolsOpen] = useState(false);
-
-  useEffect(() => {
-    fetchPinterestStatus()
-      .then(s => { setPinterestStatus(s); setStatusError(null); setLastFetchAt(Date.now()); setPinterestLoaded(true); })
-      .catch((e: PinterestClientError) => {
-        // Keep the debug detail here; the normal card never shows this.
-        setPinterestStatus({
-          connected: !!e.needsReconnect,
-          account: null, scopes: [],
-          needsReconnect: !!e.needsReconnect,
-        });
-        setStatusError(e.message || e.code || "status fetch failed");
-        setLastFetchAt(Date.now());
-        setPinterestLoaded(true);
-      });
-  }, []);
-
-  const visualState = pinterestLoaded ? derivePinterestSettingsState(pinterestStatus) : null;
-  const isConnected = visualState === "connected" || visualState === "limited_access";
-  // Sandbox concepts kept separate from a real user connection (see status route).
-  const sandboxDemo = pinterestStatus?.connectionSource === "sandbox_demo";
-  const sandboxEnv = (pinterestStatus?.apiEnv ?? pinterestStatus?.environment) === "sandbox";
-  // Boards actually load (real connection, or sandbox token backing the publish path).
-  const canLoadBoards = isConnected || sandboxDemo;
-  // Board defaults, manual board sync, publishing-access detail, advanced setup, and
-  // diagnostics are developer/debug surfaces. Normal users never see them — they live
-  // behind a collapsed "Developer tools" section shown only outside production. Also
-  // shown in sandbox mode, or when a status fetch error needs diagnosing.
-  const showDevTools = isSocialDevToolsEnabled() && pinterestLoaded && (canLoadBoards || sandboxEnv || !!statusError);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-      <div data-testid="pinterest-connection-card">
-        <PinterestSettingsPanel />
-      </div>
-      {showDevTools && (
-        <div
-          data-testid="pinterest-developer-tools"
-          style={{ marginTop: 16, border: "1px solid var(--app-border)", borderRadius: 12, overflow: "hidden" }}
-        >
-          <button
-            type="button"
-            data-testid="pinterest-developer-tools-toggle"
-            onClick={() => setDevToolsOpen(o => !o)}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-              padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", textAlign: "left",
-            }}
-          >
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--app-text-sec)" }}>Developer tools</span>
-            <span style={{ fontSize: 11, color: "#5B6577" }}>{devToolsOpen ? "Hide" : "Show"}</span>
-          </button>
-          {devToolsOpen && (
-            <div style={{ padding: "0 4px 6px", display: "flex", flexDirection: "column", gap: 12 }}>
-              <StatusDiagnostics status={pinterestStatus} statusError={statusError} lastFetchAt={lastFetchAt} />
-              {sandboxEnv && <SandboxDiagnostics />}
-              {canLoadBoards && (
-                <PinterestAdvancedSettings
-                  limited={visualState === "limited_access"}
-                  needsReconnect={!!pinterestStatus?.needsReconnect}
-                />
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PinterestTab() {
-  return (
-    <Suspense fallback={
-      <PinterestTabFallback />
-    }>
-      <PinterestTabContent />
-    </Suspense>
-  );
-}
-
-function PinterestTabFallback() {
+function SocialTabFallback() {
   const { t } = useLocale();
   return (
     <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: UI.textSec, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-      <Loader2 size={16} className="animate-spin" /> {t("pinterest.checkingConnection")}
+      <Loader2 size={16} className="animate-spin" /> {t("socialPanel.loading")}
     </div>
   );
 }
@@ -1239,7 +1227,7 @@ function SupportTab({ onClose }: { onClose: () => void }) {
 const TABS: { id: SettingsTab; labelKey?: MessageKey; label?: string; testId: string }[] = [
   { id: "account",        labelKey: "settings.tab.account",       testId: "settings-tab-account" },
   { id: "billing",        labelKey: "settings.tab.billing",       testId: "settings-tab-billing" },
-  { id: "pinterest",      labelKey: "settings.tab.pinterest",     testId: "settings-tab-pinterest" },
+  // Pinterest has no tab of its own — it is one card inside Social accounts (PRD §2).
   { id: "social",         labelKey: "settings.tab.social",        testId: "settings-tab-social" },
   { id: "publishing",     labelKey: "settings.tab.publishing",    testId: "settings-tab-publishing" },
   { id: "amazon",         labelKey: "settings.tab.amazon",        testId: "settings-tab-amazon" },
@@ -1377,8 +1365,14 @@ export function SettingsModal({
           <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px 52px", minWidth: 0 }}>
             {tab === "account"        && <AccountTab       saveFnRef={accountSaveFn} />}
             {tab === "billing"        && <BillingTab />}
-            {tab === "pinterest"      && <PinterestTab />}
-            {tab === "social"         && <SocialAccountsPanel />}
+            {/* SocialAccountsPanel reads the OAuth-return query via useSearchParams,
+                so it needs its own Suspense boundary (the retired Pinterest tab had
+                the same one). */}
+            {tab === "social"         && (
+              <Suspense fallback={<SocialTabFallback />}>
+                <SocialAccountsPanel />
+              </Suspense>
+            )}
             {tab === "publishing"     && <PublishingTab    saveFnRef={publishingSaveFn} />}
             {tab === "amazon"         && <AmazonTab        saveFnRef={amazonSaveFn} />}
             {/* Rendered whenever the tab is active, regardless of the flag: launch/callback

@@ -10,6 +10,9 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
+import { PINS_PER_REFERENCE_OPTIONS } from "@/lib/studio/selectedReferences";
+
+const MAX_PINS_PER_REFERENCE = Math.max(...PINS_PER_REFERENCE_OPTIONS);
 
 let _client: ReturnType<typeof createBrowserClient> | null = null;
 function browser() {
@@ -36,23 +39,39 @@ export type AiVersionGenerateResult = {
   source?: string;
 };
 
+/**
+ * Build the POST /api/generate body shared by the inline and worker paths.
+ *
+ * `styleReference` carries the per-GROUP reference (create-pin grouped generation):
+ * /api/generate rebuilds image_inputs from `product_images` + ONE `style_ref`
+ * string, so a single request can only ever carry one reference image. Passing
+ * `styleReference === undefined` means the caller did not opt into grouped
+ * generation, so we fall back to the legacy first-reference behavior.
+ */
 function buildGenerateBody(opts: {
   source?: PinDraft | null;
   keyword?: string;
   setup: AiVersionOptions;
   generationRequestId: string;
+  styleReference?: string | null;
 }): Record<string, unknown> {
   const { source, setup, generationRequestId } = opts;
   const productImages = setup.productImages.length
     ? setup.productImages
     : source?.imageUrl ? [source.imageUrl] : [];
-  const referenceImages = setup.referenceImages;
+  // One reference per group. `styleReference === undefined` means the caller did not
+  // opt into grouped generation, so fall back to the legacy first-reference behavior.
+  const groupReference = opts.styleReference !== undefined
+    ? opts.styleReference
+    : setup.referenceImages[0] ?? null;
+  const referenceImages = groupReference ? [groupReference] : [];
 
   return {
     keyword: source?.keyword || opts.keyword || source?.title || setup.category || "pin",
     category: setup.category || source?.category || "",
     style: "editorial",
-    count: Math.max(1, Math.min(4, setup.count)),
+    // Per-GROUP count (pinsPerReference, 1..MAX_PINS_PER_REFERENCE) — never the batch total.
+    count: Math.max(1, Math.min(MAX_PINS_PER_REFERENCE, setup.count)),
     prompt: setup.hiddenPrompt || setup.prompt,
     prompt_mode: "creative_direction_v2",
     prompt_version: 2,
@@ -100,19 +119,48 @@ function buildGenerateBody(opts: {
  * We do not gate on a public env var — GENERATION_MODE lives server-side only, and the
  * grey-out switch must work without a redeploy of client bundles. Detecting "does the
  * response have a jobId" is the single source of truth for which mode is live.
+ *
+ * Generate ONE reference group.
+ *
+ * A batch of N references is N sequential calls to this function, each requesting
+ * `setup.count` images with a single `styleReference` as its style_ref. That is not
+ * a stylistic choice:
+ *
+ *  - /api/generate rebuilds image_inputs from `product_images` + ONE `style_ref`
+ *    string (buildImageInputs), so a single request can only ever carry one
+ *    reference image; and
+ *  - it holds a per-user "active-generation" lock and returns 429
+ *    (user_generation_limit) for a concurrent second call, so the groups must be
+ *    serial rather than parallel.
+ *
+ * Product images and metadata are shared across every group; only the style
+ * reference varies. The caller pairs each result with its group's reference to
+ * persist the association onto the resulting Pins.
  */
 export async function generateAiVersions(opts: {
   source?: PinDraft | null;
   keyword?: string;
   setup: AiVersionOptions;
+  /** This group's style reference. Omit for a product/prompt-only group. */
+  styleReference?: string | null;
+  /** Shared across all groups in one batch, for log/telemetry correlation. */
+  batchRequestId?: string;
 }): Promise<AiVersionGenerateResult> {
   const { source, setup } = opts;
-  const generationRequestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const generationRequestId = opts.batchRequestId
+    ? `${opts.batchRequestId}_g${Math.random().toString(36).slice(2, 6)}`
+    : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify(buildGenerateBody({ source, keyword: opts.keyword, setup, generationRequestId })),
+    body: JSON.stringify(buildGenerateBody({
+      source,
+      keyword: opts.keyword,
+      setup,
+      generationRequestId,
+      styleReference: opts.styleReference,
+    })),
   });
   if (!res.ok) throw new Error(`Generation failed (${res.status})`);
   const body = await res.json() as {

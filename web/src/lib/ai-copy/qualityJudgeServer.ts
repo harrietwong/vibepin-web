@@ -18,6 +18,7 @@ import {
   thinkingExtras,
   asStringArray,
   type ProviderConfig,
+  type ChatCostContext,
 } from "./visionServer";
 
 /** Optional grounding context for the grader — all best-effort, safely absent. */
@@ -47,6 +48,8 @@ export async function judgeImageQuality(args: {
   cfg: ProviderConfig;
   dataUrl: string;
   context?: JudgeContext;
+  /** Optional — best-effort internal cost logging (never affects the verdict). */
+  costContext?: ChatCostContext;
 }): Promise<JudgeRawResult> {
   const ctx = args.context ?? {};
   const schema = `{
@@ -77,6 +80,8 @@ export async function judgeImageQuality(args: {
     temperature: 0.1,
     maxTokens: 512,
     extraBody: thinkingExtras(args.cfg.provider, args.cfg.visionModel),
+    costContext: args.costContext,
+    provider: args.cfg.provider,
     messages: [
       {
         role: "system",

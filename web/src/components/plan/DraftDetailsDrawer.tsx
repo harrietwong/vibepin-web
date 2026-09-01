@@ -29,7 +29,7 @@ import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
 import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
-import type { PinDraft } from "@/lib/pinDraftStore";
+import type { PinDraft, SocialPostRef } from "@/lib/pinDraftStore";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
@@ -57,12 +57,24 @@ import {
   type PinterestStatus,
 } from "@/lib/pinterestClient";
 import { getCachedBoardsResult, isCacheFresh, setCachedBoardsResult } from "@/lib/pinterest/boardsCache";
+import { PublishDestinationPicker } from "@/components/studio/PublishDestinationPicker";
+import { usePinterestConnections } from "@/hooks/usePinterestConnections";
+import {
+  resolvePublishTarget,
+  retryBlockReason,
+  selectedTargetConnection,
+  targetAccountHandle,
+  targetPatchFor,
+} from "@/lib/studio/publishTarget";
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { track } from "@/lib/analytics";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { isPublishableImage, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
+import { PublishResults } from "@/components/social/PublishResults";
+import { publishResultRows } from "@/lib/studio/publishResults";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
@@ -148,6 +160,31 @@ export function PinDetailsModal({
   const [sandboxMode, setSandboxMode] = useState(false);
   const [creatingBoard, setCreatingBoard] = useState(false);
 
+  // ── Publish target (PRD §13/§14) ────────────────────────────────────────────
+  // Which connected Pinterest account THIS Pin publishes to. The stored target wins;
+  // only a draft that has never had one falls back to the default connection, and that
+  // resolution is written back (adopt-once) so it can never drift afterwards.
+  const { connections: pinterestConnections, fallback: fallbackConnection } = usePinterestConnections();
+  // Local echo of the draft's target so a just-switched account takes effect within this
+  // render pass (the store write is async through the draft-store event).
+  const [targetConnectionId, setTargetConnectionId] = useState("");
+  const [targetAccountLabel, setTargetAccountLabel] = useState("");
+  const targetedDraft = useMemo(
+    () => ({ targetConnectionId, targetAccountLabel }),
+    [targetConnectionId, targetAccountLabel],
+  );
+  // The account the Board list and every publish/retry from this drawer must use.
+  // Null only when the pinned account is no longer connected — the Pin is NOT re-routed
+  // to another account (that would publish to the wrong Pinterest profile); the §17
+  // guard below asks the user to reconnect it.
+  const selectedConnection = selectedTargetConnection(targetedDraft, pinterestConnections, fallbackConnection);
+  const effectiveConnectionId = selectedConnection?.id ?? (targetConnectionId || "");
+  // Read by the default-board callbacks, which must scope their write to the account the
+  // board actually belongs to (a default board is per-account) without re-creating
+  // themselves — and therefore re-running the board load — on every target change.
+  const effectiveConnectionRef = useRef("");
+  useEffect(() => { effectiveConnectionRef.current = effectiveConnectionId; }, [effectiveConnectionId]);
+
   // ── Save / dirty state ──────────────────────────────────────────────────────
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
@@ -185,8 +222,25 @@ export function PinDetailsModal({
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
+  // Which specific accounts to publish as, on platforms with more than one
+  // connected. Empty means "every connected account on the selected platforms" —
+  // connecting a second account must not silently narrow an existing habit.
+  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>([]);
   // Guards the one-shot fan-out to extra channels after a successful publish.
   const socialFannedOutRef = useRef(false);
+  // `draft` is a prop — a snapshot taken when the drawer opened. The social
+  // fan-out finishes AFTER that (Instagram especially: its publish is two-step
+  // and polls a container to FINISHED) and writes to the store, which never
+  // re-renders that prop, so results landing later were invisible here. This
+  // holds whatever the fan-out recorded during this session and wins over the
+  // stale snapshot. MUST live with the other hooks, above the `!open || !draft`
+  // early return: declared below it, the hook count changes between renders and
+  // React tears the tree down (error #310).
+  const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
+  // One publish = one toast. Pinterest and the social fan-out complete at
+  // different moments, but the merchant clicked once; sharing a toast id lets the
+  // later result replace the earlier line with a combined one.
+  const PUBLISH_TOAST_ID = `publish-${draft?.id ?? "draft"}`;
 
   // ── Scheduling ──────────────────────────────────────────────────────────────
   const [scheduledTime, setScheduledTime] = useState("");
@@ -263,7 +317,7 @@ export function PinDetailsModal({
         if (board) {
           const value = { boardId: board.id, boardName: board.name };
           setDefaultBoard(value);
-          void savePinterestDefaultBoard(value).catch(() => {});
+          void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
         }
       }
       return next;
@@ -271,14 +325,19 @@ export function PinDetailsModal({
     setBoardsStatus("ready");
   }, [chooseBoardId]);
 
-  const loadBoards = useCallback(async (preferBoardId?: string) => {
+  // `connectionId` names WHICH connected account's boards to load — this Pin's publish
+  // target. Passed explicitly by every caller rather than read from state, so a load
+  // started right after an account switch can never read the pre-switch value out of a
+  // stale closure and paint the old account's boards. Omitted ⇒ the default connection
+  // (byte-for-byte the single-account behaviour that came before).
+  const loadBoards = useCallback(async (preferBoardId?: string, connectionId?: string) => {
     const seq = ++boardsLoadSeqRef.current;
     const isCurrent = () => seq === boardsLoadSeqRef.current;
 
     // Cache-first instant paint: reopening a drawer within the session shouldn't
     // re-run the full status → boards round trip (incl. a live Pinterest API call)
     // from a blank "checking…" state every time.
-    const cached = getCachedBoardsResult();
+    const cached = getCachedBoardsResult(connectionId);
     // Publish-path capability (db OR sandbox_demo) — NOT the strict merchant-connection
     // check: the sandbox demo flow must keep boards/publish working on drawer reopen.
     const paintedFromCache = !!cached && canPublishWithPinterest(cached.status);
@@ -358,7 +417,7 @@ export function PinDetailsModal({
     };
     const statusPromise = timeoutAfter(fetchPinterestStatusCached()).then(s => { mark("status finished"); return s; });
     const boardsPromise = fireBoards
-      ? timeoutAfter(fetchPinterestBoards()).then(r => { mark(`boards finished (${r.items.length} boards)`); return r; })
+      ? timeoutAfter(fetchPinterestBoards(undefined, undefined, connectionId)).then(r => { mark(`boards finished (${r.items.length} boards)`); return r; })
       : null;
     // If we bail on status below (not connected), the in-flight boards call must not
     // surface as an unhandled rejection. This handler is independent of the await.
@@ -380,7 +439,7 @@ export function PinDetailsModal({
             // boards. Do not block the dropdown on a slower/failed account lookup.
             status = connectedFallbackStatus;
           }
-          setCachedBoardsResult(status, items);
+          setCachedBoardsResult(status, items, connectionId);
           applyBoardsResult(status, items, preferBoardId);
           mark(`ready - dropdown populated (${items.length} boards)`);
           return;
@@ -388,7 +447,7 @@ export function PinDetailsModal({
           const status = await statusPromise;
           if (!isCurrent()) return;
           if (!canPublishWithPinterest(status)) {
-            setCachedBoardsResult(status, []);
+            setCachedBoardsResult(status, [], connectionId);
             if (!paintedFromCache) {
               setBoards([]);
               setBoardId("");
@@ -407,7 +466,7 @@ export function PinDetailsModal({
       const status = await statusPromise;
       if (!isCurrent()) return; // superseded by a newer load
       if (!canPublishWithPinterest(status)) {
-        setCachedBoardsResult(status, []);
+        setCachedBoardsResult(status, [], connectionId);
         if (!paintedFromCache) {
           setBoards([]);
           setBoardId("");
@@ -424,10 +483,10 @@ export function PinDetailsModal({
       if (!paintedFromCache && cached) setBoardsStatus("loading");
       // Reuse the concurrent boards fetch when we prefetched it; otherwise (we thought
       // the user was disconnected but status says connected) fetch it now.
-      const { items } = await timeoutAfter(fetchPinterestBoards())
+      const { items } = await timeoutAfter(fetchPinterestBoards(undefined, undefined, connectionId))
         .then(r => { mark(`boards finished (${r.items.length} boards, late)`); return r; });
       if (!isCurrent()) return; // superseded by a newer load
-      setCachedBoardsResult(status, items); // real network data — safe to (re)stamp the cache
+      setCachedBoardsResult(status, items, connectionId); // real network data — safe to (re)stamp the cache
       applyBoardsResult(status, items, preferBoardId);
       mark(`ready — dropdown populated (${items.length} boards)`);
     } catch (e) {
@@ -602,12 +661,27 @@ export function PinDetailsModal({
     setPinterestConnected(false);
     setPinterestAccount(null);
     setSocialDestinations([]);
+    setSocialAccountIds([]);
+    setSocialAccountIds([]);
+    // Scoped to one publish: never carry another Pin's live posts into this one.
+    setLiveSocialPosts(null);
     socialFannedOutRef.current = false;
     setIsRedirectingToPinterest(false);
-    void fetchPinterestDefaultBoard()
+    // The Pin's pinned publish target, straight off the draft. A blank one is NOT
+    // adopted here: opening a drawer must not silently decide (and persist) where an
+    // untargeted Pin goes. Adoption happens at publish time, where the server reports
+    // the account it actually used.
+    const seededTarget = draft.targetConnectionId?.trim() ?? "";
+    setTargetConnectionId(seededTarget);
+    setTargetAccountLabel(draft.targetAccountLabel?.trim() ?? "");
+    effectiveConnectionRef.current = seededTarget;
+    void fetchPinterestDefaultBoard(undefined, seededTarget || undefined)
       .then(board => setDefaultBoard(board))
       .catch(() => {});
-    void loadBoards(draft.boardId);
+    // Boards come from the Pin's OWN target account, not from whichever account happens
+    // to be the default now — a Pin pinned to account B must never be offered account A's
+    // boards. Untargeted (seededTarget "") ⇒ default connection, unchanged behaviour.
+    void loadBoards(draft.boardId, seededTarget || undefined);
   }, [open, draft, loadBoards]);
 
   useEffect(() => {
@@ -615,15 +689,21 @@ export function PinDetailsModal({
     const next = chooseBoardId(boards, draft?.boardId);
     if (!next) return;
     setBoardId(next);
-    if (!defaultBoard) {
-      const board = boards.find(b => b.id === next);
-      if (board) {
-        const value = { boardId: board.id, boardName: board.name };
-        setDefaultBoard(value);
-        void savePinterestDefaultBoard(value).catch(() => {});
-      }
+    const board = boards.find(b => b.id === next);
+    // Persist the auto-selected board ONTO THE DRAFT, not just into local state.
+    // The publish gate (StudioBoard's isPinReady(draftReadiness(d))) reads the stored
+    // draft, so a board that was only ever auto-filled into this drawer's state left
+    // the card failing the "Pinterest board" required-field check — the user saw their
+    // default board selected and was still told required details were missing.
+    if (board && draft && !draft.boardId?.trim()) {
+      pinDraftStore.updateDraft(draft.id, { boardId: board.id, boardName: board.name });
     }
-  }, [open, boardsStatus, boards, boardId, draft?.boardId, chooseBoardId, defaultBoard]);
+    if (!defaultBoard && board) {
+      const value = { boardId: board.id, boardName: board.name };
+      setDefaultBoard(value);
+      void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
+    }
+  }, [open, boardsStatus, boards, boardId, draft, chooseBoardId, defaultBoard]);
 
   // Disconnecting Pinterest in Settings does not unmount this drawer when Settings is
   // opened as an overlay on top of it — nothing would otherwise tell this already-open
@@ -640,7 +720,7 @@ export function PinDetailsModal({
       setBoardId("");
       setDefaultBoard(null);
       setBoardsStatus("not_connected");
-      void loadBoards();
+      void loadBoards(undefined, effectiveConnectionRef.current || undefined);
     }
     window.addEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
     return () => window.removeEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
@@ -786,8 +866,47 @@ export function PinDetailsModal({
     toast.success(t("pinDetails.toast.productAttached"));
   }
 
+  // "View on <Platform>" label for any social destination, derived from the single
+  // existing catalog string ("View on Pinterest") by swapping the platform name in.
+  // Deliberately NOT a new i18n key: all 18 locales already carry this sentence, and
+  // adding an English-only key would leave 17 catalogs incomplete. Falls back to the
+  // untouched Pinterest string if the catalog value ever stops containing "Pinterest".
+  function viewOnLabel(provider: SocialProvider): string {
+    const base = t("pinDetails.viewOnPinterest");
+    const target = platformName(provider);
+    const pinterest = platformName("pinterest");
+    return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
+  }
+
   // User clicked a "Publish now" affordance (footer / overflow / failed-retry). Publishing
   // is immediate and irreversible, so confirm first (the actual publish runs on confirm).
+  /**
+   * The user picked a different Pinterest account for THIS Pin.
+   *
+   * `patch` arrives from switchTargetPatch with boardId/boardName already blanked
+   * (PRD §13): board ids belong to one account, and we never guess an equivalent board
+   * on the new account by name. Written to the draft as ONE store update so a draft can
+   * never be observed pointing at account B while still holding account A's board.
+   */
+  function handleTargetChange(patch: { targetConnectionId: string; targetAccountLabel: string; boardId: string; boardName: string }) {
+    setTargetConnectionId(patch.targetConnectionId);
+    setTargetAccountLabel(patch.targetAccountLabel);
+    effectiveConnectionRef.current = patch.targetConnectionId;
+    setBoardId("");
+    setBoards([]);
+    setBoardError(false);
+    setDefaultBoard(null);
+    setBoardsStatus("loading");
+    if (activeDraft) pinDraftStore.updateDraft(activeDraft.id, patch);
+    // The new account's default board and boards list — the old account's are meaningless
+    // here, and the per-connection cache keeps them from being served to each other.
+    void fetchPinterestDefaultBoard(undefined, patch.targetConnectionId)
+      .then(board => setDefaultBoard(board))
+      .catch(() => {});
+    void loadBoards(undefined, patch.targetConnectionId);
+    markDirty();
+  }
+
   // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
   // OAuth redirect is already in flight.
   function requestPublish() {
@@ -818,6 +937,200 @@ export function PinDetailsModal({
     setTrialAccess(false);
     setPublishAttempts((n) => n + 1);
 
+    // Publish the selected non-Pinterest channels. Called after a successful
+    // Pinterest publish AND after a failed one — those channels stand on their
+    // own, so a Pinterest refusal (Trial access, dead token, bad board) must not
+    // silently swallow them. Guarded to run at most once per publish attempt.
+    // One destination per TARGET, not per platform: with several accounts picked
+    // on a platform, each needs its own row so the server publishes to each and
+    // reports them separately. Nothing narrowed → the platform is sent bare and
+    // the server resolves its single connected account, exactly as before.
+    function expandDestinations(providers: SocialProvider[]) {
+      return providers.flatMap(provider => {
+        // socialAccountIds is flat across platforms; an id belonging to another
+        // platform is simply not among that provider's connections server-side,
+        // so scoping happens there rather than duplicating the account list here.
+        const ids = socialAccountIds.filter(a => a.provider === provider).map(a => a.id);
+        return ids.length
+          ? ids.map(id => ({ provider, socialConnectionId: id }))
+          : [{ provider }];
+      });
+    }
+
+    async function fanOutToExtraChannels(pinterestPublished = false): Promise<void> {
+      const extras = socialDestinations.filter(p => p !== "pinterest");
+      if (!extras.length || socialFannedOutRef.current) return;
+      socialFannedOutRef.current = true;
+      try {
+        const r = await publishToSocial({
+          postId: activeDraft.id,
+          post: {
+            imageUrls: publicImage ? [publicImage] : [],
+            title: title.trim() || undefined,
+            caption: description.trim() || undefined,
+            destinationUrl: destinationUrl.trim() || undefined,
+            altText: altText.trim() || undefined,
+          },
+          destinations: expandDestinations(extras),
+        });
+        const published = r.destinations.filter(d => d.status === "published");
+        const failed = r.destinations.filter(d => d.status === "failed");
+        const refs = published
+          .filter(d => d.externalPostId)
+          .map(d => ({
+            provider: d.provider,
+            postId: d.externalPostId as string,
+            postUrl: d.externalPostUrl ?? "",
+            publishedAt: new Date().toISOString(),
+            // Which account received it — a permalink alone doesn't say, and a
+            // merchant may have several accounts connected per platform.
+            accountName: d.accountName ?? undefined,
+          }));
+        if (refs.length) {
+          // Merge by provider so republishing replaces that platform's entry
+          // rather than appending a stale duplicate.
+          const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
+            .filter(p => !refs.some(r2 => r2.provider === p.provider));
+          const merged = [...existing, ...refs];
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: merged });
+          // Mirror into local state: the `draft` prop will not re-render for a
+          // store write, and this drawer is usually still open when the fan-out
+          // lands.
+          setLiveSocialPosts(merged);
+        }
+        if (published.length) {
+          const withLink = published.find(d => d.externalPostUrl);
+          const names = published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"));
+          // One publish, one toast. When Pinterest succeeded it already showed
+          // "Pin published successfully" under PUBLISH_TOAST_ID; reusing that id
+          // REPLACES it with a combined line naming every destination, instead of
+          // stacking a second "Also published to …" for what the merchant
+          // experienced as a single action. With Pinterest unchecked or failed
+          // there is no prior toast, so this is simply the first one.
+          const combined = pinterestPublished
+            ? `${t("pinDetails.toast.publishSuccess")} ${t("pinDetails.toast.alsoPublishedPrefix")}${names}`
+            : `${t("pinDetails.toast.alsoPublishedPrefix")}${names}`;
+          toast.success(combined, {
+            id: PUBLISH_TOAST_ID,
+            ...(withLink?.externalPostUrl
+              ? {
+                  action: {
+                    label: viewOnLabel(withLink.provider),
+                    onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
+                  },
+                }
+              : {}),
+          });
+        }
+        if (failed.length) {
+          // Reuse the publish toast id: with nothing published this REPLACES the
+          // pending spinner, which would otherwise sit there forever. When some
+          // destinations did succeed the success branch above already claimed the
+          // id, so this rides its own toast rather than overwriting the outcome.
+          toast.info(
+            failed[0].error ||
+              `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`,
+            published.length ? undefined : { id: PUBLISH_TOAST_ID },
+          );
+        }
+      } catch {
+        // A thrown fan-out must also clear the pending spinner — Pinterest itself
+        // succeeded, so this reports the fan-out, not the publish, as the failure.
+        toast.error(t("pinDetails.error.publishFailed"), { id: PUBLISH_TOAST_ID });
+        /* non-blocking — never let a fan-out error mask the Pinterest outcome */
+      }
+    }
+
+    // ── Social-only publish: Pinterest deliberately unchecked ────────────────
+    // The merchant may repurpose to connected channels (e.g. a Facebook Page)
+    // without creating a Pin at all. Every guard below this block is a Pinterest
+    // concern (board choice, connection, board status), so a social-only publish
+    // skips them and drives the fan-out as the PRIMARY action with real
+    // success/failure feedback instead of the fire-and-forget "also published".
+    if (!socialDestinations.includes("pinterest")) {
+      const extras = socialDestinations.filter(p => p !== "pinterest");
+      if (!extras.length) {
+        setPublishError(t("pinDetails.toast.completeRequired"));
+        toast.error(t("pinDetails.toast.completeRequired"));
+        return;
+      }
+      if (!isPublishableImage(publicImage)) {
+        const msg = "This Pin needs an image before it can be published.";
+        setPublishError(msg);
+        toast.error(msg);
+        return;
+      }
+      if (!beginPublish(activeDraft.id)) return;
+      setPublishing(true);
+      try {
+        const r = await publishToSocial({
+          postId: activeDraft.id,
+          post: {
+            imageUrls: publicImage ? [publicImage] : [],
+            title: title.trim() || undefined,
+            caption: description.trim() || undefined,
+            destinationUrl: destinationUrl.trim() || undefined,
+            altText: altText.trim() || undefined,
+          },
+          destinations: expandDestinations(extras),
+        });
+        const published = r.destinations.filter(d => d.status === "published");
+        const failed = r.destinations.filter(d => d.status === "failed");
+        const refs = published
+          .filter(d => d.externalPostId)
+          .map(d => ({
+            provider: d.provider,
+            postId: d.externalPostId as string,
+            postUrl: d.externalPostUrl ?? "",
+            publishedAt: new Date().toISOString(),
+            // Which account received it — a permalink alone doesn't say, and a
+            // merchant may have several accounts connected per platform.
+            accountName: d.accountName ?? undefined,
+          }));
+        if (refs.length) {
+          // Same merge-by-provider persistence as the post-Pinterest fan-out, so
+          // the published view (View on Facebook) survives a reload.
+          const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
+            .filter(p => !refs.some(r2 => r2.provider === p.provider));
+          const merged = [...existing, ...refs];
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: merged });
+          // Mirror into local state: the `draft` prop will not re-render for a
+          // store write, and this drawer is usually still open when the fan-out
+          // lands.
+          setLiveSocialPosts(merged);
+        }
+        if (published.length) {
+          const withLink = published.find(d => d.externalPostUrl);
+          toast.success(
+            t("pinDetails.publishedSuccess"),
+            withLink?.externalPostUrl
+              ? {
+                  action: {
+                    label: viewOnLabel(withLink.provider),
+                    onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
+                  },
+                }
+              : undefined,
+          );
+          setPublishError(null);
+        }
+        if (failed.length) {
+          const msg =
+            failed[0].error ||
+            `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`;
+          setPublishError(msg);
+          toast.error(msg);
+        }
+      } catch {
+        setPublishError(t("pinDetails.error.publishFailed"));
+        toast.error(t("pinDetails.error.publishFailed"));
+      } finally {
+        setPublishing(false);
+        endPublish(activeDraft.id);
+      }
+      return;
+    }
+
     // "Publish now" publishes immediately — branching happens here.
     // Every branch below produces visible feedback (footer message / redirect / loading).
 
@@ -830,7 +1143,7 @@ export function PinDetailsModal({
     // Connection/boards still resolving → tell the user and re-fetch fresh.
     if (boardsStatus === "checking" || boardsStatus === "loading") {
       setPublishError(t("pinDetails.error.boardsLoading"));
-      void loadBoards(boardId);
+      void loadBoards(boardId, effectiveConnectionRef.current || undefined);
       return;
     }
 
@@ -898,6 +1211,10 @@ export function PinDetailsModal({
         attachedProducts: products.length ? products : undefined,
         primaryProductUrl: primaryProduct?.productUrl,
         productAttachmentMode: products.length ? "vibepin_metadata_v1" : undefined,
+        // Publish through THIS Pin's account, not "whatever is default now". Omitted for
+        // a Pin that has never had a target: the server resolves the default connection
+        // (pre-v59 behaviour) and reports it back, and we pin the draft to it below.
+        connectionId: targetConnectionId || undefined,
       });
       if (process.env.NODE_ENV !== "production") {
         console.log("[publish-result]", {
@@ -918,7 +1235,22 @@ export function PinDetailsModal({
       // DRAFT_STORE_EVENT, which the Weekly Plan listens to and refreshes from — so we do
       // NOT call onSaved here (some callers close the modal in onSaved, which would hide
       // the success state from the user).
+      // Adopt-once: a Pin that had no target is pinned to the account it actually
+      // published through, as reported by the server. From here on rule 1 applies —
+      // changing the default account never re-routes this Pin again.
+      const adopted = !targetConnectionId && res.connectionId
+        ? targetPatchFor({
+            id: res.connectionId,
+            username: pinterestConnections.find(c => c.id === res.connectionId)?.username ?? pinterestAccount?.username ?? "",
+          })
+        : null;
+      if (adopted) {
+        setTargetConnectionId(adopted.targetConnectionId);
+        setTargetAccountLabel(adopted.targetAccountLabel);
+        effectiveConnectionRef.current = adopted.targetConnectionId;
+      }
       pinDraftStore.updateDraft(activeDraft.id, {
+        ...(adopted ?? {}),
         postedAt: new Date().toISOString(),
         remotePinId: res.pin.id,
         remotePinUrl: res.pin.url,
@@ -932,43 +1264,45 @@ export function PinDetailsModal({
         previousScheduledTime: undefined,
         publishErrorCode: undefined,
       });
+      // Fires this event for the first time in the codebase (defined as a type + funnel
+      // constant but never called — the creative-intelligence funnel's last stage was
+      // permanently 0). Best-effort: analytics must never affect the publish outcome,
+      // which has already succeeded by this point.
+      try {
+        // `sourceGenerationId` (the server's generation_request_id), NOT the
+        // draft's separate `generationSessionId` client batch id — the payload key
+        // names the field the value actually came from.
+        track("draft_published", {
+          draftId: activeDraft.id,
+          ...(activeDraft.sourceGenerationId ? { sourceGenerationId: activeDraft.sourceGenerationId } : {}),
+          remotePinId: res.pin.id,
+        });
+      } catch { /* analytics must never affect publish */ }
       setResult({ pinUrl: res.pin.url, pinId: res.pin.id, boardName, environment: res.environment });
-      toast.success(t("pinDetails.toast.publishSuccess"), {
-        action: {
-          label: t("pinDetails.viewPin"),
-          onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
-        },
-      });
-
-      // Fan out to any additional connected channels the merchant selected.
-      // Dormant until non-Pinterest providers are connectable; guarded so it
-      // runs at most once per publish.
-      const extras = socialDestinations.filter(p => p !== "pinterest");
-      if (extras.length && !socialFannedOutRef.current) {
-        socialFannedOutRef.current = true;
-        void publishToSocial({
-          postId: activeDraft.id,
-          post: {
-            imageUrls: publicImage ? [publicImage] : [],
-            title: title.trim() || undefined,
-            caption: description.trim() || undefined,
-            destinationUrl: destinationUrl.trim() || undefined,
-            altText: altText.trim() || undefined,
+      // Shared id so a following social fan-out REPLACES this line with a
+      // combined one rather than stacking a second toast for one publish.
+      //
+      // With other channels still to go, this stays a LOADING toast rather than a
+      // success one. Instagram's publish is two-step and polls a container to
+      // FINISHED, so it lands seconds after Pinterest — announcing "published"
+      // and then silently rewriting the same toast read as two separate results
+      // for one click. A spinner that resolves is honest about the wait.
+      const hasPendingFanOut = socialDestinations.some(p => p !== "pinterest");
+      if (hasPendingFanOut) {
+        toast.loading(t("pinDetails.toast.publishSuccess"), { id: PUBLISH_TOAST_ID });
+      } else {
+        toast.success(t("pinDetails.toast.publishSuccess"), {
+          id: PUBLISH_TOAST_ID,
+          action: {
+            label: t("pinDetails.viewPin"),
+            onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
           },
-          destinations: extras.map(provider => ({ provider })),
-        })
-          .then(r => {
-            const published = r.destinations.filter(d => d.status === "published");
-            const failed = r.destinations.filter(d => d.status === "failed");
-            if (published.length) {
-              toast.success(`${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`);
-            }
-            if (failed.length) {
-              toast.info(failed[0].error || `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`);
-            }
-          })
-          .catch(() => {/* non-blocking — Pinterest already succeeded */});
+        });
       }
+      // Fan out to the other selected channels. Extracted so the same logic can
+      // also run when Pinterest FAILS (see the catch block) — those channels are
+      // independent and must not be withheld because Pinterest refused.
+      await fanOutToExtraChannels(true);
     } catch (e) {
       const err = e as PinterestClientError;
       if (process.env.NODE_ENV !== "production") {
@@ -1012,11 +1346,30 @@ export function PinDetailsModal({
       } else if (err.code === "pinterest_trial_access") {
         // Trial/Standard access block → clean, user-facing notice only (never raw API text).
         setTrialAccess(true);
+      } else if (err.pinterestCode === "15") {
+        // "Cannot add non-sandbox pins on sandbox boards" — the draft still points at
+        // the sandbox demo board (production no longer lists it, but a draft saved
+        // earlier can still carry its id). The generic message sent merchants chasing
+        // tokens, scopes and 2FA; name the actual fix instead.
+        const msg = t("pinDetails.board.chooseBoardToPublish");
+        setPublishError(msg);
+        toast.error(msg);
       } else {
         // Any other failure → short, readable message. No raw API/debug details surfaced.
         // Modal stays open and edits are preserved (nothing is reset on failure).
         setPublishError(t("pinDetails.error.publishFailed"));
         toast.error(t("pinDetails.error.publishFailed"));
+      }
+
+      // The other channels are INDEPENDENT of Pinterest. Pinterest failing (a
+      // Trial-access block, a bad board, a dead token) is no reason to withhold
+      // a post from a healthy Facebook Page — previously the fan-out lived after
+      // the Pinterest call inside `try`, so one Pinterest error silently dropped
+      // every other selected destination. Reconnect is the exception: the user is
+      // being navigated away to Pinterest OAuth, so publishing mid-redirect would
+      // be lost.
+      if (!needsPinterestConnect(err)) {
+        await fanOutToExtraChannels();
       }
     } finally {
       setPublishing(false);
@@ -1101,6 +1454,11 @@ export function PinDetailsModal({
   // fallback ONLY for legacy drafts published before remotePinUrl existed. Same
   // preference order as Studio's board card (PinBoardCard.tsx).
   const publishedPinUrl = activeDraft.remotePinUrl || (activeDraft.remotePinId ? `https://www.pinterest.com/pin/${activeDraft.remotePinId}/` : "");
+  // Non-Pinterest destinations this Pin was ALSO published to (Facebook Page today).
+  // Recorded on the draft at publish time from /api/publish/social's response, so the
+  // links survive a reload. Only entries with a real permalink get a button — a
+  // missing URL renders nothing rather than a dead link.
+  const socialPostRefs = (liveSocialPosts ?? activeDraft.socialPosts ?? []).filter(p => p.postUrl?.trim());
 
   function openScheduleEditor() {
     if (!isScheduled) {
@@ -1235,9 +1593,27 @@ export function PinDetailsModal({
     if (customTimeChosen) setCustomTimeConfirmed(true);
     setCustomTimeBoardChangedNotice(false);
     flushSave();
+    const wasScheduled = isScheduled;
     const updated = persistDraft();
     setSaveState(updated ? "saved" : "failed");
-    if (updated) toast.success(isScheduled ? t("pinDetails.toast.scheduleUpdated") : t("pinDetails.toast.pinScheduled"));
+    if (updated) {
+      toast.success(wasScheduled ? t("pinDetails.toast.scheduleUpdated") : t("pinDetails.toast.pinScheduled"));
+      // P0-3: fire only on a genuinely NEW schedule (not every re-save of an already-
+      // scheduled Pin's date/time), and only once persistDraft() has actually succeeded.
+      // Best-effort — analytics must never affect the confirmed schedule.
+      if (!wasScheduled) {
+        try {
+          // `sourceGenerationId` (the server's generation_request_id), NOT the
+          // draft's separate `generationSessionId` client batch id — the payload key
+          // names the field the value actually came from.
+          track("draft_scheduled", {
+            draftId: updated.id,
+            ...(updated.sourceGenerationId ? { sourceGenerationId: updated.sourceGenerationId } : {}),
+            plannedAt: updated.plannedAt || null,
+          });
+        } catch { /* analytics must never affect scheduling */ }
+      }
+    }
   }
 
   return (
@@ -1305,25 +1681,30 @@ export function PinDetailsModal({
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
               <div data-testid="draft-planned-summary">
                 {isPosted ? (
-                  <div data-testid="draft-published-summary" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: 800, color: UI.success, display: "flex", alignItems: "center", gap: 5 }}>
-                      <CheckCircle2 size={14} /> {t("pinDetails.published")}
-                    </p>
+                  <div data-testid="draft-published-summary" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     <p style={{ margin: 0, fontSize: 11.5, color: UI.textSec }}>
-                      {platformName("pinterest")}
-                      {activeDraft.postedAt && formatEnglishDateTime(activeDraft.postedAt) && ` · ${formatEnglishDateTime(activeDraft.postedAt)}`}
+                      {activeDraft.postedAt && formatEnglishDateTime(activeDraft.postedAt)}
                     </p>
-                    {activeDraft.boardName?.trim() && (
-                      <p data-testid="draft-published-board" style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
-                        {t("pinDetails.boardLabel")} {activeDraft.boardName}
-                      </p>
-                    )}
-                    {pinterestAccount?.username && (
-                      <p data-testid="draft-published-account" style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
-                        {t("pinDetails.accountLabel")} @{pinterestAccount.username}
-                      </p>
-                    )}
-                    <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textMuted }}>{t("pinDetails.publishedSuccess")}</p>
+                    {/* Same per-destination presentation as the publish result (PRD 0809
+                        §6) — no platform is the "main" one with the others appended as
+                        extra lines. The account shown is the one that RECEIVED the post
+                        (from the stored target/refs), not whichever account happens to be
+                        connected now, and a platform with no recorded handle still gets a
+                        row instead of being dropped. */}
+                    <PublishResults
+                      rows={publishResultRows({
+                        postedAt: activeDraft.postedAt,
+                        remotePinId: activeDraft.remotePinId,
+                        remotePinUrl: activeDraft.remotePinUrl,
+                        boardName: activeDraft.boardName,
+                        targetAccountLabel: activeDraft.targetAccountLabel,
+                        // Prefer what the fan-out recorded this session: the
+                        // `draft` prop is a snapshot from when the drawer opened
+                        // and never re-renders for a store write, so a Facebook /
+                        // Instagram post that landed afterwards was missing here.
+                        socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+                      })}
+                    />
                   </div>
                 ) : isScheduled ? (
                   <>
@@ -1342,22 +1723,38 @@ export function PinDetailsModal({
                     {isScheduled ? t("pinDetails.editDateTime") : t("pinDetails.addDateTime")}
                   </button>
                 )}
-                {/* Only rendered when a real published Pin URL exists — no URL means no
-                    button and no broken link, never an error. Primary-styled: it is
-                    the ONE action of the read-only published view (footer is hidden). */}
-                {isPosted && publishedPinUrl && (
-                  <a data-testid="draft-view-on-pinterest" href={publishedPinUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-                    {t("pinDetails.viewOnPinterest")} <ExternalLink size={12} />
-                  </a>
-                )}
-                {isPosted && !publishedPinUrl && (
-                  <span data-testid="draft-pin-url-unavailable" style={{ fontSize: 11, color: UI.textMuted }}>
-                    {t("pinDetails.publishedUrlUnavailable")}
-                  </span>
-                )}
+                {/* View actions live in the per-destination result rows above, one per
+                    platform. They used to sit here as a primary "View on Pinterest" plus
+                    secondary links for the others, which re-asserted Pinterest as the main
+                    destination (PRD 0809 §6) and duplicated what the rows now render. */}
               </div>
             </div>
           </div>
+
+          {/* Live posts on the other platforms, shown independently of the Pinterest
+              outcome. A publish is per-destination: Pinterest can fail while a
+              Facebook Page succeeds. In that case the Pin is not "posted", so the
+              published-summary block above renders nothing — and the post the
+              merchant just created would be unreachable from this drawer. Only
+              entries carrying a real permalink appear, so there is never a dead
+              link, and this never double-renders (the summary block owns these
+              links once the Pin itself is posted). */}
+          {!isPosted && socialPostRefs.length > 0 && (
+            <div
+              data-testid="draft-social-posts-standalone"
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 10, border: `1px solid ${UI.border}`, background: UI.surface2 }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 700, color: UI.textSec }}>
+                {t("pinDetails.publishedSuccess")}
+              </span>
+              {socialPostRefs.map(ref => (
+                <a key={ref.provider} data-testid={`draft-view-on-${ref.provider}`}
+                  href={ref.postUrl} target="_blank" rel="noopener noreferrer" style={lightBtn}>
+                  {viewOnLabel(ref.provider as SocialProvider)} <ExternalLink size={12} />
+                </a>
+              ))}
+            </div>
+          )}
 
           {/* Inline schedule editor — revealed by Schedule / Reschedule. */}
           {scheduleEditorOpen && !isPosted && (
@@ -1520,44 +1917,6 @@ export function PinDetailsModal({
             )}
           </div>
 
-          {/* Boards */}
-          <div style={fieldBlock}>
-            <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.boards")}</span></div>
-            <PinBoardSection
-              boardId={boardId}
-              boards={boards}
-              boardsStatus={boardsStatus}
-              boardError={boardError}
-              disabled={publishing}
-              selectRef={boardSelectRef}
-              onChange={(id) => {
-                setBoardId(id);
-                const board = boards.find(b => b.id === id);
-                if (board) {
-                  const value = { boardId: board.id, boardName: board.name };
-                  setDefaultBoard(value);
-                  void savePinterestDefaultBoard(value).catch(() => {});
-                }
-                // Board interplay: a custom time chosen but not yet confirmed via
-                // [Schedule]/[Update schedule] is cleared on board change — the user
-                // must re-pick a time for the newly selected board.
-                if (customTimeChosen && !customTimeConfirmed) {
-                  setPlannedDate("");
-                  setScheduledTime("");
-                  setCustomTimeChosen(false);
-                  setCustomTimeBoardChangedNotice(true);
-                }
-                markDirty();
-              }}
-              onClearBoardError={() => setBoardError(false)}
-              onRetryLoad={() => void loadBoards(boardId)}
-              onNeedsConnect={goToPinterestOAuth}
-              sandboxMode={sandboxMode}
-              creatingDemoBoard={creatingBoard}
-              onCreateDemoBoard={handleCreateDemoBoard}
-            />
-          </div>
-
           {/* Product (optional) — single lightweight row */}
           <div style={fieldBlock} data-testid="draft-products-section">
             <PinProductLinksSection
@@ -1588,11 +1947,69 @@ export function PinDetailsModal({
             <div style={{ ...fieldBlock, marginBottom: 0, marginTop: 14 }}>
               <PublishDestinations
                 selected={socialDestinations}
+                selectedAccountIds={socialAccountIds}
+                onSelectedAccountIdsChange={setSocialAccountIds}
                 onSelectedChange={setSocialDestinations}
                 onConnectPinterest={goToPinterestOAuth}
                 connectingPinterest={isRedirectingToPinterest}
                 pinterestConnected={pinterestConnected}
                 pinterestAccountName={pinterestAccount?.username ?? null}
+                renderDetails={(provider) =>
+                  provider === "pinterest" ? (
+                    <div data-testid="pinterest-destination-details">
+      <PublishDestinationPicker
+                    connections={pinterestConnections}
+                    selectedConnectionId={selectedConnection?.id ?? null}
+                    disabled={publishing}
+                    onChange={handleTargetChange}
+                  />
+                  {/* PRD §17: the Pin is pinned to an account that is no longer connected. It
+                      keeps pointing there — reconnect, don't re-route. */}
+                  {!!targetConnectionId && !selectedConnection && (
+                    <p data-testid="draft-target-disconnected" style={{ margin: "0 0 8px", fontSize: 11, color: UI.warning }}>
+                      {t("studioBoard.target.reconnectToRetry").replace(
+                        "{account}",
+                        targetAccountHandle(targetedDraft) || t("studioBoard.target.thisAccount"),
+                      )}
+                    </p>
+                  )}
+                  <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.boards")}</span></div>
+                  <PinBoardSection
+                    boardId={boardId}
+                    boards={boards}
+                    boardsStatus={boardsStatus}
+                    boardError={boardError}
+                    disabled={publishing}
+                    selectRef={boardSelectRef}
+                    onChange={(id) => {
+                      setBoardId(id);
+                      const board = boards.find(b => b.id === id);
+                      if (board) {
+                        const value = { boardId: board.id, boardName: board.name };
+                        setDefaultBoard(value);
+                        void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
+                      }
+                      // Board interplay: a custom time chosen but not yet confirmed via
+                      // [Schedule]/[Update schedule] is cleared on board change — the user
+                      // must re-pick a time for the newly selected board.
+                      if (customTimeChosen && !customTimeConfirmed) {
+                        setPlannedDate("");
+                        setScheduledTime("");
+                        setCustomTimeChosen(false);
+                        setCustomTimeBoardChangedNotice(true);
+                      }
+                      markDirty();
+                    }}
+                    onClearBoardError={() => setBoardError(false)}
+                    onRetryLoad={() => void loadBoards(boardId, effectiveConnectionRef.current || undefined)}
+                    onNeedsConnect={goToPinterestOAuth}
+                    sandboxMode={sandboxMode}
+                    creatingDemoBoard={creatingBoard}
+                    onCreateDemoBoard={handleCreateDemoBoard}
+                  />
+                    </div>
+                  ) : null
+                }
               />
             </div>
           )}
@@ -1607,30 +2024,31 @@ export function PinDetailsModal({
               </div>
             </div>
           )}
-          {result && (
-            <div data-testid="draft-publish-success" style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.30)" }}>
-              <CheckCircle2 size={16} style={{ color: UI.success, flexShrink: 0, marginTop: 1 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: UI.text }}>{t("pinDetails.publishedSuccess")}</p>
-                  {result.environment === "sandbox" && (
-                    <span data-testid="draft-publish-env" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.3, color: UI.info, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.35)", borderRadius: 999, padding: "1px 7px", textTransform: "uppercase" }}>
-                      {t("pinDetails.sandboxMode")}
-                    </span>
-                  )}
-                </div>
-                <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {t("pinDetails.environment")} {result.environment === "sandbox" ? t("pinDetails.envSandbox") : t("pinDetails.envProduction")}
-                </p>
-                <p data-testid="draft-publish-pin-id" style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.pinIdLabel")} {result.pinId}</p>
-                <p style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.boardLabel")} {result.boardName}</p>
+          {/* Per-destination results (PRD 0809 §5). Replaces the single Pinterest-shaped
+              success line and the one global "View Pin", which named Pinterest no matter
+              which platforms actually received the post. Assembled from what is already
+              persisted (draft fields + socialPosts), so it survives a refresh — a toast is
+              immediate feedback, never the record. */}
+          {/* Only for a publish that JUST completed in this drawer. An already-posted Pin
+              is served by the published summary above, which renders the same component —
+              without this guard both fired and the merchant saw Publish results twice. */}
+          {!isPosted && (() => {
+            const rows = publishResultRows({
+              postedAt: result ? new Date().toISOString() : activeDraft.postedAt,
+              remotePinId: result?.pinId ?? activeDraft.remotePinId,
+              remotePinUrl: result?.pinUrl ?? activeDraft.remotePinUrl,
+              boardName: result?.boardName ?? boards.find(b => b.id === activeDraft.boardId)?.name ?? activeDraft.boardName,
+              targetAccountLabel: activeDraft.targetAccountLabel,
+              // Same reason as above: the just-finished fan-out wins over the
+              // snapshot the drawer opened with.
+              socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+            });
+            return rows.length ? (
+              <div data-testid="draft-publish-success">
+                <PublishResults rows={rows} />
               </div>
-              <a data-testid="draft-view-link" href={result.pinUrl} target="_blank" rel="noopener noreferrer"
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: UI.text, textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap" }}>
-                {t("pinDetails.viewOnPinterest")} <ExternalLink size={12} />
-              </a>
-            </div>
-          )}
+            ) : null;
+          })()}
         </div>
 
         {/* ── State-based footer (compact; Publish is never the only action).
@@ -1686,7 +2104,7 @@ export function PinDetailsModal({
                   type="button"
                   data-testid="draft-cta-report-credits-issue"
                   onClick={() => setSupportRequest({
-                    seedText: "I think credits were charged but I didn't get a result",
+                    seedText: "My AI image allowance was used but I didn't get a result",
                     extra: {
                       source: "ai_generation",
                       draftId: activeDraft.id,

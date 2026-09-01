@@ -12,6 +12,14 @@
  * small partial DB update. Never returns tokens; never throws to the caller —
  * failures are logged server-side and reported as `{ ok: false }` so the UI can
  * quietly ignore them (the connection is already usable without this).
+ *
+ * The write is CONNECTION-scoped (v59). It used to pass the user id where the store
+ * expected a row key, which was harmless only while a user could hold exactly one
+ * Pinterest connection; with several, a user-scoped write would stamp whichever
+ * account this call happened to read onto every row the user owns. The client tells
+ * us the exact row it authenticated as (`boundConnectionId`), and the store refuses
+ * the write unless that row is still unidentified or already this same account — so
+ * a sync belonging to a superseded authorization can never relabel a live connection.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -35,10 +43,25 @@ export async function POST(req: NextRequest) {
   // Pinterest round trip. Skip it; enrichment resumes automatically in production.
   if (isPinterestSandboxEnv()) return NextResponse.json({ ok: false, code: "sandbox_env" });
 
+  // An explicit `connectionId` targets one named connection (multi-account); without
+  // one this resolves the user's single/default connection exactly as before.
+  let requestedConnectionId: string | null = null;
   try {
-    const client = await PinterestClient.forUser(uid);
+    const body = (await req.json()) as { connectionId?: string } | null;
+    const raw = body?.connectionId;
+    if (typeof raw === "string" && raw.trim()) requestedConnectionId = raw.trim();
+  } catch {
+    /* empty body is the normal case */
+  }
+
+  try {
+    const client = requestedConnectionId
+      ? await PinterestClient.forConnection(uid, requestedConnectionId)
+      : await PinterestClient.forUser(uid);
     const account = await client.getCurrentPinterestUser();
-    await updateAccountInfo(uid, account);
+    // Write the row this client authenticated as — never the user, never the id the
+    // caller asked for (forConnection already proved ownership of the resolved row).
+    await updateAccountInfo(client.boundConnectionId, account);
     return NextResponse.json({ ok: true, account });
   } catch (err) {
     // Not connected / needs reconnect just means there's nothing to sync yet —

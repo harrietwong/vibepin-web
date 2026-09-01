@@ -65,6 +65,9 @@ export const planMessages = {
   "plan.dayDetail.closeAria": "Close",
   "plan.dayDetail.empty": "No Pins scheduled for this day.",
   "plan.dayDetail.published": "Published",
+  "plan.cardStatus.scheduled": "Scheduled",
+  "plan.cardStatus.published": "Published",
+  "plan.cardStatus.failed": "Failed",
   "plan.dayDetail.scheduled": "Scheduled",
   "plan.dayDetail.editDetails": "Edit details",
   "plan.dayDetail.reschedule": "Reschedule",
@@ -96,6 +99,9 @@ export const planMessages = {
   "plan.filters.title": "Filters",
   "plan.filters.clear": "Clear",
   "plan.filters.category": "Category",
+  "plan.filters.account": "Pinterest account",
+  "plan.filters.allAccounts": "All accounts",
+  "plan.filters.unassignedAccount": "No account chosen yet",
   "plan.filters.footer": "Boards, status, and opportunity filters coming soon. Category is optional — Pins of any category plan in the same calendar.",
 
   // ── Content area ──

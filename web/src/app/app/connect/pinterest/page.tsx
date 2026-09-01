@@ -28,18 +28,18 @@ const UI = {
   gradient: "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)",
 };
 
-import { SETTINGS_PINTEREST_PATH } from "@/lib/settingsPaths";
+import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
 /** Only allow same-origin app return targets (mirrors the connect route's guard). */
 function safeNext(value: string | null): string {
-  if (!value) return SETTINGS_PINTEREST_PATH;
+  if (!value) return SETTINGS_SOCIAL_PATH;
   try {
     const decoded = decodeURIComponent(value);
-    if (!decoded.startsWith("/app/")) return SETTINGS_PINTEREST_PATH;
-    if (decoded.startsWith("//") || decoded.includes("://")) return SETTINGS_PINTEREST_PATH;
+    if (!decoded.startsWith("/app/")) return SETTINGS_SOCIAL_PATH;
+    if (decoded.startsWith("//") || decoded.includes("://")) return SETTINGS_SOCIAL_PATH;
     return decoded;
   } catch {
-    return SETTINGS_PINTEREST_PATH;
+    return SETTINGS_SOCIAL_PATH;
   }
 }
 

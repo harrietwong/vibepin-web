@@ -24,7 +24,8 @@ test.describe("Create Pins asset picker information architecture", () => {
     await openProductPicker(page);
 
     await expect(page.getByTestId("composer-panel")).toBeVisible();
-    await expect(page.getByText("Choose Product Images")).toBeVisible();
+    // Header is selection-mode aware (PRD Section C); nothing is selected yet.
+    await expect(page.getByText("Choose products")).toBeVisible();
     await expect(page.getByTestId("asset-picker-top-tabs").locator("button")).toHaveText(["My Products", "Product Ideas"]);
     await expect(page.getByTestId("picker-tab-my_products")).toHaveText("My Products");
     await expect(page.getByTestId("picker-tab-product_ideas")).toHaveText("Product Ideas");

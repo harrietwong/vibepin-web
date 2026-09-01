@@ -23,6 +23,8 @@ import {
   FUNNEL_STAGE_KEY,
   HEALTH_DRIVER_KEY,
   HEALTH_BAND_KEY,
+  GENERATION_ERROR_KEY,
+  generationErrorKey,
 } from "../src/lib/admin/adminConsoleKeys";
 import type { BlockerType } from "../src/lib/server/adminActionCenter";
 import { FUNNEL_STAGES } from "../src/lib/server/adminActivationFunnel";
@@ -112,10 +114,39 @@ const NEW_KEYS: AdminMessageKey[] = [
   "blocker.evidence.generationFailures", "blocker.evidence.signupNotConnected",
   "blocker.evidence.connectedNotCreating",
   "c360.alerts.title", "c360.alerts.none", "c360.health.driversPrefix",
+  // account-kind scoping (real customers vs test/internal)
+  "today.accounts.excluded", "today.accounts.showAll",
+  "today.accounts.includingAll", "today.accounts.customersOnly",
+  "today.accountKind.test", "today.accountKind.internal",
+  // failure-reason detail on the blocker list
+  "blocker.evidence.generationFailuresWithType",
 ];
 
 test("every new operator-console key resolves in en + zh (non-empty, not key-fallback)", () => {
   for (const key of NEW_KEYS) assertResolves(key);
+});
+
+// ── 4b. every generation failure class has a label ───────────────────────────
+//
+// The blocker list names the LATEST generation failure by class. Keying the map
+// on the full GenerationErrorType union makes a missing entry a compile error;
+// this test additionally proves each key actually resolves in both locales, so
+// a raw enum like `model_returned_text` can never reach the operator's screen.
+
+test("every GenerationErrorType has a label key resolving in en + zh", () => {
+  const types = Object.keys(GENERATION_ERROR_KEY) as Array<keyof typeof GENERATION_ERROR_KEY>;
+  assert.equal(types.length, 11, `expected all 11 GenerationErrorType values, got ${types.length}`);
+  for (const t of types) assertResolves(GENERATION_ERROR_KEY[t]);
+});
+
+test("generationErrorKey resolves known values and returns null for unknown ones", () => {
+  assert.equal(generationErrorKey("rate_limited"), "genError.rate_limited");
+  // An unrecognized value must NOT silently map to a wrong label — the UI shows
+  // it verbatim instead, which is what a debugging operator needs.
+  assert.equal(generationErrorKey("some_new_provider_code"), null);
+  assert.equal(generationErrorKey(null), null);
+  assert.equal(generationErrorKey(undefined), null);
+  assert.equal(generationErrorKey(""), null);
 });
 
 // ── 5. placeholder parity + interpolation ─────────────────────────────────────
@@ -133,7 +164,7 @@ test("templated keys carry the SAME placeholder tokens in en and zh", () => {
 });
 
 test("adminTFmt interpolates every placeholder (no {token} residue) in both locales", () => {
-  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30 };
+  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30, test: 1, internal: 2, typeLabel: "Rate limited" };
   for (const key of NEW_KEYS) {
     for (const lang of LOCALES) {
       if (tokensOf(adminT(lang, key)).length === 0) continue;

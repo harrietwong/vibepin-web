@@ -41,9 +41,9 @@ function facts(partial: {
   return {
     user: { id: partial.id ?? "u1", email: "e@x.com", created_at: partial.createdAt ?? hoursAgo(1), last_sign_in_at: partial.lastSignIn ?? null },
     publish: { lastFailedAt: null, lastFailedCode: null, lastFailedDraftId: null, failedCountInWindow: 0, lastSucceededAt: null, firstSucceededAt: null, ...partial.publish },
-    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, lastDraftUpdatedAt: null, ...partial.draft },
+    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null, ...partial.draft },
     conn: { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false, ...partial.conn },
-    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, ...partial.gen },
+    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false, ...partial.gen },
   } as AnyFacts;
 }
 
@@ -92,6 +92,50 @@ test("publish_failure INFERRED: overdue scheduled draft with no postedAt", () =>
   assert.equal(items[0].dataQuality, "inferred");
 });
 
+// ── REGRESSION: inferred publish_failure must honor the SAME 24h-window +
+// later-success-clears-it predicate as the exact branch (PRD §3 支柱1:
+// "24h 内有失败的发布且此后无成功发布"). Before the fix, the two inferred
+// branches (publishError draft / overdue draft) had no window bound at all and
+// ignored later successes — a failure from weeks ago stayed in the blocker
+// list forever, and a later successful publish never cleared it.
+test("publish_failure INFERRED-REGRESSION: publishError draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dOld", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(30) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a publishError from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: publishError draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dNew", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(2) },
+  }));
+  assert.ok(has(t, "publish_failure"), "a publishError from 2h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: publishError inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: {
+      publishErrorDraftId: "dCleared",
+      publishErrorCode: "content_error",
+      lastDraftUpdatedAt: hoursAgo(5),
+      lastPostedAt: hoursAgo(2), // a later successful publish (inferred) after the failure evidence
+    },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred publishError blocker");
+});
+test("publish_failure INFERRED-REGRESSION: overdue draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(30) } }));
+  assert.ok(!has(t, "publish_failure"), "an overdue scheduled time from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: overdue draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(3) } }));
+  assert.ok(has(t, "publish_failure"), "an overdue scheduled time from 3h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: overdue inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(5), lastPostedAt: hoursAgo(2) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred overdue blocker");
+});
+
 // ── 2. pinterest_disconnected ─────────────────────────────────────────────────
 test("pinterest_disconnected POSITIVE: disconnected_at set → reason 'disconnected'", () => {
   const items = evaluateBlockers(facts({ conn: { hasRow: true, disconnectedAt: hoursAgo(1), createdAt: hoursAgo(200) } }), windowStart)
@@ -137,17 +181,57 @@ test("signup_not_connected NEGATIVE: has a connection row", () => {
 });
 
 // ── 5. connected_not_creating ─────────────────────────────────────────────────
-test("connected_not_creating POSITIVE: connected >72h, zero gen + zero drafts", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 0 }, draft: { hasAnyDraft: false } }));
+test("connected_not_creating POSITIVE: connected >72h, never created gen or draft", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: false }, draft: { hasAnyDraftEver: false } }));
   assert.ok(has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has generations", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 4 } }));
+test("connected_not_creating NEGATIVE: has generations (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has a draft", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraft: true } }));
+test("connected_not_creating NEGATIVE: has a draft (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraftEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
+});
+// ── REGRESSION (Fix 3): existence is ALL-TIME, not the 30d scan window ─────────
+// A user who created content 45+ days ago and NOTHING in the last 30d has
+// totalCount === 0 / hasAnyDraft === false (both window-bound), but hasAnyGenEver /
+// hasAnyDraftEver are true. The old code read the window fields and WRONGLY flagged
+// them as "never created". This proves the predicate now consults the all-time
+// existence signal instead.
+test("connected_not_creating REGRESSION: 45d-old draft, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: false },          // no generations in window, none ever
+    draft: { hasAnyDraft: false, hasAnyDraftEver: true },  // no draft touched in 30d, but one exists all-time
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who created 45d ago must NOT be flagged 'never created'");
+});
+test("connected_not_creating REGRESSION: 45d-old generation, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: true },           // no generations in the 30d window, but one exists all-time
+    draft: { hasAnyDraft: false, hasAnyDraftEver: false },
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who generated 45d ago must NOT be flagged 'never created'");
+});
+// End-to-end proof through the DB layer: an all-time-only row (outside the 30d
+// scan window) must set hasAnyDraftEver and suppress the blocker. The window scans
+// (updated_at/created_at gte since) return nothing; the existence scan finds it.
+test("getActionCenter REGRESSION: draft older than 30d window suppresses connected_not_creating", async () => {
+  const authUsers = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(24 * 60), last_sign_in_at: null, app_metadata: {}, user_metadata: {} }];
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      // draft updated 45d ago → excluded from the 30d window scan, included in the all-time existence scan.
+      pin_drafts: { rows: [{ vibepin_user_id: "u1", draft_id: "old1", payload: {}, updated_at: hoursAgo(24 * 45), scheduled_at: null, deleted_at: null }] },
+      pinterest_connections: { rows: [{ vibepin_user_id: "u1", needs_reconnect: false, disconnected_at: null, created_at: hoursAgo(24 * 60) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(!res.items.some(i => i.blockerType === "connected_not_creating"), "old-but-existing draft must suppress the 'never created' blocker");
 });
 
 // ── health banding ────────────────────────────────────────────────────────────
@@ -160,7 +244,7 @@ test("health GREEN: all four signals true", () => {
 test("health YELLOW: exactly one signal false", () => {
   // active + publish + pinterest ok, but one open blocker → noOpenBlockers false.
   const f = facts({ lastSignIn: hoursAgo(1), conn: { hasRow: true, createdAt: hoursAgo(200) }, publish: { lastSucceededAt: hoursAgo(2) } });
-  const h = computeHealth(f, [{ userId: "u1", email: null, blockerType: "publish_failure", firstSeenAt: null, dataQuality: "exact", evidence: {} }]);
+  const h = computeHealth(f, [{ userId: "u1", email: null, accountKind: "customer", blockerType: "publish_failure", firstSeenAt: null, dataQuality: "exact", evidence: {} }]);
   assert.equal(h.band, "yellow");
   assert.deepEqual(h.drivers, ["noOpenBlockers"]);
 });
@@ -197,6 +281,40 @@ test("getActionCenter: paid users sort before free; both have signup_not_connect
   assert.equal(res.items.length, 2);
   assert.equal(res.items[0].userId, "paid1", "paid user must lead");
   assert.ok(res.items.every(i => i.blockerType === "signup_not_connected"));
+});
+
+// ── SECURITY REGRESSION: user_metadata.plan is NEVER trusted for "paid" ────────
+// user_metadata is USER-EDITABLE. isPaid must read ONLY app_metadata.plan (the
+// service-role cache), mirroring entitlements.ts resolvePlan. A user who set
+// user_metadata.plan="pro" themselves must NOT be treated as paid — otherwise
+// they could self-sort to the top of the founder's action list (the same
+// forbidden trust boundary security(billing) closed).
+//
+// Setup: both users are stuck (signup_not_connected) with the SAME createdAt →
+// identical firstSeenAt, so paid-status is the ONLY tiebreaker in the sort. The
+// app_metadata=pro user must lead; the user_metadata=pro user must be ranked as
+// free. (Against the OLD isPaid, which fell back to user_metadata.plan, BOTH
+// would be "paid" and the order would collapse to the id tiebreak — this test
+// would fail: usermeta1 would not be guaranteed last.)
+test("getActionCenter SECURITY: user_metadata.plan does NOT count as paid; app_metadata.plan does", async () => {
+  const createdAt = hoursAgo(100);
+  const authUsers = [
+    // Self-set user_metadata plan — must be treated as FREE (not paid).
+    { id: "usermeta1", email: "um@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: {}, user_metadata: { plan: "pro" } },
+    // Trusted service-role app_metadata plan — genuinely paid.
+    { id: "appmeta1", email: "am@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: { plan: "pro" }, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(res.available);
+  assert.equal(res.items.length, 2);
+  // The app_metadata=pro user is the only paid one → must lead unconditionally,
+  // regardless of the id-order tiebreak (proves user_metadata=pro is NOT paid).
+  assert.equal(res.items[0].userId, "appmeta1", "app_metadata.plan=pro must sort paid-first");
+  assert.equal(res.items[1].userId, "usermeta1", "user_metadata.plan=pro must NOT be treated as paid");
 });
 
 test("getActionCenter: EXACT publish_failure end-to-end (event beats postedAt)", async () => {
@@ -273,6 +391,265 @@ test("getUserBlockers: shares predicate logic; returns health band", async () =>
   assert.equal(res.userId, "u1");
   assert.equal(res.blockers.length, 0, "healthy user has no blockers");
   assert.equal(res.health.band, "green");
+});
+
+// ── account-kind scoping: the default view is REAL CUSTOMERS ONLY ────────────
+//
+// The production auth table holds the founders' own logins and a paddle e2e
+// fixture; the test DB is entirely e2e-cockpit-*@example.test. Counting those as
+// customers fills the operator's list with rows nobody will act on. These tests
+// go through getActionCenter (not the pure classifier) so the FILTERING and the
+// `excluded` counters are exercised end-to-end.
+//
+// SUPER_ADMIN_EMAILS is read from the REAL process env by the classifier (it is
+// a server-side allowlist, not an injectable), so these tests must set it.
+//
+// The harness starts every test immediately and awaits them together, so tests
+// interleave at await points: a module-level "set env / restore env at the end"
+// pair would restore BEFORE the async bodies ran, and any inherited real value
+// would leak in. Each test therefore brackets its own env with withAccountEnv().
+
+const ACCOUNT_ENV_KEYS = ["SUPER_ADMIN_EMAILS", "SUPPORT_ADMIN_EMAILS", "ADMIN_TEST_ACCOUNT_EMAILS"] as const;
+
+async function withAccountEnv<T>(env: Partial<Record<(typeof ACCOUNT_ENV_KEYS)[number], string>>, fn: () => Promise<T>): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of ACCOUNT_ENV_KEYS) {
+    saved[k] = process.env[k];
+    const v = env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const k of ACCOUNT_ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k]!;
+    }
+  }
+}
+
+const FOUNDER_ENV = { SUPER_ADMIN_EMAILS: "founder@vibepin.co" };
+
+/** All four users are stuck on signup_not_connected (no connection rows). */
+function mixedPopulationDb() {
+  const authUsers = [
+    { id: "cust1", email: "jane@shopify-store.com", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "cust2", email: "contest@x.com", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "testA", email: "paddle-e2e-test@vibepin.co", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "testB", email: "e2e-cockpit-a@example.test", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "intern1", email: "founder@vibepin.co", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  return makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+}
+
+test("getActionCenter DEFAULT: test + internal accounts are excluded, counters report them", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  const { db } = mixedPopulationDb();
+  const res = await getActionCenter(db);
+  assert.ok(res.available);
+  const ids = res.items.map(i => i.userId).sort();
+  assert.deepEqual(ids, ["cust1", "cust2"], `only real customers may appear, got ${ids.join(",")}`);
+  // 2 test fixtures (paddle-e2e-test + e2e-cockpit-a) and 1 founder.
+  assert.deepEqual(res.excluded, { test: 2, internal: 1 });
+  // contest@x.com is a REAL customer — the token guard must not swallow it.
+  assert.ok(res.items.some(i => i.email === "contest@x.com"), "contest@x.com must not be misread as a test account");
+  assert.ok(res.items.every(i => i.accountKind === "customer"));
+ });
+});
+
+test("getActionCenter includeNonCustomers: everyone appears, each tagged with its kind", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  const { db } = mixedPopulationDb();
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  assert.equal(res.items.length, 5, "all five users must appear");
+  const kindById = new Map(res.items.map(i => [i.userId, i.accountKind]));
+  assert.equal(kindById.get("cust1"), "customer");
+  assert.equal(kindById.get("cust2"), "customer");
+  assert.equal(kindById.get("testA"), "test", "paddle-e2e-test@vibepin.co must be tagged test");
+  assert.equal(kindById.get("testB"), "test", "e2e-cockpit-a@example.test must be tagged test");
+  assert.equal(kindById.get("intern1"), "internal", "SUPER_ADMIN_EMAILS member must be tagged internal");
+  // Nothing was filtered, so nothing may be reported as excluded.
+  assert.deepEqual(res.excluded, { test: 0, internal: 0 });
+ });
+});
+
+test("getActionCenter: excluded counts USERS, not blockers", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  // The test user below trips TWO predicates (disconnected + connected_not_creating
+  // would need a conn row; use disconnected + publish failure instead). Whatever
+  // the count of blockers, `excluded` must report 1 user.
+  const authUsers = [
+    { id: "testA", email: "e2e-cockpit-b@example.test", created_at: hoursAgo(300), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "testA", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      // disconnected → a second blocker for the same user
+      pinterest_connections: { rows: [{ vibepin_user_id: "testA", needs_reconnect: false, disconnected_at: hoursAgo(5), created_at: hoursAgo(300) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const withAll = await getActionCenter(db, { includeNonCustomers: true });
+  assert.ok(withAll.items.length >= 2, `expected the user to trip >1 blocker, got ${withAll.items.length}`);
+
+  const { db: db2 } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "testA", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: [{ vibepin_user_id: "testA", needs_reconnect: false, disconnected_at: hoursAgo(5), created_at: hoursAgo(300) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const res = await getActionCenter(db2);
+  assert.equal(res.items.length, 0);
+  assert.deepEqual(res.excluded, { test: 1, internal: 0 }, "one USER excluded, regardless of how many blockers they had");
+ });
+});
+
+test("getUserBlockers: the per-user view never filters, but still tags the kind", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  // An operator who navigated to a test account's page must still see its data —
+  // filtering belongs to the LIST, not the detail view.
+  const authUsers = [
+    { id: "testA", email: "paddle-e2e-test@vibepin.co", created_at: hoursAgo(300), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+  const res = await getUserBlockers("testA", db);
+  assert.ok(res.blockers.length > 0, "detail view must not filter the user away");
+  assert.ok(res.blockers.every(b => b.accountKind === "test"));
+ });
+});
+
+test("getActionCenter: available:false path still returns zeroed excluded counters", async () => {
+  const { db } = makeMockDb({}, [], { authError: true });
+  const res = await getActionCenter(db);
+  assert.equal(res.available, false);
+  assert.deepEqual(res.excluded, { test: 0, internal: 0 });
+});
+
+// -- failure REASONS carried into the evidence bag ----------------------------
+//
+// A code like `board_not_owned` names the class of failure; answering the actual
+// customer usually needs the specific detail. These tests pin the message onto
+// each of the three paths that can produce one (exact publish event, inferred
+// draft publishError, generation row) and prove the capture picks the MOST
+// RECENT failure rather than whichever row happened to be scanned first.
+
+const REASON_USER = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(300), last_sign_in_at: hoursAgo(1), app_metadata: {}, user_metadata: {} }];
+const CONNECTED_ROW = [{ vibepin_user_id: "u1", needs_reconnect: false, disconnected_at: null, created_at: hoursAgo(300) }];
+
+test("evidence: EXACT publish failure carries the sanitized event message", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "u1", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned", errorMessage: "Board not owned by this account" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf, "expected a publish_failure item");
+  assert.equal(pf!.dataQuality, "exact");
+  assert.equal(pf!.evidence.publishErrorCode, "board_not_owned");
+  assert.equal(pf!.evidence.publishErrorMessage, "Board not owned by this account");
+});
+
+test("evidence: EXACT publish failure takes the message from the NEWEST failure", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "u1", draft_id: "dOld", event_name: "pinterest_publish_failed", payload: { errorCode: "old_code", errorMessage: "stale message" }, created_at: hoursAgo(9) },
+        { user_id: "u1", draft_id: "dNew", event_name: "pinterest_publish_failed", payload: { errorCode: "new_code", errorMessage: "the current problem" }, created_at: hoursAgo(1) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf);
+  assert.equal(pf!.evidence.failedPublishCount, 2);
+  assert.equal(pf!.evidence.publishErrorMessage, "the current problem", "must report the LATEST failure, not the first row scanned");
+  assert.equal(pf!.evidence.publishErrorCode, "new_code");
+});
+
+test("evidence: INFERRED publish failure carries the draft publishError text", async () => {
+  const { db } = makeMockDb(
+    {
+      // analytics_events absent -> the inferred draft path is the only source.
+      pin_drafts: { rows: [{ vibepin_user_id: "u1", draft_id: "dERR", payload: { publishError: "Pinterest rejected the image: aspect ratio too tall", publishErrorCode: "content_error" }, updated_at: hoursAgo(1), scheduled_at: null, deleted_at: null }] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf);
+  assert.equal(pf!.dataQuality, "inferred");
+  assert.equal(pf!.evidence.publishErrorCode, "content_error");
+  assert.equal(pf!.evidence.publishErrorMessage, "Pinterest rejected the image: aspect ratio too tall");
+});
+
+test("evidence: generation failures carry error_type + error_message of the LATEST failure", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [
+        { user_id: "u1", created_at: hoursAgo(8), status: "failed", error_type: "api_server_error", error_message: "older failure" },
+        { user_id: "u1", created_at: hoursAgo(2), status: "failed", error_type: "safety_blocked", error_message: "Prompt blocked by the safety filter" },
+      ] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const gf = res.items.find(i => i.blockerType === "generation_failures");
+  assert.ok(gf, "expected a generation_failures item");
+  assert.equal(gf!.evidence.failedGenerationCount, 2);
+  assert.equal(gf!.evidence.generationErrorType, "safety_blocked", "must report the most recent failure type");
+  assert.equal(gf!.evidence.generationErrorMessage, "Prompt blocked by the safety filter");
+});
+
+test("evidence: generation error_message is clipped to 200 chars", async () => {
+  const long = "x".repeat(500);
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [
+        { user_id: "u1", created_at: hoursAgo(3), status: "failed", error_type: "unknown_error", error_message: long },
+        { user_id: "u1", created_at: hoursAgo(4), status: "failed", error_type: "unknown_error", error_message: long },
+      ] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const gf = res.items.find(i => i.blockerType === "generation_failures");
+  assert.ok(gf);
+  assert.equal(gf!.evidence.generationErrorMessage?.length, 200);
 });
 
 void done();

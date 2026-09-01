@@ -24,6 +24,18 @@ import { createServerClient }        from "@/lib/supabase";
 import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
 import { validateImageModelKey, DEFAULT_IMAGE_MODEL_KEY } from "@/lib/server/imageModelKey";
 import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
+import { resolvePlan, type PlanKey } from "@/lib/server/entitlements";
+import { checkAllowance, recordUsage } from "@/lib/server/usage";
+import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
+import {
+  usageMeteringMode,
+  reserveGenerationJobViaLedger,
+  reserveInline,
+  settleInline,
+  releaseInline,
+  aiImageLimitResponseBody,
+  type InlineReservation,
+} from "@/lib/server/usage/meterGeneration";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -195,9 +207,12 @@ function requestFallbackIdentity(req: NextRequest, body: Record<string, unknown>
 /**
  * Resolve the authenticated user ONCE per request. Called at the very top of the
  * handler so authentication precedes any outbound moderation call; the result is
- * threaded through both the worker enqueue path and the inline lock owner, so
- * auth is never parsed twice (and a request never pays for two token
- * verifications).
+ * threaded through the worker enqueue path, the inline lock owner, AND usage
+ * metering / AI cost logging, so auth is never parsed twice (and a request never
+ * pays for two token verifications).
+ *
+ * A null result means an anonymous browser session: the fallback session/anon
+ * identity used by the generation lock is NOT a user, so it is never metered.
  *
  * Honours the same `ALLOW_GENERATION_AUTH_TEST_HEADER` seam the lock owner used,
  * so tests can present a deterministic user without a live Supabase session. The
@@ -248,7 +263,7 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-export type ModeratedFields = {
+type ModeratedFields = {
   keyword: string;
   prompt: string;
   directionBrief: string;
@@ -257,7 +272,11 @@ export type ModeratedFields = {
   productMetadata?: Array<{ title?: string }> | null;
 };
 
-export function buildModeratedText(fields: ModeratedFields): string {
+// NOT exported: Next.js App Router forbids non-handler exports from route files
+// (the production build fails route type validation). No test imports this
+// helper — the moderation-gate suite drives it through buildModerationChecks /
+// POST — so un-exporting is a zero-behaviour change that keeps the build green.
+function buildModeratedText(fields: ModeratedFields): string {
   return [
     fields.keyword,
     fields.prompt,
@@ -525,13 +544,17 @@ function unavailableResponse(generationRequestId: string): NextResponse {
   );
 }
 
-/**
- * Pure decision helper — maps a ModerationResult to whether the request may
- * proceed and, if not, the exact HTTP response. Exported so the gate can be
- * unit-tested without a live Creem call. On {ok:true} the caller continues to
- * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
+/*
+ * NOTE (lineage merge): the single-check helper `evaluateModerationForRequest`
+ * was removed here. The create-pin lineage un-exported it as a production build
+ * fix (Next.js App Router forbids non-handler exports from route files); the
+ * master lineage had already replaced its only call site with the per-field
+ * `evaluateModerationResults` below, leaving it dead code kept alive solely by
+ * the `export` keyword. It has no callers and no test importers, and
+ * evaluateModerationResults implements the identical fail-closed contract for
+ * the N-check batch, so deleting it is a zero-behaviour change.
  */
-export function evaluateModerationForRequest(
+function evaluateModerationForRequest(
   result: ModerationResult,
   generationRequestId: string,
 ): ModerationGateOutcome {
@@ -562,7 +585,11 @@ export function evaluateModerationResults(
   return { proceed: true };
 }
 
-function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}): Promise<NextResponse> {
+function runGenerator(
+  payload: GeneratorPayload,
+  responseMeta: ResponseMeta = {},
+  onComplete?: (result: { ok: boolean; successfulImageCount: number }) => void | Promise<void>,
+): Promise<NextResponse> {
   return new Promise((resolve) => {
     const child = spawn(
       PYTHON_BIN,
@@ -658,7 +685,16 @@ function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}
           ? result.errors[0]
           : undefined;
         console.log("[generate]", result.keyword, "→", result.urls?.length ?? 0, "urls", topError ? `| error: ${topError}` : "");
-        resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" }));
+        // Report the ACTUAL number of images produced (urls.length) for usage
+        // metering — a partial/zero success is metered at its real count only.
+        const successfulImageCount = result.ok && Array.isArray(result.urls) ? result.urls.length : 0;
+        // AWAIT metering before resolving: on Vercel serverless the runtime can
+        // freeze right after the response resolves, dropping any in-flight insert
+        // (systematic under-count). recordUsage never throws and the insert is
+        // fast, so this does not affect perceived latency.
+        Promise.resolve(onComplete?.({ ok: !!result.ok, successfulImageCount }))
+          .catch(() => { /* metering must never break the response */ })
+          .then(() => resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" })));
       } catch (parseErr) {
         console.error("[generate] JSON parse failed:", parseErr, "raw stdout:", stdout.slice(0, 500));
         resolve(NextResponse.json(
@@ -952,14 +988,79 @@ export async function POST(req: NextRequest) {
       `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
     );
   }
+  // `costContext` attributes each moderation call's spend to the account in the
+  // internal AI cost log. `authUserId` is the SAME already-resolved user from
+  // Step 1 — never re-parse auth here.
   const moderationResults = await Promise.all(
     moderationChecks.map(check =>
-      moderatePrompt({ prompt: check.text, externalId: `${generationRequestId}:${check.suffix}` }),
+      moderatePrompt({
+        prompt: check.text,
+        externalId: `${generationRequestId}:${check.suffix}`,
+        costContext: { userId: authUserId },
+      }),
     ),
   );
   const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
+    // Internal cost-log row only (ai_cost_events, PRD §9). The request never
+    // dispatched to the image provider, so this is a 0-cost audit entry
+    // (tokens/estimated cost stay null) recording that we paid for moderation
+    // and produced nothing. Purely a side effect: recordAiCost never throws and
+    // is not awaited, so it cannot alter or delay the moderation decision below
+    // — the gate's response is returned exactly as before.
+    void recordAiCost({
+      userId: authUserId,
+      provider: "n/a",
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: 0,
+      requestStatus: "moderation_rejected",
+      referenceId: generationRequestId,
+    });
     return gate.response;
+  }
+
+  // ── Usage quota gate (AI images) ────────────────────────────────────────────
+  // AFTER moderation, BEFORE any dispatch (FastAPI or generator.py) or lock
+  // acquisition. Only signed-in users are metered/enforced; anonymous browser
+  // sessions fall through unmetered (they cannot resolve a plan). A quota outage
+  // fails OPEN (checkAllowance returns allowed on read error) so metering can
+  // never block generation. USAGE_ENFORCEMENT=0 disables enforcement (kill switch)
+  // while still metering on success.
+  // Same already-resolved user as Step 1 — auth is parsed exactly once per
+  // request, and metering keys on the identical id the auth gate admitted.
+  const meteringUserId = authUserId;
+  // Resolved alongside the allowance check below; reused ONLY for the internal
+  // cost-log row (never re-drives any quota/entitlement decision).
+  let meteringPlan: PlanKey | null = null;
+  if (meteringUserId) {
+    try {
+      const plan = await resolvePlan(meteringUserId);
+      meteringPlan = plan;
+      const allowance = await checkAllowance(meteringUserId, "ai_image", count, plan);
+      if (!allowance.allowed) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "quota_exceeded",
+            error_type: "quota_exceeded",
+            code: "quota_exceeded",
+            quota: { used: allowance.used, limit: allowance.limit },
+            userMessage:
+              "You've reached this month's AI image limit for your plan. Upgrade your plan or wait until next month to generate more.",
+            urls: [],
+            requested_image_count: imageCountClamp.requested,
+            actual_image_count: count,
+            count_clamped: imageCountClamp.clamped,
+            generation_request_id: generationRequestId,
+          },
+          { status: 429 },
+        );
+      }
+    } catch (err) {
+      // Fail open — a metering failure must not block generation.
+      console.error("[/api/generate] allowance check error:", (err as Error)?.message ?? String(err));
+    }
   }
 
   console.log(
@@ -1053,6 +1154,43 @@ export async function POST(req: NextRequest) {
       retryOutputIndex: body.retryOutputIndex,
     };
 
+    // ── Phase 4I: image metering (SHADOW by default; off = today's behaviour) ────
+    // Reserve slots against the usage ledger BEFORE dispatch, AFTER the moderation
+    // gate above (moderation is unmoved — see Step 3 at line ~926). Only authenticated
+    // `user:<id>` callers reach here (worker mode is strictly authenticated), so this
+    // is exactly the metered identity; anon callers cannot reach this branch.
+    //
+    // usage_reserve_generation_job inserts the job AND the reservation in ONE
+    // transaction (closing the reserve-then-crash-before-enqueue gap), so in metering
+    // mode it REPLACES the plain enqueueGenerationJob insert. When the ledger reserve
+    // succeeds we use its jobId directly. In `off` mode the plain path is untouched.
+    const meterMode = usageMeteringMode();
+    if (meterMode !== "off") {
+      // Worker liveness is still an honest-failure gate even under metering: a job
+      // nobody will claim must not be reserved-and-enqueued. Reuse isWorkerHealthy().
+      if (!(await isWorkerHealthy())) {
+        return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+      }
+      const ledger = await reserveGenerationJobViaLedger({
+        userId,
+        count,
+        generationRequestId,
+        params: jobParams as unknown as Record<string, unknown>,
+      });
+      if (ledger.kind === "reserved") {
+        console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
+        return NextResponse.json({ jobId: ledger.jobId, slots: ledger.slots });
+      }
+      if (ledger.kind === "insufficient" && meterMode === "enforce") {
+        // ENFORCE (reserved for a later phase; NOT enabled in prod this phase):
+        // insufficient balance → limit response in the route's error envelope.
+        return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+      }
+      // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
+      // (unmetered) enqueue so the user still generates. Deliberately inverse to the
+      // moderation gate — see meterGeneration.ts.
+    }
+
     const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
     if (!enqueued) {
       return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
@@ -1062,6 +1200,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Path 1: FastAPI (async task queue — only when server is running)
+  //
+  // Phase 4I: this branch is DELIBERATELY EXCLUDED from metering. tryFastAPI is
+  // fire-and-forget — the route hands the task to an external FastAPI queue and never
+  // learns its outcome (nothing polls the task id back here). Reserving capacity for a
+  // job whose success/failure we can never observe would leak reserved capacity until
+  // the expiry sweeper reclaimed it, charging the user for nothing in the meantime. So
+  // no reserve happens here; metering resumes on the inline (Path 2) fallback below.
   const requiresFullPayload = promptMode === "creative_direction_v2" || productImages.length > 0 || !!styleRef;
   if (!requiresFullPayload) {
     const fastapiResult = await tryFastAPI(keyword, style, undefined);
@@ -1102,8 +1247,26 @@ export async function POST(req: NextRequest) {
     }, { status: 429 });
   }
 
+  // ── Phase 4I: inline image metering (SHADOW by default; off = unchanged) ──────
+  // Reserve AFTER the per-user lock is held (so a lock-denied 429 leaks no
+  // reservation) and BEFORE runGenerator dispatches. Only authenticated `user:<id>`
+  // callers meter: anonymous inline callers (session:/anon:) have no usage account,
+  // so they are skipped entirely — metering never touches the documented anonymous
+  // path. `enforce` refuses an insufficient balance; `shadow` proceeds regardless.
+  // Moderation (Step 3, ~line 926) already ran and is unmoved.
+  let inlineReservation: InlineReservation = { kind: "off" };
+  if (authUserId && usageMeteringMode() !== "off") {
+    inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
+    if (inlineReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+      await userLock.release();
+      return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+    }
+    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
+    // the moderation gate).
+  }
+
   try {
-    return await runGenerator({
+    const response = await runGenerator({
       keyword, style, count, prompt: promptWithLang, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
       text_overlay: textOverlay, reference_strength: referenceStrength,
       output_type: outputType, format: pinFormat, product_metadata: productMetadata,
@@ -1138,7 +1301,111 @@ export async function POST(req: NextRequest) {
       actual_image_count: count,
       count_clamped: imageCountClamp.clamped,
       generation_request_id: generationRequestId,
+    }, async ({ ok, successfulImageCount }) => {
+      // Internal cost-log row (PRD §9) — best-effort, records the outcome of
+      // EVERY real generator.py run (success/partial/failed), independent of
+      // the quota/metering decision below. Never throws (recordAiCost) and
+      // never affects the response; fire-and-forget so it cannot add latency.
+      const requestStatus: AiCostRequestStatus =
+        successfulImageCount <= 0 ? "failed" : successfulImageCount < count ? "partial" : "success";
+      void recordAiCost({
+        userId: meteringUserId,
+        provider: "linapi",
+        model: process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
+        operationType: "image_generation",
+        requestedImageCount: imageCountClamp.requested,
+        successfulImageCount,
+        estimatedCost: estimateCost({
+          model: process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
+          imageCount: successfulImageCount,
+        }),
+        // No pixel width/height is known at this route (the provider returns
+        // only image URLs) — record the requested aspect-ratio/format string as
+        // the closest available signal rather than fabricating a resolution.
+        resolution: pinFormat || null,
+        requestStatus,
+        plan: meteringPlan,
+        referenceId: generationRequestId,
+        metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count },
+      });
+
+      // Meter ONLY the actual successful images, ONLY for a signed-in user, and
+      // ONLY on a non-zero success. Failures / timeouts / zero-success record
+      // nothing. Idempotency key = a SERVER-generated uuid per real execution
+      // (NOT generationRequestId, which is client-controllable): every actual
+      // generation run costs money and is metered exactly once — a client cannot
+      // reuse an id to skip metering, and there is no cross-user collision.
+      // referenceId keeps generationRequestId for correlation. Awaited so the
+      // insert completes before the serverless response returns.
+      if (!meteringUserId || !ok || successfulImageCount <= 0) return;
+      const serverRunId = crypto.randomUUID();
+      await recordUsage({
+        ownerId: meteringUserId,
+        usageType: "ai_image",
+        operation: "consume",
+        quantity: successfulImageCount,
+        referenceType: "generation",
+        referenceId: generationRequestId,
+        idempotencyKey: `ai_image:${meteringUserId}:${serverRunId}`,
+        metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count, generationRequestId },
+      });
     });
+
+    // How many images actually came back. runGenerator ALWAYS resolves a
+    // NextResponse (never throws), so read the count off a clone. Computed once
+    // here and shared by the settle path below and the internal cost log — an
+    // unparseable body counts as zero success (all slots released).
+    let successCount = 0;
+    try {
+      const parsed = (await response.clone().json()) as { urls?: unknown };
+      successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+    } catch {
+      successCount = 0;
+    }
+
+    // Internal cost-log row (ai_cost_events, PRD §9) for EVERY real generator
+    // run — success, partial or total failure — because the provider bills us
+    // for attempts. This is business cost analytics ONLY: it is deliberately
+    // independent of the quota ledger settled just below, is never awaited, and
+    // recordAiCost never throws, so it cannot affect the response, its latency,
+    // or any metering decision. estimateCost returns null while rates are
+    // unverified (aiCostRates.ts), leaving estimated_cost null rather than a
+    // fabricated number; the raw image counts are recorded either way.
+    const imageModel = process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview";
+    const requestStatus: AiCostRequestStatus =
+      successCount <= 0 ? "failed" : successCount < count ? "partial" : "success";
+    void recordAiCost({
+      userId: authUserId,
+      provider: "linapi",
+      model: imageModel,
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: successCount,
+      estimatedCost: estimateCost({ model: imageModel, imageCount: successCount }),
+      // No pixel width/height is known at this route (the provider returns only
+      // image URLs) — record the requested aspect-ratio/format string as the
+      // closest available signal rather than fabricating a resolution.
+      resolution: pinFormat || null,
+      requestStatus,
+      referenceId: generationRequestId,
+      metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count },
+    });
+
+    // Settle per slot from the parsed result: N urls succeeded → s0..s{N-1}
+    // succeeded, the rest terminal failure. Every settle failure is swallowed
+    // inside settleInline (the expiry sweeper is the net).
+    if (inlineReservation.kind === "reserved") {
+      await settleInline({ reservation: inlineReservation, successCount });
+    }
+    return response;
+  } catch (err) {
+    // A synchronous failure before any slot could run → release the whole
+    // reservation. runGenerator itself does not throw, so this covers only unexpected
+    // errors; release is idempotent and swallow-on-failure.
+    if (inlineReservation.kind === "reserved") {
+      await releaseInline({ reservation: inlineReservation, reason: "generation_error" });
+    }
+    throw err;
   } finally {
     await userLock.release();
   }
