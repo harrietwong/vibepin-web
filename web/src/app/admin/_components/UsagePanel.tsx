@@ -25,14 +25,25 @@
 
 import { AlertTriangle, Infinity as InfinityIcon } from "lucide-react";
 import { AdminT, AdminTFmt } from "../AdminT";
+import { useAdminChrome } from "../AdminChromeProvider";
 import { USAGE_METRIC_KEY } from "@/lib/admin/adminConsoleKeys";
+import type { AdminLanguage } from "@/lib/admin/adminMessages";
 import { USAGE_METRIC_KEYS, type UsageMetricView, type UsageSummaryView } from "@/lib/server/adminUsage";
 
-function fmtDate(iso: string | null): string {
+/**
+ * The admin chrome's language is a 2-value UI toggle ("en" | "zh"); Intl needs a
+ * BCP-47 tag. Mapping it here keeps the billing period reading in the SAME
+ * language as the labels around it — an English "Aug 1 – Sep 1" sitting under a
+ * Chinese heading is the kind of half-translated surface that makes an operator
+ * doubt which of the two is stale.
+ */
+const INTL_LOCALE: Record<AdminLanguage, string> = { en: "en-US", zh: "zh-CN" };
+
+function fmtDate(iso: string | null, locale: string): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "—";
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(t));
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric" }).format(new Date(t));
 }
 
 /**
@@ -106,6 +117,8 @@ function BarRow({ metric }: { metric: UsageMetricView }) {
 }
 
 export function UsagePanel({ summary }: { summary: UsageSummaryView }) {
+  const { lang } = useAdminChrome();
+  const locale = INTL_LOCALE[lang];
   const isMetered = summary.state === "metered";
 
   return (
@@ -146,7 +159,7 @@ export function UsagePanel({ summary }: { summary: UsageSummaryView }) {
           <dt className="text-[11px] font-bold uppercase" style={{ color: "#6B7280" }}><AdminT k="usage.period" /></dt>
           <dd className="mt-1 font-semibold" style={{ color: "#111827" }}>
             {isMetered && summary.periodStart && summary.periodEnd
-              ? `${fmtDate(summary.periodStart)} – ${fmtDate(summary.periodEnd)}`
+              ? `${fmtDate(summary.periodStart, locale)} – ${fmtDate(summary.periodEnd, locale)}`
               : <span className="text-gray-400"><AdminT k="usage.period.none" /></span>}
           </dd>
         </div>

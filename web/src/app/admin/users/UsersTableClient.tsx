@@ -6,6 +6,7 @@ import { Search, Lock, AlertTriangle, Users } from "lucide-react";
 import type { UsersOverview, UserListRow, AccountStatus } from "@/lib/server/customer360";
 import { PLAN_KEYS_IN_ORDER, type PlanKey } from "@/lib/server/planEntitlements";
 import { AdminT } from "../AdminT";
+import { useAdminChrome } from "../AdminChromeProvider";
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
@@ -100,6 +101,10 @@ function PlanCell({ row }: { row: UserListRow }) {
 }
 
 export default function UsersTableClient({ overview }: { overview: UsersOverview }) {
+  // `<option>` content must be a plain string, so this uses the imperative
+  // translator rather than the <AdminT> element. Named `adminT` because the local
+  // `toggle` helper already binds `t` to a Toggle key.
+  const { t: adminT } = useAdminChrome();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
   // Filters on effectivePlan — the SAME resolution Customer 360 displays — so a
@@ -208,7 +213,7 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
             className="rounded-lg border px-2.5 py-2 text-[12px] font-bold capitalize"
             style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#374151" }}
           >
-            <option value="all">All plans</option>
+            <option value="all">{adminT("users.filter.plan.all")}</option>
             {PLAN_KEYS_IN_ORDER.map(p => (
               <option key={p} value={p} className="capitalize">{p}</option>
             ))}

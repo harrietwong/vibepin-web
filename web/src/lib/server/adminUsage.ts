@@ -99,10 +99,18 @@ export interface UsageAccountsLoad {
   /** userId → row. Only users who actually have a row appear. */
   byUser: Map<string, UsageAccountRow>;
   /**
-   * false when the query failed. Every requested user is then `unavailable`;
-   * an empty `byUser` must NOT be read as "nobody is metered".
+   * false when the query failed OR could not be completed in full. Every
+   * requested user is then `unavailable`; an empty `byUser` must NOT be read as
+   * "nobody is metered".
    */
   available: boolean;
+  /**
+   * true when the scan hit the 50k pagination ceiling, so rows exist that were
+   * never fetched. Set together with `available: false` — see the comment on the
+   * saturation branch in `loadUsageAccounts` for why a partial map is not an
+   * acceptable answer here.
+   */
+  truncated: boolean;
   warnings: string[];
   /** Users seen with more than one account row (a data-quality anomaly). */
   duplicateUserIds: string[];
@@ -154,7 +162,11 @@ export interface UsageSummaryView {
   /** null unless metered. */
   bonusImages: number | null;
   metrics: Record<UsageMetricKey, UsageMetricView>;
-  /** Data-quality notes (negative counters, duplicate rows, broken period …). */
+  /**
+   * Data-quality notes: negative/non-integer counters, a negative bonus balance,
+   * duplicate rows, a missing or inverted period, plan drift, and a `plan_key`
+   * this module's vocabulary does not recognize (`unknown_plan:*`).
+   */
   anomalies: string[];
 }
 
@@ -219,6 +231,23 @@ function normalizePlanKey(value: unknown): PlanKey | null {
   if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
   if (v in LEGACY_PLAN_ALIASES) return LEGACY_PLAN_ALIASES[v];
   return null;
+}
+
+/**
+ * A value that WAS supplied but that `normalizePlanKey` could not place.
+ *
+ * The distinction matters: "no plan recorded" is normal (a free user who never
+ * subscribed), while "plan recorded as `enterprise`" means the plan vocabulary
+ * in this file has drifted from what billing actually writes. Both currently
+ * resolve to the `free` floor, which is the right DISPLAY fallback but the wrong
+ * thing to stay silent about — a whole tier reading as free is exactly the kind
+ * of quiet mis-report this module exists to prevent. Callers turn this into an
+ * `unknown_plan:*` anomaly so a dictionary drift is visible on the surface
+ * instead of being absorbed into the floor.
+ */
+function isUnrecognizedPlanValue(value: unknown): boolean {
+  if (typeof value !== "string") return value !== null && value !== undefined;
+  return value.trim().length > 0 && normalizePlanKey(value) === null;
 }
 
 // ── effectivePlan: the ONE plan resolution every surface must use ────────────
@@ -292,6 +321,19 @@ export function summarizeUsage(input: SummarizeInput): UsageSummaryView {
   if (input.duplicate) anomalies.push("duplicate_account_rows");
   if (resolution.drift) anomalies.push("plan_drift");
 
+  // Plan-vocabulary drift. Silently falling back to `free` here would hide a
+  // whole tier: a `plan_key` billing writes but this module has never heard of
+  // renders identically to a genuine free user. The value is quoted in the
+  // anomaly so an operator can see WHICH string is unrecognized. Only checked on
+  // a state where the value was actually read: on `unavailable` we did not read
+  // the row at all, so there is nothing to call unknown.
+  if (!unavailable && isUnrecognizedPlanValue(row?.plan_key)) {
+    anomalies.push(`unknown_plan:${String(row?.plan_key).trim().slice(0, 40)}`);
+  }
+  if (isUnrecognizedPlanValue(appMetadata?.["plan"])) {
+    anomalies.push(`unknown_app_metadata_plan:${String(appMetadata?.["plan"]).trim().slice(0, 40)}`);
+  }
+
   const metrics = {} as Record<UsageMetricKey, UsageMetricView>;
 
   for (const key of METRIC_KEYS) {
@@ -354,6 +396,19 @@ export function summarizeUsage(input: SummarizeInput): UsageSummaryView {
     };
   }
 
+  // D3 parity: every other counter gets a negative check, so the bonus grant does
+  // too. A negative bonus balance means the grant ledger over-debited — the same
+  // class of bug as a negative `*_used`, and just as invisible without a flag.
+  if (state === "metered" && row) {
+    const bonusRaw = row.bonus_images_balance;
+    if (typeof bonusRaw === "number" && Number.isFinite(bonusRaw)) {
+      if (bonusRaw < 0) anomalies.push("negative_bonus_images");
+      else if (!Number.isInteger(bonusRaw)) anomalies.push("non_integer_bonus_images");
+    } else if (bonusRaw !== null && bonusRaw !== undefined) {
+      anomalies.push("invalid_bonus_images");
+    }
+  }
+
   if (state === "metered" && row) {
     const startMs = row.period_start ? Date.parse(row.period_start) : NaN;
     const endMs = row.period_end ? Date.parse(row.period_end) : NaN;
@@ -405,7 +460,10 @@ export interface QuotaWatchItem {
   email: string | null;
   plan: PlanKey;
   periodEnd: string | null;
-  /** ms until period_end; null when unknown. Negative ⇒ the period lapsed. */
+  /**
+   * ms until period_end; null when unknown. Always > 0 for a listed item —
+   * lapsed periods are excluded from this list entirely (see buildQuotaWatch).
+   */
   msUntilPeriodEnd: number | null;
   /** Every bucket at/over the threshold, worst first. */
   metrics: QuotaWatchMetric[];
@@ -438,17 +496,74 @@ export function quotaWatchMetricsFor(
   return out;
 }
 
-/** Build the /admin/today Quota Watch list from already-summarized users. */
+/**
+ * Is this summary's billing period already over at `now`?
+ *
+ * `period_end` is the exclusive end of the window the counters belong to, so
+ * `period_end <= now` means the counters describe a CLOSED period: whatever they
+ * say, the user is not consuming that allowance any more. An unknown or
+ * unparseable period is NOT treated as expired — "we cannot tell" must not
+ * silently drop a row that may well be current (see `missing_period`, which
+ * summarizeUsage already flags as an anomaly).
+ */
+export function isPeriodExpired(summary: UsageSummaryView, now: number): boolean {
+  if (!summary.periodEnd) return false;
+  const endMs = Date.parse(summary.periodEnd);
+  if (!Number.isFinite(endMs)) return false;
+  return endMs <= now;
+}
+
+export interface QuotaWatchBuild {
+  /** Users worth an operator's attention RIGHT NOW. */
+  items: QuotaWatchItem[];
+  /**
+   * How many users were dropped because their period had already ended. Reported
+   * so "0 shown" is distinguishable from "0 exist" — not rendered as pressure.
+   */
+  expiredPeriods: number;
+}
+
+/**
+ * Build the /admin/today Quota Watch list from already-summarized users.
+ *
+ * EXPIRED PERIODS ARE EXCLUDED. The card answers "who is near a limit right
+ * now"; a row whose `period_end` has already passed answers a different question
+ * ("who WAS near a limit, at some point in the past"). A user who hit 90% last
+ * March and has not signed in since would otherwise sit in this list forever,
+ * manufacturing a permanent upgrade signal out of a dead period — the counters
+ * never move again, so the row can never leave on its own. Those users are
+ * counted in `expiredPeriods` instead, so the exclusion is visible rather than a
+ * silent filter.
+ *
+ * NOTE the asymmetry with `summarizeUsage`, which deliberately keeps an expired
+ * period `metered`: the data is still real measured data and Customer 360 must
+ * show it. It is only unfit for THIS card, whose whole premise is "currently".
+ */
 export function buildQuotaWatch(
   summaries: Iterable<UsageSummaryView>,
   emailByUser: Map<string, string | null>,
   now: number = Date.now(),
   threshold: number = QUOTA_WATCH_THRESHOLD,
 ): QuotaWatchItem[] {
+  return buildQuotaWatchDetailed(summaries, emailByUser, now, threshold).items;
+}
+
+/** `buildQuotaWatch` plus the count of rows dropped for having a lapsed period. */
+export function buildQuotaWatchDetailed(
+  summaries: Iterable<UsageSummaryView>,
+  emailByUser: Map<string, string | null>,
+  now: number = Date.now(),
+  threshold: number = QUOTA_WATCH_THRESHOLD,
+): QuotaWatchBuild {
   const items: QuotaWatchItem[] = [];
+  let expiredPeriods = 0;
   for (const s of summaries) {
     const metrics = quotaWatchMetricsFor(s, threshold);
     if (metrics.length === 0) continue;
+    if (isPeriodExpired(s, now)) {
+      expiredPeriods += 1;
+      continue;
+    }
     const endMs = s.periodEnd ? Date.parse(s.periodEnd) : NaN;
     items.push({
       userId: s.userId,
@@ -461,7 +576,7 @@ export function buildQuotaWatch(
     });
   }
   items.sort((a, b) => b.topRatio - a.topRatio || a.userId.localeCompare(b.userId));
-  return items;
+  return { items, expiredPeriods };
 }
 
 // ── batch loader (no N+1, no truncation) ─────────────────────────────────────
@@ -473,9 +588,10 @@ const IN_CHUNK = 200; // keep the `in(...)` URL well under PostgREST's limits
  * ids — never one query per user. Chunking bounds the URL length; the paginated
  * loader inside each chunk defeats supabase-js's silent 1000-row cap.
  *
- * A failed read sets `available: false` and yields a warning. Callers MUST NOT
- * treat the resulting empty map as "no one is metered" — pass `unavailable` into
- * summarizeUsage so those users render as `unavailable`, not `unmetered`.
+ * A failed read — OR a read that hit the pagination ceiling — sets
+ * `available: false` and yields a warning. Callers MUST NOT treat the resulting
+ * empty map as "no one is metered": pass `unavailable` into summarizeUsage so
+ * those users render as `unavailable`, not `unmetered`.
  */
 export async function loadUsageAccounts(
   userIds: string[],
@@ -486,7 +602,7 @@ export async function loadUsageAccounts(
   const duplicates = new Set<string>();
 
   const unique = Array.from(new Set(userIds.filter(id => typeof id === "string" && id.length > 0)));
-  if (unique.length === 0) return { byUser, available: true, warnings, duplicateUserIds: [] };
+  if (unique.length === 0) return { byUser, available: true, truncated: false, warnings, duplicateUserIds: [] };
 
   const db = injectedDb ?? (await createAdminDb());
 
@@ -502,7 +618,7 @@ export async function loadUsageAccounts(
       });
     } catch (e) {
       warnings.push(describeUsageFailure({ message: e instanceof Error ? e.message : String(e) }));
-      return { byUser: new Map(), available: false, warnings, duplicateUserIds: [] };
+      return { byUser: new Map(), available: false, truncated: false, warnings, duplicateUserIds: [] };
     }
 
     if (result.error) {
@@ -510,7 +626,7 @@ export async function loadUsageAccounts(
       // we do not know. Degrade the WHOLE load rather than returning a partial map
       // that would silently read as "these users have no usage".
       warnings.push(describeUsageFailure(result.error));
-      return { byUser: new Map(), available: false, warnings, duplicateUserIds: [] };
+      return { byUser: new Map(), available: false, truncated: false, warnings, duplicateUserIds: [] };
     }
 
     for (const row of result.rows) {
@@ -521,7 +637,19 @@ export async function loadUsageAccounts(
     }
 
     if (result.saturated) {
-      warnings.push("Usage account scan hit the pagination ceiling — some users may be missing usage data.");
+      // The scan stopped at the 50k-row ceiling, so an unknown number of rows was
+      // never fetched. Returning the partial map with `available: true` would mark
+      // every unfetched user `unmetered` — i.e. "we looked and confirmed nothing
+      // happened" — when the truth is "we never looked at them". That is precisely
+      // the honesty bug the three-state model exists to prevent, and a warning
+      // does not undo it: the per-user badge is what an operator reads, not the
+      // page footer. So the WHOLE load degrades to `unavailable`, exactly as a
+      // query error does. A wrong-but-confident answer is worse than no answer.
+      warnings.push(
+        "Usage unavailable — the usage_accounts scan hit the 50,000-row pagination ceiling, " +
+        "so an unknown number of users was never read.",
+      );
+      return { byUser: new Map(), available: false, truncated: true, warnings, duplicateUserIds: [] };
     }
   }
 
@@ -529,7 +657,7 @@ export async function loadUsageAccounts(
     warnings.push(`${duplicates.size} user(s) have more than one usage_accounts row — showing the first.`);
   }
 
-  return { byUser, available: true, warnings, duplicateUserIds: Array.from(duplicates) };
+  return { byUser, available: true, truncated: false, warnings, duplicateUserIds: Array.from(duplicates) };
 }
 
 function describeUsageFailure(error: PgError): string {
@@ -602,6 +730,12 @@ export interface QuotaWatchResult {
   warnings: string[];
   /** Test / internal accounts left out of the list. */
   excluded: ExcludedCounts;
+  /**
+   * Users who would have breached the threshold but whose billing period has
+   * already ended. Reported separately so the exclusion is visible; they are
+   * NOT current quota pressure and must never be merged into `items`.
+   */
+  expiredPeriods: number;
 }
 
 export interface QuotaWatchOptions {
@@ -618,10 +752,12 @@ export interface QuotaWatchOptions {
  * different colour) would train an operator to treat one like the other. For the
  * same reason this never feeds the health score.
  *
- * Only `metered` users with a FINITE POSITIVE allowance can appear. Unmetered
- * users, users whose usage read failed, and unlimited allowances are excluded by
- * construction: a percentage of an absent or unknown denominator is not something
- * anyone can act on, and listing it would manufacture urgency out of missing data.
+ * Only `metered` users with a FINITE POSITIVE allowance AND a period that has not
+ * yet ended can appear. Unmetered users, users whose usage read failed, unlimited
+ * allowances, and lapsed periods are excluded by construction: a percentage of an
+ * absent or unknown denominator is not something anyone can act on, and neither is
+ * a percentage of an allowance the user has already stopped consuming. Listing
+ * either would manufacture urgency out of data that cannot change.
  */
 export async function getQuotaWatch(
   injectedDb?: SupabaseLikeDb,
@@ -635,7 +771,7 @@ export async function getQuotaWatch(
 
   const users = await listAllAuthUsers(db, warnings);
   if (!users) {
-    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded };
+    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded, expiredPeriods: 0 };
   }
 
   const cohort: AuthUserLite[] = [];
@@ -658,11 +794,11 @@ export async function getQuotaWatch(
   // empty list would read as "nobody is close", which is a claim we have not
   // earned — so the card reports itself unavailable instead.
   if (!summaries.available) {
-    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded };
+    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded, expiredPeriods: 0 };
   }
 
   const emailByUser = new Map<string, string | null>(cohort.map(u => [u.id, u.email ?? null]));
-  const items = buildQuotaWatch(summaries.byUser.values(), emailByUser);
+  const { items, expiredPeriods } = buildQuotaWatchDetailed(summaries.byUser.values(), emailByUser);
 
-  return { available: true, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items, warnings, excluded };
+  return { available: true, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items, warnings, excluded, expiredPeriods };
 }

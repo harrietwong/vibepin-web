@@ -142,6 +142,8 @@ async function main() {
     getUserUsageSummary,
     quotaWatchMetricsFor,
     buildQuotaWatch,
+    buildQuotaWatchDetailed,
+    isPeriodExpired,
     QUOTA_WATCH_THRESHOLD,
     USAGE_ACCOUNT_COLUMNS,
   } = await import("../src/lib/server/adminUsage");
@@ -548,26 +550,145 @@ async function main() {
       assert.ok(!s.anomalies.includes("missing_period"));
     }
 
-    // Quota watch reports how long is left, and goes negative once lapsed —
-    // the operator needs to know a "90% used" row is from a dead period.
-    const watch = buildQuotaWatch(
+    // A live period at 95% still reports how long is left — that is the number the
+    // operator acts on ("upgrade them before the 3rd").
+    const live = buildQuotaWatch(
       [
         summarizeUsage({
-          userId: "p2",
+          userId: "p6",
           row: accountRow({
-            user_id: "p2",
+            user_id: "p6",
             period_start: iso(now - 30 * day),
-            period_end: iso(now - 60_000),
+            period_end: iso(now + 2 * day),
             scheduled_posts_used: 290,
           }) as never,
           appMetadata: { plan: "pro" },
         }),
       ],
-      new Map([["p2", "p2@x.com"]]),
+      new Map([["p6", "p6@x.com"]]),
       now,
     );
-    assert.equal(watch.length, 1);
-    assert.ok(watch[0].msUntilPeriodEnd !== null && watch[0].msUntilPeriodEnd < 0, "a lapsed period reads as negative time left");
+    assert.equal(live.length, 1, "a CURRENT period at 96% is exactly what this card is for");
+    assert.equal(live[0].msUntilPeriodEnd, 2 * day, "time left is measured from `now`");
+  });
+
+  test("an EXPIRED period never enters quota watch, however high its ratio", () => {
+    // The bug this locks out: a user who hit 96% last March and never came back
+    // has counters that can never move again, so the row can never leave the list
+    // on its own. "Currently under quota pressure" is false for them — the card
+    // would be manufacturing a permanent upgrade signal out of a dead period.
+    const now = Date.parse("2026-08-31T00:00:00Z");
+    const day = 86_400_000;
+    const iso = (ms: number) => new Date(ms).toISOString();
+
+    const justLapsed = summarizeUsage({
+      userId: "x1",
+      row: accountRow({
+        user_id: "x1",
+        period_start: iso(now - 30 * day),
+        period_end: iso(now - 60_000), // ended a minute ago
+        scheduled_posts_used: 290,
+      }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    const longDead = summarizeUsage({
+      userId: "x2",
+      row: accountRow({
+        user_id: "x2",
+        period_start: iso(now - 400 * day),
+        period_end: iso(now - 370 * day),
+        ai_images_used: 799, // 99.9%
+      }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    const endsExactlyNow = summarizeUsage({
+      userId: "x3",
+      row: accountRow({
+        user_id: "x3",
+        period_start: iso(now - 30 * day),
+        period_end: iso(now), // period_end is EXCLUSIVE: at t == end the window is over
+        scheduled_posts_used: 290,
+      }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    const stillLive = summarizeUsage({
+      userId: "x4",
+      row: accountRow({
+        user_id: "x4",
+        period_start: iso(now - 30 * day),
+        period_end: iso(now + 60_000), // one minute left — still current
+        scheduled_posts_used: 290,
+      }) as never,
+      appMetadata: { plan: "pro" },
+    });
+
+    // Independent oracle: every one of these four IS over the threshold, so the
+    // ONLY thing separating them is whether their period has ended.
+    for (const s of [justLapsed, longDead, endsExactlyNow, stillLive]) {
+      assert.ok(quotaWatchMetricsFor(s).length > 0, `${s.userId} must breach the threshold for this test to mean anything`);
+    }
+
+    const built = buildQuotaWatchDetailed(
+      [justLapsed, longDead, endsExactlyNow, stillLive],
+      new Map(),
+      now,
+    );
+    assert.deepEqual(
+      built.items.map(i => i.userId),
+      ["x4"],
+      "only the user whose period has NOT ended is current quota pressure",
+    );
+    assert.equal(built.expiredPeriods, 3, "the excluded rows are counted, not silently dropped");
+    // And time-left on a listed row is never negative, by construction.
+    assert.ok(built.items[0].msUntilPeriodEnd !== null && built.items[0].msUntilPeriodEnd > 0);
+
+    // buildQuotaWatch (the plain form) must agree — no surface gets the old behaviour.
+    assert.deepEqual(
+      buildQuotaWatch([justLapsed, longDead, endsExactlyNow, stillLive], new Map(), now).map(i => i.userId),
+      ["x4"],
+    );
+  });
+
+  test("an UNKNOWN period is not treated as expired (we cannot tell ≠ it lapsed)", () => {
+    const now = Date.parse("2026-08-31T00:00:00Z");
+    const noPeriod = summarizeUsage({
+      userId: "x5",
+      row: accountRow({ user_id: "x5", period_start: null, period_end: null, scheduled_posts_used: 290 }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    const garbagePeriod = summarizeUsage({
+      userId: "x6",
+      row: accountRow({ user_id: "x6", period_start: "not-a-date", period_end: "also-not-a-date", scheduled_posts_used: 290 }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    assert.equal(isPeriodExpired(noPeriod, now), false);
+    assert.equal(isPeriodExpired(garbagePeriod, now), false);
+    const built = buildQuotaWatchDetailed([noPeriod, garbagePeriod], new Map(), now);
+    assert.equal(built.items.length, 2, "an unreadable period must not silently drop a possibly-current row");
+    assert.equal(built.expiredPeriods, 0);
+    // The unreadable period is still called out — as an anomaly, not by deletion.
+    assert.ok(noPeriod.anomalies.includes("missing_period"));
+    assert.ok(garbagePeriod.anomalies.includes("missing_period"));
+  });
+
+  test("Customer 360 still shows an expired period as METERED (the exclusion is quota-watch-only)", () => {
+    // The asymmetry is deliberate: the data is real and the user page must show
+    // it. Only the "right now" card refuses it.
+    const now = Date.parse("2026-08-31T00:00:00Z");
+    const day = 86_400_000;
+    const s = summarizeUsage({
+      userId: "x7",
+      row: accountRow({
+        user_id: "x7",
+        period_start: new Date(now - 400 * day).toISOString(),
+        period_end: new Date(now - 370 * day).toISOString(),
+        ai_images_used: 799,
+      }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    assert.equal(s.state, "metered", "an expired period is still measured data");
+    assert.equal(s.metrics.aiImages.used, 799, "the number is still reported on the user page");
+    assert.equal(buildQuotaWatch([s], new Map(), now).length, 0, "…but it is not CURRENT pressure");
   });
 
   test("a missing or inverted period is flagged, not silently accepted", () => {
@@ -720,6 +841,71 @@ async function main() {
     assert.equal(roundTrips(), 0);
   });
 
+  test("hitting the pagination ceiling degrades to UNAVAILABLE, not to a partial 'unmetered'", async () => {
+    // The honesty bug: paginateRows stops at 50k rows. If the loader returned the
+    // rows it DID get with available:true, every user beyond the ceiling would be
+    // summarized as `unmetered` — "we looked and confirmed nothing happened" —
+    // when the truth is "we never read them". A page-footer warning does not fix
+    // that: the per-user badge is what an operator reads.
+    //
+    // Simulated with a db that always returns a FULL page (1000 rows), which is
+    // exactly what a real saturating scan looks like, without materializing 50k
+    // fixture rows.
+    const PAGE = 1000;
+    let calls = 0;
+    const saturatingDb = {
+      from() {
+        const b: Record<string, unknown> = {
+          select() { return b; },
+          in() { return b; },
+          eq() { return b; },
+          order() { return b; },
+          range() { return b; },
+          then(resolve: (v: { data: unknown[]; error: null }) => unknown) {
+            calls += 1;
+            // Distinct ids per page so nothing dedupes the ceiling away.
+            const base = (calls - 1) * PAGE;
+            return Promise.resolve({
+              data: Array.from({ length: PAGE }, (_, i) => accountRow({ user_id: `sat-${base + i}` })),
+              error: null,
+            }).then(resolve);
+          },
+        };
+        return b;
+      },
+    } as never;
+
+    const load = await loadUsageAccounts(["sat-0", "never-read"], saturatingDb);
+    assert.equal(load.available, false, "a truncated scan is 'we do not know', not 'we know'");
+    assert.equal(load.truncated, true, "the reason is reported distinctly from a query error");
+    assert.equal(load.byUser.size, 0, "no partial map — a partial map is what gets misread as unmetered");
+    assert.ok(load.warnings.some(w => /ceiling/i.test(w)), "the ceiling must be named in the warning");
+
+    // And the whole point: the users must render `unavailable`, never `unmetered`.
+    const cohort = await summarizeUsageForUsers(
+      [{ id: "sat-0", app_metadata: { plan: "pro" } }, { id: "never-read", app_metadata: null }],
+      saturatingDb,
+    );
+    assert.equal(cohort.available, false);
+    for (const id of ["sat-0", "never-read"]) {
+      const v = cohort.byUser.get(id)!;
+      assert.equal(v.state, "unavailable", `${id} was never read — it must not claim to be unmetered`);
+      assert.notEqual(v.state, "unmetered");
+      assert.equal(v.metrics.aiImages.used, null);
+    }
+  });
+
+  test("a NON-saturating scan is still a normal, available read", async () => {
+    // Control for the test above: proving the ceiling path fires is worthless if
+    // the ordinary path now fires it too.
+    const rows = Array.from({ length: 5 }, (_, i) => accountRow({ user_id: `ok${i}` }));
+    const { db } = makeMockDb({ usage_accounts: { rows } });
+    const load = await loadUsageAccounts(rows.map(r => r.user_id), db);
+    assert.equal(load.available, true);
+    assert.equal(load.truncated, false);
+    assert.equal(load.byUser.size, 5);
+  });
+
   test("duplicate account rows for one user are surfaced as an anomaly", async () => {
     const { db } = makeMockDb({
       usage_accounts: {
@@ -831,6 +1017,62 @@ async function main() {
     });
     assert.equal(s.state, "metered");
     assert.equal(s.metrics.aiImages.used, 0);
+  });
+
+  test("an unrecognized plan_key raises an anomaly instead of quietly reading as free", () => {
+    // Dictionary drift: billing starts writing a tier this module has never heard
+    // of. The `free` floor is the right thing to DISPLAY, but staying silent means
+    // a whole paying tier renders as free and nobody ever finds out.
+    const s = summarizeUsage({
+      userId: "drifted",
+      row: accountRow({ user_id: "drifted", plan_key: "enterprise" }) as never,
+      appMetadata: null,
+    });
+    assert.equal(s.plan, "free", "still falls back to the floor for display");
+    assert.ok(
+      s.anomalies.some(a => a.startsWith("unknown_plan:")),
+      `expected an unknown_plan anomaly, got ${JSON.stringify(s.anomalies)}`,
+    );
+    assert.ok(s.anomalies.includes("unknown_plan:enterprise"), "the offending value is quoted so it can be looked up");
+
+    // A recognized plan (including a legacy alias) must NOT raise it — otherwise
+    // the anomaly is noise and gets ignored.
+    for (const good of ["pro", "free", "growth", "AGENCY", " starter "]) {
+      const ok = summarizeUsage({ userId: "g", row: accountRow({ user_id: "g", plan_key: good }) as never, appMetadata: null });
+      assert.ok(!ok.anomalies.some(a => a.startsWith("unknown_plan:")), `"${good}" is recognized and must not be flagged`);
+    }
+    // Absent is not unknown: a NULL plan_key is the ordinary free-user case.
+    const nullPlan = summarizeUsage({ userId: "n", row: accountRow({ user_id: "n", plan_key: null }) as never, appMetadata: null });
+    assert.ok(!nullPlan.anomalies.some(a => a.startsWith("unknown_plan")), "no plan recorded is normal, not a drift signal");
+
+    // An unrecognized app_metadata plan is its own, separately-named anomaly.
+    const appDrift = summarizeUsage({ userId: "ad", row: null, appMetadata: { plan: "enterprise" } });
+    assert.ok(appDrift.anomalies.includes("unknown_app_metadata_plan:enterprise"));
+
+    // An unavailable read must NOT claim the plan is unknown — it was never read.
+    const failed = summarizeUsage({ userId: "f", row: null, appMetadata: null, unavailable: true });
+    assert.ok(!failed.anomalies.some(a => a.startsWith("unknown_plan")));
+  });
+
+  test("a negative bonus balance is flagged, like every other negative counter", () => {
+    // Parity: negative_used:* already exists for the three metric counters, so a
+    // bonus grant ledger that over-debited must be just as visible.
+    const s = summarizeUsage({
+      userId: "negbonus",
+      row: accountRow({ user_id: "negbonus", bonus_images_balance: -12 }) as never,
+      appMetadata: { plan: "pro" },
+    });
+    assert.ok(s.anomalies.includes("negative_bonus_images"), `got ${JSON.stringify(s.anomalies)}`);
+    assert.equal(s.bonusImages, -12, "the real (bad) value is shown, not scrubbed to 0");
+
+    // A healthy balance and a measured 0 must stay clean.
+    for (const v of [0, 25]) {
+      const ok = summarizeUsage({ userId: "b", row: accountRow({ user_id: "b", bonus_images_balance: v }) as never, appMetadata: { plan: "pro" } });
+      assert.ok(!ok.anomalies.some(a => a.includes("bonus")), `${v} is a fine balance`);
+    }
+    // A fractional balance is also wrong (images are whole units).
+    const frac = summarizeUsage({ userId: "bf", row: accountRow({ user_id: "bf", bonus_images_balance: 2.5 }) as never, appMetadata: { plan: "pro" } });
+    assert.ok(frac.anomalies.includes("non_integer_bonus_images"));
   });
 
   test("bonus image balance is reported when metered and null when not", () => {
