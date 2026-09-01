@@ -50,6 +50,7 @@ export const CORE: string[] = [
   "test-admin-auth-security",
   "test-admin-account-kind",
   "test-admin-action-center",
+  "test-admin-usage",
   "test-activation-funnel",
   "test-ai-adoption",
   "test-admin-today-i18n",
