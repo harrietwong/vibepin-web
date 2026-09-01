@@ -21,6 +21,7 @@ import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import { readStoredTarget, sharedTargetForSelection } from "@/lib/studio/publishTarget";
 import * as pinDraftStore from "@/lib/pinDraftStore";
+import { track } from "@/lib/analytics";
 import type { PinterestClientError } from "@/lib/pinterestClient";
 import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
@@ -1298,6 +1299,19 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         if (!targetId && res.connectionId) {
           pinDraftStore.updateDraft(p.pinId, { targetConnectionId: res.connectionId });
         }
+        // Fires this event for the first time in the codebase (defined as a type + funnel
+        // constant but never called). Best-effort — never affects the publish outcome
+        // already recorded above. p.pinId is only sometimes a pinDraftStore draft id (see
+        // the comment on the publishPin call above); when it isn't, getDraft returns null
+        // and sourceGenerationId is simply omitted rather than guessed at.
+        try {
+          const draftForGen = pinDraftStore.getDraft(p.pinId);
+          track("draft_published", {
+            draftId: p.pinId,
+            ...(draftForGen?.sourceGenerationId ? { generationSessionId: draftForGen.sourceGenerationId } : {}),
+            remotePinId: res.pin.id,
+          });
+        } catch { /* analytics must never affect publish */ }
       } catch (e) {
         const err = e as PinterestClientError;
         results.push({ pinId: p.pinId, title, status: "failed", message: err?.message ?? tr("studioModals.publish.publishFailed") });

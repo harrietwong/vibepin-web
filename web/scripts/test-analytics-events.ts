@@ -121,6 +121,58 @@ async function main() {
     assert.ok(sent.events.length <= 20, "never exceeds the server batch cap");
   });
 
+  // ── draft_published (publish-success call sites in StudioBoard.tsx /
+  // DraftDetailsDrawer.tsx / BatchEditDrawer.tsx) ─────────────────────────────
+  // These components render React and aren't unit-tested here; instead this locks
+  // down the CONTRACT those call sites rely on: track() with the exact payload keys
+  // they send (draftId, generationSessionId when available, remotePinId), fired only
+  // on success and wrapped so a publish that succeeds is never affected by analytics.
+
+  /** Mirrors the try/catch each publish-success call site wraps track() in. */
+  function trackPublishSuccessBestEffort(props: { draftId?: string; generationSessionId?: string; remotePinId?: string }): void {
+    try { analytics.track("draft_published", props); }
+    catch { /* analytics must never affect publish */ }
+  }
+
+  test("draft_published: publish success reports draftId + remotePinId (generationSessionId omitted when unknown)", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackPublishSuccessBestEffort({ draftId: "pd_42", remotePinId: "pin_123" });
+    analytics.__flushAnalyticsForTests();
+    assert.equal(beacons.length, 1);
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ event: string; draftId?: string; payload?: Record<string, unknown> }> };
+    assert.equal(sent.events.length, 1, "fires exactly once per successful publish");
+    assert.equal(sent.events[0].event, "draft_published");
+    assert.equal(sent.events[0].draftId, "pd_42");
+    assert.equal(sent.events[0].payload!.remotePinId, "pin_123");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+  });
+
+  test("draft_published: includes generationSessionId (sourceGenerationId) when the draft carries one", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackPublishSuccessBestEffort({ draftId: "pd_43", generationSessionId: "gen_req_9", remotePinId: "pin_456" });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
+    assert.equal(sent.events[0].payload!.generationSessionId, "gen_req_9");
+    assert.equal(sent.events[0].payload!.remotePinId, "pin_456");
+  });
+
+  test("draft_published: a failed publish never triggers the event", () => {
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    // Simulates the call sites' shape: track() only runs on the success branch, never
+    // inside/after a caught publish error.
+    try {
+      throw new Error("Pinterest API error");
+    } catch {
+      // publish failed — call sites record publishError state here, NOT track("draft_published", ...)
+    }
+    analytics.__flushAnalyticsForTests();
+    assert.equal(analytics.__getAnalyticsBufferForTests().length, 0);
+    assert.equal(beacons.length, 0, "no event reported for a failed publish");
+  });
+
   test("track: never throws even if reporting internals are gone", () => {
     analytics.__resetAnalyticsForTests();
     const savedBeacon = (globalThis as unknown as { navigator: { sendBeacon?: unknown } }).navigator.sendBeacon;

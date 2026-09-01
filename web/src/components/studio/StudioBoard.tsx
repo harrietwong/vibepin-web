@@ -413,6 +413,17 @@ export function StudioBoard() {
         // it actually published through, so every later retry/action stays on it.
         ...(!readStoredTarget(d) && res.connectionId ? { targetConnectionId: res.connectionId } : {}),
       });
+      // Fires this event for the first time in the codebase (it was defined as a type +
+      // funnel constant but never called — the funnel's last stage was permanently 0).
+      // Best-effort: analytics must never affect the publish outcome, which has already
+      // succeeded by this point.
+      try {
+        track("draft_published", {
+          draftId: id,
+          ...(d.sourceGenerationId ? { generationSessionId: d.sourceGenerationId } : {}),
+          remotePinId: res.pin.id,
+        });
+      } catch { /* analytics must never affect publish */ }
       toast.success(tr("studioBoard.toast.publishSuccess"));
     } catch (e) {
       const err = e as { code?: string; message?: string };

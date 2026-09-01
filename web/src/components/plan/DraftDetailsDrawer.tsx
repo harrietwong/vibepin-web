@@ -68,6 +68,7 @@ import {
 } from "@/lib/studio/publishTarget";
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { track } from "@/lib/analytics";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { isPublishableImage, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
@@ -1263,6 +1264,17 @@ export function PinDetailsModal({
         previousScheduledTime: undefined,
         publishErrorCode: undefined,
       });
+      // Fires this event for the first time in the codebase (defined as a type + funnel
+      // constant but never called — the creative-intelligence funnel's last stage was
+      // permanently 0). Best-effort: analytics must never affect the publish outcome,
+      // which has already succeeded by this point.
+      try {
+        track("draft_published", {
+          draftId: activeDraft.id,
+          ...(activeDraft.sourceGenerationId ? { generationSessionId: activeDraft.sourceGenerationId } : {}),
+          remotePinId: res.pin.id,
+        });
+      } catch { /* analytics must never affect publish */ }
       setResult({ pinUrl: res.pin.url, pinId: res.pin.id, boardName, environment: res.environment });
       // Shared id so a following social fan-out REPLACES this line with a
       // combined one rather than stacking a second toast for one publish.
