@@ -1269,9 +1269,12 @@ export function PinDetailsModal({
       // permanently 0). Best-effort: analytics must never affect the publish outcome,
       // which has already succeeded by this point.
       try {
+        // `sourceGenerationId` (the server's generation_request_id), NOT the
+        // draft's separate `generationSessionId` client batch id — the payload key
+        // names the field the value actually came from.
         track("draft_published", {
           draftId: activeDraft.id,
-          ...(activeDraft.sourceGenerationId ? { generationSessionId: activeDraft.sourceGenerationId } : {}),
+          ...(activeDraft.sourceGenerationId ? { sourceGenerationId: activeDraft.sourceGenerationId } : {}),
           remotePinId: res.pin.id,
         });
       } catch { /* analytics must never affect publish */ }
