@@ -36,6 +36,12 @@ import {
   aiImageLimitResponseBody,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
+import {
+  recordGeneration,
+  type GenerationRecordInput,
+  type GenerationRecordSource,
+  type GenerationRecordStatus,
+} from "@/lib/server/generationRecord";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -849,6 +855,75 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // ── Generation history instrumentation (pin_generations) ─────────────────────
+  // `pin_generations` is the ONLY table the six admin surfaces read to know a
+  // generation happened; production has had 4 rows in it since 2026-06-14 because
+  // the sole writer lives in the retired composer (studio/page.tsx::handleGenerate),
+  // which board-v2's early return makes unreachable. See generationRecord.ts for the
+  // full measured root cause. This route is the one chokepoint EVERY generation path
+  // flows through, so the row is written here.
+  //
+  // STRICTLY BEST-EFFORT: recordGeneration never throws (it is total by construction)
+  // and its result is deliberately ignored — a history-write problem must never turn
+  // into a generation problem. Not awaited on any path where the response is already
+  // decided; the extra `.catch` is belt-and-braces, not a real expectation.
+  //
+  // ANONYMOUS CALLERS ARE SKIPPED, not faked. Inline/FastAPI serve unauthenticated
+  // local-dev callers whose `session:`/`anon:` identity is not an auth.users id, and
+  // `pin_generations.user_id` is a NOT NULL FK to auth.users. buildGenerationRow
+  // refuses to build an unattributable row; the guard here just avoids the log noise.
+  //
+  // `source` records WHICH dispatch lineage produced the row and is never `studio`
+  // (the retired composer's value) — the admin console has to be able to tell the two
+  // apart. Refusals that happen BEFORE dispatch is chosen are attributed to the mode
+  // this deployment would have used, which is the honest reading of where they failed.
+  const defaultRecordSource: GenerationRecordSource =
+    GENERATION_MODE === "worker" ? "board_worker" : "board";
+  const recordGenerationOutcome = (
+    status: GenerationRecordStatus,
+    source: GenerationRecordSource,
+    extra: Partial<GenerationRecordInput> = {},
+  ): void => {
+    if (!authUserId) return;
+    void recordGeneration(createServerClient(), {
+      userId: authUserId,
+      generationRequestId,
+      status,
+      source,
+      keyword,
+      category,
+      expectedTotal: count,
+      productCount: productImages.length,
+      refUrls: styleRef ? [styleRef] : undefined,
+      promptExcerpt: prompt,
+      ...extra,
+    }).catch(() => { /* unreachable — recordGeneration is total; here so no path can reject */ });
+  };
+
+  // ── The worker path's KNOWN LIMIT, stated rather than papered over ────────────
+  // GENERATION_MODE=worker (production) hands the job to a VPS worker and returns
+  // {jobId} immediately; this route NEVER learns whether the images rendered. So the
+  // row it writes is `running`, with NO `total_pins` and NO `pin_urls` — the honest
+  // record of "a generation started", not a guess at how it ended.
+  //
+  // What that buys today: adminActivationFunnel's firstGeneration milestone,
+  // adminActionCenter's connected_not_creating / totalCount, adminOverview and
+  // customer360 counts, and generationLogs' per-run listing all key on the row's
+  // EXISTENCE and created_at — all of those go from permanently-empty to correct.
+  //
+  // What it does NOT fix, and must not be claimed to: adminActionCenter's
+  // generation_failures blocker and adminAiAdoption's success side read `status`,
+  // which only ever reaches completed/partial/failed on the INLINE path here. The
+  // durable fix is to finalize the row where the terminal outcome first becomes
+  // visible server-side — GET /api/generation-jobs/[id], which already settles the
+  // usage reservation from the same finished row for exactly this reason (see
+  // settleGenerationJob.ts). That is a separate change and is deliberately NOT done
+  // in this one; writing a fabricated `completed` at enqueue time would make the
+  // failure blocker permanently silent, which is worse than a visibly-`running` row.
+  const recordRunningWorkerGeneration = (): void => {
+    recordGenerationOutcome("running", "board_worker");
+  };
+
   // ── Step 2: VALIDATE AND BOUND the moderated inputs — still before any call ───
   // Structural + length validation replacing the old blind `as` casts. An
   // over-limit or malformed request is rejected with 400 invalid_request having
@@ -862,6 +937,9 @@ export async function POST(req: NextRequest) {
     productMetadata: body.product_metadata,
   });
   if (!validated.ok) {
+    recordGenerationOutcome("failed", defaultRecordSource, {
+      totalPins: 0, errorType: "invalid_request", errorMessage: validated.detail,
+    });
     return invalidRequestResponse(generationRequestId, validated.detail);
   }
   const selectedTags = validated.selectedTags;
@@ -893,6 +971,9 @@ export async function POST(req: NextRequest) {
   // else → 400. Never silently coerced onto a valid (paid) model.
   const modelKeyValidation = validateImageModelKey(body.model_key);
   if (!modelKeyValidation.ok) {
+    recordGenerationOutcome("failed", defaultRecordSource, {
+      totalPins: 0, errorType: "invalid_request", errorMessage: modelKeyValidation.detail,
+    });
     return invalidRequestResponse(generationRequestId, modelKeyValidation.detail);
   }
   const modelKey: string = modelKeyValidation.modelKey;
@@ -941,6 +1022,16 @@ export async function POST(req: NextRequest) {
       generationRequestId,
       identityKind: rateLimitIdentity.startsWith("user:") ? "user" : "anonymous",
     }));
+    // Two distinct error_types so the admin Action Center can tell "the user went too
+    // fast" from "our limiter was down" — collapsing them would blame the user for an
+    // outage. Anonymous callers are skipped inside recordGenerationOutcome.
+    recordGenerationOutcome("failed", defaultRecordSource, {
+      totalPins: 0,
+      errorType: unavailable ? "rate_limiter_unavailable" : RATE_LIMITED_ERROR,
+      errorMessage: unavailable
+        ? "Image generation is temporarily unavailable (rate limiter unreachable)."
+        : RATE_LIMITED_MESSAGE,
+    });
     return NextResponse.json(
       {
         ok: false,
@@ -983,6 +1074,11 @@ export async function POST(req: NextRequest) {
       checkCount: moderationChecks.length,
       maxChecks: MAX_MODERATION_CHECKS,
     }));
+    recordGenerationOutcome("failed", defaultRecordSource, {
+      totalPins: 0,
+      errorType: "invalid_request",
+      errorMessage: `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
+    });
     return invalidRequestResponse(
       generationRequestId,
       `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
@@ -1017,6 +1113,22 @@ export async function POST(req: NextRequest) {
       requestStatus: "moderation_rejected",
       referenceId: generationRequestId,
     });
+    // Same precedence rule evaluateModerationResults applies to build the response
+    // (`rejected` wins over `unavailable`), so the recorded error_type can never
+    // disagree with the error_type the caller was actually given. Recomputed rather
+    // than parsed back off the NextResponse body — reading a stream just to label a
+    // history row would be both wasteful and a second place to get it wrong.
+    const moderationRejected = moderationResults.some(r => !r.ok && r.reason === "rejected");
+    recordGenerationOutcome("failed", defaultRecordSource, {
+      totalPins: 0,
+      errorType: moderationRejected ? "prompt_rejected" : "moderation_unavailable",
+      errorMessage: moderationRejected
+        // The prompt text itself is NEVER copied into the failure message — it is the
+        // content we just judged unsafe, and prompt_excerpt already carries a capped
+        // preview under the same row for the operator who needs context.
+        ? "Prompt was rejected by content moderation."
+        : "Prompt screening was unavailable; no generation was started.",
+    });
     return gate.response;
   }
 
@@ -1039,6 +1151,11 @@ export async function POST(req: NextRequest) {
       meteringPlan = plan;
       const allowance = await checkAllowance(meteringUserId, "ai_image", count, plan);
       if (!allowance.allowed) {
+        recordGenerationOutcome("failed", defaultRecordSource, {
+          totalPins: 0,
+          errorType: "quota_exceeded",
+          errorMessage: `Monthly AI image allowance reached (${allowance.used}/${allowance.limit}).`,
+        });
         return NextResponse.json(
           {
             ok: false,
@@ -1169,6 +1286,11 @@ export async function POST(req: NextRequest) {
       // Worker liveness is still an honest-failure gate even under metering: a job
       // nobody will claim must not be reserved-and-enqueued. Reuse isWorkerHealthy().
       if (!(await isWorkerHealthy())) {
+        recordGenerationOutcome("failed", "board_worker", {
+          totalPins: 0,
+          errorType: "generation_unavailable",
+          errorMessage: "No healthy generation worker was available; nothing was enqueued.",
+        });
         return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
       }
       const ledger = await reserveGenerationJobViaLedger({
@@ -1179,11 +1301,17 @@ export async function POST(req: NextRequest) {
       });
       if (ledger.kind === "reserved") {
         console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
+        recordRunningWorkerGeneration();
         return NextResponse.json({ jobId: ledger.jobId, slots: ledger.slots });
       }
       if (ledger.kind === "insufficient" && meterMode === "enforce") {
         // ENFORCE (reserved for a later phase; NOT enabled in prod this phase):
         // insufficient balance → limit response in the route's error envelope.
+        recordGenerationOutcome("failed", "board_worker", {
+          totalPins: 0,
+          errorType: "quota_exceeded",
+          errorMessage: "Insufficient AI image balance; nothing was enqueued.",
+        });
         return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
       }
       // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
@@ -1193,9 +1321,15 @@ export async function POST(req: NextRequest) {
 
     const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
     if (!enqueued) {
+      recordGenerationOutcome("failed", "board_worker", {
+        totalPins: 0,
+        errorType: "generation_unavailable",
+        errorMessage: "Generation job could not be enqueued (worker unhealthy or insert failed).",
+      });
       return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
     }
     console.log(`[/api/generate] enqueued job=${enqueued.jobId} slots=${enqueued.slots} user=${userId}`);
+    recordRunningWorkerGeneration();
     return NextResponse.json({ jobId: enqueued.jobId, slots: enqueued.slots });
   }
 
@@ -1212,6 +1346,11 @@ export async function POST(req: NextRequest) {
     const fastapiResult = await tryFastAPI(keyword, style, undefined);
     if (fastapiResult) {
       console.log("[/api/generate] using FastAPI path");
+      // NO pin_generations row. This branch is fire-and-forget: the task id is handed
+      // to an external FastAPI queue and nothing ever polls it back here, so neither a
+      // terminal status nor an output count is knowable. It is skipped for the same
+      // reason it is excluded from usage metering (see the comment above), and it is a
+      // local-dev/self-hosted path — production runs GENERATION_MODE=worker.
       return NextResponse.json(fastapiResult);
     }
   } else {
@@ -1235,6 +1374,11 @@ export async function POST(req: NextRequest) {
       generationRequestId,
       lockPath: userLock.path,
     }));
+    recordGenerationOutcome("failed", "board", {
+      totalPins: 0,
+      errorType: "user_generation_limit",
+      errorMessage: "Another generation is already running for this account or browser session.",
+    });
     return NextResponse.json({
       ok: false,
       error: "A generation is already running for this account or browser session. Wait for it to finish, then try again.",
@@ -1259,6 +1403,11 @@ export async function POST(req: NextRequest) {
     inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
     if (inlineReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
       await userLock.release();
+      recordGenerationOutcome("failed", "board", {
+        totalPins: 0,
+        errorType: "quota_exceeded",
+        errorMessage: "Insufficient AI image balance; no generation was dispatched.",
+      });
       return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
     }
     // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
@@ -1356,12 +1505,48 @@ export async function POST(req: NextRequest) {
     // here and shared by the settle path below and the internal cost log — an
     // unparseable body counts as zero success (all slots released).
     let successCount = 0;
+    // The same single body read also feeds the pin_generations row below, so the
+    // history row and the cost/settle numbers can never disagree about how many
+    // images came back. `resultUrls` stays empty on an unparseable body — which is
+    // also why an unparseable body counts as zero success everywhere.
+    let resultUrls: string[] = [];
+    let resultErrorType: string | null = null;
+    let resultErrorMessage: string | null = null;
     try {
-      const parsed = (await response.clone().json()) as { urls?: unknown };
+      const parsed = (await response.clone().json()) as { urls?: unknown; error_type?: unknown; error?: unknown };
+      resultUrls = Array.isArray(parsed.urls)
+        ? parsed.urls.filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+        : [];
       successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+      resultErrorType = typeof parsed.error_type === "string" ? parsed.error_type : null;
+      resultErrorMessage = typeof parsed.error === "string" ? parsed.error : null;
     } catch {
       successCount = 0;
+      resultUrls = [];
     }
+
+    // ── Generation history row for the INLINE path ───────────────────────────────
+    // This is the ONE branch of this route that actually observes the terminal
+    // outcome, so it is the only one that may write a terminal status. The status is
+    // derived from the images that came back, using the same three-way split the AI
+    // cost log uses (`requestStatus` just below) so the two records agree by
+    // construction: 0 → failed, fewer than requested → partial, otherwise completed.
+    //
+    // `error_type` / `error_message` are taken from what the generator ACTUALLY
+    // reported. They are only written on a failed/partial run, and only when the
+    // generator supplied them — an unlabelled failure stays unlabelled rather than
+    // being given an invented code. errorMessage is sanitized + capped downstream in
+    // buildGenerationRow (shared with publishEvents).
+    const inlineStatus: GenerationRecordStatus =
+      successCount <= 0 ? "failed" : successCount < count ? "partial" : "completed";
+    recordGenerationOutcome(inlineStatus, "board", {
+      totalPins: successCount,
+      pinUrls: resultUrls,
+      ...(inlineStatus === "completed" ? {} : {
+        errorType: resultErrorType,
+        errorMessage: resultErrorMessage,
+      }),
+    });
 
     // Internal cost-log row (ai_cost_events, PRD §9) for EVERY real generator
     // run — success, partial or total failure — because the provider bills us
@@ -1405,6 +1590,15 @@ export async function POST(req: NextRequest) {
     if (inlineReservation.kind === "reserved") {
       await releaseInline({ reservation: inlineReservation, reason: "generation_error" });
     }
+    // The user's request died here, so the history row must say so. Recorded BEFORE
+    // the rethrow, and with the raw error handed to buildGenerationRow so it is
+    // sanitized and capped there rather than logged verbatim. The rethrow is unchanged
+    // — instrumentation never swallows a real failure.
+    recordGenerationOutcome("failed", "board", {
+      totalPins: 0,
+      errorType: "unknown_error",
+      errorMessage: err,
+    });
     throw err;
   } finally {
     await userLock.release();
