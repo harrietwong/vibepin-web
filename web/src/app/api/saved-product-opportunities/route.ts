@@ -5,6 +5,7 @@ import {
   removeSavedProductOpportunity,
   saveProductOpportunity,
 } from "@/lib/server/productOpportunities";
+import { productApiError, productApiSuccess, productRequestId } from "@/lib/server/productOpportunityApiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -25,42 +26,45 @@ async function productId(request: Request): Promise<string | null> {
 }
 
 export async function GET(request: Request) {
+  const requestId = productRequestId();
   const auth = await authenticated(request);
-  if (!auth) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return productApiError(requestId, "AUTH_REQUIRED", "Unauthorized", 401);
   try {
-    return Response.json({ items: await listSavedProductOpportunities(auth.userId, auth.plan) });
+    return productApiSuccess(requestId, { items: await listSavedProductOpportunities(auth.userId, auth.plan) });
   } catch (error) {
     console.error("[saved-product-opportunities GET]", error instanceof Error ? error.message : error);
-    return Response.json({ error: "Saved products could not be loaded" }, { status: 503 });
+    return productApiError(requestId, "CATALOG_UNAVAILABLE", "Saved products could not be loaded", 503);
   }
 }
 
 export async function POST(request: Request) {
+  const requestId = productRequestId();
   const auth = await authenticated(request);
-  if (!auth) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return productApiError(requestId, "AUTH_REQUIRED", "Unauthorized", 401);
   const id = await productId(request);
-  if (!id) return Response.json({ error: "productOpportunityId is required" }, { status: 400 });
+  if (!id) return productApiError(requestId, "INVALID_RESPONSE", "productOpportunityId is required", 400);
   try {
     if (!(await saveProductOpportunity(auth.userId, auth.plan, id))) {
-      return Response.json({ error: "Not found" }, { status: 404 });
+      return productApiError(requestId, "PRODUCT_NOT_FOUND", "Not found", 404);
     }
-    return Response.json({ saved: true }, { status: 201 });
+    return productApiSuccess(requestId, { saved: true }, 201);
   } catch (error) {
     console.error("[saved-product-opportunities POST]", error instanceof Error ? error.message : error);
-    return Response.json({ error: "Product could not be saved" }, { status: 503 });
+    return productApiError(requestId, "CATALOG_UNAVAILABLE", "Product could not be saved", 503);
   }
 }
 
 export async function DELETE(request: Request) {
+  const requestId = productRequestId();
   const auth = await authenticated(request);
-  if (!auth) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth) return productApiError(requestId, "AUTH_REQUIRED", "Unauthorized", 401);
   const id = await productId(request);
-  if (!id) return Response.json({ error: "productOpportunityId is required" }, { status: 400 });
+  if (!id) return productApiError(requestId, "INVALID_RESPONSE", "productOpportunityId is required", 400);
   try {
     await removeSavedProductOpportunity(auth.userId, id);
-    return Response.json({ saved: false });
+    return productApiSuccess(requestId, { saved: false });
   } catch (error) {
     console.error("[saved-product-opportunities DELETE]", error instanceof Error ? error.message : error);
-    return Response.json({ error: "Saved product could not be removed" }, { status: 503 });
+    return productApiError(requestId, "CATALOG_UNAVAILABLE", "Saved product could not be removed", 503);
   }
 }

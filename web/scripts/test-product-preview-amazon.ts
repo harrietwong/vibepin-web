@@ -28,8 +28,8 @@ async function main() {
     assert.equal(previewSourceLabel(asset({ productUrl: "https://www.amazon.com/dp/B08N5WRWNW" }) as never), "Amazon");
   });
   test("previewSourceLabel: non-Amazon keeps its source label", () => {
-    assert.equal(previewSourceLabel(asset({ source: "upload", imageUrl: "data:image/png;base64,x" }) as never), "Uploaded");
-    assert.equal(previewSourceLabel(asset({ source: "product_ideas", productUrl: "https://etsy.com/x" }) as never), "Product Ideas");
+    assert.equal(previewSourceLabel(asset({ source: "upload", imageUrl: "data:image/png;base64,x" }) as never), "Uploaded product image");
+    assert.equal(previewSourceLabel(asset({ source: "product_ideas", productUrl: "https://etsy.com/x" }) as never), "VibePin product opportunity");
   });
   test("asinForAsset: extracts ASIN from amazon /dp/ URL, null otherwise", () => {
     assert.equal(asinForAsset(asset({ productUrl: "https://www.amazon.com/dp/B08N5WRWNW" }) as never), "B08N5WRWNW");
@@ -99,7 +99,7 @@ async function main() {
   });
   test("Part3: Amazon inventory records are labeled inside Product Ideas", () => {
     assert.match(pickerSource, /isAmazonProductIdea\(product\)/);
-    assert.match(pickerSource, /label=\{isAmazon \? "Amazon" : "Product Ideas"\}/);
+    assert.match(pickerSource, /label=\{isAmazon \? "Amazon" : "VibePin product opportunity"\}/);
   });
   test("Part3: cards are wrapped in the hover preview", () => {
     assert.match(pickerSource, /<ProductHoverPreview/);

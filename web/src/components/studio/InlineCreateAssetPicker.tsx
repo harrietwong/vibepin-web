@@ -42,6 +42,8 @@ import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPic
 import type { ShopifyPanelImage, ShopifyProductSelectionCompat } from "@/components/studio/ShopifyProductPickerPanel";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { ProductImageSurface } from "@/components/products/ProductImageSurface";
+import { productOpportunityErrorInfo, type ProductOpportunityErrorInfo } from "@/lib/productOpportunitiesClient";
 
 export type InlineAssetItem = {
   id: string;
@@ -141,9 +143,9 @@ const UI = {
 };
 
 const SOURCE_LABEL_STYLE: Record<string, { color: string }> = {
-  Uploaded:       { color: "#4ADE80" },
-  "URL Imported": { color: "#60A5FA" },
-  "Product Ideas": { color: "#FB923C" },
+  "Uploaded product image": { color: "#4ADE80" },
+  "Imported from link": { color: "#60A5FA" },
+  "VibePin product opportunity": { color: "#FB923C" },
   Amazon: { color: "#FB923C" },
   "Pin Ideas": { color: "#A78BFA" },
 };
@@ -255,9 +257,7 @@ function ProductLibraryCard({
             </p>
           </div>
         ) : (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img data-testid="asset-card-image" src={item.imageUrl} alt={title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-            onError={e => { e.currentTarget.style.opacity = "0.3"; }} />
+          <ProductImageSurface src={item.imageUrl} alt={title} fallbackLabel={tr("studioModals.picker.imageUnavailable")} />
         )}
         {isAmazon && (
           <span data-testid="asset-card-amazon-badge" style={{
@@ -330,12 +330,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 function assetLabel(source: string): string {
-  if (source === "upload") return "Uploaded";
-  if (source === "url") return "URL Imported";
-  if (source === "product_signal" || source === "product_ideas") return "Product Ideas";
+  if (source === "upload") return "Uploaded product image";
+  if (source === "url") return "Imported from link";
+  if (source === "product_signal" || source === "product_ideas") return "VibePin product opportunity";
   if (source === "viral_pin") return "Pin Ideas";
   if (source === "pin_opportunity") return "Pin Opportunities";
-  return "Recent";
+  return "Saved reference";
 }
 
 
@@ -354,16 +354,15 @@ function matchesFormat(text: string, format: string): boolean {
 }
 
 // Callers pass a canonical English label from a small closed set (see assetLabel()
-// below plus "Amazon") — this maps it to a display string without disturbing the
-// `label === "Product Ideas"` identity check below. Unknown values pass through.
+// below plus "Amazon") — this maps it to a display string. Unknown values pass through.
 const ASSET_CARD_LABEL_KEY: Record<string, "studioModals.source.amazon" | "studioModals.source.productIdeas" | "studioModals.tabs.pinIdeas" | "studioModals.assetLabel.uploaded" | "studioModals.assetLabel.urlImported" | "studioModals.assetLabel.pinOpportunities" | "studioModals.assetLabel.recent"> = {
   "Amazon": "studioModals.source.amazon",
-  "Product Ideas": "studioModals.source.productIdeas",
+  "VibePin product opportunity": "studioModals.source.productIdeas",
   "Pin Ideas": "studioModals.tabs.pinIdeas",
-  "Uploaded": "studioModals.assetLabel.uploaded",
-  "URL Imported": "studioModals.assetLabel.urlImported",
+  "Uploaded product image": "studioModals.assetLabel.uploaded",
+  "Imported from link": "studioModals.assetLabel.urlImported",
   "Pin Opportunities": "studioModals.assetLabel.pinOpportunities",
-  "Recent": "studioModals.assetLabel.recent",
+  "Saved reference": "studioModals.assetLabel.recent",
 };
 
 function AssetCard({
@@ -380,7 +379,7 @@ function AssetCard({
 }) {
   const { t: tr } = useLocale();
   void id;
-  const displayTitle = normalizeCardTitle(title, label === "Product Ideas" ? tr("studioModals.picker.untitledProductIdea") : tr("studioModals.picker.untitledPinIdea"));
+  const displayTitle = normalizeCardTitle(title, label === "VibePin product opportunity" ? tr("studioModals.picker.untitledProductIdea") : tr("studioModals.picker.untitledPinIdea"));
   const displayLabel = ASSET_CARD_LABEL_KEY[label] ? tr(ASSET_CARD_LABEL_KEY[label]) : label;
   return (
     <div
@@ -423,13 +422,7 @@ function AssetCard({
           flexShrink: 0,
         }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          data-testid="asset-card-image"
-          src={imageUrl}
-          alt={displayTitle}
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          onError={e => { e.currentTarget.style.opacity = "0.3"; }} />
+        <ProductImageSurface src={imageUrl} alt={displayTitle} fallbackLabel={tr("studioModals.picker.imageUnavailable")} />
       </div>
       <span style={{
         position: "absolute", top: 8, right: 8, width: 18, height: 18,
@@ -490,7 +483,7 @@ export function ProductIdeasPickerGrid({
   onToggleProduct: (idea: ProductIdea) => void;
   products: ProductIdea[];
   loading: boolean;
-  error: string | null;
+  error: ProductOpportunityErrorInfo | null;
   kwCatMap?: Record<string, string>;
   onRetry: () => void;
 }) {
@@ -499,7 +492,7 @@ export function ProductIdeasPickerGrid({
     if (process.env.NODE_ENV !== "production") {
       console.log("[ProductIdeas]", {
         isLoading: loading,
-        error,
+        error: error ? { status: error.status, code: error.code, requestId: error.requestId } : null,
         itemCount: products.length,
         first3: products.slice(0, 3).map(p => ({
           id: p.id,
@@ -535,6 +528,16 @@ export function ProductIdeasPickerGrid({
       <div data-testid="product-ideas-grid" style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
         <div>
           <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.picker.couldNotLoadProductIdeas")}</p>
+          <p style={{ margin: "0 0 10px", maxWidth: 480, color: UI.textSec, fontSize: 11, lineHeight: 1.55 }}>{error.message}</p>
+          <dl data-testid="product-ideas-error-evidence" style={{ margin: "0 0 14px", color: UI.muted, fontSize: 10, lineHeight: 1.6 }}>
+            <div><dt style={{ display: "inline", fontWeight: 800 }}>Request</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.method} {error.path}</dd></div>
+            <div><dt style={{ display: "inline", fontWeight: 800 }}>Status</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.status ?? "Unavailable"}</dd></div>
+            <div><dt style={{ display: "inline", fontWeight: 800 }}>Code</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.code}</dd></div>
+            {error.requestId ? <div><dt style={{ display: "inline", fontWeight: 800 }}>Request ID</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.requestId}</dd></div> : null}
+            <div><dt style={{ display: "inline", fontWeight: 800 }}>Time</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.occurredAt}</dd></div>
+            {error.runtime ? <div><dt style={{ display: "inline", fontWeight: 800 }}>Runtime</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.runtime}</dd></div> : null}
+            {error.deployment ? <div><dt style={{ display: "inline", fontWeight: 800 }}>Deployment</dt><dd style={{ display: "inline", marginLeft: 6 }}>{error.deployment}</dd></div> : null}
+          </dl>
           <button type="button" data-testid="product-ideas-retry" onClick={onRetry}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
             <RefreshCw style={{ width: 13, height: 13 }} /> {tr("pinDetails.retry")}
@@ -568,7 +571,7 @@ export function ProductIdeasPickerGrid({
             id={product.id}
             imageUrl={mapped.imageUrl}
             title={mapped.title}
-            label={isAmazon ? "Amazon" : "Product Ideas"}
+            label={isAmazon ? "Amazon" : "VibePin product opportunity"}
             category={mapped.category}
             selected={isSelected}
             onToggle={() => onToggleProduct(product)}
@@ -756,7 +759,7 @@ export function InlineCreateAssetPicker({
   const productIdeas = productMeta?.products ?? [];
   const productLastUpdated = productMeta?.lastUpdatedAt ?? null;
   const productIdeasError = productIdeasSwError
-    ? (productIdeasSwError instanceof Error ? productIdeasSwError.message : "Failed to load product ideas")
+    ? productOpportunityErrorInfo(productIdeasSwError)
     : null;
   const pinIdeas = pinMeta?.pins ?? [];
   const pinLastUpdated = pinMeta?.lastUpdatedAt ?? null;

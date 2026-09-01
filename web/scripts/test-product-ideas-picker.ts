@@ -119,7 +119,7 @@ test("Product Ideas picker uses shared useProductIdeas data source", () => {
   assert(pickerSource.includes("useProductIdeasCategoryMap"), "picker missing category map hook");
   assert(pickerSource.includes("ProductIdeasPickerGrid"), "picker missing ProductIdeasPickerGrid");
   assert(pickerSource.includes("isAmazonProductIdea"), "picker missing Amazon inventory detection");
-  assert(pickerSource.includes('label={isAmazon ? "Amazon" : "Product Ideas"}'), "picker must label Amazon inventory records inside Product Ideas");
+  assert(pickerSource.includes('label={isAmazon ? "Amazon" : "VibePin product opportunity"}'), "picker must use user-facing provenance for catalog records");
   assert(pickerSource.includes("PRODUCT_IDEA_SOURCE_FILTERS"), "picker missing Product Ideas source filters");
   assert(pickerSource.includes("product-ideas-source-filters"), "picker missing separate source filter row");
   assert(pickerSource.includes("product-ideas-category-filters"), "picker missing separate category filter row");

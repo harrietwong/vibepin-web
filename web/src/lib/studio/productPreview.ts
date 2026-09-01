@@ -11,7 +11,7 @@ import { extractAsin } from "@/lib/affiliate/amazon";
 export type PreviewProduct = {
   imageUrl?:   string;
   title:       string;
-  /** User-facing source: "Amazon" / "Product Ideas" / "Uploaded" / "URL Imported" / "Recent". */
+  /** User-facing origin, e.g. Amazon, Uploaded product image, or Imported from link. */
   sourceLabel: string;
   /** Amazon ASIN when this is an Amazon product and one can be parsed; else null. */
   asin:        string | null;

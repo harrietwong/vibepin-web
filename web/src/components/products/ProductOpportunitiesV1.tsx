@@ -4,19 +4,20 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowDownRight, ArrowRight, ArrowUpRight, ChevronDown, ExternalLink, Heart,
-  ImageOff, Loader2, Minus, PackageOpen, Search, Sparkles, X,
+  Loader2, Minus, PackageOpen, Search, Sparkles, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchProductOpportunity, fetchProductOpportunities, fetchSavedProductOpportunities,
-  setProductOpportunitySaved,
+  productOpportunityErrorInfo, setProductOpportunitySaved, type ProductOpportunityErrorInfo,
 } from "@/lib/productOpportunitiesClient";
 import { track } from "@/lib/analytics";
 import type { ProductOpportunityItem, SavedProductOpportunity } from "@/lib/server/productOpportunities";
 import { buildPrefillFromProductOpportunity, openCreatePinsWithDraft } from "@/lib/createPinsPrefill";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
 import styles from "./ProductOpportunitiesV1.module.css";
+import { ProductImageSurface } from "./ProductImageSurface";
 
 type Family = "all" | "physical" | "digital";
 type Mode = "catalog" | "saved";
@@ -73,12 +74,19 @@ function Momentum({ item }: { item: ProductOpportunityItem }) {
 }
 
 function ProductImage({ item, large = false }: { item: ProductOpportunityItem; large?: boolean }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <div className={`${styles.imageFallback} ${large ? styles.imageFallbackLarge : ""}`}><ImageOff aria-hidden="true" /><span>Image could not be loaded</span></div>;
+  return <ProductImageSurface className={large ? styles.detailImage : styles.cardImage} src={item.productImageUrl} alt={item.productName?.trim() || ""} />;
+}
+
+function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
   return (
-    // Merchant image hosts are dynamic and cannot be exhaustively listed in next/image config.
-    // eslint-disable-next-line @next/next/no-img-element
-    <img className={large ? styles.detailImage : styles.cardImage} src={item.productImageUrl} alt={item.productName?.trim() || ""} onError={() => setFailed(true)} />
+    <div className={styles.errorCopy}>
+      <span>{error.message}</span>
+      <small data-testid="product-error-evidence">
+        {error.method} {error.path} · status {error.status ?? "unavailable"} · {error.code}
+        {error.requestId ? ` · request ${error.requestId}` : ""}
+        {` · ${error.occurredAt}`}{error.runtime ? ` · runtime ${error.runtime}` : ""}{error.deployment ? ` · deployment ${error.deployment}` : ""}
+      </small>
+    </div>
   );
 }
 
@@ -99,6 +107,7 @@ function ProductCard({ item, saved, saving, savedState, mode, onOpen, onSave, on
       </button>
       <div className={styles.cardBody}>
         <div className={styles.sourceLine}><span>{item.merchant || item.domain}</span>{item.productType ? <span>{item.productType}</span> : categoryLabel(item.category) ? <span>{categoryLabel(item.category)}</span> : null}</div>
+        <p className={styles.provenance} data-testid="product-provenance">VibePin product opportunity · {item.pinterestEvidenceType === "product_pin" ? "Product Pin evidence" : "Source Pin evidence"}{item.latestPinterestSnapshotAt ? ` · Updated ${dateTime(item.latestPinterestSnapshotAt)}` : ""}</p>
         {item.productName?.trim() ? <button className={styles.cardTitle} onClick={onOpen}>{item.productName}</button> : null}
         {showMetrics && (item.savesGained30d != null || item.latestPinterestSaves != null || item.recentMomentum != null) ? <div className={styles.signalRow}>
           {item.savesGained30d != null ? (
@@ -218,7 +227,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductOpportunityErrorInfo | null>(null);
   const [accessibleCount, setAccessibleCount] = useState(0);
   const [hasLockedCatalog, setHasLockedCatalog] = useState(false);
   const [planAccess, setPlanAccess] = useState<"preview" | "full">("preview");
@@ -250,7 +259,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         });
       }
     } catch (reason) {
-      if (requestId === requestSequence.current) setError(reason instanceof Error ? reason.message : "Product opportunities could not be loaded");
+      if (requestId === requestSequence.current) setError(productOpportunityErrorInfo(reason));
     } finally {
       if (requestId === requestSequence.current) { setLoading(false); setLoadingMore(false); }
     }
@@ -267,7 +276,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         track("saved_products_viewed", { savedCount: records.length });
       }
     }
-    catch (reason) { setSavedState("error"); setError(reason instanceof Error ? reason.message : "Saved products could not be loaded"); }
+    catch (reason) { setSavedState("error"); setError(productOpportunityErrorInfo(reason)); }
     finally { setLoading(false); }
   }, []);
 
@@ -314,7 +323,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     }
     catch (reason) {
       setSavedIds((current) => { const updated = new Set(current); next ? updated.delete(item.id) : updated.add(item.id); return updated; });
-      setError(reason instanceof Error ? reason.message : "Your saved products could not be updated");
+      setError(productOpportunityErrorInfo(reason));
     } finally { setSavingIds((current) => { const updated = new Set(current); updated.delete(item.id); return updated; }); }
   }, [loadSaved, mode, savedIds, savedState, savingIds]);
 
@@ -327,7 +336,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       toast.success("Removed from Saved Products");
       await loadSaved();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Your saved products could not be updated");
+      setError(productOpportunityErrorInfo(reason));
     } finally {
       setSavingIds((current) => { const updated = new Set(current); updated.delete(productOpportunityId); return updated; });
     }
@@ -349,7 +358,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       );
       toast.success("Product added to Create Pins");
     } catch {
-      setError("This product could not be added to Create Pins. Please try again.");
+      setError(productOpportunityErrorInfo(new Error("This product could not be added to Create Pins. Please try again.")));
       toast.error("Could not add product to Create Pins");
     }
   }, [mode, router]);
@@ -431,7 +440,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <button type="submit">Apply</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>Clear</button> : null}
       </form> : null}
-      {error ? <div className={styles.error} role="alert">{error}<button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>Try again</button></div> : null}
+      {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>Try again</button></div> : null}
       {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">Your saved products could not be checked. Save buttons are paused so existing records are not shown incorrectly.<button onClick={() => void loadCatalogSavedState()}>Try again</button></div> : null}
       {loading ? <div className={styles.loading}><Loader2 className={styles.spin} aria-hidden="true" /><span>Loading product opportunities…</span></div>
         : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : hasCatalogFilters ? "No products match these filters" : "No products to show yet"}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : hasCatalogFilters ? "Try changing or clearing your filters." : "New qualified products will appear after product discovery and review."}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>Show all saved products</button> : <Link href="/app/products">Browse Product Opportunities</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>Clear filters</button> : null}</div>

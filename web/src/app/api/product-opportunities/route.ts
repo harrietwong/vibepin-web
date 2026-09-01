@@ -4,6 +4,7 @@ import {
   listProductOpportunities,
   ProductMetricControlsNotReadyError,
 } from "@/lib/server/productOpportunities";
+import { productApiError, productApiSuccess, productRequestId } from "@/lib/server/productOpportunityApiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,9 @@ function boundedText(value: string | null, maxLength: number): string | undefine
 }
 
 export async function GET(request: Request) {
+  const requestId = productRequestId();
   const userId = await getUserIdFromBearerOrCookies(request);
-  if (!userId) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!userId) return productApiError(requestId, "AUTH_REQUIRED", "Unauthorized", 401);
   const url = new URL(request.url);
   const familyValue = url.searchParams.get("family");
   const family = familyValue === "physical" || familyValue === "digital"
@@ -45,12 +47,12 @@ export async function GET(request: Request) {
         ? sortValue
         : "most_saved",
     });
-    return Response.json({ ...result, planAccess: plan === "free" ? "preview" : "full" });
+    return productApiSuccess(requestId, { ...result, planAccess: plan === "free" ? "preview" : "full" });
   } catch (error) {
     console.error("[product-opportunities GET]", error instanceof Error ? error.message : error);
     if (error instanceof ProductMetricControlsNotReadyError) {
-      return Response.json({ error: error.message }, { status: 400 });
+      return productApiError(requestId, "METRIC_FILTER_NOT_READY", error.message, 400);
     }
-    return Response.json({ error: "Product opportunities could not be loaded" }, { status: 503 });
+    return productApiError(requestId, "CATALOG_UNAVAILABLE", "Product opportunities could not be loaded", 503);
   }
 }

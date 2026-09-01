@@ -216,20 +216,20 @@ export const studioModalsMessages = {
 
   // ── Source badges ──
   "studioModals.source.urlImported": "URL Imported",
-  "studioModals.source.productIdeas": "Product Ideas",
+  "studioModals.source.productIdeas": "VibePin product opportunity",
   "studioModals.source.shopify": "Shopify",
   "studioModals.source.myProducts": "My Products",
   "studioModals.source.amazon": "Amazon",
 
   // ── Asset label (InlineCreateAssetPicker assetLabel()) ──
-  "studioModals.assetLabel.uploaded": "Uploaded",
-  "studioModals.assetLabel.urlImported": "URL Imported",
+  "studioModals.assetLabel.uploaded": "Uploaded product image",
+  "studioModals.assetLabel.urlImported": "Imported from link",
   "studioModals.assetLabel.pinOpportunities": "Pin Opportunities",
   "studioModals.assetLabel.recent": "Recent",
 
   // ── Picker tabs ──
   "studioModals.tabs.myProducts": "My Products",
-  "studioModals.tabs.productIdeas": "Product Ideas",
+  "studioModals.tabs.productIdeas": "Product inspiration",
   "studioModals.tabs.fromShopify": "From Shopify",
   "studioModals.tabs.myReferences": "My References",
   "studioModals.tabs.pinIdeas": "Pin Ideas",
@@ -290,12 +290,12 @@ export const studioModalsMessages = {
 
   // ── InlineCreateAssetPicker ──
   "studioModals.picker.importIssuesCount": "Import issues {n}",
-  "studioModals.picker.imageUnavailable": "Image unavailable. Try re-importing or upload manually.",
+  "studioModals.picker.imageUnavailable": "Product image unavailable",
   "studioModals.picker.untitledProductIdea": "Untitled product idea",
   "studioModals.picker.untitledPinIdea": "Untitled pin idea",
-  "studioModals.picker.couldNotLoadProductIdeas": "Could not load Product Ideas",
-  "studioModals.picker.noProductIdeasFound": "No product ideas found\nTry another category or refresh the product ideas source.",
-  "studioModals.picker.noProductIdeasFoundCategory": "No product ideas found for this category.\nTry another category or refresh the product ideas source.",
+  "studioModals.picker.couldNotLoadProductIdeas": "Could not load product inspiration",
+  "studioModals.picker.noProductIdeasFound": "No product inspiration is available yet.\nQualified products will appear here after review.",
+  "studioModals.picker.noProductIdeasFoundCategory": "No product inspiration matches this category.\nTry another category or clear the filters.",
   "studioModals.picker.chooseProductImages": "Choose Product Images",
   // Header by selection mode (PRD Section C).
   "studioModals.picker.chooseAProduct": "Choose a product",
@@ -314,7 +314,7 @@ export const studioModalsMessages = {
   "studioModals.picker.noImportIssuesFound": "No import issues found.",
   "studioModals.picker.noAmazonProductsYet": "No Amazon products found yet. Import an Amazon product URL or save one from Product Opportunities.",
   "studioModals.picker.noSavedProductsUploadOrImport": "No saved products yet. Upload product images or import products.",
-  "studioModals.picker.searchProductIdeasEllipsis": "Search product ideas...",
+  "studioModals.picker.searchProductIdeasEllipsis": "Search product inspiration...",
   "studioModals.picker.source": "Source:",
   "studioModals.picker.category": "Category:",
   "studioModals.picker.dataMayBeStale": "Data may be stale.",

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X, Search, Package, Link2, Upload, Loader2, ChevronDown } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -15,6 +14,7 @@ import { deriveProductSaveCount } from "@/lib/productOpportunityCounts";
 import { isNonPinterestMerchantImageUrl } from "@/lib/productImageEvidence";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { toast } from "sonner";
+import { ProductImageSurface } from "./ProductImageSurface";
 
 // A product chosen in the picker, with the metadata Create Pins needs to preserve.
 export type PickerSelection = {
@@ -111,9 +111,7 @@ function PickCard({ sel, selected, meta, metaTooltip, onToggle }: {
         {selected && <span style={{ color: "#fff", fontSize: 10, fontWeight: 900, lineHeight: 1 }}>✓</span>}
       </div>
       <div className="relative bg-gray-100" style={{ aspectRatio: "1/1" }}>
-        {sel.imageUrl
-          ? <Image src={sel.imageUrl} alt={sel.title ?? ""} fill className="object-cover" sizes="180px" unoptimized />
-          : <div className="absolute inset-0 flex items-center justify-center"><Package className="h-7 w-7 text-gray-300" /></div>}
+        <ProductImageSurface src={sel.imageUrl} alt={sel.title ?? ""} fallbackLabel={tr("studioModals.picker.imageUnavailable")} />
       </div>
       <div className="p-2.5">
         {/* No title row when the merchant name is unknown — the domain / category

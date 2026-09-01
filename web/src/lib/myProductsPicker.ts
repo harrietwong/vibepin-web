@@ -27,8 +27,8 @@ export const MY_PRODUCTS_FILTERS: { id: MyProductsFilter; label: string }[] = [
   { id: "all",           label: "All" },
   { id: "shopify",       label: "Shopify" },
   { id: "amazon",        label: "Amazon" },
-  { id: "uploaded",      label: "Uploaded" },
-  { id: "url_imported",  label: "URL Imported" },
+  { id: "uploaded",      label: "Uploaded images" },
+  { id: "url_imported",  label: "Imported links" },
 ];
 
 /** Sorting is independent of the source filter (Section C: "Move Recent to sorting"). */
@@ -106,11 +106,11 @@ export function isBrokenProductImport(item: AssetItem): boolean {
 // exists. Source labelling goes through productSourceLabel() below.
 
 export function productSourceLabel(item: AssetItem): string {
-  if (item.source === "upload") return "Uploaded";
-  if (item.source === "url") return "URL Imported";
-  if (item.source === "product_signal" || item.source === "product_ideas") return "Product Ideas";
+  if (item.source === "upload") return "Uploaded product image";
+  if (item.source === "url") return "Imported from link";
+  if (item.source === "product_signal" || item.source === "product_ideas") return "VibePin product opportunity";
   if (item.source === "shopify") return "Shopify";
-  return "Recent";
+  return "My product";
 }
 
 export function productDisplayTitle(item: AssetItem): string {
