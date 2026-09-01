@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon, Images, Rows3, X, AlertTriangle, Sparkles } from "lucide-react";
+import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon, Images, Rows3, X, Sparkles } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { usePinBoardDrafts, type BoardFilter } from "@/hooks/usePinBoardDrafts";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
@@ -25,8 +25,7 @@ import { startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefault
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, publishFailureSetIdentity, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
-import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
+import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { readStoredTarget } from "@/lib/studio/publishTarget";
 import { getCachedConnections } from "@/lib/social/connectionsCache";
@@ -48,14 +47,13 @@ import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
-import { BUI } from "@/components/studio/boardUI";
+import { BUI, STUDIO_UI, canDockStudioPlan } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
 import { selectionFromLinkedProduct, toLinkedProduct, resolveProductPublicUrl, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
-import { useViewportBucket } from "@/hooks/useViewportBucket";
 import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
 import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
 import {
@@ -202,16 +200,11 @@ export function StudioBoard() {
       ? isPublishFailureItem(x.draft) && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))
       : !isPublishFailureItem(x.draft));
   }, [filter, failedSubFilter, rawItems, isPublishFailureItem, planWeekScope]);
-  // Publish-failure banner — computed from the FULL workspace population (not the
-  // current filter view), so Retry/Move to Unscheduled/Delete are reflected immediately
-  // via re-render. Publish failures are workspace-wide: Plan/cron/legacy drafts share
-  // the same core predicate and are visible in Failed even when they are not V2
-  // board-origin cards, so the banner counts `activeDrafts`, not just board items.
-  // Dismiss is keyed on the failure-set IDENTITY (not the count) so a same-size but
-  // different failure set still resurfaces the banner.
+  // Publish failures are workspace-wide: Plan/cron/legacy drafts share the same core
+  // predicate and are visible in Failed even when they are not V2 board-origin cards.
+  // Studio presents this as a quiet, actionable filter notice rather than a persistent
+  // page-width alert; the Failed tab remains the dedicated exception workspace.
   const publishFailureCount = useMemo(() => listActionablePublishFailures(activeDrafts).length, [activeDrafts]);
-  const publishFailureIdentity = useMemo(() => publishFailureSetIdentity(activeDrafts), [activeDrafts]);
-  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, publishFailureIdentity, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
   // `allItems` is now the whole active workspace (0731 count-base unification), but no
@@ -237,11 +230,13 @@ export function StudioBoard() {
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
   const [planPinned, setPlanPinned] = useState(false);
-  // PRD 0809 §IX — the Plan panel only DOCKS on wide desktop. On tablet/mobile it
-  // opens as an overlay that takes no horizontal space, so a "pinned" preference
-  // restored from localStorage must not keep narrowing the board's columns there.
-  const viewportBucket = useViewportBucket();
-  const planDocked = planPinned && viewportBucket === "desktop";
+  const boardRootRef = useRef<HTMLDivElement | null>(null);
+  const [planDockEligible, setPlanDockEligible] = useState(false);
+  // A pinned preference is durable, but docking is a container-level layout decision:
+  // it is only legal when two editable cards still fit beside Plan. Narrow containers
+  // keep the same preference and show Plan as an overlay instead of collapsing to one
+  // awkward card column.
+  const planDocked = planPinned && planDockEligible;
   // PRD 0826 §24 — the board tells the Plan sidebar when a schedule just succeeded, so
   // the sidebar can highlight the new item (when it is open) or count it on its trigger
   // (when it is not). A list, not a single id: a batch of N must move the badge by N.
@@ -281,6 +276,16 @@ export function StudioBoard() {
     // in Generating either way.
     void reconcileGeneratingDrafts();
   }, [searchParams]);
+
+  useEffect(() => {
+    const node = boardRootRef.current;
+    if (!node) return;
+    const measure = () => setPlanDockEligible(canDockStudioPlan(node.getBoundingClientRect().width));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const handlePlanPinnedChange = useCallback((next: boolean) => {
     setPlanPinned(next);
@@ -1208,25 +1213,10 @@ export function StudioBoard() {
   }
 
   return (
-    <div data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0, background: BUI.bg, position: "relative", overflow: "hidden" }}>
+    <div ref={boardRootRef} data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0, background: BUI.bg, position: "relative", overflow: "hidden" }}>
       <div data-testid="studio-board-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
-
-      {/* Context suppression (PRD §2.2): never show the Banner while already on the
-          Failed view — the user is already looking at exactly what it would tell them. */}
-      {filter !== "failed" && (
-        <FailureBanner
-          count={bannerCount}
-          onReview={() => {
-            // Banner CTA → Failed view defaults to "Publish failures" (matches the
-            // Banner's own count, which is publish-failures only). Plan applies the same
-            // rule on its own surface now (stays in Plan's Failed list, no cross-nav).
-            setFilter("failed", "publish");
-          }}
-          onDismiss={dismissBanner}
-        />
-      )}
 
       {/* Header */}
       <div style={{ padding: "16px 22px 10px", display: "flex", flexDirection: "column", gap: 12, background: BUI.surface, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
@@ -1296,27 +1286,21 @@ export function StudioBoard() {
             )}
           </div>
         )}
-        <StudioBoardFilters value={filter} counts={counts} onChange={setFilter} />
-        {filter !== "failed" && publishFailureCount > 0 && (
-          <button type="button" data-testid="studio-failure-notice" onClick={() => setFilter("failed", "publish")}
-            style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, padding: 0, border: 0, background: "none", color: "#b45309", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-            <AlertTriangle style={{ width: 12, height: 12 }} />
-            {publishFailureCount} {publishFailureCount === 1 ? "destination needs" : "destinations need"} attention · Review
-          </button>
-        )}
+        <StudioBoardFilters value={filter} counts={counts} onChange={setFilter}
+          attentionCount={publishFailureCount} onReviewAttention={() => setFilter("failed", "publish")} />
       </div>
 
       {/* Body */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 22 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: STUDIO_UI.boardPadding }}>
         {/* Failed-view sub-filter chips (PRD §4) — only inside the Failed view, above
             the card grid/empty state. Purely a client-side re-filter of the "failed"
             BoardFilter results; never touches usePinBoardDrafts' own counts. */}
         {filter === "failed" && (
           <div data-testid="failed-sub-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             {([
-              { id: "publish" as const, label: "Publish failures", n: failedSubCounts.publish },
-              { id: "generation" as const, label: "Generation failures", n: failedSubCounts.generation },
-              { id: "all" as const, label: "All", n: failedSubCounts.all },
+              { id: "publish" as const, label: tr("studioBoard.failedFilters.publish"), n: failedSubCounts.publish },
+              { id: "generation" as const, label: tr("studioBoard.failedFilters.generation"), n: failedSubCounts.generation },
+              { id: "all" as const, label: tr("studioBoard.failedFilters.all"), n: failedSubCounts.all },
             ]).map(chip => {
               const active = failedSubFilter === chip.id;
               return (
@@ -1399,9 +1383,8 @@ export function StudioBoard() {
             <p style={{ margin: 0, fontSize: 12.5 }}>{tr("studioBoard.empty.nothingHereSub")}</p>
           </div>
         ) : (
-          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planDocked
-            ? "repeat(auto-fill, minmax(248px, 1fr))"
-            : "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
+          <div data-testid="studio-board-grid" data-plan-docked={planDocked ? "true" : "false"}
+            style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${STUDIO_UI.cardMinWidth}px, 1fr))`, gap: STUDIO_UI.cardGap, alignItems: "start" }}>
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
@@ -1578,7 +1561,8 @@ export function StudioBoard() {
         </div>
       )}
       </div>
-      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned} onPinnedChange={handlePlanPinnedChange} lastScheduled={lastScheduled} />
+      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned}
+        dockEligible={planDockEligible} onPinnedChange={handlePlanPinnedChange} lastScheduled={lastScheduled} />
     </div>
   );
 }

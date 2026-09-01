@@ -45,7 +45,7 @@ import {
 } from "@/lib/social/scheduledDestinations";
 import type { SelectedAccount } from "@/components/social/PublishDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
-import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
+import { BUI, STUDIO_UI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 
 const PERSIST_DEBOUNCE = 400;
@@ -164,6 +164,16 @@ const secondaryBtn: React.CSSProperties = {
   flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 5, padding: "9px 14px",
   borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text,
   fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+};
+const scheduleBtn: React.CSSProperties = {
+  ...secondaryBtn,
+  flex: "0 0 auto",
+  padding: "7px 10px",
+  minHeight: "var(--studio-schedule-hit-height, 34px)",
+  background: "transparent",
+  color: BUI.textSec,
+  fontSize: 11,
+  fontWeight: 700,
 };
 
 // Recommended-keyword chip — subtle, matches the existing dark card density.
@@ -926,13 +936,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
         onDragEnter={onCardDragEnter} onDragOver={onCardDragOver} onDragLeave={onCardDragLeave} onDrop={onCardDrop}
-        style={{ position: "relative", display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${showDropHint ? BUI.purple : props.selected ? BUI.purple : BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
+        style={{ position: "relative", display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${showDropHint ? BUI.purple : props.selected ? BUI.purple : BUI.border}`, borderRadius: STUDIO_UI.cardRadius, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
         {/* The whole card is a drop target for media dragged from ANOTHER card, not
             just the strip's thumbnails. Shown only for a foreign payload — the source
             card must never invite a drop of the item it already holds. */}
         {showDropHint && (
           <div data-testid="card-drop-hint" style={{ position: "absolute", inset: 0, zIndex: 30, display: "grid", placeItems: "center",
-            background: "rgba(124,58,237,0.12)", border: `2px dashed ${BUI.purple}`, borderRadius: 14, pointerEvents: "none", backdropFilter: "blur(1px)" }}>
+            background: "rgba(124,58,237,0.12)", border: `2px dashed ${BUI.purple}`, borderRadius: STUDIO_UI.cardRadius, pointerEvents: "none", backdropFilter: "blur(1px)" }}>
             <span style={{ padding: "6px 12px", borderRadius: 999, background: BUI.purple, color: "#fff", fontSize: 11, fontWeight: 800 }}>
               {tr("studioBoard.card.dropHint")}
             </span>
@@ -1031,7 +1041,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </button>
           </div>
         )}
-        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
           {/* Posted header line: when it went live + a single "Needs attention" chip
               on a partial success. One notice, never a stack (PRD §5). */}
           {posted && (
@@ -1059,23 +1069,23 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
           <>
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.title")}
             <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
-              style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700, minHeight: 34, padding: "7px 9px" }} />
+              style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700 }} />
           </label>
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.description")}
             <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
               onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder={tr("studioBoard.card.fields.descriptionPlaceholder")}
-              style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, padding: "8px 9px", resize: "vertical", minHeight: 66 }} />
+              style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 60 }} />
           </label>
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.websiteUrl")}
             <input data-testid="board-card-url" value={fields.websiteUrl} disabled={publishing || generating}
               onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
-              style={{ ...fieldStyle, fontSize: 11.5, minHeight: 34, padding: "7px 9px" }} />
+              style={{ ...fieldStyle, fontSize: 11.5 }} />
           </label>
           </>
           )}
@@ -1260,10 +1270,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               </button>
             ) : (
               <>
-                <button type="button" data-testid="card-schedule" onClick={doSchedule} disabled={publishing} style={primaryBtn}>
+                <button type="button" data-testid="card-schedule" className="studio-schedule-button" onClick={doSchedule} disabled={publishing} style={scheduleBtn}>
                   <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.action.schedule")}
                 </button>
-                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={secondaryBtn}>
+                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={primaryBtn}>
                   {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
                 </button>
               </>
@@ -1279,7 +1289,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // ── Expanded (active) quick edit ────────────────────────────────────────────────
   return (
     <div data-testid="pin-board-card" data-active="true" data-source={draft.source} data-lifecycle={lifecycle}
-      style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)" }}>
+      style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: STUDIO_UI.cardRadius, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)" }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
         <div style={{ position: "relative", width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (

@@ -10,11 +10,8 @@
  *     not merely grepped.
  *  2. SOURCE CONTRACT — the sidebar/board wiring that a runtime test cannot reach
  *     without a DOM renderer: which form each bucket gets, that the trigger is never
- *     hover-only, that both overlays are real dialogs with a close control, Escape,
- *     scroll lock and focus return, and that the board's grid reflow is desktop-only.
- *
- * The desktop form is deliberately asserted as UNCHANGED: the docked panel is the one
- * shape that shipped, and this feature must not have redesigned it.
+ *     hover-only, that both overlays are real dialogs closed by the same trigger,
+ *     Escape, scroll lock and focus return, and that docking preserves two card columns.
  */
 
 import { readFileSync } from "node:fs";
@@ -26,6 +23,7 @@ import {
   DESKTOP_MIN_WIDTH,
   type ViewportBucket,
 } from "../src/hooks/useViewportBucket";
+import { canDockStudioPlan, STUDIO_UI } from "../src/components/studio/boardUI";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -96,18 +94,16 @@ test("the hook itself defaults to desktop before hydration and subscribes to bot
 
 console.log("\n=== Sidebar picks its form from the bucket ===");
 
-test("the sidebar reads the shared hook and derives one 'docked' flag", () => {
+test("the sidebar combines the viewport bucket with measured container eligibility", () => {
   assert(sidebarSrc.includes('import { useViewportBucket } from "@/hooks/useViewportBucket"'), "sidebar does not use the shared viewport hook");
   assert(sidebarSrc.includes("const bucket = useViewportBucket();"), "sidebar does not resolve a bucket");
-  assert(sidebarSrc.includes('const docked = bucket === "desktop";'), "sidebar does not derive docked from the bucket");
+  assert(sidebarSrc.includes('const docked = bucket === "desktop" && dockEligible;'), "sidebar can dock without measured two-column eligibility");
 });
 
 test("desktop keeps the docked panel (and only desktop renders it)", () => {
   assert(sidebarSrc.includes("{docked && open && ("), "the docked panel is not gated on the desktop bucket");
   assert(sidebarSrc.includes('data-testid="studio-plan-sidebar"'), "the docked panel testid disappeared");
-  // Unchanged desktop behaviour: hover/focus peek, pin toggles, the panel takes layout
-  // width so the board can reflow around it.
-  assert(sidebarSrc.includes("const PANEL_WIDTH = 344;"), "desktop panel width changed");
+  assert(sidebarSrc.includes("const PANEL_WIDTH = STUDIO_UI.planPanelWidth;"), "desktop panel width does not use the Studio token");
   assert(sidebarSrc.includes('position: pinned ? "relative" : "absolute"'), "docked panel no longer participates in layout when pinned");
   assert(sidebarSrc.includes("onMouseEnter={reveal} onMouseLeave={scheduleClose}"), "desktop hover preview was removed");
 });
@@ -166,13 +162,13 @@ test("scrim + role=dialog + aria-modal + labelled panel", () => {
   assert(sidebarSrc.includes("if (event.target === event.currentTarget) closeOverlay();"), "clicking the scrim does not close the overlay");
 });
 
-test("an explicit close control, labelled and clickable", () => {
-  assert(sidebarSrc.includes('data-testid="studio-plan-close"'), "the close control testid is missing");
-  assert(/data-testid="studio-plan-close"[\s\S]{0,140}aria-label=\{tr\("studioBoard\.plan\.close"\)\} onClick=\{onClose\}/.test(sidebarSrc),
-    "the close control has no label or no click handler");
-  // Only the overlay forms get it: the docked panel has its own pin/unpin trigger.
-  assert(sidebarSrc.includes("{onClose && ("), "the close control is not exclusive to the overlay forms");
-  assert(sidebarSrc.includes("onClose={closeOverlay}"), "the overlay does not wire its close control");
+test("the same Plan toggle opens and closes every form — no duplicate close button", () => {
+  assert(!sidebarSrc.includes('data-testid="studio-plan-close"'), "a second Plan close button still exists");
+  assert(sidebarSrc.includes('aria-controls={docked ? "studio-plan-sidebar" : "studio-plan-overlay"}'),
+    "the single toggle does not identify the surface it controls");
+  assert(sidebarSrc.includes('position: overlayOpen ? "fixed" : "absolute"'),
+    "the same toggle is not carried into the overlay header");
+  assert(sidebarSrc.includes('setOverlayOpen(value => !value);'), "the same toggle cannot close the overlay");
 });
 
 test("Escape closes the overlays and still spares a pinned desktop panel", () => {
@@ -201,12 +197,15 @@ test("focus moves into the panel on open and back to the trigger on close", () =
 
 console.log("\n=== Board reflow + wiring ===");
 
-test("the board reflows its grid only for the DOCKED panel", () => {
-  assert(boardSrc.includes('import { useViewportBucket } from "@/hooks/useViewportBucket";'), "the board does not read the viewport bucket");
-  assert(boardSrc.includes('const planDocked = planPinned && viewportBucket === "desktop";'),
-    "the board does not gate the pinned preference on the desktop bucket");
-  assert(boardSrc.includes('data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planDocked'),
-    "the grid still reflows on planPinned alone — a tablet overlay would narrow the columns");
+test("the board docks Plan only when two token-sized cards still fit", () => {
+  const threshold = STUDIO_UI.planPanelWidth + (STUDIO_UI.cardMinWidth * 2) + STUDIO_UI.cardGap + (STUDIO_UI.boardPadding * 2);
+  assert(canDockStudioPlan(threshold - 1) === false, "Plan docks one pixel below the two-card threshold");
+  assert(canDockStudioPlan(threshold) === true, "Plan does not dock at the exact two-card threshold");
+  assert(boardSrc.includes("const boardRootRef = useRef<HTMLDivElement | null>(null);"), "Studio does not measure its real container");
+  assert(boardSrc.includes("const observer = new ResizeObserver(measure);"), "Studio does not react to container resizing");
+  assert(boardSrc.includes("const planDocked = planPinned && planDockEligible;"), "grid reflow is not tied to legal docking");
+  assert(boardSrc.includes("dockEligible={planDockEligible}"), "the sidebar does not receive the same docking decision");
+  assert(boardSrc.includes("STUDIO_UI.cardMinWidth"), "the card grid does not use the shared minimum width token");
 });
 
 test("Create Pins still mounts the Plan entry unconditionally", () => {
@@ -216,13 +215,16 @@ test("Create Pins still mounts the Plan entry unconditionally", () => {
   assert(!/\{[^\n]*\?\s*<StudioPlanSidebar/.test(boardSrc), "the Plan entry became conditional — some viewport would lose its entry");
 });
 
-test("the overlay trigger label exists in English, Simplified and Traditional Chinese", () => {
+test("the one-control Plan labels exist in English, Simplified and Traditional Chinese", () => {
   assert(enSrc.includes('"studioBoard.plan.openPanel": "Open Plan"'), "English label missing");
+  assert(enSrc.includes('"studioBoard.plan.previewHint"') && enSrc.includes('"studioBoard.plan.unpinAndClose"'), "English one-control labels missing");
   assert(/"studioBoard\.plan\.openPanel":\s*"[^"]+"/.test(zhCnSrc), "zh-CN label missing");
   assert(/"studioBoard\.plan\.openPanel":\s*"[^"]+"/.test(zhTwSrc), "zh-TW label missing");
   for (const [name, src] of [["zh-CN", zhCnSrc], ["zh-TW", zhTwSrc]] as const) {
-    const value = /"studioBoard\.plan\.openPanel":\s*"([^"]+)"/.exec(src)?.[1] ?? "";
-    assert(!/^[\x00-\x7F]*$/.test(value), `${name} label "${value}" is not translated`);
+    for (const key of ["openPanel", "previewHint", "unpinAndClose"]) {
+      const value = new RegExp(`"studioBoard\\.plan\\.${key}":\\s*"([^"]+)"`).exec(src)?.[1] ?? "";
+      assert(!/^[\x00-\x7F]*$/.test(value), `${name} ${key} label "${value}" is not translated`);
+    }
   }
 });
 

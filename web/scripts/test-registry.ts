@@ -214,6 +214,7 @@ export const STUDIO: string[] = [
   // gets (docked panel / tablet drawer / mobile sheet), and that the entry is an
   // explicit button rather than a hover target on any of them.
   "test-plan-entry-responsive",
+  "test-studio-ui-feedback",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",

@@ -7,6 +7,19 @@ export const studioBoardMessages = {
   "studioBoard.uploadMore": "Upload more",
   "studioBoard.uploadingProgress": "Uploading {done}/{total}…",
 
+  // ── Status navigation and quiet exception notice ──
+  "studioBoard.filters.drafts": "Drafts",
+  "studioBoard.filters.scheduled": "Scheduled",
+  "studioBoard.filters.posted": "Posted",
+  "studioBoard.filters.failed": "Failed",
+  "studioBoard.filters.all": "All",
+  "studioBoard.attention.onePin": "1 Pin needs attention",
+  "studioBoard.attention.manyPins": "{n} Pins need attention",
+  "studioBoard.attention.review": "Review",
+  "studioBoard.failedFilters.publish": "Publish failures",
+  "studioBoard.failedFilters.generation": "Generation failures",
+  "studioBoard.failedFilters.all": "All",
+
   // ── Saved indicator ──
   "studioBoard.failedToSaveRetry": "Failed to save · Retry",
   "studioBoard.saving": "Saving…",
@@ -219,7 +232,7 @@ export const studioBoardMessages = {
   "studioBoard.card.fields.description": "Description",
   "studioBoard.card.fields.descriptionPlaceholder": "Tell people what this content is about",
   "studioBoard.card.fields.websiteUrl": "Website URL",
-  "studioBoard.card.publishTo": "Publish to",
+  "studioBoard.card.publishTo": "Destinations",
   "studioBoard.card.editDestinations": "Edit destinations",
   "studioBoard.card.aiGenerated": "AI generated",
   "studioBoard.card.mediaCounter": "{index} / {total}",
@@ -314,6 +327,8 @@ export const studioBoardMessages = {
   "studioBoard.plan.title": "Plan",
   "studioBoard.plan.open": "Keep Plan open",
   "studioBoard.plan.close": "Close Plan",
+  "studioBoard.plan.previewHint": "Hover to preview; click to keep Plan open",
+  "studioBoard.plan.unpinAndClose": "Unpin and close Plan",
   // PRD 0809 §IX — tablet/mobile open Plan as an overlay, which pins nothing, so the
   // trigger there says "Open Plan" rather than the docked panel's "Keep Plan open".
   "studioBoard.plan.openPanel": "Open Plan",

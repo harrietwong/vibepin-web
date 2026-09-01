@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, TriangleAlert, X } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, TriangleAlert } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { PublishProvider } from "@/lib/contentDraftModel";
-import { BUI } from "@/components/studio/boardUI";
+import { BUI, STUDIO_UI } from "@/components/studio/boardUI";
 import { toProxyUrl } from "@/lib/imageProxy";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -25,7 +25,7 @@ import {
 
 // Enough room for a readable 7-day strip, but narrow enough that the Create Pins
 // workspace keeps two card columns at normal desktop widths.
-const PANEL_WIDTH = 344;
+const PANEL_WIDTH = STUDIO_UI.planPanelWidth;
 
 /** How long the just-scheduled item keeps its purple ring (PRD §24). */
 const HIGHLIGHT_MS = 2000;
@@ -89,18 +89,20 @@ const STATE_COLOR: Record<PlanItemState, string> = {
  * accessible label and an onClick, and the two overlay forms attach no hover handlers
  * at all (a tablet with a mouse must not get hover-driven state changes).
  */
-export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastScheduled }: {
+export function StudioPlanSidebar({ drafts, pinned, dockEligible, onPinnedChange, lastScheduled }: {
   drafts: PinDraft[];
   pinned: boolean;
+  /** Measured by StudioBoard: docking must still leave room for two editable cards. */
+  dockEligible: boolean;
   onPinnedChange: (pinned: boolean) => void;
   /** Fired by StudioBoard whenever one or more drafts were just scheduled (PRD §24). */
   lastScheduled?: PlanScheduleSignal;
 }) {
   const { t: tr } = useLocale();
   const bucket = useViewportBucket();
-  // "docked" is the only place the bucket turns into behaviour: it decides whether the
-  // panel participates in layout (desktop) or floats over it (tablet/mobile).
-  const docked = bucket === "desktop";
+  // Viewport category alone is insufficient inside an app shell. The measured Studio
+  // container must also leave room for two editable cards beside the pinned panel.
+  const docked = bucket === "desktop" && dockEligible;
   const [hoverOpen, setHoverOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
@@ -222,8 +224,8 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
     return () => { document.body.style.overflow = previous; };
   }, [docked, overlayOpen]);
 
-  // Dialog focus contract: into the panel on open, back to the trigger on close
-  // (Escape, scrim, or the close button — they all funnel through overlayOpen).
+  // Dialog focus contract: into the panel on open, back to the same trigger on close.
+  // There is deliberately no second close button inside the Plan surface.
   useEffect(() => {
     if (!docked && overlayOpen) {
       overlayPanelRef.current?.focus();
@@ -255,22 +257,19 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
     : scheduledCount === 1
       ? tr("studioBoard.plan.oneScheduledThisWeek")
       : tr("studioBoard.plan.scheduledThisWeek").replace("{n}", String(scheduledCount));
-  const toggleLabel = pinned ? tr("studioBoard.plan.close") : tr("studioBoard.plan.open");
-  // The overlay forms pin nothing, so "Keep Plan open" would be a lie there — they say
-  // "Open Plan" / "Close Plan" instead.
+  const toggleLabel = pinned ? tr("studioBoard.plan.unpinAndClose") : tr("studioBoard.plan.previewHint");
   const triggerLabel = docked
     ? toggleLabel
     : overlayOpen ? tr("studioBoard.plan.close") : tr("studioBoard.plan.openPanel");
   const badgeLabel = formatBadge(badge);
-  // The trigger only changes shape for the docked panel it is attached to; in the
-  // overlay forms it stays put (a dialog's opener must not move out from under the
-  // pointer, and it is the element focus returns to on close).
   const railOpen = docked && open;
+  const controlOpen = railOpen || overlayOpen;
 
   return (
     <>
       <button type="button" data-testid="studio-plan-toggle" ref={toggleRef}
         aria-label={triggerLabel} aria-pressed={docked ? pinned : undefined} aria-expanded={open}
+        aria-controls={docked ? "studio-plan-sidebar" : "studio-plan-overlay"}
         title={badge > 0 ? tr("studioBoard.plan.newSinceLastOpen").replace("{n}", String(badge)) : triggerLabel}
         onMouseEnter={docked ? reveal : undefined} onMouseLeave={docked ? scheduleClose : undefined}
         onFocus={docked ? reveal : undefined} onBlur={docked ? scheduleClose : undefined}
@@ -289,16 +288,21 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
           }
         }}
         style={{
-          position: "absolute", zIndex: 45, top: railOpen ? 13 : "38%", right: railOpen ? 12 : 0,
-          width: railOpen ? 30 : 28, height: railOpen ? 30 : 44,
-          border: `1px solid ${BUI.border}`, borderRight: railOpen ? `1px solid ${BUI.border}` : "none",
-          borderRadius: railOpen ? 8 : "9px 0 0 9px",
+          position: overlayOpen ? "fixed" : "absolute", zIndex: overlayOpen ? 360 : 45,
+          top: controlOpen ? 12 : "36%", right: controlOpen ? 12 : 0,
+          width: controlOpen ? 32 : STUDIO_UI.planRailWidth, height: controlOpen ? 32 : 82,
+          border: `1px solid ${BUI.border}`, borderRight: controlOpen ? `1px solid ${BUI.border}` : "none",
+          borderRadius: controlOpen ? 9 : "10px 0 0 10px",
           background: pinned && docked ? "rgba(124,58,237,0.12)" : BUI.surface,
           color: pinned && docked ? BUI.purple : BUI.textSec, cursor: "pointer",
-          boxShadow: railOpen ? "none" : "-4px 0 14px rgba(15,23,42,0.08)",
-          display: "grid", placeItems: "center", padding: 0,
+          boxShadow: controlOpen ? "0 2px 10px rgba(15,23,42,0.10)" : "-4px 0 14px rgba(15,23,42,0.08)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: 0,
         }}>
-        {pinned && docked ? <PanelRightClose style={{ width: 16, height: 16 }} /> : <PanelRightOpen style={{ width: 16, height: 16 }} />}
+        {pinned && docked || overlayOpen
+          ? <PanelRightClose style={{ width: 16, height: 16 }} />
+          : controlOpen
+            ? <PanelRightOpen style={{ width: 16, height: 16 }} />
+            : <><CalendarDays style={{ width: 15, height: 15 }} /><span style={{ fontSize: 10, fontWeight: 800, writingMode: "vertical-rl", letterSpacing: "0.04em" }}>{tr("studioBoard.plan.title")}</span></>}
         {badgeLabel && (
           <span data-testid="studio-plan-badge"
             style={{
@@ -311,7 +315,7 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
       </button>
 
       {docked && open && (
-        <aside data-testid="studio-plan-sidebar" data-pinned={pinned ? "true" : "false"}
+        <aside id="studio-plan-sidebar" data-testid="studio-plan-sidebar" data-pinned={pinned ? "true" : "false"}
           aria-label={tr("studioBoard.plan.title")}
           onMouseEnter={reveal} onMouseLeave={scheduleClose}
           style={{
@@ -329,7 +333,7 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
       )}
 
       {!docked && overlayOpen && (
-        <div data-testid="studio-plan-overlay"
+        <div id="studio-plan-overlay" data-testid="studio-plan-overlay"
           onClick={event => { if (event.target === event.currentTarget) closeOverlay(); }}
           style={{
             position: "fixed", inset: 0, zIndex: 340, background: "rgba(15,23,42,0.46)",
@@ -353,7 +357,7 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
                 }}>
             <PlanPanelHeader tr={tr} range={range} countLabel={countLabel}
               onPrevWeek={goPrevWeek} onNextWeek={goNextWeek} onToday={goToday}
-              onClose={closeOverlay} padding="14px 12px 10px 14px" />
+              padding="14px 52px 10px 14px" />
             <PlanPanelBody days={days} highlightId={highlight?.id} tr={tr} />
             <PlanPanelFooter tr={tr} />
           </section>
@@ -363,18 +367,15 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
   );
 }
 
-/** Title + week navigation + the "n scheduled this week" line.
- *  Shared by all three forms so they can never drift apart. The only differences are
- *  the header padding (the docked panel leaves room for its floating trigger) and the
- *  close control, which exists only in the overlay forms. */
-function PlanPanelHeader({ tr, range, countLabel, onPrevWeek, onNextWeek, onToday, onClose, padding }: {
+/** Title + week navigation + the "n scheduled this week" line. Shared by every form;
+ *  its padding reserves space for the one persistent Plan toggle. */
+function PlanPanelHeader({ tr, range, countLabel, onPrevWeek, onNextWeek, onToday, padding }: {
   tr: (key: MessageKey) => string;
   range: string;
   countLabel: string;
   onPrevWeek: () => void;
   onNextWeek: () => void;
   onToday: () => void;
-  onClose?: () => void;
   padding: string;
 }) {
   return (
@@ -384,13 +385,6 @@ function PlanPanelHeader({ tr, range, countLabel, onPrevWeek, onNextWeek, onToda
           <CalendarDays style={{ width: 16, height: 16, color: BUI.purple }} />
           <strong style={{ fontSize: 14, color: BUI.text }}>{tr("studioBoard.plan.title")}</strong>
         </div>
-        {onClose && (
-          <button type="button" data-testid="studio-plan-close"
-            aria-label={tr("studioBoard.plan.close")} onClick={onClose}
-            style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4, display: "inline-flex" }}>
-            <X style={{ width: 17, height: 17 }} />
-          </button>
-        )}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 12 }}>
         <button type="button" aria-label={tr("studioBoard.plan.previousWeek")} onClick={onPrevWeek} style={navButton}><ChevronLeft style={{ width: 14, height: 14 }} /></button>
