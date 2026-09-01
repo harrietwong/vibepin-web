@@ -31,6 +31,13 @@ test("PO90-01 uses one neutral fallback for missing, decode, tiny, and unsupport
   assert.doesNotMatch(picker, /currentTarget\.style\.opacity = "0\.3"/);
 });
 
+test("PO90-01a resets image state by keyed source remount without effect state synchronization", () => {
+  assert.match(image, /function productImageRenderKey/);
+  assert.match(image, /<ProductImageForSource key=\{productImageRenderKey\(source\)\}/);
+  assert.match(image, /useState<ProductImageState>\(\(\) => initialProductImageState\(src\)\)/);
+  assert.doesNotMatch(image, /useEffect\(\(\) => \{\s*loadSequence\.current \+= 1;\s*setState\(initialProductImageState\(src\)\)/s);
+});
+
 test("PO90-02 exposes only My Products and Product inspiration as primary product tabs", () => {
   const tabs = picker.slice(picker.indexOf("export const PRODUCT_PICKER_TABS"), picker.indexOf("export const REFERENCE_PICKER_TABS"));
   assert.equal((tabs.match(/id:/g) ?? []).length, 2);

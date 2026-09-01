@@ -13,6 +13,14 @@ export type ProductImageState =
 
 const MIN_PRODUCT_IMAGE_EDGE = 48;
 
+type ProductImageSurfaceProps = {
+  src: string | null | undefined;
+  alt: string;
+  className?: string;
+  fallbackLabel?: string;
+  minEdge?: number;
+};
+
 function supportedSource(value: string | null | undefined): value is string {
   const source = value?.trim();
   if (!source || source === "null" || source === "undefined") return false;
@@ -25,26 +33,24 @@ export function initialProductImageState(source: string | null | undefined): Pro
   return supportedSource(source) ? "loading" : "unsupported";
 }
 
-export function ProductImageSurface({
+export function productImageRenderKey(source: string | null | undefined): string {
+  return source?.trim() || "__missing_product_image__";
+}
+
+export function ProductImageSurface(props: ProductImageSurfaceProps) {
+  const source = props.src?.trim() || null;
+  return <ProductImageForSource key={productImageRenderKey(source)} {...props} src={source} />;
+}
+
+function ProductImageForSource({
   src,
   alt,
   className,
   fallbackLabel = "Product image unavailable",
   minEdge = MIN_PRODUCT_IMAGE_EDGE,
-}: {
-  src: string | null | undefined;
-  alt: string;
-  className?: string;
-  fallbackLabel?: string;
-  minEdge?: number;
-}) {
+}: ProductImageSurfaceProps) {
   const [state, setState] = useState<ProductImageState>(() => initialProductImageState(src));
   const loadSequence = useRef(0);
-
-  useEffect(() => {
-    loadSequence.current += 1;
-    setState(initialProductImageState(src));
-  }, [src]);
 
   useEffect(() => {
     if (state !== "loading") return;
@@ -53,7 +59,7 @@ export function ProductImageSurface({
       setState("decode_failed");
     }, 10_000);
     return () => window.clearTimeout(timeout);
-  }, [src, state]);
+  }, [state]);
 
   const failed = state === "missing" || state === "decode_failed" || state === "tiny" || state === "unsupported";
 
