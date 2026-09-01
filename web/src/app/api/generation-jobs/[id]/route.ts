@@ -12,6 +12,81 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
 import { settleGenerationJob } from "@/lib/server/usage/settleGenerationJob";
+import { finalizeGenerationRecord, type GenerationFinalizeStatus } from "@/lib/server/generationRecord";
+
+/**
+ * generation_jobs.status → pin_generations.status. Source: migrate_v51_generation_jobs.sql
+ * comment block + api/app/worker.py::terminal_status. 'queued'/'running' are not
+ * terminal and are excluded — see finalizeTerminalGenerationRecord below.
+ */
+const TERMINAL_STATUS_MAP: Record<string, GenerationFinalizeStatus> = {
+  done: "completed",
+  partial: "partial",
+  failed: "failed",
+};
+
+/** One per-slot entry of generation_jobs.results — same shape settleGenerationJob reads. */
+type JobResultRow = { slot?: unknown; status?: unknown; imageUrl?: unknown; error?: unknown };
+
+/**
+ * Close out the `pin_generations` row the worker enqueue path left `running`, now
+ * that this poll observes a terminal generation_jobs status. Mirrors settleGenerationJob's
+ * shape: BEST-EFFORT, never awaited in a way that can reject the response, never
+ * throws out to the caller. A finalize problem must never turn a successful poll
+ * (the user's images) into a failed one.
+ */
+async function finalizeTerminalGenerationRecord(
+  db: ReturnType<typeof createServerClient>,
+  job: { id: string; status: unknown; results: unknown; params: unknown },
+): Promise<void> {
+  const mapped = typeof job.status === "string" ? TERMINAL_STATUS_MAP[job.status] : undefined;
+  if (!mapped) return; // not terminal (queued/running) — nothing to finalize yet
+
+  // The running pin_generations row is keyed on generationRequestId (the client-
+  // supplied string echoed into jobParams at enqueue time — see /api/generate's
+  // recordRunningWorkerGeneration), NOT job.id (generation_jobs' own uuid PK). Those
+  // are two different values; reusing job.id here would silently finalize nothing.
+  const paramsObj = job.params && typeof job.params === "object" ? job.params as Record<string, unknown> : null;
+  const generationRequestId = paramsObj && typeof paramsObj.generationRequestId === "string"
+    ? paramsObj.generationRequestId
+    : null;
+  if (!generationRequestId) return; // no known join key — nothing to finalize
+
+  const rows: JobResultRow[] = Array.isArray(job.results) ? (job.results as JobResultRow[]) : [];
+  // Only counted when the results array itself is present and array-shaped — an
+  // absent/malformed results field means "unknown", not "zero", so totalPins/pinUrls
+  // are left undefined (omitted from the patch) rather than fabricated as 0/[].
+  const hasResults = Array.isArray(job.results);
+  const doneUrls = hasResults
+    ? rows.filter(r => r.status === "done" && typeof r.imageUrl === "string" && r.imageUrl)
+      .map(r => r.imageUrl as string)
+    : undefined;
+  const totalPins = hasResults ? doneUrls!.length : undefined;
+
+  let errorType: string | undefined;
+  let errorMessage: string | undefined;
+  if (mapped === "failed" && hasResults) {
+    const firstError = rows.find(r => r.status === "failed" && typeof r.error === "string" && r.error);
+    if (firstError) {
+      errorType = "generation_failed";
+      errorMessage = firstError.error as string;
+    }
+  }
+
+  try {
+    await finalizeGenerationRecord(db, {
+      generationRequestId,
+      status: mapped,
+      totalPins,
+      pinUrls: doneUrls,
+      errorType,
+      errorMessage,
+    });
+  } catch {
+    // finalizeGenerationRecord is already total (never throws) — this catch exists so
+    // that even a future regression there cannot break the poll response.
+  }
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,13 +110,30 @@ export async function GET(
   const db = createServerClient();
   const { data, error } = await db
     .from("generation_jobs")
-    .select("id,status,results,vibepin_user_id,usage_reservation_id")
+    // `params` is selected ONLY to recover generationRequestId — the join key the
+    // running pin_generations row was written under at enqueue time (job.id, the
+    // generation_jobs primary key, is a DIFFERENT value — see finalizeTerminalGenerationRecord).
+    .select("id,status,results,params,vibepin_user_id,usage_reservation_id")
     .eq("id", id)
     .maybeSingle();
 
   if (error || !data || data.vibepin_user_id !== userId) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  // Close out the `pin_generations` row this job left `running` at enqueue time, now
+  // that a terminal generation_jobs status is observable here. See
+  // finalizeTerminalGenerationRecord for the terminal-status mapping, the join key,
+  // and the idempotency/no-regression guarantees. BEST-EFFORT and awaited (so the
+  // history row is durably written before the response goes out on the FIRST poll
+  // that observes the terminal status) but the function itself never throws and a
+  // failure here must never affect what is returned below.
+  await finalizeTerminalGenerationRecord(db, {
+    id: data.id as string,
+    status: data.status,
+    results: data.results,
+    params: (data as { params?: unknown }).params,
+  });
 
   // Phase 4I: OPTIONAL, purely additive `usage` block. Present only when the job was
   // metered (has a usage_reservation_id). Clients that don't know about it ignore

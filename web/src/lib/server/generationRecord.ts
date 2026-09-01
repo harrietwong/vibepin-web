@@ -238,7 +238,21 @@ type ServerClient = ReturnType<typeof createServerClient>;
 export interface GenerationRecordDb {
   from(table: string): {
     insert(row: GenerationRow): Promise<{ error: { message?: string } | null }> | { error: { message?: string } | null };
+    // Optional: only finalizeGenerationRecord (below) calls .update(). recordGeneration's
+    // insert-only test doubles remain valid GenerationRecordDb implementations without it.
+    update?(patch: GenerationRow): GenerationRecordUpdateBuilder;
   };
+}
+
+/**
+ * The fluent chain `finalizeGenerationRecord` needs from `.update(...)`: two `.eq()`
+ * filters (row identity + the CAS guard on current `status`), then `.select()` so the
+ * response reports how many rows actually matched — Supabase/PostgREST apply filters
+ * BEFORE the write, so this is a real conditional UPDATE, not a read-then-write race.
+ */
+export interface GenerationRecordUpdateBuilder {
+  eq(column: string, value: string): GenerationRecordUpdateBuilder;
+  select(columns: string): Promise<{ data: unknown[] | null; error: { message?: string } | null }>;
 }
 
 /**
@@ -277,5 +291,147 @@ export async function recordGeneration(
     // onto the generation path as an exception.
     console.warn("[generationRecord] insert threw:", err instanceof Error ? err.message : String(err));
     return { recorded: false, reason: "threw" };
+  }
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * finalizeGenerationRecord — close out the `running` row the worker enqueue path
+ * writes, once GET /api/generation-jobs/[id] observes a TERMINAL generation_jobs
+ * status.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * WHY THIS EXISTS: `recordRunningWorkerGeneration` (in /api/generate) writes
+ * status='running' at enqueue time because that route hands the job to the VPS
+ * worker and returns immediately — it never learns the outcome. The poll route is
+ * the one place server-side that DOES: generation_jobs.status reaches a terminal
+ * value (done / partial / failed per migrate_v51_generation_jobs.sql and
+ * api/app/worker.py::terminal_status) exactly there, on the same row the poll
+ * already fetched. This function is that missing update.
+ *
+ * TERMINAL STATUS MAPPING (source: migrate_v51_generation_jobs.sql comment block +
+ * api/app/worker.py::terminal_status — done = every slot succeeded, partial = some
+ * did, failed = none did):
+ *   done              → pin_generations.status = 'completed'
+ *   partial            → pin_generations.status = 'partial'
+ *   failed             → pin_generations.status = 'failed' + error_type/error_message
+ * `queued` / `running` are NOT terminal — callers must not invoke this for them
+ * (the CAS guard below would simply no-op, but the caller should not pay the
+ * round trip).
+ *
+ * IDEMPOTENT AND NON-REGRESSING BY CONSTRUCTION: the UPDATE is filtered on
+ * `generation_request_id = <id> AND status = 'running'`, exactly like the
+ * worker's own claim CAS. A job polled 50 times only matches the FIRST finalize —
+ * every later call's filter matches zero rows (the row is no longer 'running') and
+ * is a harmless no-op. This also makes a stale/out-of-order terminal read
+ * impossible to regress an already-finalized row back toward 'running': the only
+ * status this function ever WRITES is a terminal one, and it only ever writes it
+ * onto a row that is still 'running'.
+ *
+ * ONLY WRITE WHAT WE ACTUALLY KNOW — same rule as buildGenerationRow. `totalPins`
+ * / `pinUrls` are supplied by the caller from the job's own `results` array (real
+ * produced-image data), never invented here.
+ *
+ * BEST-EFFORT and TOTAL: never throws, for any input or client. A finalize failure
+ * must never turn a successful poll response into a failed one — the caller
+ * (GET .../[id]) must not await this on the response's critical path in a way that
+ * could reject it.
+ */
+export type GenerationFinalizeStatus = "completed" | "partial" | "failed";
+
+export interface GenerationFinalizeInput {
+  /** Matches the `generation_request_id` a running row was written under. */
+  generationRequestId: string;
+  status: GenerationFinalizeStatus;
+  /** Images actually produced, from the job's own results — omitted when unknown. */
+  totalPins?: number | null;
+  /** Produced image URLs, from the job's own results — omitted when unknown. */
+  pinUrls?: string[] | null;
+  /** Stable failure code. Only meaningful (and only written) when status='failed'. */
+  errorType?: string | null;
+  /** Raw failure detail — sanitized + capped before storage, same as recordGeneration. */
+  errorMessage?: unknown;
+}
+
+export type GenerationFinalizeResult =
+  | { finalized: true }
+  | {
+      finalized: false;
+      reason: "no_client" | "no_request_id" | "update_error" | "threw" | "no_match";
+    };
+
+/**
+ * Build the terminal-state PATCH. PURE — no DB — so the "only known facts, never
+ * fabricated" rule is directly assertable, same pattern as buildGenerationRow.
+ */
+export function buildGenerationFinalizePatch(input: GenerationFinalizeInput): GenerationRow {
+  const patch: GenerationRow = { status: input.status };
+
+  const totalPins = count(input.totalPins);
+  if (totalPins !== undefined) patch.total_pins = totalPins;
+
+  const pinList = urls(input.pinUrls);
+  if (pinList !== undefined) patch.pin_urls = pinList;
+
+  // error_type/error_message are only meaningful for a failed job, but the guard is
+  // "was a value actually supplied", not "is status failed" — a caller that knows an
+  // error code for a partial job should not have it silently dropped.
+  const errorType = text(input.errorType);
+  if (errorType !== undefined) patch.error_type = errorType;
+
+  if (input.errorMessage !== undefined && input.errorMessage !== null) {
+    const message = sanitizeErrorMessage(input.errorMessage);
+    if (message) patch.error_message = message;
+  }
+
+  return patch;
+}
+
+export async function finalizeGenerationRecord(
+  db: GenerationRecordDb | ServerClient | null | undefined,
+  input: GenerationFinalizeInput,
+): Promise<GenerationFinalizeResult> {
+  try {
+    if (!db) {
+      console.warn("[generationRecord] finalize: no service client — dropped update");
+      return { finalized: false, reason: "no_client" };
+    }
+    const requestId = text(input.generationRequestId);
+    if (!requestId) {
+      console.warn("[generationRecord] finalize: missing generationRequestId — dropped update");
+      return { finalized: false, reason: "no_request_id" };
+    }
+
+    const patch = buildGenerationFinalizePatch({ ...input, generationRequestId: requestId });
+
+    const table = (db as GenerationRecordDb).from("pin_generations");
+    if (!table.update) {
+      console.warn("[generationRecord] finalize: client has no update() — dropped update");
+      return { finalized: false, reason: "no_client" };
+    }
+    // CAS guard: only a row still 'running' is eligible. This is what makes repeated
+    // polls of the same finished job idempotent and prevents a delayed/duplicate
+    // finalize call from ever moving an already-terminal row backward.
+    const result = await table
+      .update(patch)
+      .eq("generation_request_id", requestId)
+      .eq("status", "running")
+      .select("id");
+
+    const error = result?.error ?? null;
+    if (error) {
+      console.warn("[generationRecord] finalize: update failed:", error.message ?? "unknown");
+      return { finalized: false, reason: "update_error" };
+    }
+    const matched = Array.isArray(result?.data) ? result.data.length : 0;
+    if (matched === 0) {
+      // Not an error: either already finalized (idempotent replay) or no running row
+      // exists for this request id (e.g. the insert itself degraded). Either way
+      // there is nothing more to do.
+      return { finalized: false, reason: "no_match" };
+    }
+    return { finalized: true };
+  } catch (err) {
+    console.warn("[generationRecord] finalize threw:", err instanceof Error ? err.message : String(err));
+    return { finalized: false, reason: "threw" };
   }
 }

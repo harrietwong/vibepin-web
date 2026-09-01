@@ -88,9 +88,66 @@ function throwingFromDb() {
   };
 }
 
+
+/**
+ * In-memory `pin_generations` table double supporting BOTH insert() (recordGeneration)
+ * and the update().eq().eq().select() chain finalizeGenerationRecord issues. Filters
+ * are applied to decide which rows the UPDATE touches — same CAS semantics PostgREST
+ * gives the real client (filters apply BEFORE the write).
+ */
+function fakeTable(rows: Record<string, unknown>[]) {
+  return {
+    from(table: string) {
+      if (table !== "pin_generations") throw new Error(`unexpected table ${table}`);
+      return {
+        async insert(row: Record<string, unknown>) {
+          rows.push({ ...row });
+          return { error: null };
+        },
+        update(patch: Record<string, unknown>) {
+          const filters: Array<[string, unknown]> = [];
+          const builder = {
+            eq(column: string, value: unknown) {
+              filters.push([column, value]);
+              return builder;
+            },
+            async select(_columns: string) {
+              const matched = rows.filter(r => filters.every(([c, v]) => r[c] === v));
+              for (const r of matched) Object.assign(r, patch);
+              return { data: matched.map(r => ({ id: r.id })), error: null };
+            },
+          };
+          return builder;
+        },
+      };
+    },
+  };
+}
+
+/** update() present but every call throws — a broken/misconfigured client. */
+function throwingUpdateDb() {
+  return {
+    from() {
+      return {
+        async insert() { return { error: null }; },
+        update(): never { throw new Error("update exploded"); },
+      };
+    },
+  };
+}
+
+/** No update() at all on the table object — an older/narrower client shape. */
+function noUpdateDb() {
+  return {
+    from() {
+      return { async insert() { return { error: null }; } };
+    },
+  };
+}
+
 async function main() {
   const mod = await import("../src/lib/server/generationRecord");
-  const { buildGenerationRow, recordGeneration, MAX_ERROR_MESSAGE_LENGTH, MAX_PROMPT_EXCERPT_LENGTH } = mod;
+  const { buildGenerationRow, recordGeneration, MAX_ERROR_MESSAGE_LENGTH, MAX_PROMPT_EXCERPT_LENGTH, finalizeGenerationRecord, buildGenerationFinalizePatch } = mod;
 
   const USER = "11111111-2222-3333-4444-555555555555";
   const REQ = "board_1756000000000_abc123";
@@ -374,6 +431,134 @@ async function main() {
     for (const key of Object.keys(maximal)) {
       assert.ok(known.has(key), `column '${key}' is not in the production schema — PostgREST would reject the whole row`);
     }
+  });
+
+
+  // ── 5. finalizeGenerationRecord — worker-path terminal close-out ─────────────
+  // Covers: success/failure finalize, IDEMPOTENCY (repeat terminal poll produces
+  // no second row and no change), NO-REGRESSION (an already-completed row cannot
+  // be moved back toward running/partial by a later/duplicate call), and
+  // best-effort (write errors never throw).
+
+  await test("finalize: a running job that reaches 'done' becomes completed", async () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "row-1", user_id: USER, generation_request_id: REQ, status: "running" },
+    ];
+    const res = await finalizeGenerationRecord(fakeTable(rows), {
+      generationRequestId: REQ, status: "completed",
+      totalPins: 2, pinUrls: ["https://cdn.example/a.png", "https://cdn.example/b.png"],
+    });
+    assert.deepEqual(res, { finalized: true });
+    assert.equal(rows.length, 1, "no second row was inserted");
+    assert.equal(rows[0].status, "completed");
+    assert.equal(rows[0].total_pins, 2);
+    assert.deepEqual(rows[0].pin_urls, ["https://cdn.example/a.png", "https://cdn.example/b.png"]);
+  });
+
+  await test("finalize: a failed job carries error_type + sanitized/capped error_message", async () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "row-1", user_id: USER, generation_request_id: REQ, status: "running" },
+    ];
+    const long = "provider stderr: " + "e".repeat(5000);
+    const res = await finalizeGenerationRecord(fakeTable(rows), {
+      generationRequestId: REQ, status: "failed",
+      totalPins: 0, errorType: "generation_failed", errorMessage: long,
+    });
+    assert.deepEqual(res, { finalized: true });
+    assert.equal(rows[0].status, "failed");
+    assert.equal(rows[0].error_type, "generation_failed");
+    assert.ok(String(rows[0].error_message).length <= MAX_ERROR_MESSAGE_LENGTH);
+  });
+
+  await test("finalize: IDEMPOTENT — polling the same terminal job twice writes once, second call is a harmless no-op", async () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "row-1", user_id: USER, generation_request_id: REQ, status: "running" },
+    ];
+    const first = await finalizeGenerationRecord(fakeTable(rows), {
+      generationRequestId: REQ, status: "completed", totalPins: 3,
+    });
+    const secondRowsSnapshot = JSON.stringify(rows);
+    const second = await finalizeGenerationRecord(fakeTable(rows), {
+      generationRequestId: REQ, status: "completed", totalPins: 3,
+    });
+    assert.deepEqual(first, { finalized: true });
+    assert.deepEqual(second, { finalized: false, reason: "no_match" }, "a replay matches zero running rows");
+    assert.equal(rows.length, 1, "still exactly one row — no duplicate created");
+    assert.equal(JSON.stringify(rows), secondRowsSnapshot, "the row is byte-identical after the replay");
+  });
+
+  await test("finalize: NO REGRESSION — a later 'partial' finalize cannot move an already-completed row backward", async () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "row-1", user_id: USER, generation_request_id: REQ, status: "running" },
+    ];
+    await finalizeGenerationRecord(fakeTable(rows), { generationRequestId: REQ, status: "completed", totalPins: 4 });
+    assert.equal(rows[0].status, "completed");
+
+    // A stale/duplicate poll observes a DIFFERENT (older, less-final) terminal read
+    // and tries to finalize again — the CAS guard (status='running') must refuse it
+    // because the row is no longer running.
+    const res = await finalizeGenerationRecord(fakeTable(rows), {
+      generationRequestId: REQ, status: "partial", totalPins: 2,
+    });
+    assert.deepEqual(res, { finalized: false, reason: "no_match" });
+    assert.equal(rows[0].status, "completed", "status must NOT have been overwritten to partial");
+    assert.equal(rows[0].total_pins, 4, "total_pins must NOT have been overwritten to the stale call's value");
+  });
+
+  await test("finalize: only known facts are written — totalPins/pinUrls omitted when the caller does not know them", () => {
+    const patch = buildGenerationFinalizePatch({ generationRequestId: REQ, status: "completed" });
+    assert.equal("total_pins" in patch, false);
+    assert.equal("pin_urls" in patch, false);
+    assert.equal(patch.status, "completed");
+  });
+
+  await test("finalize: best-effort — an update ERROR does not throw and reports recorded:false", async () => {
+    const db = {
+      from() {
+        return {
+          async insert() { return { error: null }; },
+          update() {
+            const builder = {
+              eq() { return builder; },
+              async select() { return { data: null, error: { message: "network blip" } }; },
+            };
+            return builder;
+          },
+        };
+      },
+    };
+    const res = await finalizeGenerationRecord(db, { generationRequestId: REQ, status: "completed" });
+    assert.deepEqual(res, { finalized: false, reason: "update_error" });
+  });
+
+  await test("finalize: best-effort — a client whose update() THROWS does not escape", async () => {
+    let threw = false;
+    let res: Awaited<ReturnType<typeof finalizeGenerationRecord>> | null = null;
+    try {
+      res = await finalizeGenerationRecord(throwingUpdateDb(), { generationRequestId: REQ, status: "completed" });
+    } catch { threw = true; }
+    assert.equal(threw, false, "finalizeGenerationRecord must be total");
+    assert.equal(res!.finalized, false);
+    assert.equal(res!.finalized === false && res!.reason, "threw");
+  });
+
+  await test("finalize: best-effort — a client with no update() degrades honestly", async () => {
+    const res = await finalizeGenerationRecord(noUpdateDb(), { generationRequestId: REQ, status: "completed" });
+    assert.deepEqual(res, { finalized: false, reason: "no_client" });
+  });
+
+  await test("finalize: best-effort — a null client reports no_client rather than crashing the poll", async () => {
+    const res = await finalizeGenerationRecord(null, { generationRequestId: REQ, status: "completed" });
+    assert.deepEqual(res, { finalized: false, reason: "no_client" });
+  });
+
+  await test("finalize: an empty generationRequestId is refused, not sent as an unfiltered UPDATE", async () => {
+    const rows: Record<string, unknown>[] = [
+      { id: "row-1", user_id: USER, generation_request_id: REQ, status: "running" },
+    ];
+    const res = await finalizeGenerationRecord(fakeTable(rows), { generationRequestId: "   ", status: "completed" });
+    assert.deepEqual(res, { finalized: false, reason: "no_request_id" });
+    assert.equal(rows[0].status, "running", "the unrelated running row must be untouched");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
