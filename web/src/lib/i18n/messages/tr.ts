@@ -12,6 +12,9 @@ const tr: Partial<Record<MessageKey, string>> = {
   "nav.productIdeas": "Ürün Fırsatları",
   "nav.settings": "Ayarlar",
   "nav.helpSupport": "Yardım ve Destek",
+  "adminForbidden.title": "Yönetici erişimi gerekli",
+  "adminForbidden.description": "Bu hesabın yönetici konsolunu açma izni yok.",
+  "adminForbidden.back": "Pin Oluştur sayfasına dön",
 
   // ── Account dropdown ──
   "account.myAccount": "Hesabım",
