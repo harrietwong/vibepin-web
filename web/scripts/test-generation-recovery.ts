@@ -204,6 +204,7 @@ async function main() {
     assert.equal(postAttempts, 2, "one original POST plus one bounded exact replay");
     assert.equal(result.okCount, 0);
     assert.equal(result.failCount, 0, "unknown outcome is not a definitive failure");
+    assert.equal(result.state, "unknown", "two lost responses must remain unknown, not failed");
     const pending = store.getAllDrafts();
     assert.equal(pending.length, 2, "no replacement placeholders were created");
     for (const draft of pending) {

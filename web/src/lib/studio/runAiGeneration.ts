@@ -22,6 +22,7 @@ import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveProductPublicUrl, toLinkedProduct } from "@/lib/studio/productSelection";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { generationRequestIdForGroup, isAmbiguousGenerationOutcomeError } from "@/lib/studio/generationIntent";
+import { deriveGenerationAttemptState, type GenerationAttemptState } from "@/lib/studio/generationAttemptState";
 import { isLimitReachedError, type LimitReached } from "@/lib/usage/limitReached";
 
 /**
@@ -68,7 +69,13 @@ export type RunAiGenerationDeps = {
   /** Called once all placeholders exist — the UI closes the drawer here. */
   onPlaceholdersReady?: (totalPins: number) => void;
   onGroupProgress?: (current: number, total: number) => void;
-  onSettled?: (summary: { okCount: number; failCount: number }) => void;
+  onSettled?: (summary: {
+    attemptId: string;
+    state: GenerationAttemptState;
+    okCount: number;
+    failCount: number;
+    expectedCount: number;
+  }) => void;
   /**
    * The server refused on usage. Fired at most ONCE per run, after every untouched
    * placeholder has been removed. `retryCount` is the per-group count that was
@@ -82,6 +89,9 @@ export type RunAiGenerationDeps = {
 export type RunAiGenerationInput = {
   parent: PinDraft | null;
   opts: AiVersionOptions;
+  /** Prepared and persisted before this function may create placeholders. */
+  requestId?: string;
+  setupKey?: string;
 };
 
 /**
@@ -129,6 +139,7 @@ export async function runAiGeneration(
   failCount: number;
   requestId: string;
   totalPins: number;
+  state: GenerationAttemptState;
   /** Non-null when the run was stopped by a usage limit rather than finishing. */
   limitReached: LimitReached | null;
 }> {
@@ -137,7 +148,7 @@ export async function runAiGeneration(
   const now = deps.now ?? (() => Date.now());
   const rand = deps.randomId ?? (() => Math.random().toString(36).slice(2, 8));
 
-  const requestId = `board_${now()}_${rand()}`;
+  const requestId = input.requestId || `board_${now()}_${rand()}`;
   const perGroup = Math.max(1, opts.count || 1);
   // One group per style reference; no references still yields exactly one group.
   const groups = planReferenceGroups(opts.selectedReferences ?? [], perGroup);
@@ -158,7 +169,15 @@ export async function runAiGeneration(
       title: opts.productMetadata[index]?.title || parent?.title || `Product ${index + 1}`,
       productUrl: opts.productMetadata[index]?.productUrl,
     })),
-    selectedReferences: opts.referenceImages.map(imageUrl => ({ imageUrl })),
+    selectedReferences: opts.selectedReferences.map(reference => ({
+      referenceId: reference.id,
+      imageUrl: reference.imageUrl,
+      title: reference.title,
+      source: reference.source,
+      sourceUrl: reference.sourceUrl,
+      reason: reference.reason,
+      patternTags: reference.patternTags,
+    })),
     promptSnapshot: opts.directionBrief,
     creativeDirectionSnapshot: opts.creativeDirectionMeta,
     createdFrom: "studio_board",
@@ -189,6 +208,7 @@ export async function runAiGeneration(
         format: opts.format,
         generationSessionId: requestId,
         generationIntentId: generationRequestIdForGroup(requestId, group.index),
+        generationSetupKey: input.setupKey,
         generationSlot: i,
         promptSnapshot: opts.directionBrief,
         setupSnapshot,
@@ -204,6 +224,7 @@ export async function runAiGeneration(
   // second call with 429, so parallel groups would fail the 2nd and 3rd outright.
   let okCount = 0;
   let failCount = 0;
+  let unknownOutcome = false;
   let limitReached: LimitReached | null = null;
   for (const group of groups) {
     if (limitReached) break;
@@ -271,6 +292,7 @@ export async function runAiGeneration(
         for (let i = group.index + 1; i < groups.length; i++) {
           groupPlaceholders[i].forEach(p => store.deleteDraft(p.id));
         }
+        unknownOutcome = true;
         break;
       }
       // This reference failed; keep going so the others still produce results.
@@ -284,6 +306,12 @@ export async function runAiGeneration(
     deps.onLimitReached?.(limitReached, { retryCount: perGroup });
   }
 
-  deps.onSettled?.({ okCount, failCount });
-  return { okCount, failCount, requestId, totalPins, limitReached };
+  const state = deriveGenerationAttemptState({
+    okCount,
+    failCount,
+    unknown: unknownOutcome,
+    cancelled: limitReached !== null,
+  });
+  deps.onSettled?.({ attemptId: requestId, state, okCount, failCount, expectedCount: totalPins });
+  return { okCount, failCount, requestId, totalPins, state, limitReached };
 }

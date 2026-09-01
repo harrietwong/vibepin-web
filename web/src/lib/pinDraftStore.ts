@@ -245,6 +245,8 @@ export interface PinDraft {
   generationJobId?:    string;
   /** Stable client operation id persisted before POST, for ambiguous retry/reload. */
   generationIntentId?: string;
+  /** Owner-scoped drawer setup key used to restore the full generation action. */
+  generationSetupKey?: string;
   /** Exact bounded POST body used only to recover an intent whose response was lost. */
   generationIntentPayload?: Record<string, unknown>;
   /** Network-verified Supabase user that prepared the recovery payload. */
@@ -751,6 +753,7 @@ export function createBoardDraft(input: {
   /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
   generationJobId?: string;
   generationIntentId?: string;
+  generationSetupKey?: string;
   generationIntentPayload?: Record<string, unknown>;
   generationIntentOwnerId?: string;
   generationRecoveryPending?: boolean;
@@ -858,6 +861,7 @@ export function createBoardDraft(input: {
     generationStatus:    input.generationStatus,
     generationJobId:     input.generationJobId,
     generationIntentId:  input.generationIntentId,
+    generationSetupKey: input.generationSetupKey,
     generationIntentPayload: input.generationIntentPayload,
     generationIntentOwnerId: input.generationIntentOwnerId,
     generationRecoveryPending: input.generationRecoveryPending,

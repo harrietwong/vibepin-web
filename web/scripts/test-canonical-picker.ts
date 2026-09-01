@@ -173,7 +173,10 @@ test("EVERY retry branch carries the failed draft's own product, not just scratc
 test("retry restores the model even with ZERO references", () => {
   const src = read("components/studio/StudioBoard.tsx");
   // Gating the setup on a reference meant a no-reference failure never restored it.
-  assert.ok(/const retrySetup = productImages\.length/.test(src), "setup must not require a reference");
+  assert.ok(
+    /const retrySetup = durableRetrySetup \?\? \(productImages\.length/.test(src),
+    "setup must not require a reference, and an exact durable setup may take priority",
+  );
   assert.ok(/KNOWN_MODELS\.includes\(snapshotModel\)/.test(src), "an unknown/blank persisted model must fall back");
 });
 

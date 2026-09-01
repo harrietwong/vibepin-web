@@ -36,8 +36,22 @@ import type { CreativeRequestError } from "@/lib/studio/recommendationRequest";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
-import { type SelectedReference } from "@/lib/studio/selectedReferences";
+import { totalPins as computeTotalPins, type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
+import {
+  createGenerationAttemptId,
+  generationToastCommand,
+  generationToastId,
+  isBlockingGenerationState,
+  type GenerationAttemptSummary,
+} from "@/lib/studio/generationAttemptState";
+import {
+  getBlockingGenerationAttempt,
+  loadGenerationSetup,
+  prepareGenerationAttempt,
+  saveGenerationSetup,
+  updateGenerationAttempt,
+} from "@/lib/studio/generationSetupStore";
 import { limitMessageKeyForCode, offerableRemaining, type LimitReached } from "@/lib/usage/limitReached";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
@@ -87,6 +101,22 @@ function isInternalBoardName(name: string | null | undefined): boolean {
 // post-OAuth restore effect in app/plan/page.tsx) — no new mechanism needed.
 function planDeepLink(draftId: string): string {
   return `/app/plan?modal=publish&pinId=${encodeURIComponent(draftId)}`;
+}
+
+function setupFromGenerationOptions(opts: AiVersionOptions): AiVersionDrawerSetup {
+  return {
+    productImages: [...opts.productImages],
+    referenceImages: [...opts.referenceImages],
+    referenceSelections: opts.selectedReferences.map(reference => ({ ...reference })),
+    count: opts.count,
+    format: opts.format,
+    modelKey: opts.modelKey,
+    variationMode: opts.variationMode,
+    selectedDirectionId: opts.creativeDirectionMeta.selectedDirectionId,
+    selectedTagIds: opts.selectedTags.map(tag => tag.id),
+    directionBrief: opts.directionBrief,
+    briefManuallyEdited: opts.briefManuallyEdited,
+  };
 }
 
 // Remembers the user's manually-chosen filter for this browser session only
@@ -268,13 +298,6 @@ export function StudioBoard() {
     // A stray/stale flag must never silently seed "publish" when not on the failed filter.
     const urlSub = parseSubParam(searchParams.get("sub"));
     setFailedSubFilter(restored === "failed" ? (urlSub ?? consumeFailedSubEntryDefault()) : "all");
-    // WP3-P2: reconcile in-flight generation jobs instead of blindly failing every
-    // "generating" card. Worker-mode placeholders (generationJobId set) resume
-    // polling or apply their already-terminal result; only jobId-less (inline-mode)
-    // leftovers are judged dead — which is exactly the old
-    // failStaleGeneratingDrafts() behavior for that partition, so nothing sticks
-    // in Generating either way.
-    void reconcileGeneratingDrafts();
   }, [searchParams]);
 
   useEffect(() => {
@@ -304,6 +327,7 @@ export function StudioBoard() {
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
+  const aiGenerationLockRef = useRef<string | null>(null);
   /**
    * The usage limit the server just refused a generation with, plus enough context to
    * re-issue the SAME request at the remaining count (product decision #6: never
@@ -332,6 +356,59 @@ export function StudioBoard() {
   const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const presentGenerationAttempt = useCallback((summary: GenerationAttemptSummary) => {
+    const command = generationToastCommand(summary);
+    const id = command.id;
+    const total = summary.expectedCount ?? Math.max(1, summary.okCount + summary.failCount);
+    const scope = pinDraftStore.getPinDraftOwnerScope();
+    if (scope) updateGenerationAttempt(scope, summary);
+    setAiGenerating(isBlockingGenerationState(summary.state));
+
+    if (command.kind === "loading") {
+      toast.loading(total === 1
+        ? tr("studioBoard.toast.generatingOne")
+        : tr("studioBoard.toast.generatingMany").replace("{n}", String(total)), { id });
+    } else if (command.kind === "info") {
+      toast.info(tr("studioBoard.toast.generationUnknown"), { id });
+    } else if (command.kind === "warning") {
+      toast.warning(tr("studioBoard.toast.generatedSomeFailedSome")
+        .replace("{okCount}", String(summary.okCount))
+        .replace("{okPlural}", summary.okCount === 1 ? "" : "s")
+        .replace("{failCount}", String(summary.failCount)), { id });
+    } else if (command.kind === "success") {
+      toast.success(tr("studioBoard.toast.createdAiPins")
+        .replace("{n}", String(summary.okCount))
+        .replace("{plural}", summary.okCount === 1 ? "" : "s"), { id });
+    } else if (command.kind === "error") {
+      toast.error(tr("studioBoard.toast.noAiPinsGenerated"), { id });
+    } else {
+      toast.dismiss(id);
+    }
+  }, [tr]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const scope = pinDraftStore.getPinDraftOwnerScope();
+    const blocking = getBlockingGenerationAttempt(scope);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (blocking) {
+        presentGenerationAttempt({
+          attemptId: blocking.attemptId,
+          state: blocking.state,
+          okCount: blocking.okCount,
+          failCount: blocking.failCount,
+          expectedCount: blocking.expectedCount,
+        });
+      }
+      // Rebuild the exact attempt from durable job/slot records. The callback updates
+      // the same toast id after reload; another owner cannot reach these records.
+      void reconcileGeneratingDrafts({ onAttemptState: presentGenerationAttempt });
+    });
+    return () => { cancelled = true; };
+  }, [hydrated, presentGenerationAttempt]);
+
   /**
    * PRD §17 — the destinations NEW content should be seeded with, narrowed to the
    * accounts that are connected right now. Recomputed per creation (not memoized on
@@ -353,7 +430,14 @@ export function StudioBoard() {
   const openFilePicker = useCallback(() => fileRef.current?.click(), []);
 
   const hasCards = items.length > 0 || counts.all > 0;
-  const aiSetupKey = aiDrawer?.mode === "version" ? aiDrawer.draft.id : aiDrawer?.mode === "scratch" ? "scratch" : null;
+  const aiSetupKey = aiDrawer?.mode === "version"
+    ? aiDrawer.draft.id
+    : aiDrawer?.mode === "scratch"
+      ? (aiDrawer.product ? `scratch:${aiDrawer.product.id ?? aiDrawer.product.imageUrl}` : "scratch")
+      : null;
+  const persistedAiSetup = aiSetupKey
+    ? loadGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), aiSetupKey)?.setup
+    : undefined;
   const batchPins = useMemo<BatchPinRow[]>(() => allItems.map(({ draft }) => ({
     pinId: draft.id,
     sessionId: draft.generationSessionId || "create-pins",
@@ -838,6 +922,7 @@ export function StudioBoard() {
      * the original parent/target context explicitly.
      */
     retryContext?: { parent: PinDraft | null; targetMediaId?: string },
+    committedSetup?: AiVersionDrawerSetup,
   ) => {
     if (!aiDrawer && !retryContext) return;
     const parent = retryContext
@@ -846,95 +931,97 @@ export function StudioBoard() {
     const retryTargetMediaId = retryContext
       ? retryContext.targetMediaId
       : aiDrawer!.mode === "version" ? aiDrawer!.targetMediaId : undefined;
+    const scope = pinDraftStore.getPinDraftOwnerScope();
+    const blocking = getBlockingGenerationAttempt(scope);
+    const inFlightId = aiGenerationLockRef.current;
+    if (blocking || inFlightId) {
+      const activeId = blocking?.attemptId ?? inFlightId!;
+      toast.info(tr("studioBoard.toast.generationAlreadyActive"), { id: generationToastId(activeId) });
+      return;
+    }
 
+    const setupKey = retryContext
+      ? (parent?.id ?? "scratch")
+      : (aiSetupKey ?? (parent?.id ?? "scratch"));
+    const setup = committedSetup ?? setupFromGenerationOptions(opts);
+    const attemptId = createGenerationAttemptId();
+    const expectedCount = computeTotalPins(opts.selectedReferences.length, opts.count);
+    const prepared = prepareGenerationAttempt({ scope, setupKey, setup, attemptId, expectedCount });
+    if (!prepared) {
+      toast.error(tr("studioBoard.toast.generationSetupSaveFailed"));
+      return;
+    }
+
+    setAiSetupCache(previous => ({ ...previous, [setupKey]: setup }));
+    aiGenerationLockRef.current = attemptId;
     setAiGenerating(true);
+    presentGenerationAttempt({ attemptId, state: "persisting", okCount: 0, failCount: 0, expectedCount });
     if (parent) track("regenerate_clicked", { draftId: parent.id });
 
     // One orchestration owns both runtime modes. Each reference group performs one
     // state-changing POST and consumes that exact response: inline results are used
     // directly; worker results are polled to terminal before the next group starts.
-    const batchToastId = `gen-batch-${Date.now()}`;
-    let groupTotal = 1;
     let limitStopped = false;
-
-    await runAiGeneration({ parent, opts }, {
-      store: pinDraftStore,
-      defaultDestinations: defaultDestinationsForNewContent(),
-      generate: ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds }) =>
-        dispatchGenerationGroup({
-          source: parent,
-          setup,
-          styleReference,
-          batchRequestId,
-          groupIndex,
-          generationIntentId,
-          placeholderIds,
-          onIntentPrepared: (intentId, payload, ownerId, ids) => ids.forEach(id => {
-            pinDraftStore.updateDraft(id, {
-              generationIntentId: intentId,
-              generationIntentPayload: payload,
-              generationIntentOwnerId: ownerId,
-              generationRecoveryPending: false,
-            });
+    let keepBlockedForUnknown: boolean = false;
+    try {
+      await runAiGeneration({ parent, opts, requestId: attemptId, setupKey }, {
+        store: pinDraftStore,
+        defaultDestinations: defaultDestinationsForNewContent(),
+        generate: ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup: groupSetup, placeholderIds }) =>
+          dispatchGenerationGroup({
+            source: parent,
+            setup: groupSetup,
+            styleReference,
+            batchRequestId,
+            groupIndex,
+            generationIntentId,
+            placeholderIds,
+            onIntentPrepared: (intentId, payload, ownerId, ids) => ids.forEach(id => {
+              pinDraftStore.updateDraft(id, {
+                generationIntentId: intentId,
+                generationIntentPayload: payload,
+                generationIntentOwnerId: ownerId,
+                generationRecoveryPending: false,
+              });
+            }),
+            onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
+              pinDraftStore.updateDraft(id, { generationJobId: jobId, generationSlot: slot });
+            }),
           }),
-          onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
-            pinDraftStore.updateDraft(id, {
-              generationJobId: jobId,
-              generationSlot: slot,
-            });
-          }),
-        }),
-      resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
-      onAnalyze: id => { void startImageAnalysis(id); },
-      onJudge: id => { void startQualityJudge(id); },
-      onPlaceholdersReady: totalPins => {
-        setAiDrawer(null);
+        resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
+        onAnalyze: id => { void startImageAnalysis(id); },
+        onJudge: id => { void startQualityJudge(id); },
+        onPlaceholdersReady: total => {
+          setAiDrawer(null);
+          presentGenerationAttempt({ attemptId, state: "generating", okCount: 0, failCount: 0, expectedCount: total });
+        },
+        onGroupProgress: (current, total) => {
+          toast.loading(tr("studioBoard.toast.generatingReferenceProgress")
+            .replace("{current}", String(current))
+            .replace("{total}", String(total)), { id: generationToastId(attemptId) });
+        },
+        onLimitReached: (limit, { retryCount }) => {
+          limitStopped = true;
+          keepBlockedForUnknown = false;
+          presentGenerationAttempt({ attemptId, state: "cancelled", okCount: 0, failCount: 0, expectedCount });
+          handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
+        },
+        onSettled: summary => {
+          if (limitStopped) return;
+          keepBlockedForUnknown = summary.state === "unknown";
+          presentGenerationAttempt(summary);
+        },
+      });
+    } catch {
+      keepBlockedForUnknown = false;
+      presentGenerationAttempt({ attemptId, state: "failed", okCount: 0, failCount: expectedCount, expectedCount });
+    } finally {
+      if (!keepBlockedForUnknown) {
+        if (aiGenerationLockRef.current === attemptId) aiGenerationLockRef.current = null;
         setAiGenerating(false);
-        toast.success(totalPins === 1
-          ? tr("studioBoard.toast.generatingOne")
-          : tr("studioBoard.toast.generatingMany").replace("{n}", String(totalPins)));
-      },
-      onGroupProgress: (current, total) => {
-        groupTotal = total;
-        if (total > 1) {
-          toast.loading(
-            tr("studioBoard.toast.generatingReferenceProgress")
-              .replace("{current}", String(current))
-              .replace("{total}", String(total)),
-            { id: batchToastId },
-          );
-        }
-      },
-      onLimitReached: (limit, { retryCount }) => {
-        if (groupTotal > 1) toast.dismiss(batchToastId);
-        limitStopped = true;
-        handleGenerationLimit(limit, retryCount, opts, {
-          parent,
-          targetMediaId: retryTargetMediaId,
-        });
-      },
-      onSettled: ({ okCount, failCount }) => {
-        if (groupTotal > 1) toast.dismiss(batchToastId);
-        if (limitStopped) return;
-        if (okCount && failCount) {
-          toast.error(tr("studioBoard.toast.generatedSomeFailedSome")
-            .replace("{okCount}", String(okCount))
-            .replace("{okPlural}", okCount === 1 ? "" : "s")
-            .replace("{failCount}", String(failCount)));
-        } else if (okCount) {
-          toast.success(parent
-            ? tr("studioBoard.toast.createdAiPinsKeptOriginal")
-              .replace("{n}", String(okCount))
-              .replace("{plural}", okCount === 1 ? "" : "s")
-            : tr("studioBoard.toast.createdAiPins")
-              .replace("{n}", String(okCount))
-              .replace("{plural}", okCount === 1 ? "" : "s"));
-        } else {
-          toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
-        }
-      },
-    });
-  }, [aiDrawer, defaultDestinationsForNewContent, handleGenerationLimit, tr]);
+      }
+    }
+  }, [aiDrawer, aiSetupKey, defaultDestinationsForNewContent, handleGenerationLimit, presentGenerationAttempt, tr]);
 
   /**
    * "Generate R instead" (product decision #6, option B).
@@ -1165,7 +1252,7 @@ export function StudioBoard() {
     // its exact owner-bound intent instead of opening a drawer that would create a
     // new requestId/job and potentially charge twice.
     if (d.generationRecoveryPending && d.generationIntentId && d.generationIntentPayload) {
-      void reconcileGeneratingDrafts();
+      void reconcileGeneratingDrafts({ onAttemptState: presentGenerationAttempt });
       return;
     }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
@@ -1206,7 +1293,10 @@ export function StudioBoard() {
     // productImages may be empty here only when there is genuinely nothing to restore,
     // in which case no setup is cached at all (an empty list would otherwise be taken
     // as authoritative and leave Generate disabled).
-    const retrySetup = productImages.length
+    const durableRetrySetup = d.generationSetupKey
+      ? loadGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), d.generationSetupKey)?.setup
+      : undefined;
+    const retrySetup = durableRetrySetup ?? (productImages.length
       ? {
           productImages,
           referenceImages: groupReference.map(r => r.imageUrl),
@@ -1220,7 +1310,7 @@ export function StudioBoard() {
           directionBrief: d.promptSnapshot ?? "",
           briefManuallyEdited: false,
         }
-      : undefined;
+      : undefined);
 
     // The drawer opens in version mode when there is a parent or an own image, and
     // reads aiSetupCache under the DRAFT ID in that case; a true scratch drawer reads
@@ -1243,10 +1333,15 @@ export function StudioBoard() {
     const nextDrawer: AiDrawerState = parent
       ? { mode: "version", draft: parent, product: retryProduct }
       : d.imageUrl ? { mode: "version", draft: d, product: retryProduct } : { mode: "scratch", product: retryProduct };
-    const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
-    if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
+    const cacheKey = nextDrawer.mode === "version"
+      ? nextDrawer.draft.id
+      : nextDrawer.product ? `scratch:${nextDrawer.product.id ?? nextDrawer.product.imageUrl}` : "scratch";
+    if (retrySetup) {
+      setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
+      saveGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), cacheKey, retrySetup);
+    }
     setAiDrawer(nextDrawer);
-  }, [requestPublish]);
+  }, [presentGenerationAttempt, requestPublish]);
 
   // Persist failure is re-read on every render; the store emits (via
   // usePinBoardDrafts' subscription) after every write, including failed ones.
@@ -1518,9 +1613,10 @@ export function StudioBoard() {
           onSetupChange={setup => {
             if (!aiSetupKey) return;
             setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));
+            saveGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), aiSetupKey, setup);
           }}
           onClose={() => setAiDrawer(null)}
-          onGenerate={handleAiGenerate}
+          onGenerate={(opts, setup) => handleAiGenerate(opts, undefined, setup)}
         />
       )}
 

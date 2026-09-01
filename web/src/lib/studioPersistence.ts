@@ -62,6 +62,9 @@ export type ReferenceSnapshot = {
   imageUrl:      string;
   title?:        string;
   source?:       string;
+  sourceUrl?:    string;
+  reason?:       string;
+  patternTags?:  unknown;
   visualFormat?: string;        // on_body | flat_lay | mirror_selfie | room_scene | unknown
   humanPresence?: string;       // visible_person | no_person | unknown
 };

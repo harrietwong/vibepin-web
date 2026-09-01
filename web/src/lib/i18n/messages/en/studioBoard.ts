@@ -71,6 +71,9 @@ export const studioBoardMessages = {
   "studioBoard.toast.customTimeScheduled": "Scheduled for {date} at {time}.",
   "studioBoard.toast.generatingOne": "Generating 1 Pin…",
   "studioBoard.toast.generatingMany": "Generating {n} Pins…",
+  "studioBoard.toast.generationUnknown": "We’re confirming the result. Recheck this generation before trying again.",
+  "studioBoard.toast.generationAlreadyActive": "A generation is still active. Recheck it before starting another.",
+  "studioBoard.toast.generationSetupSaveFailed": "Your generation setup could not be saved. Nothing was submitted.",
   // Serial reference-group queue: one /api/generate call per reference.
   "studioBoard.toast.generatingReferenceProgress": "Generating reference {current} of {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generated, {failCount} failed.",

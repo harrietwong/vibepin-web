@@ -160,7 +160,7 @@ export type AiVersionDrawerProps = {
   initialProductSelection?: CanonicalProductSelection | null;
   onSetupChange?: (setup: AiVersionDrawerSetup) => void;
   onClose: () => void;
-  onGenerate: (opts: AiVersionOptions) => void;
+  onGenerate: (opts: AiVersionOptions, committedSetup: AiVersionDrawerSetup) => void | Promise<void>;
 };
 
 const FORMATS = ["Pinterest 2:3", "Pinterest 4:5", "Square 1:1", "Story 9:16"];
@@ -1388,10 +1388,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     setPickerRole(null);
   };
 
-  const doGenerate = () => {
-    // Freeze the committed setup before handing it to StudioBoard's existing
-    // generation lifecycle. This store never creates a job/placeholder/toast/usage.
-    saveSetup();
+  const doGenerate = async () => {
     const snapshot = buildSnapshot({
       selectedDirection,
       recommendations,
@@ -1409,7 +1406,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       variationMode,
       outputVariants,
     });
-    onGenerate({
+    // Commit the exact visible setup in the same turn. The parent receives the
+    // snapshot directly because React state propagation is not a durability gate.
+    saveSetup();
+    await onGenerate({
       prompt: effectiveDirectionBrief.trim() || derivedBrief,
       hiddenPrompt,
       productImages: productUrls,
@@ -1435,7 +1435,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       // hand-edited destinationUrl) instead of rebuilding it from one selection.
       // A bare draft image never fabricates a product link either.
       primaryProductSelection: isUserChosenProduct(primarySelection) ? primarySelection : null,
-    });
+    }, currentSetup);
   };
 
   if (pickerRole) {

@@ -39,6 +39,8 @@ import {
   type GenerationJobStatus,
   type VerifiedGenerationAuthContext,
 } from "@/lib/studio/generateAiVersions";
+import { summarizeGenerationDrafts, type GenerationAttemptSummary } from "@/lib/studio/generationAttemptState";
+import { updateGenerationAttempt } from "@/lib/studio/generationSetupStore";
 
 type JobStatusBody = { status?: GenerationJobStatus; results?: GenerationJobResult[] };
 type RecoveredIntentBody = { jobId?: string; slots?: number };
@@ -54,6 +56,8 @@ export type GenerationRecoveryOptions = {
   authContext?: VerifiedGenerationAuthContext;
   /** Test-only transport seam. */
   fetchImpl?: typeof fetch;
+  /** UI hook; receives the durable attempt state rebuilt from all of its slots. */
+  onAttemptState?: (summary: GenerationAttemptSummary) => void;
 };
 
 async function fetchJobStatus(
@@ -109,6 +113,8 @@ function killDrafts(drafts: PinDraftLike[]) {
 
 type PinDraftLike = {
   id: string;
+  generationSessionId?: string;
+  generationStatus?: string;
   generationSlot?: number;
   generationJobId?: string;
   generationIntentId?: string;
@@ -116,6 +122,21 @@ type PinDraftLike = {
   generationIntentOwnerId?: string;
   generationRecoveryPending?: boolean;
 };
+
+function notifyAttemptState(
+  drafts: PinDraftLike[],
+  authContext: VerifiedGenerationAuthContext,
+  callback?: (summary: GenerationAttemptSummary) => void,
+): void {
+  const attemptIds = new Set(drafts.map(d => d.generationSessionId).filter((id): id is string => !!id));
+  const scope = pinDraftStore.getPinDraftOwnerScope();
+  for (const attemptId of attemptIds) {
+    const all = pinDraftStore.getAllDrafts().filter(d => d.generationSessionId === attemptId);
+    const summary = summarizeGenerationDrafts(attemptId, all);
+    if (scope?.ownerUserId === authContext.ownerId) updateGenerationAttempt(scope, summary);
+    callback?.(summary);
+  }
+}
 
 async function recoverJobIdFromIntent(
   payload: Record<string, unknown>,
@@ -192,6 +213,7 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
     }
   }
   killDrafts(unrecoverable);
+  notifyAttemptState(unrecoverable, authContext, options?.onAttemptState);
 
   // Group the jobId-bearing drafts by job so each job is checked exactly once
   // regardless of how many slots/cards it has.
@@ -212,11 +234,20 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
         generationStatus: "generating",
         generationRecoveryPending: true,
       }));
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
       continue;
     }
-    if (recovered.kind === "definitive_failure") { killDrafts(drafts); continue; }
+    if (recovered.kind === "definitive_failure") {
+      killDrafts(drafts);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      continue;
+    }
     const { jobId } = recovered.body;
-    if (!jobId) { killDrafts(drafts); continue; }
+    if (!jobId) {
+      killDrafts(drafts);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      continue;
+    }
     const slotDrafts = drafts.map((draft, slot) => ({
       ...draft,
       generationSlot: draft.generationSlot ?? slot,
@@ -238,18 +269,23 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
         generationStatus: "generating",
         generationRecoveryPending: true,
       }));
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
       return;
     }
     if (result.kind === "definitive_failure") {
       killDrafts(drafts);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
       return;
     }
 
     const { status, results } = result.body;
     if (status === "done" || status === "partial" || status === "failed") {
       applyTerminalResults(drafts, results ?? []);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState);
       return;
     }
+
+    notifyAttemptState(drafts, authContext, options?.onAttemptState);
 
     // queued/running — resume live polling. isPollingJob-style dedup lives inside
     // pollGenerationJob itself (activePolls) so a caller that already has a live
@@ -264,10 +300,10 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
         } else {
           pinDraftStore.failGeneratedDraft(draft.id);
         }
+        notifyAttemptState(drafts, authContext, options?.onAttemptState);
       },
       onEnd: () => {
-        // No toast here — reconcile runs silently on mount/reload; StudioBoard's
-        // own enqueue-time flow is what owns the user-facing toast copy.
+        notifyAttemptState(drafts, authContext, options?.onAttemptState);
       },
     }, { intervalMs: options?.intervalMs, timeoutMs: options?.timeoutMs });
   }));

@@ -30,8 +30,8 @@ test("one orchestration performs exactly one enqueue call per planned reference 
 });
 
 test("the group dispatch carries its reference and shared batch identity", () => {
-  assert.match(handler, /generate: \(\{ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds \}\)/);
-  assert.match(handler, /dispatchGenerationGroup\(\{[\s\S]*?source: parent,[\s\S]*?setup,[\s\S]*?styleReference,[\s\S]*?batchRequestId,[\s\S]*?groupIndex,[\s\S]*?generationIntentId,[\s\S]*?placeholderIds/);
+  assert.match(handler, /generate: \(\{ styleReference, batchRequestId, groupIndex, generationIntentId, setup: groupSetup, placeholderIds \}\)/);
+  assert.match(handler, /dispatchGenerationGroup\(\{[\s\S]*?source: parent,[\s\S]*?setup: groupSetup,[\s\S]*?styleReference,[\s\S]*?batchRequestId,[\s\S]*?groupIndex,[\s\S]*?generationIntentId,[\s\S]*?placeholderIds/);
 });
 
 test("inline mode consumes the same dispatch response without a second request", () => {
@@ -49,7 +49,18 @@ test("worker mode stamps each group's recovery job and local slot before polling
 });
 
 test("ambiguous owner-bound intent reconciles before any Try Again can create a new action", () => {
-  assert.match(source, /if \(d\.generationRecoveryPending && d\.generationIntentId && d\.generationIntentPayload\) \{[\s\S]*?reconcileGeneratingDrafts\(\);[\s\S]*?return;/);
+  assert.match(source, /if \(d\.generationRecoveryPending && d\.generationIntentId && d\.generationIntentPayload\) \{[\s\S]*?reconcileGeneratingDrafts\(\{ onAttemptState: presentGenerationAttempt \}\);[\s\S]*?return;/);
+});
+
+test("visible setup and attempt are committed before the generation run can create placeholders", () => {
+  assert.match(handler, /prepareGenerationAttempt\([\s\S]*?await runAiGeneration\(\{ parent, opts, requestId: attemptId, setupKey \}/);
+  assert.match(source, /onGenerate=\{\(opts, setup\) => handleAiGenerate\(opts, undefined, setup\)\}/);
+});
+
+test("pending and terminal feedback share the stable attempt toast id", () => {
+  assert.match(source, /generationToastCommand\(summary\)/);
+  assert.doesNotMatch(handler, /toast\.success\(totalPins === 1/);
+  assert.match(handler, /summary\.state === "unknown"/);
 });
 
 test("the component does not maintain a second worker-only placeholder implementation", () => {
