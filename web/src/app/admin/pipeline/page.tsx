@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { AlertTriangle, Lock, Workflow } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getPipelineStatus } from "@/lib/server/pipelineStatus";
+import { AdminT, AdminTFmt } from "../AdminT";
+import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 export const dynamic = "force-dynamic";
 
@@ -12,16 +14,26 @@ function fmtDateTime(iso: string | null): string {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(t));
 }
 
-function fmtRelative(iso: string | null): string {
-  if (!iso) return "never";
+// Returns a catalog key + interpolation vars so the value renders in the admin
+// language via <AdminTFmt>, or null for an un-parseable/absent instant (caller
+// renders the em-dash placeholder). Never emits hardcoded English.
+function relativeParts(iso: string | null): { key: AdminMessageKey; vars: Record<string, number> } | null {
+  if (!iso) return { key: "time.relative.never", vars: {} };
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
-  const mins = Math.round((Date.now() - t) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (!Number.isFinite(t)) return null;
+  const diff = Date.now() - t;
+  const mins = Math.round(diff / 60000);
+  if (mins < 1) return { key: "time.relative.justNow", vars: {} };
+  if (mins < 60) return { key: "time.relative.minutesAgo", vars: { n: mins } };
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return { key: "time.relative.hoursAgo", vars: { n: hrs } };
+  return { key: "time.relative.daysAgo", vars: { n: Math.round(hrs / 24) } };
+}
+
+function Relative({ iso }: { iso: string | null }) {
+  const parts = relativeParts(iso);
+  if (!parts) return <>—</>;
+  return <AdminTFmt k={parts.key} vars={parts.vars} />;
 }
 
 function fmtDuration(sec: number | null): string {
@@ -72,19 +84,19 @@ export default async function AdminPipelinePage() {
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold" style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#4B5563" }}>
               <Lock className="h-3.5 w-3.5" />
-              Super Admin only · Internal
+              <AdminT k="pipeline.badge" />
             </div>
-            <h1 className="text-[25px] font-black tracking-tight text-gray-950">Pipeline / Jobs</h1>
-            <p className="mt-1 text-[13px] text-gray-500">Latest run per job — status, timing, row counts, and errors. Read-only.</p>
+            <h1 className="text-[25px] font-black tracking-tight text-gray-950"><AdminT k="pipeline.title" /></h1>
+            <p className="mt-1 text-[13px] text-gray-500"><AdminT k="pipeline.subtitle" /></p>
           </div>
           {p.available && (
             <div className="flex gap-2">
               <div className="rounded-lg border px-4 py-3 text-center" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
-                <p className="text-[11px] font-bold uppercase text-gray-400">Runs today</p>
+                <p className="text-[11px] font-bold uppercase text-gray-400"><AdminT k="pipeline.stat.runsToday" /></p>
                 <p className="mt-1 text-[20px] font-black text-gray-950">{p.runsToday.toLocaleString()}</p>
               </div>
               <div className="rounded-lg border px-4 py-3 text-center" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
-                <p className="text-[11px] font-bold uppercase text-gray-400">Failed today</p>
+                <p className="text-[11px] font-bold uppercase text-gray-400"><AdminT k="pipeline.stat.failedToday" /></p>
                 <p className="mt-1 text-[20px] font-black" style={{ color: p.failedToday > 0 ? "#B91C1C" : "#030712" }}>{p.failedToday.toLocaleString()}</p>
               </div>
             </div>
@@ -95,7 +107,7 @@ export default async function AdminPipelinePage() {
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <p className="text-[13px] font-semibold text-amber-900">Pipeline job history table not available yet.</p>
+              <p className="text-[13px] font-semibold text-amber-900"><AdminT k="pipeline.unavailable" /></p>
             </div>
           </div>
         ) : (
@@ -111,17 +123,17 @@ export default async function AdminPipelinePage() {
                 <table className="w-full text-[12.5px]" style={{ minWidth: 1180 }}>
                   <thead>
                     <tr className="border-b text-left text-[10px] uppercase text-gray-400" style={{ borderColor: "#EEF0F3" }}>
-                      <th className="px-4 py-2.5 font-bold">Job</th>
-                      <th className="px-3 py-2.5 font-bold">Status</th>
-                      <th className="px-3 py-2.5 font-bold">Started</th>
-                      <th className="px-3 py-2.5 font-bold">Ended</th>
-                      <th className="px-3 py-2.5 font-bold">Duration</th>
-                      <th className="px-3 py-2.5 font-bold">Processed</th>
-                      <th className="px-3 py-2.5 font-bold">Skipped</th>
-                      <th className="px-3 py-2.5 font-bold">Failed</th>
-                      <th className="px-3 py-2.5 font-bold">Retryable</th>
-                      <th className="px-3 py-2.5 font-bold">Last success</th>
-                      <th className="px-4 py-2.5 font-bold">Error</th>
+                      <th className="px-4 py-2.5 font-bold"><AdminT k="pipeline.col.job" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.status" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.started" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.ended" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.duration" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.processed" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.skipped" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.failed" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.retryable" /></th>
+                      <th className="px-3 py-2.5 font-bold"><AdminT k="pipeline.col.lastSuccess" /></th>
+                      <th className="px-4 py-2.5 font-bold"><AdminT k="pipeline.col.error" /></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -135,8 +147,8 @@ export default async function AdminPipelinePage() {
                         <td className="px-3 py-2.5 text-gray-700">{fmtNum(j.processedRows)}</td>
                         <td className="px-3 py-2.5 text-gray-500">{fmtNum(j.skippedRows)}</td>
                         <td className="px-3 py-2.5" style={{ color: (j.failedRows ?? 0) > 0 ? "#B91C1C" : "#6B7280" }}>{fmtNum(j.failedRows)}</td>
-                        <td className="px-3 py-2.5 text-gray-600">{j.retryable === null ? <span className="text-gray-300">—</span> : j.retryable ? "Yes" : "No"}</td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-gray-600">{fmtRelative(j.lastSuccessAt)}</td>
+                        <td className="px-3 py-2.5 text-gray-600">{j.retryable === null ? <span className="text-gray-300">—</span> : j.retryable ? <AdminT k="pipeline.retryable.yes" /> : <AdminT k="pipeline.retryable.no" />}</td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-gray-600"><Relative iso={j.lastSuccessAt} /></td>
                         <td className="max-w-[240px] px-4 py-2.5 text-[11.5px] text-gray-500">
                           {j.errorCode && <span className="mr-1 font-bold text-red-600">{j.errorCode}</span>}
                           <span className="text-gray-500" title={j.errorReason ?? undefined}>{na(j.errorReason)}</span>
@@ -148,19 +160,19 @@ export default async function AdminPipelinePage() {
               </div>
             ) : (
               <div className="rounded-xl border px-4 py-16 text-center text-[13px] text-gray-400" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
-                pipeline_runs is present but has no rows yet.
+                <AdminT k="pipeline.empty" />
               </div>
             )}
 
             <p className="mt-3 text-[11px] text-gray-400">
-              Skipped rows, failed rows, error code, and retryable are read from run metadata when present (otherwise —). &ldquo;Today&rdquo; is since 00:00 UTC.
+              <AdminT k="pipeline.footer.note" />
             </p>
           </>
         )}
 
         <div className="mt-5 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-semibold" style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#6B7280" }}>
           <Workflow className="h-4 w-4 text-emerald-600" />
-          Read-only. No run / requeue / apply / timer / product-supply / scoring controls on this page.
+          <AdminT k="pipeline.footer.readOnly" />
         </div>
       </div>
     </main>
