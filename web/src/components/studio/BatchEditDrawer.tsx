@@ -1636,8 +1636,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "publishTo":
                               return (
                                 <td key={c.id} style={td}>
-                                  <span data-testid="batch-edit-publish-to" title={p.publishTo || platformName("pinterest")} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: UI.textSec, fontSize: 10.5, textTransform: "capitalize" }}>
-                                    {p.publishTo || platformName("pinterest")}
+                                  <span data-testid="batch-edit-publish-to" data-empty={!p.publishTo ? "true" : "false"}
+                                    title={p.publishTo || tr("studioBoard.card.noSavedDestination")}
+                                    style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: p.publishTo ? UI.textSec : UI.textMuted, fontSize: 10.5, textTransform: p.publishTo ? "capitalize" : "none", fontStyle: p.publishTo ? "normal" : "italic" }}>
+                                    {p.publishTo || tr("studioBoard.card.noSavedDestination")}
                                   </span>
                                 </td>
                               );

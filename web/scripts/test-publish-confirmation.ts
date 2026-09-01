@@ -19,7 +19,8 @@ const storage = new FakeStorage();
 /* eslint-disable @typescript-eslint/no-require-imports */
 const pinDraftStore = require("../src/lib/pinDraftStore") as typeof import("../src/lib/pinDraftStore");
 const { publishContent } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
-const { buildPublishConfirmation, confirmPublishSnapshot } = require("../src/lib/studio/publishConfirmation") as typeof import("../src/lib/studio/publishConfirmation");
+const { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations } = require("../src/lib/studio/publishConfirmation") as typeof import("../src/lib/studio/publishConfirmation");
+const { contentDestinations } = require("../src/lib/contentDraftModel") as typeof import("../src/lib/contentDraftModel");
 /* eslint-enable @typescript-eslint/no-require-imports */
 import type { PinDraft } from "../src/lib/pinDraftStore";
 import type { PublishContentDeps } from "../src/lib/studio/publishContent";
@@ -74,6 +75,8 @@ async function main() {
   });
   await test("legacy board/account never becomes a default Pinterest destination", async () => {
     const draft = seed({ legacyOnly: true }); const fake = deps();
+    assert.equal(contentDestinations(draft).length, 1, "legacy result projection remains available for historical records");
+    assert.equal(explicitPublishDestinations(draft).length, 0, "legacy projection is not a saved publishing decision");
     const snapshot = buildPublishConfirmation(draft);
     assert.equal(snapshot.publishableDestinations.length, 0);
     assert(snapshot.blockers.some(item => item.code === "no_destinations"));
@@ -142,7 +145,14 @@ async function main() {
     await publishContent(draft.id, { confirmation: receipt, deps: fake.value });
     const replay = await publishContent(draft.id, { confirmation: receipt, deps: fake.value });
     assert.equal(fake.pinCalls.length, 1);
-    assert.equal(replay.blocked, "invalid_confirmation");
+    // Store timestamps have millisecond resolution. If the first publish finishes in
+    // the same millisecond as the snapshot, receipt validation can still match; the
+    // completed intent must then resolve as an idempotent no-op. A later timestamp
+    // invalidates the receipt instead. Both paths are safe only when neither dispatches.
+    assert(
+      replay.blocked === "invalid_confirmation" || replay.nothingToRetry === true,
+      "a duplicate confirmation must fail closed or resolve as a completed no-op",
+    );
     assert.equal(buildPublishConfirmation(pinDraftStore.getDraft(draft.id)!, { onlyPending: true }).intentId, snapshot.intentId);
   });
   await test("ambiguous delivery locks resubmit under the same intent", async () => {
@@ -191,6 +201,31 @@ async function main() {
     assert(dialog.includes('aria-labelledby="confirm-publish-title"')); assert(dialog.includes('aria-live="polite"'));
     assert(dialog.includes('width: "min(560px, 100%)"')); assert(dialog.includes('overflowX: "hidden"'));
     assert(dialog.includes('t("publishConfirm.title")')); assert(!dialog.includes(">Publish now<"));
+  });
+  await test("CP-14 card and Batch presentation use explicit destination authority", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/studio/PinBoardCard.tsx"), "utf8");
+    const board = readFileSync(join(process.cwd(), "src/components/studio/StudioBoard.tsx"), "utf8");
+    const batch = readFileSync(join(process.cwd(), "src/components/studio/BatchEditDrawer.tsx"), "utf8");
+    assert(card.includes("const destinations = explicitPublishDestinations(draft)"));
+    assert(card.includes('data-testid="card-no-saved-destination"'));
+    assert(card.includes('data-testid="card-publish-entry-issue"'));
+    assert(!card.includes("const destinations = contentDestinations(draft)"));
+    assert(board.includes("publishTo: explicitPublishDestinations(draft)"));
+    assert(!board.includes('|| "pinterest"'));
+    assert(batch.includes('data-empty={!p.publishTo ? "true" : "false"}'));
+    assert(!batch.includes('p.publishTo || platformName("pinterest")'));
+  });
+  await test("CP-14 persistent blocker and three-locale copy contracts are present", () => {
+    const board = readFileSync(join(process.cwd(), "src/components/studio/StudioBoard.tsx"), "utf8");
+    assert(board.includes('"image_unavailable"'));
+    assert(board.includes('"field_too_long"'));
+    assert(board.includes("setPublishEntryIssues"));
+    for (const path of ["src/lib/i18n/messages/en/studioBoard.ts", "src/lib/i18n/messages/zh-CN.ts", "src/lib/i18n/messages/zh-TW.ts"]) {
+      const messages = readFileSync(join(process.cwd(), path), "utf8");
+      assert(messages.includes('"studioBoard.card.noSavedDestination"'), `${path} missing no-destination copy`);
+      assert(messages.includes('"studioBoard.card.publishBlocked.imageUnavailable"'), `${path} missing media blocker copy`);
+      assert(messages.includes('"studioBoard.card.publishBlocked.fieldTooLong"'), `${path} missing field blocker copy`);
+    }
   });
 
   console.log(`\nPublish confirmation: ${passed} passed, ${failed} failed\n`);

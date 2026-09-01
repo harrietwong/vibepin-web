@@ -44,7 +44,7 @@ import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
-import { PinBoardCard } from "@/components/studio/PinBoardCard";
+import { PinBoardCard, type PublishEntryIssue } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI, STUDIO_UI, canDockStudioPlan } from "@/components/studio/boardUI";
@@ -54,9 +54,9 @@ import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
-import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
+import { contentMedia } from "@/lib/contentDraftModel";
 import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
-import { buildPublishConfirmation, confirmPublishSnapshot, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import {
   partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
   type BulkPublishOutcomeRow, type BulkPublishSummary,
@@ -213,9 +213,6 @@ export function StudioBoard() {
   // admits only source === "ai_generated_from_upload" cards with a ready quality judge,
   // so the wider input cannot change which ids come back.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
-  const recentBoardName = useMemo(() => allItems
-    .map(item => item.draft.boardName?.trim())
-    .find(name => !!name && !isInternalBoardName(name)) || "", [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   const customerBoards = useMemo(() => boards.filter(board => !isInternalBoardName(board.name)), [boards]);
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
@@ -382,7 +379,9 @@ export function StudioBoard() {
     taggedCount: draft.linkedProducts?.length,
     category: draft.category,
     mediaCount: contentMedia(draft).length,
-    publishTo: contentDestinations(draft).map(destination => destination.provider).join(", ") || "pinterest",
+    // Batch rows must not resurrect the pre-confirmation default-Pinterest fiction.
+    // Empty means "choose destinations" in the drawer; it is not a provider choice.
+    publishTo: explicitPublishDestinations(draft).map(destination => destination.provider).join(", "),
   })), [allItems]);
   const selectedBatchPins = useMemo(() => batchPins.filter(pin => selectedIds.has(pin.pinId)), [batchPins, selectedIds]);
 
@@ -517,6 +516,10 @@ export function StudioBoard() {
   // Title ≤100 / description ≤500 over-limit errors (WP1 follow-up). Keyed by draft id,
   // cleared as soon as the offending field is edited back under the cap.
   const [fieldErrors, setFieldErrors] = useState<Record<string, PinFieldErrors>>({});
+  // A Publish click can stop before confirmation on local media/text validation. Keep
+  // that reason on the card instead of relying on a transient toast that can disappear
+  // before the merchant knows why "Publish" seemed to do nothing (CP-14).
+  const [publishEntryIssues, setPublishEntryIssues] = useState<Record<string, PublishEntryIssue>>({});
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
     let next = patch;
@@ -545,9 +548,28 @@ export function StudioBoard() {
     if ("title" in patch || "description" in patch) {
       setFieldErrors(prev => {
         const cur = pinDraftStore.getDraft(id);
-        const next = pinFieldErrors({ title: cur?.title, description: cur?.description });
-        if (!next.title && !next.description && !prev[id]) return prev;
-        return { ...prev, [id]: next };
+        const errors = pinFieldErrors({ title: cur?.title, description: cur?.description });
+        if (!errors.title && !errors.description && !prev[id]) return prev;
+        return { ...prev, [id]: errors };
+      });
+      setPublishEntryIssues(prev => {
+        if (prev[id] !== "field_too_long") return prev;
+        const cur = pinDraftStore.getDraft(id);
+        const errors = pinFieldErrors({ title: cur?.title, description: cur?.description });
+        if (errors.title || errors.description) return prev;
+        const remaining = { ...prev };
+        delete remaining[id];
+        return remaining;
+      });
+    }
+    if ("imageUrl" in patch || "assetError" in patch) {
+      setPublishEntryIssues(prev => {
+        if (prev[id] !== "image_unavailable") return prev;
+        const cur = pinDraftStore.getDraft(id);
+        if (!cur || cur.assetError || !isPublishableImage(cur.imageUrl)) return prev;
+        const remaining = { ...prev };
+        delete remaining[id];
+        return remaining;
       });
     }
   }, [boards, flashSaved]);
@@ -598,6 +620,8 @@ export function StudioBoard() {
   const requestPublish = useCallback((id: string, options?: { onlyPending?: boolean }) => {
     const draft = pinDraftStore.getDraft(id); if (!draft) return;
     if (draft.assetError || !isPublishableImage(draft.imageUrl)) {
+      setActiveId(id);
+      setPublishEntryIssues(previous => ({ ...previous, [id]: "image_unavailable" }));
       toast.error(tr("studioBoard.toast.imageUnavailable"));
       return;
     }
@@ -605,9 +629,16 @@ export function StudioBoard() {
     if (lenErrors.title || lenErrors.description) {
       setActiveId(id);
       setFieldErrors(previous => ({ ...previous, [id]: lenErrors }));
+      setPublishEntryIssues(previous => ({ ...previous, [id]: "field_too_long" }));
       toast.error(tr("studioBoard.toast.fieldTooLong"));
       return;
     }
+    setPublishEntryIssues(previous => {
+      if (!previous[id]) return previous;
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
     // Opening the dialog is read-only. It exposes missing/invalid destinations in the
     // disabled-reason area instead of silently repairing them with a default account.
     setPublishConfirmation(buildPublishConfirmation(draft, { onlyPending: options?.onlyPending ?? true }));
@@ -1393,7 +1424,6 @@ export function StudioBoard() {
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
                 topPick={topPickIds.has(draft.id)}
-                fallbackBoardName={recentBoardName}
                 selected={selectedIds.has(draft.id)}
                 onSelectedChange={(id, selected) => setSelectedIds(previous => {
                   const next = new Set(previous);
@@ -1406,6 +1436,7 @@ export function StudioBoard() {
                 boardFieldError={scheduleErrors[draft.id] || undefined}
                 titleFieldError={fieldErrors[draft.id]?.title}
                 descriptionFieldError={fieldErrors[draft.id]?.description}
+                publishEntryIssue={publishEntryIssues[draft.id]}
                 onPersist={handlePersist}
                 onSchedule={handleSchedule} onCustomSchedule={handleCustomSchedule}
                 onSelectProduct={(pin) => { setProductPickerTargetId(pin.id); setShowProductPicker(true); }}

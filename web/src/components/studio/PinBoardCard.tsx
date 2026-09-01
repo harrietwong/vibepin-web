@@ -29,7 +29,7 @@ import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio
 import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
 import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
-import { contentDestinationResults, contentDestinations, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
+import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -48,6 +48,7 @@ import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { BUI, STUDIO_UI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
+import { explicitPublishDestinations } from "@/lib/studio/publishConfirmation";
 
 const PERSIST_DEBOUNCE = 400;
 
@@ -131,11 +132,6 @@ function nextStepFor(category: "transient" | "content" | "auth" | undefined, err
   if (category === "content") return { key: "studioBoard.card.nextStep.edit", action: "edit" };
   return null; // transient / unknown: Retry alone is the whole remedy.
 }
-function customerFacingBoardName(...names: Array<string | null | undefined>): string {
-  const name = names.map(item => item?.trim()).find(item => item
-    && !/^(qa board|vibepin sandbox demo board|sandbox demo board)$/i.test(item));
-  return name || "Pinterest";
-}
 function menuItemStyle(withTopBorder: boolean, danger: boolean): React.CSSProperties {
   return {
     display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none",
@@ -183,14 +179,14 @@ const keywordChipXStyle: React.CSSProperties = {
   borderRadius: 999, background: "none", color: BUI.textMuted, cursor: "pointer",
 };
 
+export type PublishEntryIssue = "image_unavailable" | "field_too_long";
+
 export type PinBoardCardProps = {
   draft: PinDraft;
   lifecycle: PinLifecycle;
   publishing: boolean;
   /** Derived by the board: the qualitative "Top pick" of this generation batch. */
   topPick?: boolean;
-  /** Last customer-selected Board name, used only as a compact display fallback. */
-  fallbackBoardName?: string;
   selected?: boolean;
   onSelectedChange?: (id: string, selected: boolean) => void;
   active: boolean;
@@ -206,6 +202,8 @@ export type PinBoardCardProps = {
   /** In-place title/description validation error (set when Schedule/Publish fails on an over-limit field). */
   titleFieldError?: string;
   descriptionFieldError?: string;
+  /** Persistent reason a Publish-entry click stopped before the confirmation dialog. */
+  publishEntryIssue?: PublishEntryIssue;
   onPersist: (id: string, patch: Partial<PinDraft>) => void;
   onSchedule: (id: string) => void;
   onCustomSchedule: (id: string, date: string, time: string) => void;
@@ -260,7 +258,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [customDate, setCustomDate] = useState(() => draft.scheduledDate ?? "");
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
   const [selectedProviders, setSelectedProviders] = useState<PublishProvider[]>(() => {
-    const providers = contentDestinations(draft).map(item => item.provider);
+    const providers = explicitPublishDestinations(draft).map(item => item.provider);
     return Array.from(new Set(providers));
   });
   /**
@@ -269,7 +267,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
    * its own Pinterest board) across a remount.
    */
   const [selectedAccountIds, setSelectedAccountIds] = useState<SelectedAccount[]>(() =>
-    contentDestinations(draft)
+    explicitPublishDestinations(draft)
       .filter(item => item.socialConnectionId)
       .map(item => ({
         provider: item.provider,
@@ -522,6 +520,21 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
   const startEditing = useCallback(() => { setEditing(true); props.onSetActive(draft.id); }, [props, draft.id]);
   const stopEditing = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
+  const publishEntryNotice = props.publishEntryIssue ? (
+    <div data-testid="card-publish-entry-issue" role="alert" data-code={props.publishEntryIssue}
+      style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: "#fffbeb", color: "#92400e" }}>
+      <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 5, fontSize: 10.5, fontWeight: 700, lineHeight: 1.4 }}>
+        <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} />
+        {tr(props.publishEntryIssue === "image_unavailable"
+          ? "studioBoard.card.publishBlocked.imageUnavailable"
+          : "studioBoard.card.publishBlocked.fieldTooLong")}
+      </span>
+      <button type="button" data-testid="card-publish-entry-review" onClick={startEditing}
+        style={{ flexShrink: 0, border: 0, background: "none", color: BUI.purple, padding: 0, fontSize: 10.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+        {tr("studioBoard.card.publishBlocked.review")}
+      </button>
+    </div>
+  ) : null;
   /**
    * THE destination writer: the merchant's platform/account choice, frozen into
    * `scheduledDestinations` — the same record the due-time worker reads.
@@ -725,7 +738,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const failed = lifecycle === "failed";
   const needsAttention = failed || hasFailedDestination(draft);
   const destinationResults = contentDestinationResults(draft);
-  const destinations = contentDestinations(draft);
+  // Chips represent only an explicit, saved publishing decision. The broader
+  // contentDestinations() projection intentionally keeps legacy Board-only rows alive
+  // for historical results, but presenting that projection here made "Home Decor"
+  // look like an account-backed destination while confirmation correctly saw zero.
+  const destinations = explicitPublishDestinations(draft);
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
@@ -745,7 +762,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     const pinterest = platformName("pinterest");
     return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
   };
-  const boardSummary = customerFacingBoardName(draft.boardName, props.fallbackBoardName);
   const linkedProduct = (draft.linkedProducts ?? []).find(product => product.productId === draft.primaryProductId)
     ?? draft.linkedProducts?.[0]
     ?? null;
@@ -1032,6 +1048,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           </div>
         )}
         {syncIssueNotice}
+        {publishEntryNotice}
         <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
           {/* Posted header line: when it went live + a single "Needs attention" chip
               on a partial success. One notice, never a stack (PRD §5). */}
@@ -1095,19 +1112,33 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 // draft keeps showing its real state instead of reverting to pending.
                 const result = findDestinationResult(destinationResults, destination);
                 const isFailed = result?.status === "failed";
+                const ready = !!destination.socialConnectionId
+                  && (destination.provider !== "pinterest" || !!destination.boardId);
                 return (
                   <span key={destination.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 8px", borderRadius: 8,
-                    border: `1px solid ${isFailed ? "#f59e0b66" : BUI.border}`, background: isFailed ? "#fffbeb" : BUI.surface2,
-                    color: isFailed ? "#b45309" : BUI.textSec, fontSize: 10.5, fontWeight: 750 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: 999, background: isFailed ? "#f59e0b" : result?.status === "published" ? "#22c55e" : BUI.textMuted }} />
-                    {destination.provider === "pinterest" ? customerFacingBoardName(destination.boardName, boardSummary) : platformName(destination.provider as SocialProvider)}
+                    border: `1px solid ${isFailed || !ready ? "#f59e0b66" : BUI.border}`, background: isFailed || !ready ? "#fffbeb" : BUI.surface2,
+                    color: isFailed || !ready ? "#92400e" : BUI.textSec, fontSize: 10.5, fontWeight: 750 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: 999, background: isFailed || !ready ? "#f59e0b" : result?.status === "published" ? "#22c55e" : BUI.textMuted }} />
+                    {destination.provider === "pinterest"
+                      ? (destination.boardName || destination.boardId || platformName("pinterest"))
+                      : platformName(destination.provider as SocialProvider)}
                     {/* The account is what disambiguates two chips on one platform. */}
                     {(destination.accountLabel || result?.accountLabel) && (
                       <span style={{ color: BUI.textMuted, fontWeight: 650 }}>{destination.accountLabel || result?.accountLabel}</span>
                     )}
+                    {!ready && <span style={{ color: "#b45309", fontWeight: 750 }}>{tr("studioBoard.card.destinationNeedsSetup")}</span>}
                   </span>
                 );
               })}
+              {!destinations.length && (
+                <button type="button" data-testid="card-no-saved-destination" onClick={() => setDestinationsOpen(true)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, minHeight: 30, padding: "5px 9px", borderRadius: 8,
+                    border: `1px dashed ${BUI.borderHi}`, background: BUI.surface2, color: BUI.textSec, fontSize: 10.5, fontWeight: 750,
+                    cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <Layers aria-hidden="true" style={{ width: 12, height: 12, color: BUI.textMuted }} />
+                  {tr("studioBoard.card.noSavedDestination")}
+                </button>
+              )}
               {/* PRD §6: the picker opens ANCHORED TO THE CHIPS. Editing where a
                   Content publishes must not require expanding the whole card — that
                   cost the merchant their place on the board for a two-click change.
@@ -1334,6 +1365,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       </div>
 
       {syncIssueNotice}
+      {publishEntryNotice}
       <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
         {/* AI actions — Generate copy primary, Create AI Version secondary */}
         <PinFieldsForm value={fields} boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
