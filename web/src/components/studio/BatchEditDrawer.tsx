@@ -17,7 +17,12 @@ import {
   type LinkedProduct,
 } from "@/lib/pinMetadata";
 import { startPinterestConnect, type PinterestBoard } from "@/lib/pinterestClient";
-import { platformName } from "@/lib/social/platforms";
+import { isSocialProvider, platformName } from "@/lib/social/platforms";
+import type { SocialProvider } from "@/lib/social/platforms";
+import type { PlatformConnectionSummary } from "@/lib/social/types";
+import { PublishDestinations, type SelectedAccount } from "@/components/social/PublishDestinations";
+import { buildScheduledDestinations, legacyPinterestMirror } from "@/lib/social/scheduledDestinations";
+import type { ScheduledDestination } from "@/lib/pinDraftStore";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { publishContent } from "@/lib/studio/publishContent";
 import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
@@ -82,6 +87,10 @@ export type RowEdit = {
   linkedProductImageUrl?: string | null;
   linkedProductSource?:   string | null;
   isAutoLinked?:       boolean;
+  /** Exact canonical provider/account/Board/Page intent shared by every surface. */
+  scheduledDestinations?: ScheduledDestination[];
+  targetConnectionId?: string;
+  targetAccountLabel?: string;
 };
 
 export type BatchApplyOpts = { rowEdits: Record<string, RowEdit> };
@@ -535,14 +544,94 @@ function SchedulePopover({ count, onApply, onClose }: {
     <Modal title={(count === 1 ? tr("studioModals.schedule.titleOne") : tr("studioModals.schedule.titleMany").replace("{n}", String(count)))}
       subtitle={tr("studioModals.schedule.subtitle")} onClose={onClose}
       footer={<>
+        <button type="button" data-testid="batch-edit-schedule-clear" onClick={() => onApply("", "")} style={{ ...btnBase, marginRight: "auto" }}>{tr("studioModals.schedule.clear")}</button>
         <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
-        <button type="button" disabled={!date} data-testid="batch-edit-schedule-apply" onClick={() => date && onApply(date, time)}
-          style={{ ...btnBase, border: "none", background: date ? UI.gradient : UI.cardElev, color: "#fff", opacity: date ? 1 : 0.5 }}>{tr("studioModals.apply")}</button>
+        <button type="button" disabled={!date || !time} data-testid="batch-edit-schedule-apply" onClick={() => date && time && onApply(date, time)}
+          style={{ ...btnBase, border: "none", background: date && time ? UI.gradient : UI.cardElev, color: "#fff", opacity: date && time ? 1 : 0.5 }}>{tr("studioModals.apply")}</button>
       </>}>
       <label style={labelStyle}>{tr("studioModals.schedule.date")}</label>
       <input type="date" data-testid="batch-edit-schedule-date" value={date} onChange={e => setDate(e.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} />
       <label style={{ ...labelStyle, marginTop: 14 }}>{tr("studioModals.schedule.time")}</label>
       <input type="time" data-testid="batch-edit-schedule-time" value={time} onChange={e => setTime(e.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} />
+    </Modal>
+  );
+}
+
+function PublishingDestinationsPopover({ count, initial, mixed, onApply, onClose }: {
+  count: number;
+  initial: ScheduledDestination[];
+  mixed: boolean;
+  onApply: (destinations: ScheduledDestination[]) => void;
+  onClose: () => void;
+}) {
+  const { t: tr } = useLocale();
+  const [providers, setProviders] = useState<SocialProvider[]>(() =>
+    Array.from(new Set(initial.map(item => item.provider))).filter((provider): provider is SocialProvider =>
+      provider === "pinterest" || provider === "instagram" || provider === "facebook"),
+  );
+  const [accounts, setAccounts] = useState<SelectedAccount[]>(() => initial.map(item => ({
+    provider: item.provider,
+    id: item.socialConnectionId,
+    accountLabel: item.accountLabel,
+    boardId: item.boardId,
+    boardName: item.boardName,
+  })));
+  const [summaries, setSummaries] = useState<PlatformConnectionSummary[]>([]);
+
+  const exactAccounts = accounts.filter(account => providers.includes(account.provider as SocialProvider));
+  const missingAccount = providers.some(provider => !exactAccounts.some(account => account.provider === provider));
+  const missingBoard = exactAccounts.some(account => account.provider === "pinterest" && !account.boardId?.trim());
+  const canApply = providers.length > 0 && !missingAccount && !missingBoard;
+
+  function submit() {
+    if (!canApply) return;
+    const destinations = buildScheduledDestinations(
+      exactAccounts.map(account => ({
+        provider: account.provider as SocialProvider,
+        socialConnectionId: account.id,
+        accountLabel: account.accountLabel,
+        boardId: account.boardId,
+        boardName: account.boardName,
+      })),
+      {},
+      summaries,
+    );
+    if (destinations.length !== exactAccounts.length) return;
+    onApply(destinations);
+  }
+
+  return (
+    <Modal
+      title={tr("studioModals.publishDestinations.title").replace("{n}", String(count))}
+      subtitle={tr("studioModals.publishDestinations.subtitle")}
+      onClose={onClose}
+      footer={<>
+        <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
+        <button
+          type="button"
+          data-testid="batch-edit-publish-destinations-apply"
+          disabled={!canApply}
+          onClick={submit}
+          style={{ ...btnBase, border: "none", background: canApply ? UI.gradient : UI.cardElev, color: "#fff", opacity: canApply ? 1 : 0.5 }}
+        >
+          {tr("studioModals.apply")}
+        </button>
+      </>}
+    >
+      {mixed && <p data-testid="batch-edit-destination-mixed" style={{ margin: "0 0 10px", color: UI.warning, fontSize: 11.5 }}>{tr("studioModals.publishDestinations.mixed")}</p>}
+      <PublishDestinations
+        selected={providers}
+        onSelectedChange={setProviders}
+        selectedAccountIds={accounts}
+        onSelectedAccountIdsChange={setAccounts}
+        onSummariesChange={setSummaries}
+        onConnectPinterest={() => { void startPinterestConnect(); }}
+      />
+      {(missingAccount || missingBoard) && (
+        <p data-testid="batch-edit-destination-disabled-reason" style={{ margin: "10px 0 0", color: UI.warning, fontSize: 11.5 }}>
+          {missingAccount ? tr("studioModals.publishDestinations.accountRequired") : tr("studioModals.publishDestinations.boardRequired")}
+        </p>
+      )}
     </Modal>
   );
 }
@@ -710,7 +799,7 @@ const DEFAULT_W: Record<ColId, number> = {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type BulkKind = null | "destination" | "board" | "schedule" | "product";
+type BulkKind = null | "destination" | "publishing_destinations" | "board" | "schedule" | "product";
 type PublishPhase = null | "confirm" | "blocked" | "running" | "done";
 type PublishResultRow = { pinId: string; title: string; status: "published" | "failed" | "skipped"; message?: string; url?: string };
 
@@ -1170,6 +1259,21 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     setBulk(null);
   }
 
+  function applyBulkPublishingDestinations(destinations: ScheduledDestination[]) {
+    const next = { ...rowEdits };
+    const mirror = legacyPinterestMirror(destinations);
+    for (const pinId of checkedRows) {
+      next[pinId] = {
+        ...next[pinId],
+        scheduledDestinations: destinations.map(destination => ({ ...destination })),
+        ...mirror,
+      };
+    }
+    commit(next);
+    setBulk(null);
+    toast.success(tr("studioModals.publishDestinations.applied").replace("{n}", String(checkedRows.size)));
+  }
+
   function resolveProductFromUrl(url: string): LinkedProduct {
     const norm = normalizeProductUrl(url);
     if (norm) {
@@ -1260,10 +1364,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         destinationBlocked.push({ pinId: pin.pinId, title: pin.title || tr("studioModals.untitledPin"), missing: ["saved publishing destination"] });
         continue;
       }
-      const board = effBoard(pin, rowEdits);
-      const scheduledDestinations = (draft.scheduledDestinations ?? []).map(destination => destination.provider === "pinterest"
-        ? { ...destination, boardId: board.id || destination.boardId, boardName: board.name || destination.boardName }
-        : destination);
+      const scheduledDestinations = rowEdits[pin.pinId]?.scheduledDestinations ?? draft.scheduledDestinations ?? [];
       const snapshot = buildPublishConfirmation({
         ...draft,
         imageUrl: pin.imageUrl || draft.imageUrl,
@@ -1450,6 +1551,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           <div data-testid="batch-edit-selection-toolbar" style={{ padding: "8px 22px", borderBottom: `1px solid ${UI.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, background: UI.bg2 }}>
             <span data-testid="batch-edit-selected-count" style={{ fontSize: 11.5, fontWeight: 700, color: "#C4B5FD", border: `1px solid ${UI.borderStr}`, borderRadius: 20, padding: "3px 11px" }}>{tr("studioModals.selectedCount").replace("{n}", String(checkedCount))}</span>
             <button type="button" data-testid="batch-edit-bulk-destination-url" onClick={() => setBulk("destination")} style={btnBase}><Link2 style={{ width: 13, height: 13 }} /> {tr("studioModals.col.destinationUrl")}</button>
+            <button type="button" data-testid="batch-edit-bulk-publish-destinations" onClick={() => setBulk("publishing_destinations")} style={btnBase}><Send style={{ width: 13, height: 13 }} /> {tr("studioModals.col.publishTo")}</button>
             <button type="button" data-testid="batch-edit-bulk-board" onClick={() => setBulk("board")} style={btnBase}><Package style={{ width: 13, height: 13 }} /> {tr("studioModals.col.board")}</button>
             <button type="button" data-testid="batch-edit-bulk-product" onClick={() => setBulk("product")} style={btnBase}><Tag style={{ width: 13, height: 13 }} /> {tr("studioModals.col.product")}</button>
             <button type="button" data-testid="batch-edit-bulk-schedule" onClick={() => setBulk("schedule")} style={btnBase}><Calendar style={{ width: 13, height: 13 }} /> {tr("studioModals.col.publishTime")}</button>
@@ -1634,15 +1736,22 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                 </td>
                               );
                             case "publishTo":
+                              {
+                                const exact = rowEdits[p.pinId]?.scheduledDestinations ?? pinDraftStore.getDraft(p.pinId)?.scheduledDestinations ?? [];
+                                const hasExactDestination = exact.length > 0;
+                                const label = hasExactDestination
+                                  ? exact.map(destination => `${isSocialProvider(destination.provider) ? platformName(destination.provider) : destination.provider}${destination.accountLabel ? ` · ${destination.accountLabel}` : ""}${destination.boardName ? ` / ${destination.boardName}` : ""}`).join(", ")
+                                  : tr("studioBoard.card.noSavedDestination");
                               return (
                                 <td key={c.id} style={td}>
-                                  <span data-testid="batch-edit-publish-to" data-empty={!p.publishTo ? "true" : "false"}
-                                    title={p.publishTo || tr("studioBoard.card.noSavedDestination")}
-                                    style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: p.publishTo ? UI.textSec : UI.textMuted, fontSize: 10.5, textTransform: p.publishTo ? "capitalize" : "none", fontStyle: p.publishTo ? "normal" : "italic" }}>
-                                    {p.publishTo || tr("studioBoard.card.noSavedDestination")}
+                                  <span data-testid="batch-edit-publish-to" data-empty={hasExactDestination ? "false" : "true"}
+                                    title={label}
+                                    style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: hasExactDestination ? UI.textSec : UI.textMuted, fontSize: 10.5, fontStyle: hasExactDestination ? "normal" : "italic" }}>
+                                    {label}
                                   </span>
                                 </td>
                               );
+                              }
                             case "alt":
                               return (
                                 <td key={c.id} style={td}>
@@ -1709,6 +1818,13 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
 
       {/* Bulk popovers */}
       {bulk === "destination" && <DestinationUrlPopover count={checkedCount} onApply={applyBulkDestination} onClose={() => setBulk(null)} />}
+      {bulk === "publishing_destinations" && (() => {
+        const chosen = checkedPins.map(pin => rowEdits[pin.pinId]?.scheduledDestinations ?? pinDraftStore.getDraft(pin.pinId)?.scheduledDestinations ?? []);
+        const signature = (items: ScheduledDestination[]) => JSON.stringify(items.map(item => ({ provider: item.provider, socialConnectionId: item.socialConnectionId, boardId: item.boardId ?? "" })));
+        const first = chosen[0] ?? [];
+        const mixed = chosen.some(items => signature(items) !== signature(first));
+        return <PublishingDestinationsPopover count={checkedCount} initial={mixed ? [] : first} mixed={mixed} onApply={applyBulkPublishingDestinations} onClose={() => setBulk(null)} />;
+      })()}
       {bulk === "schedule" && <SchedulePopover count={checkedCount} onApply={applyBulkSchedule} onClose={() => setBulk(null)} />}
       {bulk === "product" && <ProductPopover count={checkedCount} onApply={applyBulkProductAdd} onReplace={applyBulkProductReplace} onClose={() => setBulk(null)} />}
       {bulk === "board" && (

@@ -236,7 +236,7 @@ export async function GET(req: NextRequest) {
     // Nothing is written. The panel offers PRD §10's two options; usernames ride in
     // the query so it can name both accounts without another round trip.
     if (decision.action === "reject") {
-      const res = redirectAfterOAuth(req, "account_mismatch", verdict.returnTo);
+      const res = redirectAfterOAuth(req, decision.reason, verdict.returnTo);
       const url = new URL(res.headers.get("location") ?? "/", req.nextUrl.origin);
       if (decision.expectedUsername) url.searchParams.set("expected", decision.expectedUsername);
       if (decision.gotUsername) url.searchParams.set("got", decision.gotUsername);

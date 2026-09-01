@@ -9,7 +9,7 @@
  *
  * The rule (resolveScheduledAccount):
  *   1. an explicit pick always wins;
- *   2. exactly one connected account is unambiguous, so use it;
+ *   2. no explicit id returns null even when only one account is connected;
  *   3. several connected and no pick THROWS — guessing would publish weeks of
  *      content to the wrong account before anyone noticed.
  *
@@ -62,14 +62,14 @@ section("several connected and NO pick must be refused, never guessed");
   check("the old rule would have silently chosen A", firstConnected?.id === "ig_A");
 }
 
-section("a single connected account stays effortless");
+section("even a single connected account requires a frozen explicit id");
 {
   const r = resolveScheduledAccount("instagram", [A]);
-  check("one connected account resolves with no explicit pick", r?.id === "ig_A");
+  check("one connected account does not become a dispatch fallback", r === null);
 }
 {
   const r = resolveScheduledAccount("instagram", [A, DEAD]);
-  check("a disconnected account does not create ambiguity", r?.id === "ig_A", `got ${JSON.stringify(r)}`);
+  check("a disconnected sibling still does not make A implicit", r === null, `got ${JSON.stringify(r)}`);
 }
 
 section("nothing connected, and stale picks");
@@ -104,7 +104,7 @@ section("INT-P0-05/06 — the saved schedule is immune to later changes");
 section("Pinterest keeps account AND board");
 {
   const saved = buildScheduledDestinations(
-    [{ provider: "pinterest" }],
+    [{ provider: "pinterest", socialConnectionId: "pin_conn_1", boardId: "813814663854885698", boardName: "家居" }],
     { targetConnectionId: "pin_conn_1", targetAccountLabel: "harrietstudio", boardId: "813814663854885698", boardName: "家居" },
     () => [{ id: "pin_conn_1", connectionStatus: "connected", providerAccountUsername: "harrietstudio" }],
   );

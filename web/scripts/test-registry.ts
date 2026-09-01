@@ -59,6 +59,7 @@ export const CORE: string[] = [
   "test-account-allowance",
   "test-account-identity",
   "test-publish-capability",
+  "test-multichannel-prd-remaining",
   "test-publish-social-account-guard",
   "test-publish-results",
   "test-per-account-disconnect",

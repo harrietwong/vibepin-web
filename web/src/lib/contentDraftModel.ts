@@ -55,7 +55,7 @@ export interface PublishDestination {
   boardName?: string;
 }
 
-export type DestinationPublishStatus = "pending" | "publishing" | "published" | "failed" | "delivery_unknown";
+export type DestinationPublishStatus = "requested" | "accepted" | "pending" | "publishing" | "published" | "failed" | "delivery_unknown";
 
 /**
  * One durable record per destination of one publish (PRD §27).
@@ -83,6 +83,12 @@ export interface DestinationPublishResult {
   remoteId?: string;
   postUrl?: string;
   errorCode?: string;
+  providerStatus?: number;
+  attempt?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  intentId?: string;
+  jobId?: string;
   /** User-facing failure reason — shown verbatim on the card. */
   errorMessage?: string;
 }
@@ -202,13 +208,8 @@ export function coverMedia(draft: ContentDraftLike): ContentMedia | null {
  * Tier 1 is `resolveScheduledDestinations`, i.e. exactly what the cron worker will
  * dispatch, so what the card shows and what a scheduled run does cannot disagree.
  *
- * Tier 2 exists because that resolver's own legacy fallback needs a
- * `targetConnectionId`, and most historical drafts have none — they only ever had a
- * board (and possibly a published/failed Pinterest outcome). Dropping them would
- * silently strip the destination chip and the publish path off every pre-multi-account
- * draft. They project as Pinterest with a null connection (`pinterest:legacy`); the
- * publish path then resolves the account the same way it always did (server default,
- * adopt-once).
+ * Legacy board/account fields remain available to the result/history reader, but never
+ * become publish intent. A current publish must carry explicit stored destinations.
  */
 export function contentDestinations(draft: ContentDraftLike): PublishDestination[] {
   const intent = resolveScheduledDestinations(draft as Parameters<typeof resolveScheduledDestinations>[0]);
@@ -223,35 +224,13 @@ export function contentDestinations(draft: ContentDraftLike): PublishDestination
           socialConnectionId: d.socialConnectionId,
         };
         if (d.accountLabel) dest.accountLabel = d.accountLabel;
-        // Each Pinterest entry has its OWN board. The draft-level board is a fallback
-        // ONLY for the entry that IS the draft's legacy target (where the intent copy
-        // can lag an edit to the board field) or for a legacy entry naming no account.
-        // Applying it to every entry would hand a second account the FIRST account's
-        // board id — a board it does not own, so the Pin either fails or, worse, lands
-        // somewhere the merchant never chose.
-        if (p === "pinterest") {
-          const target = draft.targetConnectionId?.trim();
-          const own = !d.socialConnectionId || (!!target && d.socialConnectionId === target);
-          const boardId = d.boardId || (own ? draft.boardId : undefined);
-          const boardName = d.boardName || (own ? draft.boardName : undefined);
-          if (boardId) dest.boardId = boardId;
-          if (boardName) dest.boardName = boardName;
-        } else {
-          if (d.boardId) dest.boardId = d.boardId;
-          if (d.boardName) dest.boardName = d.boardName;
-        }
+        if (d.boardId) dest.boardId = d.boardId;
+        if (d.boardName) dest.boardName = d.boardName;
         return dest;
       })
       .filter((d): d is PublishDestination => d !== null);
   }
-  if (!draft.boardId && !draft.boardName && !draft.remotePinId && !draft.publishError) return [];
-  return [{
-    id: destinationKey("pinterest", null),
-    provider: "pinterest",
-    socialConnectionId: null,
-    boardId: draft.boardId,
-    boardName: draft.boardName,
-  }];
+  return [];
 }
 
 function provider(value: string): PublishProvider | null {

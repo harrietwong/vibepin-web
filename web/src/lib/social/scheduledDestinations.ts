@@ -31,10 +31,9 @@ function str(v: unknown): string {
 }
 
 /**
- * Build the intent record for a Pinterest destination from the draft's existing
- * pinned target. This is the shape the drawer writes and the shape historical
- * drafts are read AS — it is deliberately the same code path, so a legacy Pin
- * and a freshly scheduled one behave identically at due time.
+ * Build a compatibility-shaped Pinterest destination from an explicitly pinned
+ * draft target. Callers may use this for display or migration tooling; publish
+ * execution never invokes it as a fallback for missing destination intent.
  */
 export function pinterestDestinationFrom(
   draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
@@ -67,21 +66,10 @@ export function isUsableDestination(d: unknown): d is ScheduledDestination {
  * THE read rule. Everything that needs to know where a scheduled Pin should
  * publish — the due-time worker above all — must go through this.
  *
- * Stored intent wins. When there is none (every Pin scheduled before this
- * feature existed), the Pinterest target already pinned on the draft is derived
- * as an equivalent Pinterest-only intent.
- *
- * That derivation is deliberately READ-SIDE rather than a backfill migration:
- *
- *   - Rewriting ~3.7k historical payloads would bump every `updatedAt` and push
- *     a full LWW re-sync to every client — a large, irreversible cost for data
- *     we can compute exactly.
- *   - It is a pure function, so it is testable and cannot corrupt stored rows.
- *
- * It NEVER invents Instagram or Facebook. Those were never recorded for
- * historical Pins, so they cannot be recovered — and guessing them from the
- * currently-connected accounts or the workspace default would fabricate a
- * merchant decision that was never made.
+ * Only explicit stored intent is publishable. Historical Pinterest target fields
+ * remain readable for display/history, but they are not proof that the merchant
+ * confirmed a current destination. Deriving a publish target from them would be the
+ * silent/default fallback forbidden by MC-REQ-DESTINATION-MODEL.
  */
 export function resolveScheduledDestinations(
   draft: Partial<
@@ -95,10 +83,7 @@ export function resolveScheduledDestinations(
   const usable = stored.filter(isUsableDestination);
   if (usable.length) return usable;
 
-  // Legacy Pin: derive Pinterest-only from the pinned target, if it has one.
-  // `capturedAt` reflects that this was derived now, not chosen by the merchant.
-  const derived = pinterestDestinationFrom(draft, new Date().toISOString());
-  return derived ? [derived] : [];
+  return [];
 }
 
 /**
@@ -136,11 +121,9 @@ export class AmbiguousScheduleAccountError extends Error {
  *   1. An account the merchant EXPLICITLY picked always wins. Once several
  *      accounts can be connected per platform, "the first connected one" stops
  *      being a synonym for "the one they meant".
- *   2. Exactly one connected account ⇒ use it. Unambiguous, and it keeps the
- *      single-account experience free of a choice nobody needs to make.
- *   3. Several connected and no explicit pick ⇒ THROW. Picking the first would
- *      quietly schedule months of posts to the wrong account, and the merchant
- *      would only find out by seeing them appear there.
+ *   2. No explicit account ⇒ return null. Even when exactly one account is connected,
+ *      execution must consume an id frozen by the user's destination choice rather
+ *      than resolve a current/default account at write or dispatch time.
  *
  * Returns null only when the platform has no connected account at all, which the
  * caller reports as "not connected" rather than an ambiguity.
@@ -163,18 +146,16 @@ export function resolveScheduledAccount(
     return null;
   }
 
-  if (connected.length === 0) return null;
-  if (connected.length === 1) return { id: connected[0].id, label: labelOf(connected[0]) };
-  throw new AmbiguousScheduleAccountError(provider, connected.length);
+  if (connected.length > 1) throw new AmbiguousScheduleAccountError(provider, connected.length);
+  return null;
 }
 
 /**
  * One destination the merchant ticked, as the picker reports it.
  *
- * `socialConnectionId` is optional ONLY for the single-account case: a platform row
- * ticked when exactly one account is connected needs no second click, and the account
- * is resolved here. With several connected accounts the picker must name one — an
- * unnamed pick then throws rather than guessing (see `resolveScheduledAccount`).
+ * `socialConnectionId` remains optional at the type boundary so stale clients can be
+ * rejected safely. The canonical picker freezes an exact id on the user's click; the
+ * builder drops an unnamed pick instead of resolving a current/default account.
  *
  * Pinterest picks carry their OWN board: two Pinterest accounts are two destinations
  * with two different boards, and a board id means nothing on the other account.
@@ -213,7 +194,7 @@ function accountsFor(source: AccountsByProvider, provider: SocialProvider): read
  */
 export function buildScheduledDestinations(
   picks: readonly DestinationPick[],
-  draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
+  _draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
   accounts: AccountsByProvider,
   now: Date = new Date(),
 ): ScheduledDestination[] {
@@ -239,12 +220,10 @@ export function buildScheduledDestinations(
     const label = str(pick.accountLabel) || str(resolved.label);
     if (label) d.accountLabel = label;
     if (pick.provider === "pinterest") {
-      // The board this ENTRY publishes to. The draft-level board is only a fallback
-      // for the entry that IS the legacy target — never for a second account, whose
-      // board would then be another account's board.
-      const isLegacyTarget = resolved.id === str(draft.targetConnectionId);
-      const boardId = str(pick.boardId) || (isLegacyTarget ? str(draft.boardId) : "");
-      const boardName = str(pick.boardName) || (isLegacyTarget ? str(draft.boardName) : "");
+      // Board must belong to this exact explicit destination. Draft-level/default
+      // Board fields are display compatibility only and cannot be dispatch input.
+      const boardId = str(pick.boardId);
+      const boardName = str(pick.boardName);
       if (boardId) d.boardId = boardId;
       if (boardName) d.boardName = boardName;
     }
@@ -290,9 +269,8 @@ export function legacyPinterestMirror(
  * the two views of "the card's Pinterest target" cannot drift apart. A second Pinterest
  * account's entry is never touched: a board id means nothing on the other account.
  *
- * With NO Pinterest entry the list comes back unchanged. The legacy fields alone are
- * then correct, since `resolveScheduledDestinations` derives Pinterest-only intent from
- * them for exactly that case.
+ * With NO exact Pinterest entry the list comes back unchanged. Legacy fields alone
+ * are never promoted into publish intent.
  *
  * Pure: a new array, one copied entry, only its board fields changed — `capturedAt` and
  * `accountLabel` stay as captured. Clearing the board clears those keys rather than
@@ -306,8 +284,7 @@ export function withBoardOnPinterestEntry(
   const list = Array.isArray(destinations) ? destinations.slice() : [];
   const isPinterest = (d: ScheduledDestination) => d.provider === "pinterest" && !!str(d.socialConnectionId);
   const target = str(targetConnectionId);
-  let idx = target ? list.findIndex(d => isPinterest(d) && str(d.socialConnectionId) === target) : -1;
-  if (idx < 0) idx = list.findIndex(isPinterest);
+  const idx = target ? list.findIndex(d => isPinterest(d) && str(d.socialConnectionId) === target) : -1;
   if (idx < 0) return list;
   const boardId = str(board.boardId);
   const boardName = str(board.boardName);

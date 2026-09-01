@@ -46,7 +46,7 @@ export type ReconnectDecision =
    * be written — no token refresh, no insert. The panel offers the same two
    * options Pinterest's mismatch banner does.
    */
-  | { action: "reject"; reason: "account_mismatch"; expectedLabel: string | null; gotLabel: string | null };
+  | { action: "reject"; reason: "account_mismatch" | "reconnect_target_missing" | "identity_unavailable"; expectedLabel: string | null; gotLabel: string | null };
 
 export type DecideReconnectInput = {
   /**
@@ -95,9 +95,12 @@ export function decideReconnect(input: DecideReconnectInput): ReconnectDecision 
   const { reconnectTargetId, target, authorizedAccountId, authorizedLabel } = input;
 
   if (!reconnectTargetId) return { action: "proceed", targetConnectionId: null };
-  if (!target) return { action: "proceed", targetConnectionId: null };
+  if (!target) return { action: "reject", reason: "reconnect_target_missing", expectedLabel: null, gotLabel: authorizedLabel };
 
   if (!target.accountId) {
+    if (!authorizedAccountId) {
+      return { action: "reject", reason: "identity_unavailable", expectedLabel: target.label, gotLabel: authorizedLabel };
+    }
     return { action: "proceed", targetConnectionId: target.connectionId };
   }
   if (sameAccount(target.accountId, authorizedAccountId)) {

@@ -59,7 +59,7 @@ function deps(options: { ambiguous?: boolean } = {}) {
     }) as unknown as PublishContentDeps["publishPin"],
     publishToSocial: (async (input: { destinations: Array<{ provider: string; socialConnectionId?: string | null }> }) => {
       socialCalls.push(input as unknown as Record<string, unknown>);
-      return { ok: true, jobId: "job-1", status: "published", destinations: input.destinations.map(destination => ({ provider: destination.provider, status: "published", externalPostId: `${destination.provider}-remote`, externalPostUrl: `https://${destination.provider}.test/post`, accountName: destination.socialConnectionId, error: null })) };
+      return { ok: true, jobId: "job-1", status: "published", destinations: input.destinations.map(destination => ({ provider: destination.provider, socialConnectionId: destination.socialConnectionId, status: "published", externalPostId: `${destination.provider}-remote`, externalPostUrl: `https://${destination.provider}.test/post`, accountName: destination.socialConnectionId, error: null })) };
     }) as PublishContentDeps["publishToSocial"],
   };
   return { value, pinCalls, socialCalls };

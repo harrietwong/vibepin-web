@@ -12,7 +12,15 @@
 import { isSocialProvider, type SocialProvider } from "./platforms";
 import type { ScheduledDestination } from "../pinDraftStore";
 
-export type DestinationStatus = "pending" | "skipped" | "publishing" | "published" | "failed";
+export type DestinationStatus =
+  | "requested"
+  | "accepted"
+  | "pending"
+  | "skipped"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "delivery_unknown";
 export type JobStatus = "draft" | "publishing" | "published" | "partially_published" | "failed";
 
 export type DestinationOutcome = {
@@ -42,6 +50,11 @@ export type DestinationOutcome = {
    * refund classifier never infers it from an error message.
    */
   preNetwork?: boolean;
+  /** Auditable lifecycle fields returned to the client; DB schemas may persist a subset. */
+  attempt?: number;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  errorCode?: string | null;
 };
 
 /** A Pinterest result produced by the dedicated Pinterest path, folded in here. */
@@ -75,9 +88,10 @@ export function rollUpJobStatus(outcomes: readonly DestinationOutcome[]): JobSta
  *
  * This is what makes a retry safe: a destination that has already published is
  * never dispatched again, so retrying a partial failure cannot double-post to
- * the platforms that worked. Anything not yet `published` — failed, still
- * `publishing` after a crash — stays pending, so an interrupted attempt is
- * completed rather than abandoned.
+ * the platforms that worked. A typed `delivery_unknown` row is also closed to
+ * blind retry: the provider may already have accepted it, so recovery must
+ * reconcile the original job first. Ordinary failed or legacy `publishing` rows
+ * retain their existing behavior.
  *
  * Keyed by ACCOUNT, not by platform. Keying on the provider alone meant a merchant
  * with two Facebook Pages who published to one and failed on the other got nothing
@@ -145,11 +159,13 @@ export function pendingDestinations(
   options?: PendingOptions,
 ): ScheduledDestination[] {
   const published = alreadyAttempted.filter(r => publishedForSchedule(r, options?.scheduledAt));
+  const unknown = alreadyAttempted.filter(r => r.status === "delivery_unknown");
+  const closed = [...published, ...unknown];
   const doneAccounts = new Set(
-    published.filter(r => !!r.socialConnectionId).map(r => `${r.provider}:${r.socialConnectionId}`),
+    closed.filter(r => !!r.socialConnectionId).map(r => `${r.provider}:${r.socialConnectionId}`),
   );
   const doneProviders = new Set(
-    published.filter(r => !r.socialConnectionId).map(r => r.provider),
+    closed.filter(r => !r.socialConnectionId).map(r => r.provider),
   );
   return intent.filter(d =>
     !doneProviders.has(d.provider)

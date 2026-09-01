@@ -95,6 +95,9 @@ check("a destination left 'publishing' is still pending",
   pendingDestinations(intent, [{ provider: "instagram", status: "publishing" }]).length === 3);
 check("a 'failed' destination is pending",
   pendingDestinations(intent, [{ provider: "facebook", status: "failed" }]).length === 3);
+check("a delivery_unknown destination is locked until reconciliation, never blindly retried",
+  pendingDestinations(intent, [{ provider: "facebook", status: "delivery_unknown" }])
+    .every(destination => destination.provider !== "facebook"));
 
 // ── two accounts on ONE platform are two destinations, not one ──────────────
 // Keying "already done" by provider alone skipped the second Facebook Page for
@@ -225,8 +228,8 @@ async function main(): Promise<void> {
     check("the destination BEFORE the throw keeps its published outcome",
       outcomes[0].status === "published" && outcomes[0].externalPostId === "post-conn-a",
       JSON.stringify(outcomes[0]));
-    check("the throwing destination is failed, carrying the reason",
-      outcomes[1].status === "failed" && outcomes[1].error === "lookup exploded for conn-b",
+    check("the throwing destination is delivery_unknown, carrying the reason",
+      outcomes[1].status === "delivery_unknown" && outcomes[1].error === "lookup exploded for conn-b",
       JSON.stringify(outcomes[1]));
     check("the destination AFTER the throw is still attempted",
       outcomes[2].status === "published" && publishes.includes("conn-c"),
@@ -241,8 +244,8 @@ async function main(): Promise<void> {
     publishThrows.add("conn-b");
     const outcomes = await fanOutDestinations("u1",
       [social("instagram", "conn-a"), social("facebook", "conn-b")], POST);
-    check("a provider that throws fails only its own destination",
-      outcomes.length === 2 && outcomes[0].status === "published" && outcomes[1].status === "failed",
+    check("a provider that throws marks only its own destination delivery_unknown",
+      outcomes.length === 2 && outcomes[0].status === "published" && outcomes[1].status === "delivery_unknown",
       JSON.stringify(outcomes.map(o => o.status)));
     check("and the reason the merchant sees is the provider's",
       outcomes[1].error === "publish exploded for conn-b");

@@ -218,19 +218,10 @@ check("the connections load decides nothing about the selection",
 check("the per-mount selection latch is gone entirely",
   !picker.includes("didInitSelection"),
   "a per-mount latch cannot tell a fresh drawer from a fresh Content");
-check("Pinterest is defaulted in exactly ONE place",
-  picker.split('onSelectedChange(["pinterest"])').length - 1 === 1);
-
-const defaultBlock = picker.slice(
-  picker.indexOf("const didDefaultPinterest = useRef(false);"),
-  picker.indexOf('onSelectedChange(["pinterest"]);'),
-);
-check("the default stands down as soon as the parent has a selection",
-  /if \(selected\.length\) \{/.test(defaultBlock),
-  "a non-empty selection is the merchant's intent and may never be replaced or added to");
-check("the default only ever applies to an EMPTY selection",
-  !/onSelectedChange\(\["pinterest", \.\.\.selected/.test(picker),
-  "adding Pinterest to an Instagram-only selection corrupts the stored intent on the card path");
+check("the picker has no implicit Pinterest selection",
+  !picker.includes('onSelectedChange(["pinterest"])'));
+check("the picker never adds Pinterest to an existing selection",
+  !/onSelectedChange\(\["pinterest", \.\.\.selected/.test(picker));
 
 // The parent half: the picker can only respect a selection it is GIVEN on its first
 // render. Both parents must therefore seed synchronously from the draft's own intent.
@@ -254,22 +245,23 @@ check("only EXPLICIT intent seeds a tick",
 const card = readFileSync("src/components/studio/PinBoardCard.tsx", "utf8");
 check("the card seeds its selection from the Content's own destinations",
   /useState<PublishProvider\[\]>\(\(\) => \{[\s\S]{0,200}contentDestinations\(draft\)/.test(card));
-check("the card's Pinterest fallback only applies when there are none",
-  /providers\.length \? Array\.from\(new Set\(providers\)\) : \["pinterest"\]/.test(card));
+check("the card has no Pinterest fallback when intent is empty",
+  /return Array\.from\(new Set\(providers\)\)/.test(card)
+    && !/providers\.length \? Array\.from\(new Set\(providers\)\) : \["pinterest"\]/.test(card));
 
 // The rule itself, mirrored (as rowState mirrors DestinationRow below): what the
 // picker must decide for each starting state.
 function defaultedSelection(selected: string[], pinterestConnected: boolean): string[] {
-  if (selected.length) return selected;              // never overwrite intent
-  return pinterestConnected ? ["pinterest"] : [];    // fill an empty selection once
+  void pinterestConnected;
+  return selected;
 }
 check("a Pinterest + Instagram selection survives a remount",
   JSON.stringify(defaultedSelection(["pinterest", "instagram"], true))
     === JSON.stringify(["pinterest", "instagram"]));
 check("an Instagram-only selection does not gain Pinterest",
   JSON.stringify(defaultedSelection(["instagram"], true)) === JSON.stringify(["instagram"]));
-check("a brand-new Content still defaults to Pinterest",
-  JSON.stringify(defaultedSelection([], true)) === JSON.stringify(["pinterest"]));
+check("a brand-new Content has no implicit destination",
+  defaultedSelection([], true).length === 0);
 check("with Pinterest not connected, nothing is invented",
   defaultedSelection([], false).length === 0);
 
@@ -358,8 +350,8 @@ check("duplicates collapse (two accounts on one platform are two ids, one id twi
 
 // Legacy: only when nothing usable is stored, because that is exactly when
 // resolveScheduledDestinations derives a Pinterest-only intent from it.
-check("legacy targetConnectionId counts when there are no stored destinations",
-  JSON.stringify(requiredScheduleConnectionIds({ targetConnectionId: "old-1" })) === JSON.stringify(["old-1"]));
+check("legacy targetConnectionId is never schedule intent",
+  requiredScheduleConnectionIds({ targetConnectionId: "old-1" }).length === 0);
 
 check("legacy targetConnectionId is IGNORED once real destinations exist",
   JSON.stringify(requiredScheduleConnectionIds({
@@ -383,8 +375,8 @@ section("the PUT route wires the destination-exists gate correctly");
   check("it collects targets only when the draft is being scheduled",
     /if \(incomingScheduledAt\) \{[\s\S]{0,240}requiredScheduleConnectionIds\(p\)/.test(route),
     "an unscheduled draft must not be refused for naming a removed account");
-  check("refusal is 422 destination_unavailable",
-    route.includes('code: "destination_unavailable"') && /destination_unavailable[\s\S]{0,600}status: 422/.test(route));
+  check("refusal is a per-draft destination_unavailable result",
+    route.includes('code: "destination_unavailable"') && route.includes('status: "rejected"'));
   check("the gate runs BEFORE the upsert",
     route.indexOf("unavailableScheduleDestinations(") < route.indexOf(".upsert("),
     "refusing after the write would leave the orphan schedule stored");

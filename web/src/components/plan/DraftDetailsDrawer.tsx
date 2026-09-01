@@ -45,14 +45,12 @@ import {
 import { toProxyUrl } from "@/lib/imageProxy";
 import {
   fetchPinterestBoards,
-  fetchPinterestDefaultBoard,
   fetchPinterestStatusCached,
   savePinterestDefaultBoard,
   createSandboxDemoBoard,
   PINTEREST_DISCONNECTED_EVENT,
   type AttachedProduct,
   type PinterestBoard,
-  type PinterestDefaultBoard,
   type PinterestClientError,
   type PinterestStatus,
 } from "@/lib/pinterestClient";
@@ -70,7 +68,7 @@ import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinter
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { isPublishableImage, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
-import { PublishDestinations } from "@/components/social/PublishDestinations";
+import { PublishDestinations, type SelectedAccount } from "@/components/social/PublishDestinations";
 import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
 import { publishContent } from "@/lib/studio/publishContent";
@@ -127,8 +125,8 @@ function needsPinterestConnect(err?: PinterestClientError | { code?: string; nee
  * is our inference, not the merchant's choice, so it must not appear as though they had
  * ticked it. Shared by the useState initialiser and the per-draft seed below so the
  * selection is correct on the FIRST render — PublishDestinations is mounted fresh on
- * every open, and a selection that only arrives in an effect lets its own
- * "default Pinterest" path run against an empty/stale value.
+ * every open, and a selection that only arrives in an effect briefly paints an
+ * empty/stale destination state.
  */
 function seedSocialDestinations(draft: PinDraft | null | undefined): SocialProvider[] {
   if (!draft || !hasExplicitIntent(draft)) return [];
@@ -142,11 +140,17 @@ function seedSocialDestinations(draft: PinDraft | null | undefined): SocialProvi
  */
 function seedSocialAccountIds(
   draft: PinDraft | null | undefined,
-): Array<{ provider: string; id: string }> {
+): SelectedAccount[] {
   if (!draft || !hasExplicitIntent(draft)) return [];
   return (draft.scheduledDestinations ?? [])
-    .filter(d => isSocialProvider(d.provider) && d.provider !== "pinterest" && !!d.socialConnectionId)
-    .map(d => ({ provider: d.provider, id: d.socialConnectionId }));
+    .filter(d => isSocialProvider(d.provider) && !!d.socialConnectionId)
+    .map(d => ({
+      provider: d.provider,
+      id: d.socialConnectionId,
+      ...(d.accountLabel ? { accountLabel: d.accountLabel } : {}),
+      ...(d.boardId ? { boardId: d.boardId } : {}),
+      ...(d.boardName ? { boardName: d.boardName } : {}),
+    }));
 }
 
 export type PinDetailsModalProps = {
@@ -182,8 +186,6 @@ export function PinDetailsModal({
   // ── Board loading (background) ──────────────────────────────────────────────
   const [boards, setBoards] = useState<PinterestBoard[]>([]);
   const [boardId, setBoardId] = useState("");
-  const [defaultBoard, setDefaultBoard] = useState<PinterestDefaultBoard | null>(null);
-  const defaultBoardRef = useRef<PinterestDefaultBoard | null>(null);
   const [boardsStatus, setBoardsStatus] = useState<BoardsStatus>("checking");
   const [pinterestConnected, setPinterestConnected] = useState(false);
   const [pinterestAccount, setPinterestAccount] = useState<PinterestStatus["account"] | null>(null);
@@ -192,10 +194,10 @@ export function PinDetailsModal({
   const [creatingBoard, setCreatingBoard] = useState(false);
 
   // ── Publish target (PRD §13/§14) ────────────────────────────────────────────
-  // Which connected Pinterest account THIS Pin publishes to. The stored target wins;
-  // only a draft that has never had one falls back to the default connection, and that
-  // resolution is written back (adopt-once) so it can never drift afterwards.
-  const { connections: pinterestConnections, fallback: fallbackConnection } = usePinterestConnections();
+  // Which connected Pinterest account THIS Pin publishes to. Only an exact frozen
+  // target may be selected; an untargeted draft stays untargeted until the merchant
+  // chooses Pinterest in the canonical destination picker.
+  const { connections: pinterestConnections } = usePinterestConnections();
   // Local echo of the draft's target so a just-switched account takes effect within this
   // render pass (the store write is async through the draft-store event).
   const [targetConnectionId, setTargetConnectionId] = useState("");
@@ -208,7 +210,7 @@ export function PinDetailsModal({
   // Null only when the pinned account is no longer connected — the Pin is NOT re-routed
   // to another account (that would publish to the wrong Pinterest profile); the §17
   // guard below asks the user to reconnect it.
-  const selectedConnection = selectedTargetConnection(targetedDraft, pinterestConnections, fallbackConnection);
+  const selectedConnection = selectedTargetConnection(targetedDraft, pinterestConnections, null);
   const effectiveConnectionId = selectedConnection?.id ?? (targetConnectionId || "");
   // Read by the default-board callbacks, which must scope their write to the account the
   // board actually belongs to (a default board is per-account) without re-creating
@@ -258,7 +260,7 @@ export function PinDetailsModal({
   // Which specific accounts to publish as, on platforms with more than one
   // connected. Empty means "every connected account on the selected platforms" —
   // connecting a second account must not silently narrow an existing habit.
-  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>(
+  const [socialAccountIds, setSocialAccountIds] = useState<SelectedAccount[]>(
     () => seedSocialAccountIds(open ? draft : null),
   );
   /**
@@ -350,16 +352,10 @@ export function PinDetailsModal({
   // just connected, or clobber a newer board selection).
   const boardsLoadSeqRef = useRef(0);
 
-  useEffect(() => {
-    defaultBoardRef.current = defaultBoard;
-  }, [defaultBoard]);
-
   const chooseBoardId = useCallback((items: PinterestBoard[], preferBoardId?: string, currentBoardId?: string) => {
-    const defaultId = defaultBoardRef.current?.boardId ?? "";
-    const candidates = [preferBoardId, currentBoardId, defaultId].map(v => v?.trim()).filter(Boolean) as string[];
+    const candidates = [preferBoardId, currentBoardId].map(v => v?.trim()).filter(Boolean) as string[];
     const match = candidates.find(id => items.some(b => b.id === id));
-    if (match) return match;
-    return items.length === 1 ? items[0].id : "";
+    return match ?? "";
   }, []);
 
   // Applies a boards result to UI state ONLY — does not touch the cache. Used both to
@@ -372,16 +368,7 @@ export function PinDetailsModal({
     setPinterestAccount(status.account);
     setBoards(items);
     setBoardId(prev => {
-      const next = chooseBoardId(items, preferBoardId, prev);
-      if (next && !defaultBoardRef.current) {
-        const board = items.find(b => b.id === next);
-        if (board) {
-          const value = { boardId: board.id, boardName: board.name };
-          setDefaultBoard(value);
-          void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
-        }
-      }
-      return next;
+      return chooseBoardId(items, preferBoardId, prev);
     });
     setBoardsStatus("ready");
   }, [chooseBoardId]);
@@ -737,13 +724,10 @@ export function PinDetailsModal({
     setTargetConnectionId(seededTarget);
     setTargetAccountLabel(draft.targetAccountLabel?.trim() ?? "");
     effectiveConnectionRef.current = seededTarget;
-    void fetchPinterestDefaultBoard(undefined, seededTarget || undefined)
-      .then(board => setDefaultBoard(board))
-      .catch(() => {});
     // Boards come from the Pin's OWN target account, not from whichever account happens
     // to be the default now — a Pin pinned to account B must never be offered account A's
-    // boards. Untargeted (seededTarget "") ⇒ default connection, unchanged behaviour.
-    void loadBoards(draft.boardId, seededTarget || undefined);
+    // boards. An untargeted draft does not query a default account or Board.
+    if (seededTarget) void loadBoards(draft.boardId, seededTarget);
   }, [open, draft, loadBoards]);
 
   // Restore a publish that was already running when the page reloaded (TC-094).
@@ -784,12 +768,7 @@ export function PinDetailsModal({
     if (board && draft && !draft.boardId?.trim()) {
       pinDraftStore.updateDraft(draft.id, { boardId: board.id, boardName: board.name });
     }
-    if (!defaultBoard && board) {
-      const value = { boardId: board.id, boardName: board.name };
-      setDefaultBoard(value);
-      void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
-    }
-  }, [open, boardsStatus, boards, boardId, draft, chooseBoardId, defaultBoard]);
+  }, [open, boardsStatus, boards, boardId, draft, chooseBoardId]);
 
   // Disconnecting Pinterest in Settings does not unmount this drawer when Settings is
   // opened as an overlay on top of it — nothing would otherwise tell this already-open
@@ -804,7 +783,6 @@ export function PinDetailsModal({
       setPinterestAccount(null);
       setBoards([]);
       setBoardId("");
-      setDefaultBoard(null);
       setBoardsStatus("not_connected");
       void loadBoards(undefined, effectiveConnectionRef.current || undefined);
     }
@@ -897,24 +875,20 @@ export function PinDetailsModal({
     // scheduled from somewhere else.
     if (trimmedDate) {
       try {
-      // This drawer picks ONE account per platform (its Board field belongs to a single
-      // Pinterest target), so it emits one pick per ticked platform. The builder still
-      // resolves/validates each: an unpicked platform with several connected accounts
-      // throws, which is caught below.
+      // Every selected account is an exact destination. A single Pinterest target may
+      // use the drawer Board field; multi-account Pinterest keeps a Board per account.
       patch.scheduledDestinations = buildScheduledDestinations(
-        socialDestinations.map(provider => {
-          // The account the merchant actually ticked, when the platform offered a
-          // choice. resolveScheduledAccount refuses to guess when several are
-          // connected and none was picked — see its doc comment.
-          const explicit = socialAccountIds.find(a => a.provider === provider)?.id;
-          return {
+        socialDestinations.flatMap(provider => socialAccountIds
+          .filter(account => account.provider === provider)
+          .map(account => ({
             provider,
-            socialConnectionId: explicit ?? null,
-            ...(provider === "pinterest"
-              ? { boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" }
-              : {}),
-          };
-        }),
+            socialConnectionId: account.id,
+            accountLabel: account.accountLabel,
+            ...(provider === "pinterest" ? {
+              boardId: account.boardId ?? selectedBoard?.id ?? "",
+              boardName: account.boardName ?? selectedBoard?.name ?? "",
+            } : {}),
+          }))),
         { ...activeDraft, boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
         (provider) => destinationSummaries.find(s => s.provider === provider)?.accounts ?? [],
       );
@@ -1038,16 +1012,40 @@ export function PinDetailsModal({
     setBoardId("");
     setBoards([]);
     setBoardError(false);
-    setDefaultBoard(null);
     setBoardsStatus("loading");
     if (activeDraft) pinDraftStore.updateDraft(activeDraft.id, patch);
-    // The new account's default board and boards list — the old account's are meaningless
-    // here, and the per-connection cache keeps them from being served to each other.
-    void fetchPinterestDefaultBoard(undefined, patch.targetConnectionId)
-      .then(board => setDefaultBoard(board))
-      .catch(() => {});
+    // The new account's Board list — the old account's Boards are meaningless here.
+    // No default Board is loaded or applied; the merchant must choose explicitly.
     void loadBoards(undefined, patch.targetConnectionId);
     markDirty();
+  }
+
+  function handleSelectedAccountsChange(next: SelectedAccount[]) {
+    setSocialAccountIds(next);
+    const pinterest = next.filter(account => account.provider === "pinterest");
+    if (pinterest.length === 1 && pinterest[0].id !== targetConnectionId) {
+      const connection = pinterestConnections.find(item => item.id === pinterest[0].id);
+      if (connection) {
+        handleTargetChange({
+          targetConnectionId: connection.id,
+          targetAccountLabel: connection.username ?? pinterest[0].accountLabel ?? "",
+          boardId: "",
+          boardName: "",
+        });
+      }
+    } else if (pinterest.length !== 1 && targetConnectionId) {
+      setTargetConnectionId("");
+      setTargetAccountLabel("");
+      effectiveConnectionRef.current = "";
+      setBoardId("");
+      setBoards([]);
+      if (activeDraft) pinDraftStore.updateDraft(activeDraft.id, {
+        targetConnectionId: "",
+        targetAccountLabel: "",
+        boardId: "",
+        boardName: "",
+      });
+    }
   }
 
   // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
@@ -1066,21 +1064,16 @@ export function PinDetailsModal({
     const capturedAt = new Date().toISOString();
     const scheduledDestinations = socialDestinations.flatMap(provider => {
       if (provider === "tiktok") return [];
-      const ids = provider === "pinterest"
-        ? (targetConnectionId ? [targetConnectionId] : [])
-        : socialAccountIds.filter(account => account.provider === provider).map(account => account.id);
-      return ids.map(connectionId => ({
+      return socialAccountIds.filter(account => account.provider === provider).map(account => ({
         provider,
-        socialConnectionId: connectionId,
-        accountLabel: provider === "pinterest"
-          ? (targetAccountLabel || undefined)
-          : (() => {
-              const account = destinationSummaries.find(summary => summary.provider === provider)?.accounts.find(item => item.id === connectionId);
-              return account?.providerAccountUsername || account?.providerAccountName || account?.providerAccountId || undefined;
-            })(),
+        socialConnectionId: account.id,
+        accountLabel: account.accountLabel || (() => {
+          const summaryAccount = destinationSummaries.find(summary => summary.provider === provider)?.accounts.find(item => item.id === account.id);
+          return summaryAccount?.providerAccountUsername || summaryAccount?.providerAccountName || summaryAccount?.providerAccountId || undefined;
+        })(),
         ...(provider === "pinterest" ? {
-          boardId: boardId || undefined,
-          boardName: boards.find(item => item.id === boardId)?.name || undefined,
+          boardId: account.boardId || boardId || undefined,
+          boardName: account.boardName || boards.find(item => item.id === boardId)?.name || undefined,
         } : {}),
         capturedAt,
       }));
@@ -1906,7 +1899,7 @@ export function PinDetailsModal({
               <PublishDestinations
                 selected={socialDestinations}
                 selectedAccountIds={socialAccountIds}
-                onSelectedAccountIdsChange={setSocialAccountIds}
+                onSelectedAccountIdsChange={handleSelectedAccountsChange}
                 onSelectedChange={setSocialDestinations}
                 scheduleMode={isScheduled}
                 onSummariesChange={setDestinationSummaries}
@@ -1946,7 +1939,6 @@ export function PinDetailsModal({
                       const board = boards.find(b => b.id === id);
                       if (board) {
                         const value = { boardId: board.id, boardName: board.name };
-                        setDefaultBoard(value);
                         void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
                       }
                       // Board interplay: a custom time chosen but not yet confirmed via

@@ -246,10 +246,10 @@ test("destinationPublishInput: a second account never inherits the legacy board"
   const base = payloadToPublishInput("u", { imageUrl: "https://cdn/x.jpg", boardId: "b-A", targetConnectionId: "pin_A" })!;
   const boardless = destinationPublishInput(base, { socialConnectionId: "pin_B" }, "pin_A");
   assert.equal(boardless, null, "b-A belongs to pin_A — publishing pin_B into it is the wrong-board defect");
-  // The entry that IS the legacy target still inherits it.
-  assert.equal(destinationPublishInput(base, { socialConnectionId: "pin_A" }, "pin_A")?.boardId, "b-A");
-  // So does a legacy destination that names no account at all.
-  assert.equal(destinationPublishInput(base, {}, "pin_A")?.boardId, "b-A");
+  assert.equal(destinationPublishInput(base, { socialConnectionId: "pin_A" }, "pin_A"), null,
+    "even the legacy target must carry an explicit Board snapshot");
+  assert.equal(destinationPublishInput(base, {}, "pin_A"), null,
+    "an unnamed account/Board may never dispatch");
 });
 
 test("payloadToPublishInput: a Content whose board lives on its entry is publishable", () => {
@@ -342,9 +342,9 @@ test("pendingDestinations: two accounts on one platform retry independently", ()
 const IG_A = { provider: "instagram", socialConnectionId: "ig_A", capturedAt: "t" };
 const PIN_NO_BOARD = { provider: "pinterest", socialConnectionId: "pin_A", capturedAt: "t" };
 
-test("owedDestinations: a legacy draft derives its pinned Pinterest target", () => {
+test("owedDestinations: legacy account/board fields never become dispatch intent", () => {
   const owed = owedDestinations({ targetConnectionId: "pin_A", boardId: "b-A" });
-  assert.deepEqual(owed.map(d => `${d.provider}:${d.socialConnectionId}`), ["pinterest:pin_A"]);
+  assert.deepEqual(owed, []);
   // No intent and no pinned target ⇒ nothing owed (Instagram is never invented).
   assert.deepEqual(owedDestinations({ imageUrl: "https://cdn/x.jpg" }), []);
 });
@@ -377,16 +377,15 @@ test("payloadToPublishInput: a boardless Pinterest entry never blocks the platfo
   assert.equal(destinationPublishInput(input!, { socialConnectionId: "pin_A" }, ""), null);
 });
 
-test("payloadToPublishInput: legacy rows unchanged — Pinterest still requires a board", () => {
+test("payloadToPublishInput: only explicit destinations can enter dispatch", () => {
   const img = "https://cdn/x.jpg";
   // explicit Pinterest-only intent …
   assert.equal(payloadToPublishInput("u", { imageUrl: img, scheduledDestinations: [PIN_NO_BOARD] }), null);
-  // … intent derived from the legacy pinned target …
+  // Legacy fields can still form a display/content payload, but owe zero destinations.
   assert.equal(payloadToPublishInput("u", { imageUrl: img, targetConnectionId: "pin_A" }), null);
   // … and a draft carrying no intent at all.
   assert.equal(payloadToPublishInput("u", { imageUrl: img }), null);
-  // With a board it is publishable, exactly as before.
-  assert.equal(payloadToPublishInput("u", { imageUrl: img, targetConnectionId: "pin_A", boardId: "b-A" })?.boardId, "b-A");
+  assert.deepEqual(owedDestinations({ imageUrl: img, targetConnectionId: "pin_A", boardId: "b-A" }), []);
 });
 
 test("payloadAfterOutcomes: a social-only publish is posted, and invents no Pin", () => {
@@ -418,23 +417,15 @@ test("payloadAfterOutcomes: a social-only publish that failed is a Content failu
 // with a board and no targetConnectionId resolves to nothing owed — and once
 // destinations drove the publish, that made the row leave the due scan as "completed"
 // after being metered, having published nothing at all.
-test("owedDestinations: a draft with a board but no account owes one Pinterest publish", () => {
+test("owedDestinations: a board with no explicit account owes nothing", () => {
   const owed = owedDestinations({ imageUrl: "https://cdn/x.jpg", boardId: "b-A", boardName: "Board A" });
-  assert.equal(owed.length, 1, "a scheduled Pin must never silently publish nowhere");
-  assert.equal(owed[0].provider, "pinterest");
-  assert.ok(!owed[0].socialConnectionId, "it names no account — the publish adopts the default one");
-  assert.equal(owed[0].boardId, "b-A");
-  assert.equal(owed[0].boardName, "Board A");
+  assert.deepEqual(owed, [], "missing exact account must fail closed, not adopt a default");
 });
 
-test("owedDestinations: that legacy destination publishes with adopt-once, into its board", () => {
+test("destinationPublishInput: an absent explicit destination cannot dispatch", () => {
   const payload = { imageUrl: "https://cdn/x.jpg", boardId: "b-A" };
   const base = payloadToPublishInput("u", payload)!;
-  assert.equal(base.boardId, "b-A", "a board-only draft is still publishable, exactly as before");
-  const perDestination = destinationPublishInput(base, owedDestinations(payload)[0], "")!;
-  assert.equal(perDestination.boardId, "b-A");
-  assert.equal(perDestination.connectionId, undefined,
-    "no connection is named, so publishPinForUser resolves the default and the route adopts it");
+  assert.equal(destinationPublishInput(base, {}, ""), null);
 });
 
 test("owedDestinations: no board and no intent ⇒ nothing owed, and the Content is refused", () => {
@@ -452,10 +443,9 @@ test("owedDestinations: a legacy draft that already published owes nothing (no d
   assert.deepEqual(owed, [], "a stale re-claim must not re-publish the Pin this row already created");
 });
 
-test("owedDestinations: a draft that DOES name an account is untouched by the legacy path", () => {
+test("owedDestinations: a legacy target id alone still owes nothing", () => {
   const owed = owedDestinations({ imageUrl: "https://cdn/x.jpg", boardId: "b-A", targetConnectionId: "pin_A" });
-  assert.equal(owed.length, 1);
-  assert.equal(owed[0].socialConnectionId, "pin_A", "derived intent still wins — nothing synthetic is added");
+  assert.deepEqual(owed, []);
 });
 
 // ── A1-1: a republish must not erase the post it replaces ────────────────────
@@ -920,15 +910,13 @@ test("owedDestinations: the partial case still retries only what did not go out"
   assert.equal(owed[0].provider, "instagram");
 });
 
-test("owedDestinations: a legacy Content can be re-scheduled too", () => {
-  // The board-only path had its own hard-coded "any published pinterest row ⇒ nothing
-  // owed", so without the same rule a legacy Posted Content could never republish.
+test("owedDestinations: a legacy Content must choose an explicit destination before re-scheduling", () => {
   const payload = {
     imageUrl: "https://cdn/x.jpg", boardId: "b-A",
     destinationResults: [{ destinationId: "pinterest:legacy", provider: "pinterest", status: "published", publishedAt: "2026-07-01T09:00:00.000Z" }],
   };
-  assert.equal(owedDestinations(payload, { scheduledAt: RESCHEDULED }).length, 1,
-    "re-scheduled after that publish ⇒ owed again");
+  assert.equal(owedDestinations(payload, { scheduledAt: RESCHEDULED }).length, 0,
+    "legacy result/account/Board fields are not a new publish instruction");
   assert.deepEqual(owedDestinations(payload, { scheduledAt: RECLAIMED }), [],
     "re-claimed for the schedule it already published for ⇒ still nothing owed");
 });
@@ -1094,16 +1082,15 @@ test("(b) the same Content whose prior row FAILED is owed again", () => {
   assert.equal(input!.boardId, undefined);
 });
 
-test("(c) a legacy board-only Content with nothing published still requires its board", () => {
+test("(c) a legacy board-only Content has no dispatch intent", () => {
   const boardless = { imageUrl: "https://cdn/x.jpg" };
   assert.deepEqual(owedDestinations(boardless, { scheduledAt: RECLAIMED }), [],
     "no board and no intent ⇒ nothing to publish INTO");
   assert.equal(payloadToPublishInput("u", boardless, { scheduledAt: RECLAIMED }), null,
     "and with no result history the route still records the content failure it always did");
-  // With a board it is owed, exactly as before.
+  // A Board without an exact account snapshot remains display compatibility only.
   const withBoard = { imageUrl: "https://cdn/x.jpg", boardId: "b-A" };
-  assert.equal(owedDestinations(withBoard, { scheduledAt: RECLAIMED }).length, 1);
-  assert.equal(payloadToPublishInput("u", withBoard, { scheduledAt: RECLAIMED })?.boardId, "b-A");
+  assert.equal(owedDestinations(withBoard, { scheduledAt: RECLAIMED }).length, 0);
 });
 
 test("(c) the completion path needs a result history — an empty payload still fails", () => {

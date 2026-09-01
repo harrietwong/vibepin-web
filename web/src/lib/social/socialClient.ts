@@ -266,7 +266,13 @@ export async function fetchSocialScheduledCount(connectionId: string): Promise<n
 
 // ── Publish destinations ────────────────────────────────────────────────────
 
-export type DestinationInput = { provider: SocialProvider; socialConnectionId?: string | null };
+export type DestinationInput = {
+  provider: SocialProvider;
+  socialConnectionId: string;
+  boardId?: string | null;
+  publishMode?: "now" | "scheduled";
+  mediaCount?: number;
+};
 
 export type ValidateResult = {
   ok: boolean;
@@ -275,6 +281,9 @@ export type ValidateResult = {
     publishable: boolean;
     status: ConnectionStatus;
     socialConnectionId: string | null;
+    providerAccountId?: string | null;
+    displayIdentity?: string | null;
+    reasonCode?: string;
     reason?: string;
   }>;
 };
@@ -297,7 +306,8 @@ export type SocialPublishResult = {
   status: "draft" | "publishing" | "published" | "partially_published" | "failed";
   destinations: Array<{
     provider: SocialProvider;
-    status: "pending" | "skipped" | "publishing" | "published" | "failed";
+    status: "requested" | "accepted" | "pending" | "skipped" | "publishing" | "published" | "failed" | "delivery_unknown";
+    socialConnectionId: string | null;
     /** Remote post id on the platform (e.g. a Facebook `{page-id}_{post-id}`). */
     externalPostId: string | null;
     /** Direct link to the live post — powers "View on <platform>". */
@@ -308,6 +318,11 @@ export type SocialPublishResult = {
      */
     accountName: string | null;
     error: string | null;
+    errorCode?: string | null;
+    providerStatus?: number | null;
+    attempt?: number;
+    startedAt?: string | null;
+    finishedAt?: string | null;
   }>;
 };
 

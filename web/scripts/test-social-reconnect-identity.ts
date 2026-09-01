@@ -193,15 +193,25 @@ async function main() {
     assertEq(d.action, "reject", "unknown ≠ matching");
   });
 
-  await test("target row GONE (removed in another tab) → plain connect, not a refusal", () => {
+  await test("target row GONE (removed in another tab) → fail closed", () => {
     const d = decideReconnect({
       reconnectTargetId: "c1",
       target: null,
       authorizedAccountId: "acc-1",
       authorizedLabel: "one",
     });
-    assert(d.action === "proceed" && d.targetConnectionId === null,
-      "refusing would strand the merchant; the store's insert branch re-checks the plan");
+    assert(d.action === "reject" && d.reason === "reconnect_target_missing",
+      "a reconnect must never silently become Add account or bind another row");
+  });
+
+  await test("unidentified target + missing callback identity → fail closed", () => {
+    const d = decideReconnect({
+      reconnectTargetId: "c1",
+      target: { connectionId: "c1", accountId: null, label: null },
+      authorizedAccountId: null,
+      authorizedLabel: null,
+    });
+    assert(d.action === "reject" && d.reason === "identity_unavailable", "no official identity means zero writes");
   });
 
   await test("target with NO recorded identity → adopt it by id", () => {
@@ -442,9 +452,9 @@ async function main() {
   });
 
   for (const [name, src] of [["facebook", fbCb], ["instagram", igCb]] as const) {
-    await test(`${name} callback: mismatch redirects account_mismatch with expected/got`, () => {
-      assert(src.includes('redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {'),
-        "the panel keys its banner off this exact flag");
+    await test(`${name} callback: every reconnect refusal redirects its exact reason with expected/got`, () => {
+      assert(src.includes('redirectAfterOAuth(req, decision.reason, verdict.returnTo, {'),
+        "target-gone/identity-unavailable must not be mislabeled or written");
       assert(src.includes("expected: decision.expectedLabel"), "expected label rides in the query");
       assert(src.includes("got: decision.gotLabel"), "got label rides in the query");
     });
@@ -552,8 +562,8 @@ async function main() {
     // FB/IG hand it to the shared redirect helper, which only sets truthy values —
     // so a plain (non-reconnect) connect never grows a stray empty param.
     for (const [name, src] of [["facebook", fbCb], ["instagram", igCb]] as const) {
-      const at = src.indexOf('redirectAfterOAuth(req, "account_mismatch"');
-      assert(at > 0, `${name}: mismatch redirect not found`);
+      const at = src.indexOf('redirectAfterOAuth(req, decision.reason');
+      assert(at > 0, `${name}: fail-closed refusal redirect not found`);
       const block = src.slice(at, at + 900);
       assert(block.includes("target: verdict.reconnectConnectionId"),
         `${name}: the refusal must name the row being repaired`);

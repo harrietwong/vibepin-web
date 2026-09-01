@@ -59,7 +59,11 @@ const accountsOf = (p: SocialProvider) => ACCOUNTS[p] ?? [];
 section("capturing intent");
 
 const built = buildScheduledDestinations(
-  [{ provider: "pinterest" }, { provider: "instagram" }, { provider: "facebook" }],
+  [
+    { provider: "pinterest", socialConnectionId: "conn-pinterest-A", boardId: "board-A", boardName: "Board A" },
+    { provider: "instagram", socialConnectionId: "conn-ig-1" },
+    { provider: "facebook", socialConnectionId: "conn-fb-1" },
+  ],
   legacyDraft(), accountsOf,
   new Date("2026-08-18T12:00:00.000Z"),
 );
@@ -78,7 +82,10 @@ check("every entry is stamped with when it was captured",
 // A platform with no resolvable account must not become a half-record that would
 // fail at due time pointing at nothing.
 const partial = buildScheduledDestinations(
-  [{ provider: "pinterest" }, { provider: "instagram" }], legacyDraft(),
+  [
+    { provider: "pinterest", socialConnectionId: "conn-pinterest-A", boardId: "board-A" },
+    { provider: "instagram", socialConnectionId: "conn-ig-1" },
+  ], legacyDraft(),
   (p) => (p === "instagram" ? [] : accountsOf(p)),
 );
 check("a platform with no resolvable account is omitted, not stored empty",
@@ -95,15 +102,11 @@ check("providers are reported in order",
 check("explicit intent is distinguishable from a derivation",
   hasExplicitIntent(withIntent) && !hasExplicitIntent(legacyDraft()));
 
-// ── historical Pins: derive Pinterest, never invent IG/FB ─────────────────────
+// ── historical fields are display compatibility, never dispatch intent ─────────
 section("historical Pins (no stored intent)");
 
 const derived = resolveScheduledDestinations(legacyDraft());
-check("a legacy Pin derives exactly one destination", derived.length === 1);
-check("and it is Pinterest, with the account and board it already had",
-  derived[0].provider === "pinterest"
-    && derived[0].socialConnectionId === "conn-pinterest-A"
-    && derived[0].boardId === "board-A");
+check("legacy account/board fields do not become publish intent", derived.length === 0);
 check("NO Instagram is invented for a legacy Pin",
   !derived.some(d => d.provider === "instagram"));
 check("NO Facebook is invented for a legacy Pin",
@@ -178,10 +181,9 @@ check("a poisoned list keeps only the valid entries",
 const allBad = legacyDraft({
   scheduledDestinations: [{ provider: "myspace", socialConnectionId: "x", capturedAt: "t" }] as ScheduledDestination[],
 });
-check("an all-invalid list falls back to the legacy Pinterest derivation",
-  resolveScheduledDestinations(allBad).length === 1
-    && resolveScheduledDestinations(allBad)[0].provider === "pinterest",
-  "documented behaviour: no usable intent ⇒ same path as a legacy Pin");
+check("an all-invalid list stays empty and never falls back to Pinterest",
+  resolveScheduledDestinations(allBad).length === 0,
+  "corrupt intent must fail closed");
 
 // ── the helper used to keep Pinterest intent and pinned target in sync ───────
 section("Pinterest intent mirrors the pinned target");
@@ -231,8 +233,8 @@ section("N accounts per platform (WS-B3)");
 
   const single = buildScheduledDestinations([{ provider: "instagram" }], {},
     (p) => (p === "instagram" ? [IG_A] : []));
-  check("with exactly one connected account, no explicit pick is needed",
-    single.length === 1 && single[0].socialConnectionId === "ig_A");
+  check("even one connected account is not a dispatch-time default",
+    single.length === 0);
 
   // A second Pinterest account must NOT inherit the draft-level (first account's) board.
   const noInherit = buildScheduledDestinations(
@@ -248,8 +250,8 @@ section("N accounts per platform (WS-B3)");
     { targetConnectionId: "pin_A", boardId: "b-A", boardName: "Board A" },
     accounts,
   );
-  check("the entry that IS the legacy target still inherits its board",
-    inherits[0].boardId === "b-A" && inherits[0].boardName === "Board A");
+  check("even the legacy target does not inherit a Board fallback",
+    !inherits[0].boardId && !inherits[0].boardName);
 
   const mirror = legacyPinterestMirror(two);
   check("the legacy mirror follows the FIRST Pinterest entry",
@@ -278,8 +280,8 @@ section("a board edit moves the entry it speaks for");
   const derivedAfterEdit = resolveScheduledDestinations(
     legacyDraft({ boardId: "b-Z", boardName: "Board Z" }),
   );
-  check("legacy draft: the edited board is what the read side derives",
-    derivedAfterEdit.length === 1 && derivedAfterEdit[0].boardId === "b-Z",
+  check("legacy board edit does not invent publish intent",
+    derivedAfterEdit.length === 0,
     JSON.stringify(derivedAfterEdit));
 
   // 2. One Pinterest entry beside a non-Pinterest one.
@@ -303,16 +305,16 @@ section("a board edit moves the entry it speaks for");
   check("only the entry matching targetConnectionId changes",
     onlyB[1].boardId === "b-Z" && onlyB[0].boardId === "b-A", JSON.stringify(onlyB));
 
-  // 4. No entry matches (or nothing to match on) ⇒ the FIRST Pinterest entry, which is
-  // the one legacyPinterestMirror mirrors, so the two never disagree.
+  // 4. No entry matches (or nothing to match on) ⇒ fail closed. Picking the first
+  // Pinterest entry would silently move another account's Board.
   const noMatch = withBoardOnPinterestEntry(twoPins, "pin_GONE", NEW);
-  check("with no matching account the FIRST Pinterest entry takes the board",
-    noMatch[0].boardId === "b-Z" && noMatch[1].boardId === "b-B", JSON.stringify(noMatch));
-  check("that is the same entry the legacy mirror follows",
-    legacyPinterestMirror(noMatch).boardId === "b-Z");
+  check("with no matching account no Pinterest entry changes",
+    noMatch[0].boardId === "b-A" && noMatch[1].boardId === "b-B", JSON.stringify(noMatch));
+  check("the legacy mirror also remains unchanged",
+    legacyPinterestMirror(noMatch).boardId === "b-A");
   const noTarget = withBoardOnPinterestEntry(twoPins, "", NEW);
-  check("no target id at all still falls to the first Pinterest entry",
-    noTarget[0].boardId === "b-Z" && noTarget[1].boardId === "b-B");
+  check("no target id at all changes nothing",
+    noTarget[0].boardId === "b-A" && noTarget[1].boardId === "b-B");
 
   // 5. Clearing the board clears it on the entry too — a cleared field must never leave
   // the old board still stored as where this publishes.

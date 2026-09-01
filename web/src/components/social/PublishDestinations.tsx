@@ -16,12 +16,8 @@ import { PLATFORMS, SOCIAL_PROVIDERS, VISIBLE_SOCIAL_PROVIDERS, type SocialProvi
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections, SOCIAL_CONNECTIONS_CHANGED_EVENT } from "@/lib/social/connectionsCache";
-import {
-  PINTEREST_DISCONNECTED_EVENT,
-  fetchPinterestBoards,
-  fetchPinterestDefaultBoard,
-  savePinterestDefaultBoard,
-} from "@/lib/pinterestClient";
+import { PINTEREST_DISCONNECTED_EVENT, fetchPinterestBoards } from "@/lib/pinterestClient";
+import { connectionState, soleConnectedAccount } from "@/lib/social/destinationCapability";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const CONNECTIONS_TIMEOUT_MS = 3000;
@@ -33,6 +29,7 @@ const CONNECTIONS_TIMEOUT_MS = 3000;
 export type SelectedAccount = {
   provider: string;
   id: string;
+  accountLabel?: string;
   /** Pinterest only: the board THIS account publishes to. Cleared when it is unticked. */
   boardId?: string;
   boardName?: string;
@@ -218,13 +215,9 @@ function DestinationRow({
  * The board ONE ticked Pinterest account publishes to.
  *
  * Boards are per-account, so the list is fetched with this account's connection id —
- * listing "the" boards would show whichever account the server defaults to. The last
- * board chosen for THIS account seeds the field (`fetchPinterestDefaultBoard(id)`) and
- * a new choice is remembered against it (`savePinterestDefaultBoard(board, id)`), so a
- * merchant publishing to two accounts does not re-pick both boards every time.
- *
- * It never auto-picks: an account with no remembered board shows "Choose a board" and
- * the destination is refused at publish time rather than landing somewhere unintended.
+ * listing "the" boards would show whichever account the server defaults to. It never
+ * auto-picks or loads a remembered/default Board: the displayed value must come from
+ * this Content's explicit destination snapshot.
  */
 function AccountBoardSelect({
   connectionId,
@@ -238,9 +231,6 @@ function AccountBoardSelect({
   const { t } = useLocale();
   const [boards, setBoards] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const seededRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -255,21 +245,6 @@ function AccountBoardSelect({
     return () => { alive = false; };
   }, [connectionId]);
 
-  // Seed from THIS account's remembered board, once, and only while the field is
-  // still empty — never overwrite a board the merchant just chose.
-  useEffect(() => {
-    if (seededRef.current || value) return;
-    seededRef.current = true;
-    let alive = true;
-    void fetchPinterestDefaultBoard(undefined, connectionId)
-      .then(board => {
-        if (!alive || !board?.boardId) return;
-        onChangeRef.current({ boardId: board.boardId, boardName: board.boardName ?? "" });
-      })
-      .catch(() => { /* no remembered board — the merchant picks one */ });
-    return () => { alive = false; };
-  }, [connectionId, value]);
-
   return (
     <div style={{ padding: "0 10px 8px 60px" }}>
       <select
@@ -281,8 +256,6 @@ function AccountBoardSelect({
           if (!boardId) { onChange(null); return; }
           const board = boards.find(b => b.id === boardId);
           onChange({ boardId, boardName: board?.name ?? "" });
-          // Remembered against THIS connection, so the other account's board is untouched.
-          void savePinterestDefaultBoard({ boardId, boardName: board?.name ?? "" }, connectionId).catch(() => {});
         }}
         style={{
           width: "100%", padding: "5px 7px", borderRadius: 7,
@@ -302,8 +275,6 @@ export function PublishDestinations({
   onSelectedChange,
   onConnectPinterest,
   connectingPinterest,
-  pinterestConnected,
-  pinterestAccountName,
   scheduleMode,
   onSummariesChange,
   renderDetails,
@@ -441,34 +412,6 @@ export function PublishDestinations({
     };
   }, [load, selected, onSelectedChange]);
 
-  // Default Pinterest ON once when it resolves as connected — but never fight the
-  // merchant. The previous version re-added Pinterest on EVERY render where it was
-  // connected-but-unselected, which made the checkbox impossible to uncheck (it
-  // sprang back instantly) and forced every publish through the Pinterest leg.
-  // Social-only publishes (e.g. Facebook Page only) are legitimate.
-  //
-  // THE RULE: a non-empty `selected` is the parent's stored intent and is NEVER
-  // overwritten or added to. Only an EMPTY selection may be defaulted, and only once.
-  // Adding Pinterest to a selection that already named other platforms was intent
-  // corruption in both parents: the card persists every selection change
-  // (persistDestinationSelection), so reopening an Instagram-only Content wrote a
-  // Pinterest destination the merchant never chose into its stored intent.
-  const didDefaultPinterest = useRef(false);
-  useEffect(() => {
-    if (didDefaultPinterest.current) return;
-    if (selected.length) {
-      // The parent has a selection of its own. Stand down permanently — including
-      // later, if the merchant unticks everything (that is a choice, not a gap).
-      didDefaultPinterest.current = true;
-      return;
-    }
-    const connected = summaries.find(s2 => s2.provider === "pinterest")?.connected ?? !!pinterestConnected;
-    // Not connected, or not known yet: decide nothing — the answer may still arrive.
-    if (!connected) return;
-    didDefaultPinterest.current = true;
-    onSelectedChange(["pinterest"]);
-  }, [onSelectedChange, pinterestConnected, summaries, selected]);
-
   // Strip any non-live provider from the selection (e.g. stale persisted state).
   // Unimplemented platforms must never be scheduled/published against.
   useEffect(() => {
@@ -512,9 +455,22 @@ export function PublishDestinations({
 
   function toggle(provider: SocialProvider) {
     if (!PLATFORMS[provider].liveConnect) return;
-    const next = selected.includes(provider)
-      ? selected.filter(p => p !== provider)
-      : [...selected, provider];
+    const removing = selected.includes(provider);
+    const next = removing ? selected.filter(p => p !== provider) : [...selected, provider];
+    if (onSelectedAccountIdsChange) {
+      const withoutProvider = (selectedAccountIds ?? []).filter(account => account.provider !== provider);
+      if (removing) {
+        onSelectedAccountIdsChange(withoutProvider);
+      } else {
+        const summary = summaries.find(item => item.provider === provider);
+        const only = summary ? soleConnectedAccount(summary.accounts) : null;
+        onSelectedAccountIdsChange(only ? [...withoutProvider, {
+          provider,
+          id: only.id,
+          accountLabel: only.providerAccountUsername ?? only.providerAccountName ?? undefined,
+        }] : withoutProvider);
+      }
+    }
     onSelectedChange(next);
   }
 
@@ -550,7 +506,7 @@ export function PublishDestinations({
         {VISIBLE_SOCIAL_PROVIDERS.map(provider => {
           const summary = effectiveSummaries.find(s => s.provider === provider);
           if (!summary) return null;
-          const multi = summary.accounts.filter(a => a.connectionStatus === "connected");
+          const multi = summary.accounts.filter(a => connectionState(a) === "connected");
           const showAccounts = multi.length > 1 && selected.includes(provider);
           return (
             <Fragment key={provider}>

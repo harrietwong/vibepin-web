@@ -407,6 +407,9 @@ export function StudioBoard() {
         plannedAt: edit.plannedAt,
         boardId: edit.boardId,
         boardName: edit.boardName,
+        scheduledDestinations: edit.scheduledDestinations,
+        targetConnectionId: edit.targetConnectionId,
+        targetAccountLabel: edit.targetAccountLabel,
       };
       Object.keys(patch).forEach(key => patch[key as keyof PinDraft] === undefined && delete patch[key as keyof PinDraft]);
       pinDraftStore.updateDraft(id, patch);

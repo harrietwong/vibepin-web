@@ -148,22 +148,22 @@ test("the first-connected-account fallback is gone", () => {
   );
 });
 
-test("the route resolves each destination through the shared rule", () => {
-  assert.match(route, /resolveDestinationConnection\(summary, raw as \{ socialConnectionId\?: unknown \}\)/);
+test("the route resolves each exact destination through the canonical capability", () => {
+  assert.match(route, /resolveDestinationCapability\(\{/);
+  assert.match(route, /accounts\.find\(account => account\.id === connectionId\)/);
 });
 
-test("an ambiguous destination is refused BEFORE the provider is called", () => {
-  const guard = route.indexOf("choice.kind === \"none\" || choice.kind === \"ambiguous\"");
+test("a missing exact destination is refused BEFORE metering/job/provider", () => {
+  const guard = route.indexOf("if (!connectionId || seenDestinations.has(key))");
+  const refusal = route.indexOf('code: "destination_validation_failed"');
   const call = route.indexOf("publishPost({");
-  assert.ok(guard > 0 && guard < call, "nothing may be published while the account is unknown");
-  const block = route.slice(guard, call);
-  assert.match(block, /continue;/, "the destination must be abandoned, not published");
-  assert.match(block, /chooseAccountMessage\(provider\)/);
-  assert.match(block, /connectAccountMessage\(provider\)/);
+  const meter = route.indexOf("await consumeScheduledPost(");
+  assert.ok(guard > 0 && refusal > guard && refusal < meter && refusal < call,
+    "nothing may be charged, recorded or published while the exact account is unknown");
 });
 
 test("an explicitly named account still goes through the user-scoped lookup", () => {
-  assert.match(route, /choice\.kind === "explicit"\s*\r?\n?\s*\? await findConnection\(uid, choice\.connectionId\)/);
+  assert.match(route, /await findConnection\(uid, connectionId\)/);
 });
 
 test("an explicit id that is no longer connected fails — it never falls back to another account", () => {

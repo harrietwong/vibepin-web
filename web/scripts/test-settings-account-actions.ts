@@ -477,13 +477,12 @@ await testAsync("cancel:多目的地行保住排程,单目的地行才 scheduled
   }
 });
 
-await testAsync("destinations 清空时必须同时清 scheduled_at(否则 legacy 回退会让 cron 照发)", async () => {
-  // 这是最隐蔽的一条:resolveScheduledDestinations 在 destinations 为空时会从
-  // targetConnectionId 回退推导出一个 Pinterest 意图。若我们留着 scheduled_at,
-  // 被"取消"的排程会以 Pinterest 的身份照常发出去。
+await testAsync("destinations 清空时同时清 scheduled_at，且 legacy target 不得恢复发布意图", async () => {
+  // 即使旧稿还留有 targetConnectionId，发布读取也必须 fail closed；取消连接时
+  // 同时清 scheduled_at，避免保留一个永远无法执行却看似仍排程的脏状态。
   const resolveSrc = read("src/lib/social/scheduledDestinations.ts");
-  assert.match(resolveSrc, /const derived = pinterestDestinationFrom\(draft, new Date\(\)\.toISOString\(\)\);/,
-    "前提校验:空 destinations 确实会回退推导(不是推断,是查过的)");
+  assert.doesNotMatch(resolveSrc, /return\s+pinterestDestinationFrom\(/,
+    "空 destinations 不得从 legacy targetConnectionId 恢复 Pinterest 发布意图");
 
   const rows = [{
     vibepin_user_id: "u1", draft_id: "legacy",
@@ -632,10 +631,10 @@ test("发布侧的读取方仍然只认能发的账号", () => {
   assert.match(hook, /new Set\(\["connected", "expired"\]\)/,
     "白名单而不是黑名单:将来新增的状态默认不能发");
   for (const [p, needle] of [
-    ["src/components/social/PublishDestinations.tsx", 'accounts.filter(a => a.connectionStatus === "connected")'],
+    ["src/components/social/PublishDestinations.tsx", 'accounts.filter(a => connectionState(a) === "connected")'],
     ["src/components/studio/StudioBoard.tsx", 'accounts.filter(a => a.connectionStatus === "connected")'],
     ["src/components/settings/SettingsModal.tsx", 'filter(a => a.connectionStatus === "connected")'],
-    ["src/app/api/publish/destinations/validate/route.ts", 'find(a => a.connectionStatus === "connected")'],
+    ["src/app/api/publish/destinations/validate/route.ts", 'accounts.find(account => account.id === connectionId)'],
   ] as const) {
     assert.ok(read(p).includes(needle), p + " 必须只取 connected 的账号");
   }

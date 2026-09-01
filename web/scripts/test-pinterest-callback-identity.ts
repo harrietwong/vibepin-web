@@ -59,14 +59,20 @@ test("reconnect 目标从未同步身份(accountId=null)→ update(唯一能获�
   const d = decideConnect({ account: acct("A"), existing: [conn("c1", null)], reconnectTargetId: "c1" });
   assert.equal(d.action, "update");
 });
-test("reconnect 目标已被删除 → 落到身份匹配,命中另一行则 update 它", () => {
+test("reconnect 目标已被删除 → reject，不得改绑另一行", () => {
   const d = decideConnect({ account: acct("B"), existing: [conn("c2", "B")], reconnectTargetId: "c-gone" });
-  assert.equal(d.action, "update");
-  if (d.action === "update") assert.equal(d.connectionId, "c2");
+  assert.equal(d.action, "reject");
+  if (d.action === "reject") assert.equal(d.reason, "reconnect_target_missing");
 });
-test("reconnect 目标已删除且身份无匹配 → create(当成新增)", () => {
+test("reconnect 目标已删除且身份无匹配 → reject，不得转成新增", () => {
   const d = decideConnect({ account: acct("C"), existing: [conn("c2", "B")], reconnectTargetId: "c-gone" });
-  assert.equal(d.action, "create");
+  assert.equal(d.action, "reject");
+  if (d.action === "reject") assert.equal(d.reason, "reconnect_target_missing");
+});
+test("reconnect 未识别目标且回调身份也不可读 → reject", () => {
+  const d = decideConnect({ account: acct(null), existing: [conn("c1", null)], reconnectTargetId: "c1" });
+  assert.equal(d.action, "reject");
+  if (d.action === "reject") assert.equal(d.reason, "identity_unavailable");
 });
 
 console.log("\n=== 身份获取失败(account.id=null)的安全行为 ===");

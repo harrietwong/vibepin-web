@@ -161,23 +161,14 @@ export function checkMediaForProvider(
 /**
  * WHICH board a Pinterest destination publishes to.
  *
- * Its own board wins. The draft-level `boardId` is a fallback ONLY for the entry that
- * IS the draft's legacy Pinterest target (or for a legacy destination naming no account
- * at all) — with several Pinterest accounts it describes the FIRST one, so falling back
- * to it for a second account would publish that account's Pin into a board id that
- * belongs to another account: either a hard "board not owned" failure or, worse, a Pin
- * silently landing on the wrong board.
+ * Only the Board frozen on the exact destination is dispatch input. Draft-level and
+ * remembered Board fields are compatibility/display data, never a fallback.
  */
 export function boardForDestination(
   destination: Pick<PublishDestination, "socialConnectionId" | "boardId">,
-  draft: Pick<ContentDraftLike, "boardId" | "targetConnectionId">,
+  _draft: Pick<ContentDraftLike, "boardId" | "targetConnectionId">,
 ): string | undefined {
-  const own = destination.boardId?.trim();
-  if (own) return own;
-  const target = draft.targetConnectionId?.trim();
-  const id = destination.socialConnectionId?.trim();
-  if (!id || (target && id === target)) return draft.boardId;
-  return undefined;
+  return destination.boardId?.trim() || undefined;
 }
 
 /**
@@ -239,8 +230,6 @@ export function explainPublishBlockers(draft: ContentDraftLike): PublishBlocker[
       continue;
     }
     if (destination.provider === "pinterest") {
-      // Same fallback publishContent uses: the destination's own board, and the
-      // draft-level board ONLY for the entry that is the draft's legacy target.
       if (!boardForDestination(destination, draft)?.trim()) {
         blockers.push({
           code: "missing_board",
@@ -559,19 +548,21 @@ export async function publishContent(
           ...(meteringBucketSig ? { meteringBucketSig } : {}),
           ...(meteringBucketMintedAt ? { meteringBucketMintedAt } : {}),
         });
-        // The response is provider-ordered; match each result back to the destination it
-        // came from so two accounts on one platform stay distinguishable.
-        const queues = new Map<string, PublishDestination[]>();
+        // Match by the exact account returned by the server. Provider-order matching is
+        // unsafe when two Pages/accounts share a provider and one result is omitted.
+        const pendingByExactDestination = new Map<string, PublishDestination>();
         for (const d of socialTargets) {
           if (!d.socialConnectionId) {
             outcomes.push(refusedRow(d, "no_account", `Choose which ${d.provider} account to publish as.`, submittedAt));
             continue;
           }
-          queues.set(d.provider, [...(queues.get(d.provider) ?? []), d]);
+          pendingByExactDestination.set(`${d.provider}:${d.socialConnectionId}`, d);
         }
         for (const result of social.destinations) {
-          const destination = queues.get(result.provider)?.shift();
+          const resultConnectionId = result.socialConnectionId?.trim() ?? "";
+          const destination = pendingByExactDestination.get(`${result.provider}:${resultConnectionId}`);
           if (!destination) continue;
+          pendingByExactDestination.delete(`${result.provider}:${resultConnectionId}`);
           if (result.status === "skipped") {
             // Skipped is not attempted: leave the destination as it was rather than
             // recording an outcome that never happened.
@@ -579,23 +570,41 @@ export async function publishContent(
             continue;
           }
           outcomes.push({
-            ...baseRow(destination, result.status === "published" ? "published" : "failed", submittedAt),
+            ...baseRow(
+              destination,
+              result.status === "published"
+                ? "published"
+                : result.status === "delivery_unknown"
+                  ? "delivery_unknown"
+                  : result.status === "accepted" || result.status === "requested" || result.status === "publishing"
+                    ? result.status
+                    : "failed",
+              submittedAt,
+            ),
             accountLabel: result.accountName ?? destination.accountLabel,
             remoteId: result.externalPostId ?? undefined,
             postUrl: result.externalPostUrl ?? undefined,
             publishedAt: result.status === "published" ? deps.now() : undefined,
-            errorMessage: result.status === "published" ? undefined : (result.error ?? "Publishing failed."),
+            errorCode: result.errorCode ?? undefined,
+            providerStatus: result.providerStatus ?? undefined,
+            attempt: result.attempt,
+            startedAt: result.startedAt ?? undefined,
+            finishedAt: result.finishedAt ?? undefined,
+            errorMessage: result.status === "published"
+              ? undefined
+              : result.status === "delivery_unknown"
+                ? "Delivery status is unknown. Check the original publish before trying again."
+                : (result.error ?? "Publishing failed."),
           });
         }
         // A destination the response never mentioned did not publish — recording it as
         // anything else would be the "UI says published, platform never got it" defect.
-        for (const leftovers of queues.values()) {
-          for (const destination of leftovers) {
-            outcomes.push({
-              ...baseRow(destination, "failed", submittedAt),
-              errorMessage: "The platform returned no result for this account.",
-            });
-          }
+        for (const destination of pendingByExactDestination.values()) {
+          outcomes.push({
+            ...baseRow(destination, "delivery_unknown", submittedAt),
+            errorCode: "missing_destination_result",
+            errorMessage: "Delivery status is unknown. Check the original publish before trying again.",
+          });
         }
       } catch (error) {
         const message = (error as Error)?.message || "Publishing failed.";

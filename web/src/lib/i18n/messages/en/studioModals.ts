@@ -117,6 +117,14 @@ export const studioModalsMessages = {
   "studioModals.schedule.subtitle": "Optional override — Schedule auto-assigns a slot via Smart Schedule if you leave this blank.",
   "studioModals.schedule.date": "Date",
   "studioModals.schedule.time": "Time",
+  "studioModals.schedule.clear": "Publish now (clear time)",
+  "studioModals.publishDestinations.title": "Publish destinations for {n} selected",
+  "studioModals.publishDestinations.subtitle": "Choose exact connected accounts and each Pinterest Board. This replaces the destination intent for every selected Content.",
+  "studioModals.publishDestinations.mixed": "The selected Contents currently use different destinations. Applying will replace them with this exact selection.",
+  "studioModals.publishDestinations.accountRequired": "Choose an exact connected account for every selected provider.",
+  "studioModals.publishDestinations.boardRequired": "Choose a Board for every selected Pinterest account.",
+  "studioModals.publishDestinations.applied": "Destinations updated for {n} Contents",
+  "studioModals.publishDestinations.none": "No destination selected",
   "studioModals.schedule.publishDate": "Publish date",
 
   // ── Product ──

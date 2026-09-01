@@ -3640,11 +3640,21 @@ function CreatePinsContent() {
         return next;
       });
       const draft = pinDraftStore.getDraftByImageUrl(entry.pin.url);
-      if (draft && (rowEdit.plannedDate !== undefined || rowEdit.plannedTime !== undefined || rowEdit.plannedAt !== undefined)) {
+      if (draft && (
+        rowEdit.plannedDate !== undefined
+        || rowEdit.plannedTime !== undefined
+        || rowEdit.plannedAt !== undefined
+        || rowEdit.scheduledDestinations !== undefined
+      )) {
         pinDraftStore.updateDraft(draft.id, {
           scheduledDate: rowEdit.plannedDate ?? draft.scheduledDate,
           scheduledTime: rowEdit.plannedTime ?? draft.scheduledTime,
           plannedAt: rowEdit.plannedAt ?? draft.plannedAt,
+          scheduledDestinations: rowEdit.scheduledDestinations ?? draft.scheduledDestinations,
+          targetConnectionId: rowEdit.targetConnectionId ?? draft.targetConnectionId,
+          targetAccountLabel: rowEdit.targetAccountLabel ?? draft.targetAccountLabel,
+          boardId: rowEdit.boardId ?? draft.boardId,
+          boardName: rowEdit.boardName ?? draft.boardName,
         });
       }
     });

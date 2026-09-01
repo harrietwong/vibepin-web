@@ -196,7 +196,7 @@ export async function GET(req: NextRequest) {
       authorizedLabel: profile.username ?? profile.name ?? null,
     });
     if (decision.action === "reject") {
-      return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
+      return redirectAfterOAuth(req, decision.reason, verdict.returnTo, {
         expected: decision.expectedLabel,
         got: decision.gotLabel,
         // The row being repaired, so the banner's retry names it (Codex #3). The

@@ -338,10 +338,8 @@ export function blockedScheduleDestinations(payload: Record<string, unknown>): S
  * The 口径 mirrors `resolveScheduledDestinations`, because the point is to
  * validate what the DUE-TIME worker will read, not what the payload happens to
  * contain:
- *   - usable `scheduledDestinations[]` entries win, and each names its account.
- *   - with none, the legacy `targetConnectionId` is the single derived Pinterest
- *     target — so it is validated only THEN, exactly when it is the thing that
- *     will be published through.
+ *   - usable `scheduledDestinations[]` entries are the only schedule intent.
+ *   - legacy target fields are display compatibility and never become dispatch.
  *
  * Pure on purpose: this file is imported under bare `tsx` by several tests, so
  * it must not reach a database or import anything server-only. The lookup lives
@@ -357,11 +355,5 @@ export function requiredScheduleConnectionIds(payload: Record<string, unknown>):
       if (id && !out.includes(id)) out.push(id);
     }
   }
-  if (out.length > 0) return out;
-
-  // Legacy single target: only meaningful when nothing usable was stored, which
-  // is precisely when resolveScheduledDestinations derives Pinterest from it.
-  const legacy = payload.targetConnectionId;
-  const legacyId = typeof legacy === "string" ? legacy.trim() : "";
-  return legacyId ? [legacyId] : [];
+  return out;
 }

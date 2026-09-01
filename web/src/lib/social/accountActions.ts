@@ -16,7 +16,8 @@
  * Client-safe: pure, no env reads, no server imports, no i18n lookups.
  */
 
-import { accountUiState, type AccountUiState } from "./accountUiState";
+import type { AccountUiState } from "./accountUiState";
+import { connectionState } from "./destinationCapability";
 import type { SocialProvider } from "./platforms";
 import type { SocialConnection } from "./types";
 
@@ -91,10 +92,5 @@ export function accountRowState(
   account: AccountStateSource,
   provider: SocialProvider,
 ): AccountUiState {
-  return accountUiState({
-    connectionStatus: account.connectionStatus,
-    scopes: account.scopes,
-    // Scope completeness is only knowable (and only required) for Pinterest today.
-    enforcePinterestScopes: provider === "pinterest",
-  });
+  return connectionState({ ...account, provider });
 }

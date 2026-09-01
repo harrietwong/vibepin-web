@@ -28,7 +28,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isSocialProvider, platformName, type SocialProvider } from "./platforms";
 import { findConnection } from "./server/socialConnectionStore";
 import { getSocialProviderById } from "./providers";
-import { readProviderSignal } from "@/lib/server/usage/deliveryOutcome";
+import { classifyDelivery, readProviderSignal } from "@/lib/server/usage/deliveryOutcome";
 import type { ScheduledDestination } from "../pinDraftStore";
 import type { SocialPostPayload } from "./types";
 import {
@@ -103,10 +103,27 @@ export async function recordOutcomes(
     publish_job_id: jobId,
     provider: o.provider,
     social_connection_id: o.socialConnectionId,
-    status: o.status,
+    // v32's check constraint predates requested/accepted/delivery_unknown. Preserve
+    // the exact lifecycle in payload while mapping to its existing safe terminal or
+    // in-flight bucket; no migration is required for this Preview-only code gate.
+    status: o.status === "requested" || o.status === "accepted"
+      ? "publishing"
+      : o.status === "delivery_unknown"
+        ? "failed"
+        : o.status,
     external_post_id: o.externalPostId ?? null,
     external_post_url: o.externalPostUrl ?? null,
     error_message: o.error ?? null,
+    payload: {
+      lifecycleStatus: o.status,
+      retryAllowed: o.status !== "delivery_unknown",
+      providerStatus: o.providerStatus ?? null,
+      providerResourceId: o.providerResourceId ?? null,
+      errorCode: o.errorCode ?? null,
+      attempt: o.attempt ?? null,
+      startedAt: o.startedAt ?? null,
+      finishedAt: o.finishedAt ?? null,
+    },
     published_at: o.status === "published" ? nowIso : null,
   }));
   const { error: destErr } = await db.from("social_publish_job_destinations").insert(rows);
@@ -174,9 +191,15 @@ export async function dispatchDestination(
       post,
       userId: uid,
     });
+    const delivery = classifyDelivery({
+      ok: result.ok,
+      preNetwork: result.status === "not_implemented" || result.preNetwork === true,
+      providerStatus: result.providerStatus,
+      providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
+    });
     return {
       ...base,
-      status: result.ok ? "published" : "failed",
+      status: result.ok ? "published" : delivery === "delivery_unknown" ? "delivery_unknown" : "failed",
       externalPostId: result.externalPostId ?? null,
       externalPostUrl: result.externalPostUrl ?? null,
       accountName: result.accountName ?? null,
@@ -199,9 +222,10 @@ export async function dispatchDestination(
     // Read the two provider fields off it if they happen to be there; otherwise
     // this is `delivery_unknown` and the charge stands.
     const signal = readProviderSignal(err);
+    const delivery = classifyDelivery(signal);
     return {
       ...base,
-      status: "failed",
+      status: delivery === "delivery_unknown" ? "delivery_unknown" : "failed",
       error: (err as Error).message || "Publishing failed.",
       providerStatus: signal.providerStatus ?? null,
       providerResourceId: signal.providerResourceId ?? null,

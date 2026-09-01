@@ -17,7 +17,6 @@ import { toProxyUrl } from "@/lib/imageProxy";
 import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import {
   pendingDestinations,
-  publishedForSchedule,
   type AttemptedResult,
   type DestinationOutcome,
   type PendingOptions,
@@ -143,9 +142,8 @@ export interface DuePublishInput {
  *
  * `targetConnectionId` rides through verbatim: cron publishes a scheduled Pin to the
  * account that Pin was pinned to, whatever the user's default account has since become.
- * Absent (every pre-Phase-C draft) ⇒ publishPinForUser resolves the default connection,
- * exactly the pre-v59 behaviour, and the adoption is written back by payloadAfterSuccess /
- * payloadAfterFailure.
+ * Absent means fail closed. Due-time execution never resolves a current/default
+ * connection for historical intent that did not freeze an exact account.
  */
 export function owedDestinations(
   payload: Record<string, unknown>,
@@ -159,36 +157,7 @@ export function owedDestinations(
   const prior = Array.isArray(payload.destinationResults)
     ? (payload.destinationResults as AttemptedResult[])
     : [];
-  if (intent.length) return pendingDestinations(intent, prior, options);
-
-  // ── The draft that names no account at all ────────────────────────────────────
-  // `resolveScheduledDestinations` can only derive intent from a PINNED target, so a
-  // draft with a board but no `targetConnectionId` — every Pin scheduled before
-  // adopt-once wrote one back — resolves to nothing. Once destinations drove the
-  // publish, "nothing owed" made such a row leave the due scan as completed after
-  // being metered, publishing absolutely nothing. It used to publish through
-  // `publishPinForUser` on the DEFAULT connection and adopt it, so that is what is
-  // owed: one Pinterest destination naming no account.
-  //
-  // The empty `socialConnectionId` is the point, not an oversight — it is what makes
-  // `destinationPublishInput` leave `connectionId` unset, so the publish resolves the
-  // default account and the route's adopt-once branch pins it. It is also why the
-  // stored result row keys as `pinterest:legacy`, exactly as it always did.
-  const boardId = firstString(payload.boardId);
-  if (!boardId) return []; // nothing to publish INTO — payloadToPublishInput refuses it
-  // A stale re-claim must not double-post the Pin this row already published — but a
-  // Pin published for an EARLIER schedule must not block the one the merchant just
-  // set, or a legacy Content could never be re-scheduled at all. Same rule as above.
-  if (prior.some(r => r.provider === "pinterest" && publishedForSchedule(r, options?.scheduledAt))) return [];
-  const legacy: ScheduledDestination = {
-    provider: "pinterest",
-    socialConnectionId: "",
-    boardId,
-    capturedAt: new Date().toISOString(),
-  };
-  const boardName = firstString(payload.boardName);
-  if (boardName) legacy.boardName = boardName;
-  return [legacy];
+  return intent.length ? pendingDestinations(intent, prior, options) : [];
 }
 
 export function payloadToPublishInput(
@@ -802,14 +771,13 @@ function previousScheduledIso(payload: Record<string, unknown>): string | undefi
 export function destinationPublishInput(
   base: DuePublishInput,
   destination: { socialConnectionId?: string | null; boardId?: string | null },
-  /** The draft's legacy target — the only entry the draft-level board belongs to. */
-  legacyTargetConnectionId: string,
+  /** Retained for call-site compatibility; legacy target fields are never fallbacks. */
+  _legacyTargetConnectionId: string,
 ): PinterestPublishInput | null {
   const own = typeof destination.boardId === "string" ? destination.boardId.trim() : "";
   const id = typeof destination.socialConnectionId === "string" ? destination.socialConnectionId.trim() : "";
-  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId ?? "" : "");
-  if (!boardId) return null;
-  return { ...base, boardId, connectionId: id || base.connectionId };
+  if (!own || !id) return null;
+  return { ...base, boardId: own, connectionId: id };
 }
 
 /** Extract { message, code } from a thrown error for categorization. Connection/API

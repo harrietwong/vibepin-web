@@ -21,7 +21,8 @@
  */
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
-import { isSocialProvider, platformName } from "@/lib/social/platforms";
+import { isSocialProvider } from "@/lib/social/platforms";
+import { resolveDestinationCapability, type PublishMode } from "@/lib/social/destinationCapability";
 import { summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 
 export const dynamic = "force-dynamic";
@@ -48,32 +49,53 @@ export async function POST(req: Request) {
   const byProvider = new Map(summaries.map(s => [s.provider, s]));
 
   const results = requested.map((raw) => {
-    const provider = (raw as { provider?: unknown }).provider;
+    const item = raw as {
+      provider?: unknown;
+      socialConnectionId?: unknown;
+      boardId?: unknown;
+      publishMode?: unknown;
+      mediaCount?: unknown;
+    };
+    const provider = item.provider;
     if (!isSocialProvider(provider)) {
       return {
         provider: String(provider),
         publishable: false,
         status: "not_connected" as const,
         socialConnectionId: null,
-        reason: "Unknown platform",
+        reasonCode: "unsupported_provider" as const,
+        reason: "This publishing provider is not supported.",
       };
     }
     const summary = byProvider.get(provider);
-    const usable = summary?.accounts.find(a => a.connectionStatus === "connected") ?? null;
-    if (!summary?.connected || !usable) {
-      return {
-        provider,
-        publishable: false,
-        status: summary?.status ?? ("not_connected" as const),
-        socialConnectionId: null,
-        reason: `Connect your ${platformName(provider)} account in Settings to publish here.`,
-      };
-    }
+    const connectionId = typeof item.socialConnectionId === "string" ? item.socialConnectionId.trim() : "";
+    const connection = summary?.accounts.find(account => account.id === connectionId) ?? null;
+    const capability = resolveDestinationCapability({
+      provider,
+      connection,
+      connectionId,
+      subdestinationId: typeof item.boardId === "string" ? item.boardId : null,
+      mode: item.publishMode === "scheduled" ? "scheduled" : "now" as PublishMode,
+      mediaCount: typeof item.mediaCount === "number" ? item.mediaCount : 1,
+    });
     return {
       provider,
-      publishable: true,
-      status: "connected" as const,
-      socialConnectionId: usable.id,
+      publishable: capability.selectable,
+      status: connection?.connectionStatus ?? summary?.status ?? ("not_connected" as const),
+      socialConnectionId: capability.connectionId,
+      providerAccountId: capability.providerAccountId,
+      displayIdentity: capability.displayIdentity,
+      capability: {
+        selectable: capability.selectable,
+        publishNow: capability.publishNow,
+        schedule: capability.schedule,
+        requiresMedia: capability.requiresMedia,
+        requiresSubdestination: capability.requiresSubdestination,
+      },
+      ...(capability.unavailableReason ? {
+        reasonCode: capability.unavailableReason,
+        reason: capability.unavailableReason,
+      } : {}),
     };
   });
 

@@ -224,8 +224,8 @@ export async function GET(req: NextRequest) {
       authorizedLabel: fbUser.name,
     });
     if (decision.action === "reject") {
-      fbDebug(`account_mismatch — nothing written (expected=${decision.expectedLabel ?? "?"})`);
-      return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
+      fbDebug(`${decision.reason} — nothing written (expected=${decision.expectedLabel ?? "?"})`);
+      return redirectAfterOAuth(req, decision.reason, verdict.returnTo, {
         expected: decision.expectedLabel,
         got: decision.gotLabel,
         // The row the merchant was repairing, so "Sign in to the original" can

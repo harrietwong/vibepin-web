@@ -38,7 +38,7 @@ export type ConnectDecision =
    * A reconnect was aimed at one connection but a different account authorized.
    * Nothing is written; the UI offers PRD §10's two options.
    */
-  | { action: "reject"; reason: "account_mismatch"; expectedUsername: string | null; gotUsername: string | null };
+  | { action: "reject"; reason: "account_mismatch" | "reconnect_target_missing" | "identity_unavailable"; expectedUsername: string | null; gotUsername: string | null };
 
 export type DecideInput = {
   /** Identity Pinterest reported for the token we just obtained. */
@@ -81,6 +81,9 @@ export function decideConnect(input: DecideInput): ConnectDecision {
       // cannot produce a mismatch — adopting the account that just authorized is the
       // only way it can ever gain an identity.
       if (!target.accountId) {
+        if (!account.id) {
+          return { action: "reject", reason: "identity_unavailable", expectedUsername: target.username, gotUsername: account.username };
+        }
         return { action: "update", connectionId: target.connectionId, account, revived: target.disconnected };
       }
       if (sameAccount(target.accountId, account.id)) {
@@ -93,8 +96,7 @@ export function decideConnect(input: DecideInput): ConnectDecision {
         gotUsername: account.username,
       };
     }
-    // The targeted connection is gone (removed in another tab / another device).
-    // Fall through: match by identity below, else treat as a fresh Add.
+    return { action: "reject", reason: "reconnect_target_missing", expectedUsername: null, gotUsername: account.username };
   }
 
   const byIdentity = existing.find(c => sameAccount(c.accountId, account.id));

@@ -36,19 +36,15 @@
  * straight to the live post ("View on Facebook").
  *
  * Pinterest is intentionally NOT published here — it keeps its dedicated,
- * tested flow (/api/pinterest/pins). If a pinterest destination is sent it is
- * marked "skipped" so the two paths never double-post.
+ * tested flow (/api/pinterest/pins). A Pinterest destination is rejected during
+ * preflight before metering, job creation or provider dispatch.
  */
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
-import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "@/lib/social/platforms";
+import { isSocialProvider, platformName, PLATFORMS } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
-import {
-  resolveDestinationConnection,
-  connectAccountMessage,
-  chooseAccountMessage,
-} from "@/lib/social/server/resolveDestinationConnection";
+import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
@@ -106,6 +102,55 @@ export async function POST(req: Request) {
   const requested = Array.isArray(body.destinations) ? body.destinations : [];
   if (!requested.length) {
     return Response.json({ error: "Select at least one destination to publish." }, { status: 400 });
+  }
+
+  // Resolve every exact owner-scoped account before metering, job creation or provider
+  // dispatch. This route never chooses a first/default account and never accepts the
+  // Pinterest leg (its dedicated endpoint owns that dispatch).
+  let summaries: Awaited<ReturnType<typeof summarizeConnections>>;
+  try {
+    summaries = await summarizeConnections(uid);
+  } catch (error) {
+    console.error("[publish/social preflight]", (error as Error).message);
+    return Response.json({ error: "Could not validate publishing destinations.", code: "capability_unavailable" }, { status: 503 });
+  }
+  const byProvider = new Map(summaries.map(summary => [summary.provider, summary]));
+  const seenDestinations = new Set<string>();
+  const validation = requested.map(raw => {
+    const item = raw as { provider?: unknown; socialConnectionId?: unknown };
+    const provider = item.provider;
+    const connectionId = typeof item.socialConnectionId === "string" ? item.socialConnectionId.trim() : "";
+    if (!isSocialProvider(provider) || provider === "pinterest" || !PLATFORMS[provider].liveConnect) {
+      return { provider: String(provider), socialConnectionId: connectionId || null, publishable: false, reasonCode: "unsupported_provider" };
+    }
+    const key = `${provider}:${connectionId}`;
+    if (!connectionId || seenDestinations.has(key)) {
+      return { provider, socialConnectionId: connectionId || null, publishable: false, reasonCode: connectionId ? "duplicate_destination" : "not_connected" };
+    }
+    seenDestinations.add(key);
+    const connection = byProvider.get(provider)?.accounts.find(account => account.id === connectionId) ?? null;
+    const capability = resolveDestinationCapability({
+      provider,
+      connection,
+      connectionId,
+      mediaCount: post.imageUrls.length,
+      mode: "now",
+    });
+    return {
+      provider,
+      socialConnectionId: capability.connectionId ?? connectionId,
+      providerAccountId: capability.providerAccountId,
+      displayIdentity: capability.displayIdentity,
+      publishable: capability.publishNow,
+      reasonCode: capability.unavailableReason,
+    };
+  });
+  if (validation.some(result => !result.publishable)) {
+    return Response.json({
+      error: "One or more publishing destinations are no longer available.",
+      code: "destination_validation_failed",
+      results: validation,
+    }, { status: 422 });
   }
 
   // ── Metering: scheduled-post quota (PRD v3.1 decisions 3 & 4) ────────────────
@@ -202,6 +247,7 @@ export async function POST(req: Request) {
   // Parallel to `outcomes`, but only for targets we actually ATTEMPTED — the refund
   // classification (below) must not see skips, which are not delivery failures.
   const deliveries: DeliveryOutcome[] = [];
+  const requestStartedAt = new Date().toISOString();
 
   /**
    * ── PRE-DISPATCH THROWS MUST RELEASE A FRESH CONSUME (Codex round 8, High 2) ──
@@ -227,15 +273,10 @@ export async function POST(req: Request) {
    * about.
    */
   let dispatchStarted = false;
-  let summaries: Awaited<ReturnType<typeof summarizeConnections>>;
-  let byProvider: Map<SocialProvider, (typeof summaries)[number]>;
   let db: ReturnType<typeof createServerClient>;
   let jobId: Awaited<ReturnType<typeof createPublishJob>>;
 
   try {
-    summaries = await summarizeConnections(uid);
-    byProvider = new Map(summaries.map(s => [s.provider, s]));
-
   // Create the attempt BEFORE dispatching anything. Previously the job row was
   // written only after every provider call returned, so a crash mid-publish left
   // a post live on the platform with no record of it, and a client that
@@ -247,17 +288,6 @@ export async function POST(req: Request) {
   for (const raw of requested) {
     const provider = (raw as { provider?: unknown }).provider;
     if (!isSocialProvider(provider)) continue;
-
-    // Pinterest is published by its own dedicated flow — never here.
-    if (provider === "pinterest") {
-      outcomes.push({
-        provider,
-        status: "skipped",
-        socialConnectionId: null,
-        error: "Pinterest is published through the Pinterest flow.",
-      });
-      continue;
-    }
 
     // Publishing capability is not the same thing as being connected (PRD 0809 §4).
     // A platform we cannot publish to is refused HERE, before any provider call, so the
@@ -274,30 +304,10 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // WHICH account this destination means. Falling back to "the first connected
-    // account" — what this route used to do for a destination that named none —
-    // publishes to an account the merchant never chose as soon as two are connected,
-    // and they only find out by seeing the post appear there.
-    const summary = byProvider.get(provider);
-    const choice = resolveDestinationConnection(summary, raw as { socialConnectionId?: unknown });
-    if (choice.kind === "none" || choice.kind === "ambiguous") {
-      deliveries.push(classifyDelivery({ preNetwork: true }));
-      outcomes.push({
-        provider,
-        status: "failed",
-        socialConnectionId: null,
-        // Refused BEFORE the provider is called: an ambiguous destination must not
-        // publish anywhere at all. Asking is recoverable; the wrong audience is not.
-        error: choice.kind === "none" ? connectAccountMessage(provider) : chooseAccountMessage(provider),
-      });
-      continue;
-    }
-    // An explicitly named account is resolved through the user-scoped lookup, so an
-    // id belonging to someone else resolves to nothing rather than publishing across
-    // a workspace boundary.
-    const connection: SocialConnection | null = choice.kind === "explicit"
-      ? await findConnection(uid, choice.connectionId)
-      : choice.connection;
+    const connectionId = typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
+      ? (raw as { socialConnectionId: string }).socialConnectionId.trim()
+      : "";
+    const connection: SocialConnection | null = await findConnection(uid, connectionId);
 
     if (!connection || connection.connectionStatus !== "connected") {
       // Refused here, before any network call → `not_sent`, refundable.
@@ -330,15 +340,16 @@ export async function POST(req: Request) {
       // — missing credentials, no Page/account selected, a local media-rule refusal):
       // those carry no providerStatus and would otherwise be indistinguishable from a
       // timeout, i.e. charged as `delivery_unknown`. See lib/social/types.ts.
-      deliveries.push(classifyDelivery({
+      const delivery = classifyDelivery({
         ok: result.ok,
         preNetwork: result.status === "not_implemented" || result.preNetwork === true,
         providerStatus: result.providerStatus,
         providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
-      }));
+      });
+      deliveries.push(delivery);
       outcomes.push({
         provider,
-        status: result.ok ? "published" : "failed",
+        status: result.ok ? "published" : delivery === "delivery_unknown" ? "delivery_unknown" : "failed",
         socialConnectionId: connection.id,
         externalPostId: result.externalPostId ?? null,
         externalPostUrl: result.externalPostUrl ?? null,
@@ -350,17 +361,32 @@ export async function POST(req: Request) {
           : result.status === "not_implemented"
             ? `Publishing to ${platformName(provider)} is coming soon.`
             : result.error ?? "Publishing is not available for this platform yet.",
+        errorCode: result.ok ? null : result.status,
+        providerStatus: result.providerStatus ?? null,
+        providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
+        preNetwork: result.status === "not_implemented" || result.preNetwork === true,
+        attempt: 1,
+        startedAt: requestStartedAt,
+        finishedAt: new Date().toISOString(),
       });
     } catch (err) {
       // A provider that THREW instead of returning a typed failure. The two provider
       // fields are read off it if present; otherwise this is `delivery_unknown` and
       // the charge stands — we cannot prove the post was not created.
-      deliveries.push(classifyDelivery(readProviderSignal(err)));
+      const signal = readProviderSignal(err);
+      const delivery = classifyDelivery(signal);
+      deliveries.push(delivery);
       outcomes.push({
         provider,
-        status: "failed",
+        status: delivery === "delivery_unknown" ? "delivery_unknown" : "failed",
         socialConnectionId: connection.id,
         error: (err as Error).message || "Publishing failed.",
+        errorCode: "provider_dispatch_error",
+        providerStatus: signal.providerStatus ?? null,
+        providerResourceId: signal.providerResourceId ?? null,
+        attempt: 1,
+        startedAt: requestStartedAt,
+        finishedAt: new Date().toISOString(),
       });
     }
   }
@@ -456,7 +482,14 @@ export async function POST(req: Request) {
       // the url powers "View on Facebook", the id is the durable reference.
       externalPostId: o.externalPostId ?? null,
       externalPostUrl: o.externalPostUrl ?? null,
+      socialConnectionId: o.socialConnectionId,
+      accountName: o.accountName ?? null,
       error: o.error ?? null,
+      errorCode: o.errorCode ?? null,
+      providerStatus: o.providerStatus ?? null,
+      attempt: o.attempt ?? null,
+      startedAt: o.startedAt ?? null,
+      finishedAt: o.finishedAt ?? null,
     })),
   });
 }

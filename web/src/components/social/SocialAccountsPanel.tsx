@@ -129,6 +129,8 @@ const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: s
   profile_failed: { type: "error", msg: "Facebook authorized but reading your profile failed — try again" },
   discovery_failed: { type: "error", msg: "Facebook authorized but reading your accounts failed — try again" },
   persist_failed: { type: "error", msg: "Facebook authorized but saving the connection failed — try again" },
+  reconnect_target_missing: { type: "error", msg: "That Facebook connection changed while you were authorizing. Refresh and reconnect the exact account again." },
+  identity_unavailable: { type: "error", msg: "Facebook did not return a verifiable account identity. Nothing was changed." },
   config_error: { type: "error", msg: "Facebook is not configured on the server" },
   error: { type: "error", msg: "Facebook authorization failed" },
 };
@@ -152,6 +154,8 @@ const INSTAGRAM_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: 
   exchange_failed: { type: "error", msg: "Could not complete Instagram authorization — please try again" },
   profile_failed: { type: "error", msg: "Instagram authorized but reading your profile failed — try again" },
   persist_failed: { type: "error", msg: "Instagram authorized but saving the connection failed — try again" },
+  reconnect_target_missing: { type: "error", msg: "That Instagram connection changed while you were authorizing. Refresh and reconnect the exact account again." },
+  identity_unavailable: { type: "error", msg: "Instagram did not return a verifiable account identity. Nothing was changed." },
   config_error: { type: "error", msg: "Instagram is not configured on the server" },
   error: { type: "error", msg: "Instagram authorization failed" },
 };
@@ -175,6 +179,8 @@ const PINTEREST_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: 
   missing_code: { type: "error", msg: "Pinterest did not return an authorization code" },
   exchange_failed: { type: "error", msg: "Could not complete Pinterest authorization — please try again" },
   persist_failed: { type: "error", msg: "Pinterest authorized but saving the connection failed — try again" },
+  reconnect_target_missing: { type: "error", msg: "That Pinterest connection changed while you were authorizing. Refresh and reconnect the exact account again." },
+  identity_unavailable: { type: "error", msg: "Pinterest did not return a verifiable account identity. Nothing was changed." },
   config_error: { type: "error", msg: "Pinterest is not configured on the server" },
   error: { type: "error", msg: "Pinterest authorization failed" },
 };

@@ -144,6 +144,7 @@ function makeDeps(opts: {
         status,
         destinations: input.destinations.map(d => ({
           provider: d.provider,
+          socialConnectionId: d.socialConnectionId,
           status,
           externalPostId: status === "published" ? "ig-1" : null,
           externalPostUrl: status === "published" ? "https://instagram.com/p/ig-1" : null,

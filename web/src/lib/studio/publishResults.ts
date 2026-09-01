@@ -22,7 +22,7 @@ import {
 export type PublishResultRow = {
   provider: string;
   /** A failed destination now gets a row too, with the reason it failed. */
-  status: "published" | "failed" | "publishing" | "pending" | "delivery_unknown";
+  status: "requested" | "accepted" | "published" | "failed" | "publishing" | "pending" | "delivery_unknown";
   /** Which account received it, when we know. Never invented. */
   accountName?: string | null;
   /** Pinterest's board. Absent for platforms that have no equivalent. */
