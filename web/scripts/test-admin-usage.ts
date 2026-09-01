@@ -115,7 +115,6 @@ function oracleIsWatched(state: string, used: number | null, limit: number | nul
  */
 function accountRow(over: Partial<Record<string, unknown>> & { user_id: string }) {
   return {
-    user_id: over.user_id,
     plan_key: "pro",
     period_start: "2026-08-01T09:40:00.000Z",
     period_end: "2026-09-01T09:40:00.000Z",
@@ -898,6 +897,125 @@ async function main() {
 
     // Nobody in production is near 80% today — the card must not invent an alert.
     assert.equal(quotaWatchMetricsFor(summary).length, 0);
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 13. COCKPIT ENTRY POINT + THE BOUNDARIES THAT MUST HOLD
+  // ══════════════════════════════════════════════════════════════════════════
+
+  console.log("\n=== 13. getQuotaWatch: scope, separation, and no side effects ===");
+
+  const { getQuotaWatch } = await import("../src/lib/server/adminUsage");
+
+  function authUser(id: string, email: string, plan?: string) {
+    return {
+      id,
+      email,
+      created_at: "2026-01-01T00:00:00Z",
+      last_sign_in_at: "2026-08-30T00:00:00Z",
+      email_confirmed_at: "2026-01-01T00:00:00Z",
+      app_metadata: plan ? { plan } : {},
+      user_metadata: {},
+    };
+  }
+
+  test("getQuotaWatch lists only metered users at or above the threshold", async () => {
+    const { db } = makeMockDb(
+      {
+        usage_accounts: {
+          rows: [
+            // 95% of scheduled posts → listed.
+            accountRow({ user_id: "near", scheduled_posts_used: 285 }),
+            // 10% → not listed.
+            accountRow({ user_id: "fine", scheduled_posts_used: 30 }),
+            // unlimited → never listed, however large.
+            accountRow({ user_id: "unl", plan_key: "business", scheduled_posts_used: 99999, scheduled_posts_limit: null }),
+          ],
+        },
+      },
+      [authUser("near", "near@x.com", "pro"), authUser("fine", "fine@x.com", "pro"), authUser("unl", "unl@x.com", "business"), authUser("norow", "norow@x.com", "free")],
+    );
+    const res = await getQuotaWatch(db);
+    assert.equal(res.available, true);
+    const ids = res.items.map(i => i.userId);
+    assert.deepEqual(ids, ["near"], `expected only the 95% user, got ${JSON.stringify(ids)}`);
+    // Oracle: 285/300, remaining 15.
+    assert.equal(res.items[0].metrics[0].remaining, oracleRemaining(285, 300));
+    assert.equal(res.thresholdPct, 80);
+  });
+
+  test("getQuotaWatch reports UNAVAILABLE rather than an empty 'nobody is close'", async () => {
+    const { db } = makeMockDb(
+      { usage_accounts: { error: { code: "42501", message: "permission denied" } } },
+      [authUser("a", "a@x.com", "pro")],
+    );
+    const res = await getQuotaWatch(db);
+    assert.equal(res.available, false, "a failed read must not render as a reassuring empty list");
+    assert.equal(res.items.length, 0);
+    assert.ok(res.warnings.length > 0);
+  });
+
+  test("getQuotaWatch is READ-ONLY: it never writes or creates an account", async () => {
+    // Structural proof: the derivation layer contains no mutating verb at all.
+    for (const verb of ["insert(", "update(", "upsert(", "delete(", "ensureAccount", "ensureUsageAccount", "rpc("]) {
+      assert.ok(!code.includes(verb), `adminUsage must not call ${verb} — an admin GET must never mint billing state`);
+    }
+    // And behaviourally: reading a cohort leaves the fixture rows untouched.
+    const rows = [accountRow({ user_id: "ro", scheduled_posts_used: 42 })];
+    const before = JSON.stringify(rows);
+    const { db } = makeMockDb({ usage_accounts: { rows } }, [authUser("ro", "ro@x.com", "pro")]);
+    await getQuotaWatch(db);
+    await summarizeUsageForUsers([{ id: "ro", app_metadata: { plan: "pro" } }], db);
+    assert.equal(JSON.stringify(rows), before, "a read must not mutate usage state");
+  });
+
+  test("quota pressure is NOT a blocker and NOT a health driver", async () => {
+    // The separation the PRD makes non-negotiable: an at-quota user must not
+    // appear in the blocker list, and quota must not be a health-score input.
+    const actionCenter = readFileSync(join(process.cwd(), "src/lib/server/adminActionCenter.ts"), "utf8");
+    for (const token of ["usage_accounts", "adminUsage", "quotaWatch", "QUOTA_WATCH"]) {
+      assert.ok(
+        !actionCenter.includes(token),
+        `the blocker/health layer must not depend on usage ("${token}" found) — quota pressure is a commercial signal, not a fault`,
+      );
+    }
+    const todayPage = readFileSync(join(process.cwd(), "src/app/admin/today/page.tsx"), "utf8");
+    assert.ok(todayPage.includes("QuotaWatchCard"), "quota watch renders as its own card");
+    assert.ok(
+      todayPage.indexOf("QuotaWatchCard") > todayPage.indexOf("ActionCenterCard"),
+      "quota watch is a separate card rendered outside the blocker table",
+    );
+  });
+
+  test("the Customer 360 page reads usage without triggering account creation", () => {
+    const page = readFileSync(join(process.cwd(), "src/app/admin/users/[id]/page.tsx"), "utf8");
+    assert.ok(page.includes("getUserUsageSummary"), "the card is wired to the read-only summary");
+    // Strip comments before looking for calls: the page documents WHY it does not
+    // create accounts, and a naive substring search would flag that prose.
+    const pageCode = page
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter(line => !line.trim().startsWith("//"))
+      .join("\n");
+    for (const verb of ["ensureAccount(", "ensureUsageAccount("]) {
+      assert.ok(!pageCode.includes(verb), `the detail page must never call ${verb}`);
+    }
+    // And it must not import the broken v57 helper either.
+    assert.ok(
+      !/from\s+["'][^"']*server\/usage["']/.test(pageCode),
+      "the detail page must not import the v57 usage helper",
+    );
+  });
+
+  test("the users list resolves its Plan column from the SAME effectivePlan", () => {
+    const loader = readFileSync(join(process.cwd(), "src/lib/server/customer360.ts"), "utf8");
+    assert.ok(loader.includes("summarizeUsageForUsers"), "the list uses the shared batch summarizer");
+    assert.ok(/effectivePlan:\s*usage\?\.plan/.test(loader), "the list column comes from the shared resolution");
+    const client = readFileSync(join(process.cwd(), "src/app/admin/users/UsersTableClient.tsx"), "utf8");
+    assert.ok(
+      /planFilter\s*!==\s*"all"\s*&&\s*r\.effectivePlan\s*!==\s*planFilter/.test(client),
+      "the plan FILTER must use effectivePlan too, or a row can be filtered under one plan and shown as another",
+    );
   });
 
   await Promise.all(pending);

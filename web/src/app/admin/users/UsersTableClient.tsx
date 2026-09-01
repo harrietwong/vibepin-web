@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Search, Lock, AlertTriangle, Users } from "lucide-react";
 import type { UsersOverview, UserListRow, AccountStatus } from "@/lib/server/customer360";
+import { PLAN_KEYS_IN_ORDER, type PlanKey } from "@/lib/server/planEntitlements";
+import { AdminT } from "../AdminT";
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
@@ -72,9 +74,37 @@ function hasNoRecentActivity(iso: string | null): boolean {
   return !Number.isFinite(t) || Date.now() - t > INACTIVE_MS;
 }
 
+/**
+ * Plan + a qualifier for how much we actually know. The plan itself is always
+ * displayable (it falls back to the billing metadata, then to free), but whether
+ * we could READ this user's usage is a separate fact, and a row whose usage read
+ * failed must not look identical to one we successfully measured. `drift` marks
+ * the enforced snapshot disagreeing with billing metadata.
+ */
+function PlanCell({ row }: { row: UserListRow }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[12px] font-semibold capitalize text-gray-800">{row.effectivePlan}</span>
+      {row.usageState !== "metered" && (
+        <span className="text-[10.5px]" style={{ color: row.usageState === "unavailable" ? "#B45309" : "#9CA3AF" }}>
+          <AdminT k={row.usageState === "unavailable" ? "users.plan.unavailable" : "users.plan.unmetered"} />
+        </span>
+      )}
+      {row.planDrift && (
+        <span className="text-[10.5px] font-semibold" style={{ color: "#4338CA" }}>
+          <AdminT k="users.plan.drift" />
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function UsersTableClient({ overview }: { overview: UsersOverview }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
+  // Filters on effectivePlan — the SAME resolution Customer 360 displays — so a
+  // user can never show up under "Pro" here and read "Starter" on their page.
+  const [planFilter, setPlanFilter] = useState<PlanKey | "all">("all");
   const [toggles, setToggles] = useState<Record<Toggle, boolean>>({
     failedGen: false,
     integrationIssue: false,
@@ -89,13 +119,14 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
     return overview.rows.filter(r => {
       if (q && !(r.email ?? "").toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) return false;
       if (statusFilter !== "all" && r.accountStatus !== statusFilter) return false;
+      if (planFilter !== "all" && r.effectivePlan !== planFilter) return false;
       if (toggles.failedGen && !r.hasFailedGeneration) return false;
       if (toggles.integrationIssue && !r.integration.hasIssue) return false;
       if (toggles.recentlyActive && !isRecentlyActive(r.latestActivityAt)) return false;
       if (toggles.noRecentActivity && !hasNoRecentActivity(r.latestActivityAt)) return false;
       return true;
     });
-  }, [overview.rows, query, statusFilter, toggles]);
+  }, [overview.rows, query, statusFilter, planFilter, toggles]);
 
   const chip = (t: Toggle, label: string) => (
     <button
@@ -171,6 +202,17 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
             <option value="unconfirmed">Unconfirmed</option>
             <option value="banned">Banned</option>
           </select>
+          <select
+            value={planFilter}
+            onChange={e => setPlanFilter(e.target.value as PlanKey | "all")}
+            className="rounded-lg border px-2.5 py-2 text-[12px] font-bold capitalize"
+            style={{ background: "#FFFFFF", borderColor: "#E5E7EB", color: "#374151" }}
+          >
+            <option value="all">All plans</option>
+            {PLAN_KEYS_IN_ORDER.map(p => (
+              <option key={p} value={p} className="capitalize">{p}</option>
+            ))}
+          </select>
           {chip("failedGen", "Has failed generation")}
           {chip("integrationIssue", "Has integration issue")}
           {chip("recentlyActive", "Recently active")}
@@ -206,7 +248,7 @@ export default function UsersTableClient({ overview }: { overview: UsersOverview
                   </td>
                   <td className="px-3 py-2.5 text-gray-600">{fmtDate(r.createdAt)}</td>
                   <td className="px-3 py-2.5 text-gray-600">{fmtRelative(r.lastLoginAt)}</td>
-                  <td className="px-3 py-2.5 text-gray-600">{r.plan ?? <span className="text-gray-300">n/a</span>}</td>
+                  <td className="px-3 py-2.5"><PlanCell row={r} /></td>
                   <td className="px-3 py-2.5 text-gray-700">
                     {r.totalWorkspaces ?? 0}
                     <span className="text-gray-400"> · {r.activeWorkspaces ?? 0} active</span>

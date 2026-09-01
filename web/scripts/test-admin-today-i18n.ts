@@ -24,6 +24,7 @@ import {
   HEALTH_DRIVER_KEY,
   HEALTH_BAND_KEY,
   GENERATION_ERROR_KEY,
+  USAGE_METRIC_KEY,
   generationErrorKey,
 } from "../src/lib/admin/adminConsoleKeys";
 import type { BlockerType } from "../src/lib/server/adminActionCenter";
@@ -87,6 +88,12 @@ test("every FunnelStage (from the server layer's FUNNEL_STAGES) has a name key r
 
 // ── 3. health drivers + bands ─────────────────────────────────────────────────
 
+test("every usage metric has a label key resolving in en + zh", () => {
+  const keys = Object.keys(USAGE_METRIC_KEY) as Array<keyof typeof USAGE_METRIC_KEY>;
+  assert.equal(keys.length, 3, `expected all 3 usage metrics, got ${keys.length}`);
+  for (const k of keys) assertResolves(USAGE_METRIC_KEY[k]);
+});
+
 test("every health driver + band has a key resolving in en + zh", () => {
   for (const key of Object.values(HEALTH_DRIVER_KEY)) assertResolves(key);
   for (const key of Object.values(HEALTH_BAND_KEY)) assertResolves(key);
@@ -120,6 +127,22 @@ const NEW_KEYS: AdminMessageKey[] = [
   "today.accountKind.test", "today.accountKind.internal",
   // failure-reason detail on the blocker list
   "blocker.evidence.generationFailuresWithType",
+  // usage & plan visibility
+  "usage.card.title", "usage.plan", "usage.period", "usage.period.none",
+  "usage.metric.aiImages", "usage.metric.aiTextGenerations", "usage.metric.scheduledPosts",
+  "usage.bonusImages", "usage.used", "usage.remaining", "usage.overage",
+  "usage.unlimited", "usage.included", "usage.included.unlimited",
+  "usage.badge.unmetered", "usage.badge.unavailable",
+  "usage.state.unmetered", "usage.state.unavailable",
+  "usage.planDrift", "usage.anomaly", "usage.footer",
+  "users.col.plan", "users.filter.plan.all",
+  "users.plan.unmetered", "users.plan.unavailable", "users.plan.drift",
+  "today.quotaWatch.title", "today.quotaWatch.subtitle", "today.quotaWatch.empty",
+  "today.quotaWatch.unavailable",
+  "today.quotaWatch.col.user", "today.quotaWatch.col.plan", "today.quotaWatch.col.quota",
+  "today.quotaWatch.col.usage", "today.quotaWatch.col.remaining", "today.quotaWatch.col.periodEnds",
+  "today.quotaWatch.periodEnded", "today.quotaWatch.daysLeft", "today.quotaWatch.hoursLeft",
+  "today.quotaWatch.excludedNote",
 ];
 
 test("every new operator-console key resolves in en + zh (non-empty, not key-fallback)", () => {
@@ -164,7 +187,7 @@ test("templated keys carry the SAME placeholder tokens in en and zh", () => {
 });
 
 test("adminTFmt interpolates every placeholder (no {token} residue) in both locales", () => {
-  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30, test: 1, internal: 2, typeLabel: "Rate limited" };
+  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30, test: 1, internal: 2, typeLabel: "Rate limited", n: 42, pct: 80, account: "pro", app: "starter", codes: "over_limit:aiImages" };
   for (const key of NEW_KEYS) {
     for (const lang of LOCALES) {
       if (tokensOf(adminT(lang, key)).length === 0) continue;

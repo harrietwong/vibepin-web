@@ -21,6 +21,8 @@
 // clearly labeled as derived in the UI.
 
 import { classifyAccount, type AccountKind } from "./adminAccountKind";
+import { summarizeUsageForUsers, type UsageState } from "./adminUsage";
+import type { PlanKey } from "./entitlements";
 
 type Db = ReturnType<typeof import("@/lib/supabase").createServerClient>;
 type PgError = { code?: string; message?: string } | null;
@@ -38,7 +40,19 @@ export type UserListRow = {
   email: string | null;
   createdAt: string | null;
   lastLoginAt: string | null;
+  /** Raw app_metadata.plan (may be null). Kept for backwards compatibility. */
   plan: string | null;
+  /**
+   * The plan to DISPLAY and FILTER by, from the single effectivePlan resolver in
+   * adminUsage: the enforced usage-account snapshot when there is one, else
+   * app_metadata, else "free". Sharing that resolver with Customer 360 is what
+   * stops a user appearing under one plan in the list and another on their page.
+   */
+  effectivePlan: PlanKey;
+  /** metered / unmetered / unavailable — so "no data" is never drawn as zero. */
+  usageState: UsageState;
+  /** true when the account snapshot and app_metadata name different plans. */
+  planDrift: boolean;
   totalWorkspaces: number | null;
   activeWorkspaces: number | null;
   totalGenerations: number | null; // within the recent scan window
@@ -235,7 +249,17 @@ export async function getUsersOverview(): Promise<UsersOverview> {
     /* optional */
   }
 
+  // ONE batched usage read for the whole cohort (never per-user). A failure here
+  // marks every row `unavailable` rather than silently rendering them as if they
+  // had no usage — "we could not look" and "there is nothing" are different
+  // answers, and the list must not conflate them either.
+  const usageCohort = await summarizeUsageForUsers(
+    users.map(u => ({ id: u.id, app_metadata: u.app_metadata ?? null })),
+  );
+  warnings.push(...usageCohort.warnings);
+
   const rows: UserListRow[] = users.map(u => {
+    const usage = usageCohort.byUser.get(u.id);
     const gen = genByUser.get(u.id);
     const ws = wsByUser.get(u.id);
     const pin = pinterestStatus(pinByUser.get(u.id));
@@ -251,6 +275,9 @@ export async function getUsersOverview(): Promise<UsersOverview> {
       createdAt: u.created_at,
       lastLoginAt: u.last_sign_in_at,
       plan: planOf(u),
+      effectivePlan: usage?.plan ?? "free",
+      usageState: usage?.state ?? "unavailable",
+      planDrift: usage?.planDrift ?? false,
       totalWorkspaces: ws ? ws.categories.size : 0,
       activeWorkspaces: ws ? ws.activeCategories.size : 0,
       totalGenerations: gen ? gen.total : 0,

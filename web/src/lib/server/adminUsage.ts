@@ -55,11 +55,14 @@
 import {
   createAdminDb,
   isMissingSchema,
+  listAllAuthUsers,
   paginateRows,
+  type AuthUserLite,
   type PgError,
   type SupabaseLikeDb,
 } from "./adminQueryUtils";
-import { normalizePlanKey, type PlanKey } from "./entitlements";
+import { classifyAccount, emptyExcluded, type ExcludedCounts } from "./adminAccountKind";
+import type { PlanKey } from "./entitlements";
 import { PLAN_ENTITLEMENTS } from "./planEntitlements";
 
 // ── row shape (exactly the columns that exist in production) ─────────────────
@@ -189,6 +192,33 @@ function rawLimit(row: UsageAccountRow, key: UsageMetricKey): number | null {
  */
 function settled(value: number | null): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Recognized plan vocabulary, INCLUDING the pre-rename tiers that can still sit
+ * in old creem_subscriptions rows and cached app_metadata (creator/growth/agency).
+ * Mapping them keeps a legacy subscriber from silently reading as "free" here
+ * while entitlements.ts still grants them their real plan.
+ *
+ * Kept inline rather than imported from entitlements.ts — the same tradeoff
+ * adminActionCenter.ts and adminAccountKind.ts already make. entitlements.ts
+ * pulls in lib/supabase, which builds a client at MODULE LOAD; importing it would
+ * push that side effect onto every consumer of this file (customer360 → the users
+ * list), and make the pure derivation untestable without live credentials. The
+ * `PlanKey` type import keeps the two vocabularies in lockstep at compile time.
+ */
+const LEGACY_PLAN_ALIASES: Record<string, PlanKey> = {
+  creator: "starter",
+  growth: "pro",
+  agency: "business",
+};
+
+function normalizePlanKey(value: unknown): PlanKey | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
+  if (v in LEGACY_PLAN_ALIASES) return LEGACY_PLAN_ALIASES[v];
+  return null;
 }
 
 // ── effectivePlan: the ONE plan resolution every surface must use ────────────
@@ -559,4 +589,80 @@ export async function getUserUsageSummary(
     cohort.byUser.get(user.id) ??
     summarizeUsage({ userId: user.id, row: null, appMetadata: user.app_metadata ?? null, unavailable: true });
   return { summary, warnings: cohort.warnings };
+}
+
+// ── /admin/today entry point ─────────────────────────────────────────────────
+
+export interface QuotaWatchResult {
+  /** false when usage or the user list could not be read (shown as an error). */
+  available: boolean;
+  generatedAt: string;
+  thresholdPct: number;
+  items: QuotaWatchItem[];
+  warnings: string[];
+  /** Test / internal accounts left out of the list. */
+  excluded: ExcludedCounts;
+}
+
+export interface QuotaWatchOptions {
+  includeNonCustomers?: boolean;
+}
+
+/**
+ * The /admin/today "Quota Watch" card.
+ *
+ * This is deliberately NOT part of the blocker list. A blocker answers "whose
+ * creation flow is broken, go fix it"; this answers "who may need a bigger plan".
+ * They have different severities, different actions, different definitions of
+ * done, and different success metrics — rendering them in one list (even in a
+ * different colour) would train an operator to treat one like the other. For the
+ * same reason this never feeds the health score.
+ *
+ * Only `metered` users with a FINITE POSITIVE allowance can appear. Unmetered
+ * users, users whose usage read failed, and unlimited allowances are excluded by
+ * construction: a percentage of an absent or unknown denominator is not something
+ * anyone can act on, and listing it would manufacture urgency out of missing data.
+ */
+export async function getQuotaWatch(
+  injectedDb?: SupabaseLikeDb,
+  options: QuotaWatchOptions = {},
+): Promise<QuotaWatchResult> {
+  const db = injectedDb ?? (await createAdminDb());
+  const warnings: string[] = [];
+  const generatedAt = new Date().toISOString();
+  const excluded = emptyExcluded();
+  const includeNonCustomers = options.includeNonCustomers === true;
+
+  const users = await listAllAuthUsers(db, warnings);
+  if (!users) {
+    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded };
+  }
+
+  const cohort: AuthUserLite[] = [];
+  for (const u of users) {
+    const kind = classifyAccount(u);
+    if (!includeNonCustomers && kind !== "customer") {
+      excluded[kind] += 1;
+      continue;
+    }
+    cohort.push(u);
+  }
+
+  const summaries = await summarizeUsageForUsers(
+    cohort.map(u => ({ id: u.id, app_metadata: u.app_metadata ?? null })),
+    db,
+  );
+  warnings.push(...summaries.warnings);
+
+  // A failed usage read means we cannot say who is near a limit. Reporting an
+  // empty list would read as "nobody is close", which is a claim we have not
+  // earned — so the card reports itself unavailable instead.
+  if (!summaries.available) {
+    return { available: false, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items: [], warnings, excluded };
+  }
+
+  const emailByUser = new Map<string, string | null>(cohort.map(u => [u.id, u.email ?? null]));
+  const items = buildQuotaWatch(summaries.byUser.values(), emailByUser);
+
+  return { available: true, generatedAt, thresholdPct: QUOTA_WATCH_THRESHOLD * 100, items, warnings, excluded };
 }
