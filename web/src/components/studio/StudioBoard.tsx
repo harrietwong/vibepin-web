@@ -418,9 +418,14 @@ export function StudioBoard() {
       // Best-effort: analytics must never affect the publish outcome, which has already
       // succeeded by this point.
       try {
+        // Key name = the field the value is READ FROM. `PinDraft` carries TWO
+        // different generation ids — `generationSessionId` (the client-side batch
+        // session) and `sourceGenerationId` (the server's generation_request_id) —
+        // and this is the latter. Sending it under the other one's name would make
+        // every downstream consumer join on the wrong id.
         track("draft_published", {
           draftId: id,
-          ...(d.sourceGenerationId ? { generationSessionId: d.sourceGenerationId } : {}),
+          ...(d.sourceGenerationId ? { sourceGenerationId: d.sourceGenerationId } : {}),
           remotePinId: res.pin.id,
         });
       } catch { /* analytics must never affect publish */ }

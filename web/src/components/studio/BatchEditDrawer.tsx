@@ -1304,11 +1304,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         // already recorded above. p.pinId is only sometimes a pinDraftStore draft id (see
         // the comment on the publishPin call above); when it isn't, getDraft returns null
         // and sourceGenerationId is simply omitted rather than guessed at.
+        //
+        // Key name = the field the value is READ FROM. `PinDraft` carries TWO different
+        // generation ids — `generationSessionId` (the client-side batch session) and
+        // `sourceGenerationId` (the server's generation_request_id) — and this is the
+        // latter, so it is sent under its own name, not the other field's name.
         try {
           const draftForGen = pinDraftStore.getDraft(p.pinId);
           track("draft_published", {
             draftId: p.pinId,
-            ...(draftForGen?.sourceGenerationId ? { generationSessionId: draftForGen.sourceGenerationId } : {}),
+            ...(draftForGen?.sourceGenerationId ? { sourceGenerationId: draftForGen.sourceGenerationId } : {}),
             remotePinId: res.pin.id,
           });
         } catch { /* analytics must never affect publish */ }

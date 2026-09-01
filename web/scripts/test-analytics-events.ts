@@ -5,6 +5,8 @@
  */
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // ── window / navigator shim (must exist before importing analytics.ts) ─────────
 const listeners = new Map<string, Set<() => void>>();
@@ -125,16 +127,22 @@ async function main() {
   // DraftDetailsDrawer.tsx / BatchEditDrawer.tsx) ─────────────────────────────
   // These components render React and aren't unit-tested here; instead this locks
   // down the CONTRACT those call sites rely on: track() with the exact payload keys
-  // they send (draftId, generationSessionId when available, remotePinId), fired only
+  // they send (draftId, sourceGenerationId when available, remotePinId), fired only
   // on success and wrapped so a publish that succeeds is never affected by analytics.
+  //
+  // `PinDraft` carries TWO different generation ids — `generationSessionId` (the
+  // client-side batch session) and `sourceGenerationId` (the server's
+  // generation_request_id). The payload key must be `sourceGenerationId` because that
+  // is the field the value is actually read from; sending it under the OTHER field's
+  // name would make every downstream consumer join on the wrong id.
 
   /** Mirrors the try/catch each publish-success call site wraps track() in. */
-  function trackPublishSuccessBestEffort(props: { draftId?: string; generationSessionId?: string; remotePinId?: string }): void {
+  function trackPublishSuccessBestEffort(props: { draftId?: string; sourceGenerationId?: string; remotePinId?: string }): void {
     try { analytics.track("draft_published", props); }
     catch { /* analytics must never affect publish */ }
   }
 
-  test("draft_published: publish success reports draftId + remotePinId (generationSessionId omitted when unknown)", () => {
+  test("draft_published: publish success reports draftId + remotePinId (sourceGenerationId omitted when unknown)", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
     trackPublishSuccessBestEffort({ draftId: "pd_42", remotePinId: "pin_123" });
@@ -145,17 +153,48 @@ async function main() {
     assert.equal(sent.events[0].event, "draft_published");
     assert.equal(sent.events[0].draftId, "pd_42");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_123");
-    assert.equal("generationSessionId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("sourceGenerationId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
   });
 
-  test("draft_published: includes generationSessionId (sourceGenerationId) when the draft carries one", () => {
+  test("draft_published: includes sourceGenerationId when the draft carries one", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
-    trackPublishSuccessBestEffort({ draftId: "pd_43", generationSessionId: "gen_req_9", remotePinId: "pin_456" });
+    trackPublishSuccessBestEffort({ draftId: "pd_43", sourceGenerationId: "gen_req_9", remotePinId: "pin_456" });
     analytics.__flushAnalyticsForTests();
     const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
-    assert.equal(sent.events[0].payload!.generationSessionId, "gen_req_9");
+    assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_9");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_456");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
+  });
+
+  // GUARD -- added because every assertion above runs against the local mock, so
+  // renaming the payload key in the REAL components would not fail any of them
+  // (this was verified: the suite stayed green while a shipped call site said
+  // generationSessionId). This test reads the shipped call sites' own source so the
+  // contract is pinned to the code that ships, not to this file's restatement.
+  test("draft_published / draft_scheduled: the real call sites send sourceGenerationId, never the old generationSessionId key", () => {
+    const sites: Array<{ rel: string; call: string }> = [
+      { rel: "src/components/studio/StudioBoard.tsx", call: 'track("draft_published"' },
+      { rel: "src/components/plan/DraftDetailsDrawer.tsx", call: 'track("draft_published"' },
+      { rel: "src/components/studio/BatchEditDrawer.tsx", call: 'track("draft_published"' },
+      { rel: "src/components/plan/DraftDetailsDrawer.tsx", call: 'track("draft_scheduled"' },
+    ];
+    for (const { rel, call } of sites) {
+      const src = readFileSync(join(process.cwd(), rel), "utf8");
+      const at = src.indexOf(call);
+      assert.notStrictEqual(at, -1, `${rel} must still fire ${call}`);
+      // End the window at the call's own "});" -- slicing to the first "}" would stop
+      // inside the payload's conditional spread and hide the very key being guarded.
+      const rest = src.slice(at);
+      const payload = rest.slice(0, rest.indexOf("});") + 3);
+      assert.ok(
+        payload.indexOf("generationSessionId") === -1,
+        `${rel} (${call}) must send the server generation_request_id under sourceGenerationId, ` +
+        "not under the client-side batch id's name generationSessionId",
+      );
+      assert.ok(payload.indexOf("sourceGenerationId") !== -1, `${rel} (${call}) must send sourceGenerationId`);
+    }
   });
 
   test("draft_published: a failed publish never triggers the event", () => {
@@ -247,23 +286,40 @@ async function main() {
     assert.equal(sent.events[0].event, "direction_selected");
   });
 
+  // GUARD -- direction_rejected does not currently carry either generation-id field,
+  // but pins the real call site's source so a future addition can't repeat the
+  // generationSessionId/sourceGenerationId key-name mistake made elsewhere in this file.
+  test("direction_rejected: the real call site never uses the wrong generationSessionId key", () => {
+    const rel = "src/components/studio/AiVersionDrawer.tsx";
+    const call = 'track("direction_rejected"';
+    const src = readFileSync(join(process.cwd(), rel), "utf8");
+    const at = src.indexOf(call);
+    assert.notStrictEqual(at, -1, `${rel} must still fire direction_rejected`);
+    const rest = src.slice(at);
+    const payload = rest.slice(0, rest.indexOf("});") + 3);
+    assert.ok(
+      payload.indexOf("generationSessionId") === -1,
+      `${rel} must not send the client-side batch id under the key generationSessionId`,
+    );
+  });
+
   // -- draft_scheduled (DraftDetailsDrawer.tsx handleSchedulePrimary) ---------
   // Fires once persistDraft() has ACTUALLY succeeded, and only when the draft was NOT
   // already scheduled before this action (so re-saving an already-scheduled Pin's time
   // does not re-fire it). Mirrors the call site's try/catch.
-  function trackDraftScheduledBestEffort(props: { wasScheduled: boolean; persistSucceeded: boolean; draftId?: string; generationSessionId?: string; plannedAt?: string | null }): void {
+  function trackDraftScheduledBestEffort(props: { wasScheduled: boolean; persistSucceeded: boolean; draftId?: string; sourceGenerationId?: string; plannedAt?: string | null }): void {
     if (!props.persistSucceeded) return; // persistDraft() returned null -- never fires
     if (props.wasScheduled) return; // re-save of an already-scheduled Pin -- never fires
     try {
       analytics.track("draft_scheduled", {
         draftId: props.draftId ?? null,
-        ...(props.generationSessionId ? { generationSessionId: props.generationSessionId } : {}),
+        ...(props.sourceGenerationId ? { sourceGenerationId: props.sourceGenerationId } : {}),
         plannedAt: props.plannedAt ?? null,
       });
     } catch { /* analytics must never affect scheduling */ }
   }
 
-  test("draft_scheduled: a Pin scheduled for the first time reports draftId + plannedAt (generationSessionId omitted when unknown)", () => {
+  test("draft_scheduled: a Pin scheduled for the first time reports draftId + plannedAt (sourceGenerationId omitted when unknown)", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
     trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: true, draftId: "pd_50", plannedAt: "2026-09-05T09:00" });
@@ -274,16 +330,18 @@ async function main() {
     assert.equal(sent.events[0].event, "draft_scheduled");
     assert.equal(sent.events[0].payload!.draftId, "pd_50");
     assert.equal(sent.events[0].payload!.plannedAt, "2026-09-05T09:00");
-    assert.equal("generationSessionId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("sourceGenerationId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
   });
 
-  test("draft_scheduled: includes generationSessionId (sourceGenerationId) when the draft carries one", () => {
+  test("draft_scheduled: includes sourceGenerationId when the draft carries one", () => {
     analytics.__resetAnalyticsForTests();
     beacons.length = 0;
-    trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: true, draftId: "pd_51", generationSessionId: "gen_req_5", plannedAt: "2026-09-06T09:00" });
+    trackDraftScheduledBestEffort({ wasScheduled: false, persistSucceeded: true, draftId: "pd_51", sourceGenerationId: "gen_req_5", plannedAt: "2026-09-06T09:00" });
     analytics.__flushAnalyticsForTests();
     const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
-    assert.equal(sent.events[0].payload!.generationSessionId, "gen_req_5");
+    assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_5");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
   });
 
   test("draft_scheduled: re-saving an ALREADY-scheduled Pin never re-fires the event", () => {
