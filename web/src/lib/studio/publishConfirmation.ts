@@ -28,6 +28,8 @@ export type PublishConfirmationMode =
 
 export type PublishConfirmationSnapshot = {
   intentId: string;
+  /** Previous durable intent whose retry entitlement this new action consumes. */
+  priorIntentId: string | null;
   fingerprint: string;
   draftId: string;
   contentId: string;
@@ -40,6 +42,8 @@ export type PublishConfirmationSnapshot = {
   mode: PublishConfirmationMode;
   destinations: PublishDestination[];
   publishableDestinations: PublishDestination[];
+  /** Exact destinations this confirmation authorizes this action to dispatch. */
+  dispatchDestinationIds: string[];
   blockers: PublishConfirmationBlocker[];
   onlyPending: boolean;
 };
@@ -137,6 +141,7 @@ export function sha256Hex(value: string): string {
 }
 
 export type PublishConfirmationFingerprintInput = {
+  priorIntentId: string | null;
   draftId: string;
   contentId: string;
   sourceUpdatedAt: string;
@@ -154,6 +159,7 @@ export type PublishConfirmationFingerprintInput = {
     boardId?: string | null;
     boardName?: string | null;
   }>;
+  dispatchDestinationIds: string[];
   blockers: Array<{ code: PublishConfirmationBlockerCode; destinationId?: string | null }>;
   onlyPending: boolean;
 };
@@ -167,6 +173,7 @@ export function publishConfirmationFingerprint(input: PublishConfirmationFingerp
   return sha256Hex(stableString({
     contentId: input.contentId,
     draftId: input.draftId,
+    priorIntentId: input.priorIntentId,
     sourceUpdatedAt: input.sourceUpdatedAt,
     mode: input.mode,
     title: input.title,
@@ -187,6 +194,7 @@ export function publishConfirmationFingerprint(input: PublishConfirmationFingerp
       boardId: item.boardId ?? null,
       boardName: item.boardName ?? null,
     })),
+    dispatchDestinationIds: [...input.dispatchDestinationIds].sort(),
     blockers: input.blockers.map(item => ({ code: item.code, destinationId: item.destinationId ?? null })),
     onlyPending: input.onlyPending,
   }));
@@ -244,7 +252,22 @@ export function buildPublishConfirmation(
 
   const mode = options.mode ?? { kind: "now" as const };
   const onlyPending = options.onlyPending ?? true;
+  const priorIntentId = onlyPending && draft.publishIntentId?.trim()
+    ? draft.publishIntentId.trim()
+    : null;
+  const resultByDestination = new Map(
+    (draft.destinationResults ?? []).map(result => [result.destinationId, result]),
+  );
+  const dispatchDestinationIds = publishableDestinations
+    .filter(destination => {
+      if (!onlyPending) return true;
+      const result = resultByDestination.get(destination.id);
+      return result?.status !== "published" && result?.status !== "delivery_unknown";
+    })
+    .map(destination => destination.id)
+    .sort();
   const identity = {
+    priorIntentId,
     contentId: draft.contentId?.trim() || draft.id,
     draftId: draft.id,
     sourceUpdatedAt: draft.updatedAt,
@@ -262,6 +285,7 @@ export function buildPublishConfirmation(
       boardId: item.boardId ?? null,
       boardName: item.boardName ?? null,
     })),
+    dispatchDestinationIds,
     blockers: blockers.map(item => ({ code: item.code, destinationId: item.destinationId ?? null })),
     onlyPending,
   };
@@ -270,11 +294,13 @@ export function buildPublishConfirmation(
   const generatedActionId = options.actionId?.trim()
     || globalThis.crypto?.randomUUID?.().replaceAll("-", "")
     || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-  const intentId = options.onlyPending && draft.publishIntentId && draft.publishIntentFingerprint === fingerprint
-    ? draft.publishIntentId
-    : `publish:${identity.contentId}:${generatedActionId}`;
+  // Every explicit confirmation is a distinct merchant action. A retry links to
+  // the prior intent instead of reusing its id, so the database can consume each
+  // prior destination's retry entitlement exactly once across server instances.
+  const intentId = `publish:${identity.contentId}:${generatedActionId}`;
   return {
     intentId,
+    priorIntentId,
     fingerprint,
     draftId: draft.id,
     contentId: identity.contentId,
@@ -287,6 +313,7 @@ export function buildPublishConfirmation(
     mode,
     destinations,
     publishableDestinations,
+    dispatchDestinationIds,
     blockers,
     onlyPending,
   };
@@ -319,6 +346,11 @@ export function receiptMatchesDispatch(receipt: ConfirmedPublishReceipt, draft: 
     destinationUrl: receipt.destinationUrl,
     media: receipt.media,
     imageUrl: receipt.media[0]?.url ?? draft.imageUrl,
+    // publishContent persists the NEW intent before either provider route is
+    // called. Rebuild the exact merchant-approved pre-dispatch snapshot with its
+    // parent, otherwise the second route in a mixed fan-out would mistake the
+    // current action for its own retry parent.
+    publishIntentId: receipt.priorIntentId ?? undefined,
     scheduledDestinations: receipt.destinations.map(destination => ({
       provider: destination.provider,
       socialConnectionId: destination.socialConnectionId ?? "",
@@ -334,6 +366,7 @@ export function receiptMatchesDispatch(receipt: ConfirmedPublishReceipt, draft: 
   if (!/^[a-z0-9]{8,64}$/i.test(actionId)) return false;
   if (stableString(receipt.destinations) !== stableString(rebuilt.destinations)) return false;
   if (stableString(receipt.publishableDestinations) !== stableString(rebuilt.publishableDestinations)) return false;
+  if (stableString(receipt.dispatchDestinationIds) !== stableString(rebuilt.dispatchDestinationIds)) return false;
   if (stableString(receipt.blockers) !== stableString(rebuilt.blockers)) return false;
   return receipt.publishableDestinations.every(destination =>
     !!destination.socialConnectionId?.trim()

@@ -96,6 +96,8 @@ export interface PinDraft {
   previousResults?:     DestinationPublishResult[];
   /** Stable user-confirmed immediate-publish intent; persisted before provider dispatch. */
   publishIntentId?:      string;
+  /** Parent intent frozen when this distinct retry action was confirmed. */
+  publishIntentPriorIntentId?: string | null;
   publishIntentFingerprint?: string;
   publishIntentStatus?:  "publishing" | "completed" | "recovery_pending";
   publishIntentConfirmedAt?: string;

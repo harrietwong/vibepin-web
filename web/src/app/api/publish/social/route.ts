@@ -73,7 +73,7 @@ import {
 import {
   PublishIntentLedgerError,
   claimPublishIntentDestinations,
-  reconcilePublishIntent,
+  claimPublishRetryDestinations,
   settlePublishIntentDestination,
   type PublishIntentClaim,
 } from "@/lib/server/publish/publishIntentLedger";
@@ -137,7 +137,7 @@ export async function POST(req: Request) {
   if (!isConfirmedSocialDestinationSelection(
     requestedDestinationIds,
     confirmation.destinations,
-    confirmation.receipt.onlyPending,
+    confirmation.receipt.dispatchDestinationIds,
   )) {
     return Response.json({
       error: confirmation.receipt.onlyPending
@@ -213,44 +213,6 @@ export async function POST(req: Request) {
     });
   }
   const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
-  if (confirmation.receipt.onlyPending) {
-    let priorIntent: Awaited<ReturnType<typeof reconcilePublishIntent>>;
-    try {
-      priorIntent = stored.priorIntentId
-        ? await reconcilePublishIntent(db, uid, stored.priorIntentId)
-        : null;
-    } catch {
-      return Response.json({
-        error: "Could not verify which destinations are safe to retry.",
-        code: "publish_intent_unavailable",
-      }, { status: 503 });
-    }
-    // A first attempt may use the shared onlyPending default even though no
-    // durable intent exists yet. In that case it is safe only when the receipt
-    // contains the exact complete confirmed social fan-out; narrowing is
-    // authorized only by an existing prior intent's per-destination evidence.
-    const priorById = new Map(priorIntent?.destinations.map(destination => [destination.destinationId, destination]) ?? []);
-    const retryIsAuthoritative = !stored.priorIntentId
-      ? requestedDestinationIds.length === destinationById.size
-      : !!priorIntent
-        && priorIntent.draftId === confirmation.receipt.draftId
-        && priorIntent.contentId === confirmation.receipt.contentId
-        && requestedDestinationIds.every(destinationId => {
-          const destination = destinationById.get(destinationId);
-          const prior = priorById.get(destinationId);
-          return !!destination && !!prior
-            && prior.provider === destination.provider
-            && prior.socialConnectionId === destination.socialConnectionId
-            && prior.status === "failed"
-            && prior.retryAllowed;
-        });
-    if (!retryIsAuthoritative) {
-      return Response.json({
-        error: "Retry may include only destinations whose latest durable result failed and allows retry.",
-        code: "retry_destination_not_allowed",
-      }, { status: 409 });
-    }
-  }
   const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
   try {
     const destinations: PublishDestination[] = [];
@@ -261,11 +223,20 @@ export async function POST(req: Request) {
       }
       destinations.push(destination);
     }
-    for (const claimed of await claimPublishIntentDestinations(db, uid, confirmation.receipt, destinations)) {
+    const claimedDestinations = confirmation.receipt.priorIntentId
+      ? await claimPublishRetryDestinations(db, uid, confirmation.receipt, destinations)
+      : await claimPublishIntentDestinations(db, uid, confirmation.receipt, destinations);
+    for (const claimed of claimedDestinations) {
       claims.set(claimed.destination.id, claimed);
     }
   } catch (error) {
     const code = error instanceof PublishIntentLedgerError ? error.code : "unavailable";
+    if (code === "retry_not_allowed") {
+      return Response.json({
+        error: "Retry may include only destinations whose latest durable result failed and allows retry.",
+        code: "retry_destination_not_allowed",
+      }, { status: 409 });
+    }
     return Response.json({ error: "Could not establish durable publish recovery.", code: `publish_intent_${code}` }, { status: code === "conflict" ? 409 : 503 });
   }
 

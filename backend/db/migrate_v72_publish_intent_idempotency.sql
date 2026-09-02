@@ -108,7 +108,9 @@ create or replace function publish_intent_claim_destination(
 declare
   v_intent publish_intents%rowtype;
   v_destination publish_intent_destinations%rowtype;
-  v_claim_token uuid := uuid_generate_v4();
+  -- Supabase installs uuid-ossp outside this SECURITY DEFINER function's
+  -- restricted search_path. The PostgreSQL built-in avoids widening it.
+  v_claim_token uuid := gen_random_uuid();
   v_inserted boolean := false;
 begin
   if p_intent_id !~ '^publish:.{1,240}$'

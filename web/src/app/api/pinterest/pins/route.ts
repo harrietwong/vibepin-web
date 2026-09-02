@@ -60,6 +60,7 @@ import {
 import {
   PublishIntentLedgerError,
   claimPublishIntentDestination,
+  claimPublishRetryDestinations,
   settlePublishIntentDestination,
 } from "@/lib/server/publish/publishIntentLedger";
 import { findConnection } from "@/lib/social/server/socialConnectionStore";
@@ -152,9 +153,27 @@ export async function POST(req: Request) {
 
   let durableClaim: Awaited<ReturnType<typeof claimPublishIntentDestination>>;
   try {
-    durableClaim = await claimPublishIntentDestination(durableDb, uid, confirmation.receipt, confirmedDestination);
+    if (confirmation.receipt.priorIntentId) {
+      const retryClaims = await claimPublishRetryDestinations(
+        durableDb,
+        uid,
+        confirmation.receipt,
+        [confirmedDestination],
+      );
+      const retryClaim = retryClaims[0];
+      if (!retryClaim) throw new PublishIntentLedgerError("unavailable", "Durable retry claim was not returned.");
+      durableClaim = retryClaim.claim;
+    } else {
+      durableClaim = await claimPublishIntentDestination(durableDb, uid, confirmation.receipt, confirmedDestination);
+    }
   } catch (error) {
     const code = error instanceof PublishIntentLedgerError ? error.code : "unavailable";
+    if (code === "retry_not_allowed") {
+      return Response.json({
+        error: "This Pinterest destination is no longer eligible for retry.",
+        code: "retry_destination_not_allowed",
+      }, { status: 409 });
+    }
     return Response.json({ error: "Could not establish durable publish recovery.", code: `publish_intent_${code}` }, { status: code === "conflict" ? 409 : 503 });
   }
   if (!durableClaim.claimed) {

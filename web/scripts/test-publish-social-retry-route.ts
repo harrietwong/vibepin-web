@@ -16,7 +16,7 @@ const CONTENT_ID = "content-social-retry-route";
 const FACEBOOK_ID = "facebook:fb-connection";
 const INSTAGRAM_ID = "instagram:ig-connection";
 
-const pinterestDestination = { id: "pinterest:pin-connection", provider: "pinterest", socialConnectionId: "pin-connection" };\n\nconst destinations = [
+const destinations = [
   { id: FACEBOOK_ID, provider: "facebook", socialConnectionId: "fb-connection" },
   { id: INSTAGRAM_ID, provider: "instagram", socialConnectionId: "ig-connection" },
 ];
@@ -29,7 +29,7 @@ let providerCalls = 0;
 let meterCalls = 0;
 
 class FakePublishIntentLedgerError extends Error {
-  constructor(public readonly code: "unavailable" | "conflict" | "claim_lost", message: string) {
+  constructor(public readonly code: "unavailable" | "conflict" | "claim_lost" | "retry_not_allowed", message: string) {
     super(message);
   }
 }
@@ -51,11 +51,24 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
     const real = originalLoad.call(this, request, parent, isMain) as Record<string, unknown>;
     return {
       ...real,
-      validateImmediatePublishReceipt: (raw: Record<string, unknown>) => ({
-        ok: true,
-        receipt: raw,
-        destinations: raw.destinations,
-      }),
+      validateImmediatePublishReceipt: (raw: Record<string, unknown>, _content: Record<string, unknown>, requestedIds: string[]) => {
+        const ds = Array.isArray(raw.destinations) ? raw.destinations : [];
+        const destinationId = (value: unknown) => {
+          const row = value as { id?: unknown; provider?: unknown; socialConnectionId?: unknown };
+          return typeof row.id === "string" ? row.id : `${String(row.provider)}:${String(row.socialConnectionId)}`;
+        };
+        const ids = ds.map(destinationId);
+        const publishable = Array.isArray(raw.publishableDestinations)
+          ? raw.publishableDestinations.map(destinationId)
+          : [];
+        const dispatch = Array.isArray(raw.dispatchDestinationIds) ? raw.dispatchDestinationIds : [];
+        const same = (a: string[], b: string[]) => a.length === b.length && a.every(id => b.includes(id));
+        if (!raw.onlyPending && !same(dispatch, publishable)) return { ok: false, code: "invalid_confirmation", error: "incomplete" };
+        if (raw.onlyPending && !raw.priorIntentId && !same(dispatch, publishable)) return { ok: false, code: "invalid_confirmation", error: "incomplete" };
+        if (!same(ids, dispatch)) return { ok: false, code: "invalid_confirmation", error: "inconsistent" };
+        if (!same(requestedIds, dispatch)) return { ok: false, code: "invalid_confirmation", error: "unconfirmed" };
+        return { ok: true, receipt: raw, destinations: ds };
+      },
       validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId }),
     };
   }
@@ -106,6 +119,19 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
             evidence: {},
           },
         }));
+      },
+      claimPublishRetryDestinations: async (_db: unknown, _uid: string, _receipt: unknown, selected: typeof destinations) => {
+        if (selected.some(destination => {
+          const row = authoritative.get(destination.id);
+          return row?.status !== "failed" || row.retryAllowed !== true;
+        })) throw new FakePublishIntentLedgerError("retry_not_allowed", "retry_not_allowed");
+        claimCalls++;
+        return selected.map((destination, index) => ({ destination, claim: {
+          claimed: true, replayed: false, intentJobId: "retry-intent-job-route",
+          destinationJobId: `retry-destination-job-${index}`, claimToken: `retry-claim-token-${index}`,
+          status: "claimed", attempt: 1, retryAllowed: false, providerJobId: null,
+          remoteId: null, remoteUrl: null, providerStatus: null, evidence: {},
+        }}));
       },
       settlePublishIntentDestination: async () => undefined,
     };
@@ -172,7 +198,13 @@ function request(onlyPending: boolean, selectedIds: string[]): Request {
         contentId: CONTENT_ID,
         confirmedAt: "2026-09-01T12:00:02.000Z",
         onlyPending,
-        destinations,
+        mode: { kind: "now" },
+        media: [{ id: "media-1", url: "https://example.com/pin.png", source: "upload" }],
+        blockers: [],
+        priorIntentId,
+        dispatchDestinationIds: selected.map(destination => destination.id),
+        publishableDestinations: destinations,
+        destinations: selected,
       },
     }),
   } as unknown as Request;
@@ -196,7 +228,7 @@ async function test(name: string, fn: () => Promise<void>) {
   }
 }
 
-await test("onlyPending=true first attempt compares only confirmed non-Pinterest destinations", async () => {\n  priorIntentId = null;\n  const response = await POST(request(true, [FACEBOOK_ID, INSTAGRAM_ID]));\n  assert.equal(response.status, 402);\n  assert.equal(claimCalls, 1);\n  assert.equal(meterCalls, 1);\n  assert.equal(providerCalls, 0);\n});\n\nawait test("onlyPending=true first attempt accepts the exact full social set without prior intent", async () => {
+await test("onlyPending=true first attempt accepts the exact full social set without prior intent", async () => {
   priorIntentId = null;
   const response = await POST(request(true, [FACEBOOK_ID, INSTAGRAM_ID]));
   assert.equal(response.status, 402);
@@ -209,7 +241,7 @@ await test("onlyPending=true first attempt still rejects a narrowed set without 
   priorIntentId = null;
   const response = await POST(request(true, [FACEBOOK_ID]));
   assert.equal(response.status, 409);
-  assert.equal((await response.json() as { code: string }).code, "retry_destination_not_allowed");
+  assert.equal((await response.json() as { code: string }).code, "invalid_confirmation");
   assert.equal(claimCalls, 0);
   assert.equal(meterCalls, 0);
   assert.equal(providerCalls, 0);
@@ -225,6 +257,7 @@ await test("onlyPending=false rejects a narrowed subset with 409 before claim", 
 });
 
 await test("onlyPending=false accepts the exact full social set", async () => {
+  priorIntentId = null;
   const response = await POST(request(false, [FACEBOOK_ID, INSTAGRAM_ID]));
   assert.equal(response.status, 402, "the quota fake proves the request passed selection and durable claim");
   assert.equal(claimCalls, 1);

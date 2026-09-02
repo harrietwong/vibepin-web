@@ -381,9 +381,8 @@ export async function publishContent(
   if (confirmation.onlyPending && hasUnknownDelivery) {
     return { published: [], failed: [], results: priorResults, blocked: "recovery_pending" };
   }
-  const targets = confirmation.onlyPending
-    ? destinations.filter(d => findDestinationResult(priorResults, d)?.status !== "published")
-    : destinations;
+  const dispatchSet = new Set(confirmation.dispatchDestinationIds);
+  const targets = destinations.filter(destination => dispatchSet.has(destination.id));
   if (!targets.length) {
     return { published: [], failed: [], results: priorResults, nothingToRetry: true };
   }
@@ -420,6 +419,7 @@ export async function publishContent(
     pinDraftStore.updateDraft(draftId, {
       publishError: undefined,
       publishIntentId: confirmation.intentId,
+      publishIntentPriorIntentId: confirmation.priorIntentId,
       publishIntentFingerprint: confirmation.fingerprint,
       publishIntentStatus: "publishing",
       publishIntentConfirmedAt: confirmation.confirmedAt,

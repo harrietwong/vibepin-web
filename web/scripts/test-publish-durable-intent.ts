@@ -14,6 +14,7 @@ import {
 import {
   PublishIntentLedgerError,
   claimPublishIntentDestinations,
+  claimPublishRetryDestinations,
   reconcilePublishIntent,
 } from "../src/lib/server/publish/publishIntentLedger";
 import { requiredScheduleDestinations } from "../src/app/api/pin-drafts/promote";
@@ -91,19 +92,19 @@ async function main() {
   await test("new social publish is exact; Retry may narrow only within the confirmed social set", () => {
     const allSocial = ["instagram:ig-connection", "facebook:fb-connection"];
     assert.equal(isConfirmedSocialDestinationSelection(
-      allSocial, snapshot.destinations, false,
+      allSocial, snapshot.destinations, receipt.dispatchDestinationIds,
     ), true, "initial fan-out submits the complete confirmed social set");
     assert.equal(isConfirmedSocialDestinationSelection(
-      ["instagram:ig-connection"], snapshot.destinations, false,
+      ["instagram:ig-connection"], snapshot.destinations, receipt.dispatchDestinationIds,
     ), false, "onlyPending=false may not silently narrow the initial fan-out");
     assert.equal(isConfirmedSocialDestinationSelection(
-      ["instagram:ig-connection"], snapshot.destinations, true,
+      ["instagram:ig-connection"], snapshot.destinations, ["instagram:ig-connection"],
     ), true, "Retry may submit a confirmed social subset before ledger authorization");
     assert.equal(isConfirmedSocialDestinationSelection(
-      ["pinterest:pin-connection"], snapshot.destinations, true,
+      ["pinterest:pin-connection"], snapshot.destinations, ["pinterest:pin-connection"],
     ), false, "Pinterest is owned by its dedicated route");
     assert.equal(isConfirmedSocialDestinationSelection(
-      ["instagram:not-confirmed"], snapshot.destinations, true,
+      ["instagram:not-confirmed"], snapshot.destinations, ["instagram:not-confirmed"],
     ), false, "an unconfirmed destination remains a 409-class rejection");
   });
 
@@ -114,6 +115,41 @@ async function main() {
     assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({
       row: { ...storedRow, updated_at: "2026-09-01T12:00:00+00:00" },
     }), OWNER, receipt), { ok: true, priorIntentId: null }, "equivalent Postgres timestamptz serialization must not make a valid receipt stale");
+  });
+  await test("server accepts the exact lifecycle snapshot if sync wins the route race", async () => {
+    const priorIntentId = `publish:${draft.contentId}:prior1234`;
+    const retryDraft: PinDraft = {
+      ...draft,
+      publishIntentId: priorIntentId,
+      publishIntentFingerprint: "a".repeat(64),
+      destinationResults: draft.scheduledDestinations!.map(destination => ({
+        provider: destination.provider,
+        socialConnectionId: destination.socialConnectionId,
+        destinationId: `${destination.provider}:${destination.socialConnectionId}`,
+        status: "failed",
+        errorMessage: "retryable",
+      })) as NonNullable<PinDraft["destinationResults"]>,
+    };
+    const retryReceipt = confirmPublishSnapshot(
+      buildPublishConfirmation(retryDraft, { onlyPending: true, actionId: "retryrace01" }),
+      NOW,
+    );
+    const persisted = {
+      ...retryDraft,
+      updatedAt: "2026-09-01T12:00:01.000Z",
+      publishIntentId: retryReceipt.intentId,
+      publishIntentPriorIntentId: retryReceipt.priorIntentId,
+      publishIntentFingerprint: retryReceipt.fingerprint,
+      publishIntentConfirmedAt: retryReceipt.confirmedAt,
+    };
+    assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({ row: {
+      draft_id: draft.id, updated_at: persisted.updatedAt, payload: persisted, deleted_at: null,
+    } }), OWNER, retryReceipt), { ok: true, priorIntentId });
+    const wrongParent = { ...persisted, publishIntentPriorIntentId: `publish:${draft.contentId}:other1234` };
+    const rejected = await validateStoredImmediatePublishReceipt(storedDb({ row: {
+      draft_id: draft.id, updated_at: persisted.updatedAt, payload: wrongParent, deleted_at: null,
+    } }), OWNER, retryReceipt);
+    assert.equal(rejected.ok, false, "synced lifecycle metadata cannot substitute another retry parent");
   });
   await test("stale revision and changed destination fail before claim/usage/provider", async () => {
     const stale = await validateStoredImmediatePublishReceipt(storedDb({ row: { ...storedRow, updated_at: "2026-09-01T12:01:00.000Z" } }), OWNER, receipt);
@@ -145,6 +181,39 @@ async function main() {
     assert.equal(recorded.name, "publish_intent_claim_destinations");
     const ids = (recorded.args.p_destinations as Array<{ id: string }>).map(item => item.id);
     assert.deepEqual(ids, [...ids].sort());
+  });
+  await test("retry claim sends one parent-bound atomic RPC and maps typed refusal", async () => {
+    const priorIntentId = `publish:${draft.contentId}:prior5678`;
+    const retryReceipt = confirmPublishSnapshot(buildPublishConfirmation(
+      { ...draft, publishIntentId: priorIntentId },
+      { onlyPending: true, actionId: "retryclaim01" },
+    ), NOW);
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const okDb = { rpc: async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      const selected = args.p_destinations as Array<{ id: string }>;
+      return { data: selected.map((_, index) => ({
+        claimed: true, replayed: false, intentJobId: "retry-intent", destinationJobId: `retry-${index}`,
+        claimToken: `token-${index}`, status: "claimed", attempt: 2, retryAllowed: false,
+        providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {},
+      })), error: null };
+    } } as unknown as SupabaseClient;
+    await claimPublishRetryDestinations(okDb, OWNER, retryReceipt, retryReceipt.publishableDestinations);
+    assert.deepEqual(calls.map(call => call.name), [
+      "publish_intent_reserve_retry_destinations",
+      "publish_intent_activate_retry_destinations",
+    ]);
+    assert.equal(calls[0]?.args.p_prior_intent_id, priorIntentId);
+    assert.equal((calls[0]?.args.p_destinations as unknown[]).length, retryReceipt.dispatchDestinationIds.length);
+
+    const refusedDb = { rpc: async () => ({
+      data: null,
+      error: { code: "P0001", message: "retry_not_allowed" },
+    }) } as unknown as SupabaseClient;
+    await assert.rejects(
+      claimPublishRetryDestinations(refusedDb, OWNER, retryReceipt, retryReceipt.publishableDestinations),
+      (error: unknown) => error instanceof PublishIntentLedgerError && error.code === "retry_not_allowed",
+    );
   });
   await test("v72/RPC unavailable fails closed and never fabricates a claim", async () => {
     const db = { rpc: async () => ({ data: null, error: { code: "PGRST202", message: "function not found" } }) } as unknown as SupabaseClient;
@@ -199,9 +268,32 @@ async function main() {
     const socialQuota = social.slice(social.indexOf('consumed.kind === "insufficient"'), social.indexOf("const outcomes"));
     assert.match(socialQuota, /settleFreshClaimsNotSent\("scheduled_post_limit_reached"\)/);
     assert.match(social, /isConfirmedSocialDestinationSelection\(/);
-    assert.match(social, /prior\.status === "failed"/);
-    assert.match(social, /prior\.retryAllowed/);
+    assert.match(social, /claimPublishRetryDestinations/);
     assert.match(social, /retry_destination_not_allowed/);
+    assert.match(pins, /claimPublishRetryDestinations/);
+    assert.match(pins, /retry_destination_not_allowed/);
+  });
+  await test("v73 retry lineage migration is atomic and rollback-safe", () => {
+    const migration = readFileSync("../backend/db/migrate_v73_publish_intent_retry_lineage.sql", "utf8");
+    const rollback = readFileSync("../backend/db/rollback_v73_publish_intent_retry_lineage.sql", "utf8");
+    assert.match(migration, /prior_intent_id/);
+    assert.match(migration, /retry_of_destination_id/);
+    assert.match(migration, /publish_intent_destinations_retry_source_unique/);
+    assert.match(migration, /publish_intent_reserve_retry_destinations/);
+    assert.match(migration, /publish_intent_activate_retry_destinations/);
+    assert.match(migration, /A committed reservation is all-or-none/);
+    assert.match(migration, /covers the complete signed action/);
+    assert.match(migration, /jsonb_array_length\(p_receipt -> 'dispatchDestinationIds'\)/);
+    assert.match(migration, /reserved_not_activated/);
+    assert.match(migration, /claim_token is null and retry_of_destination_id is not null/);
+    assert.match(migration, /for update/);
+    assert.match(migration, /retry_not_allowed/);
+    assert.match(migration, /publish_intent_reject_legacy_retry_trigger/);
+    assert.match(migration, /create or replace function publish_intent_claim_destination/);
+    assert.match(migration, /gen_random_uuid\(\)/);
+    assert.doesNotMatch(migration, /uuid_generate_v4\(\)/);
+    assert.match(migration, /revoke all on function/);
+    assert.match(rollback, /Refusing v73 rollback: retry lineage exists/);
   });
   await test("v72 source owns atomic claim, recovery evidence, RLS and data-safe rollback", () => {
     const migration = readFileSync("../backend/db/migrate_v72_publish_intent_idempotency.sql", "utf8");
@@ -214,6 +306,8 @@ async function main() {
     assert.match(migration, /social_publish_job_destinations_exact_unique/);
     assert.match(migration, /historical non-null duplicates exist/);
     assert.match(migration, /social_publish_job_destinations_null_connection_unique/);
+    assert.match(migration, /gen_random_uuid\(\)/);
+    assert.doesNotMatch(migration, /v_claim_token uuid := uuid_generate_v4\(\)/);
     assert.match(rollback, /Refusing v72 rollback: durable publish intent receipts exist/);
   });
   await test("same intent binds confirmed time, mode and receipt immutably", () => {

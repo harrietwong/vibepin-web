@@ -36,7 +36,7 @@ export type StoredConfirmationValidation =
 export function isConfirmedSocialDestinationSelection(
   requestedDestinationIds: readonly string[],
   confirmedDestinations: readonly PublishDestination[],
-  onlyPending: boolean,
+  dispatchDestinationIds: readonly string[],
 ): boolean {
   if (!requestedDestinationIds.length || new Set(requestedDestinationIds).size !== requestedDestinationIds.length) return false;
   const confirmedSocialIds = confirmedDestinations
@@ -45,8 +45,10 @@ export function isConfirmedSocialDestinationSelection(
   const confirmedSet = new Set(confirmedSocialIds);
   if (confirmedSet.size !== confirmedSocialIds.length
       || requestedDestinationIds.some(id => !confirmedSet.has(id))) return false;
-  if (onlyPending) return true;
-  return requestedDestinationIds.length === confirmedSocialIds.length;
+  const expected = dispatchDestinationIds
+    .filter(id => confirmedSet.has(id))
+    .sort();
+  return stablePublishString([...requestedDestinationIds].sort()) === stablePublishString(expected);
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -131,9 +133,32 @@ export function validateImmediatePublishReceipt(
     return invalid("The confirmation contains duplicate destinations.");
   }
   if (publishableIds.some(id => !destinationIds.includes(id))) return invalid("The confirmation destination set is inconsistent.");
+  const priorIntentId = value.priorIntentId === null
+    ? null
+    : text(value.priorIntentId).trim();
+  if (value.priorIntentId !== null && !priorIntentId) return invalid("The prior publish intent id is invalid.");
+  if (priorIntentId && !priorIntentId.startsWith(`publish:${text(value.contentId).trim()}:`)) {
+    return invalid("The prior publish intent belongs to different content.");
+  }
+  if (priorIntentId === intentId) return invalid("A retry must use a new publish intent.");
+  const dispatchDestinationIds = Array.isArray(value.dispatchDestinationIds)
+    ? value.dispatchDestinationIds.map(item => text(item).trim())
+    : [];
+  if (!dispatchDestinationIds.length
+      || dispatchDestinationIds.some(id => !id)
+      || new Set(dispatchDestinationIds).size !== dispatchDestinationIds.length
+      || dispatchDestinationIds.some(id => !publishableIds.includes(id))) {
+    return invalid("The confirmed dispatch destination set is invalid.");
+  }
+  const onlyPending = value.onlyPending === true;
+  if (!onlyPending && priorIntentId !== null) return invalid("A full publish cannot consume a prior retry intent.");
+  if ((!onlyPending || priorIntentId === null)
+      && stablePublishString([...dispatchDestinationIds].sort()) !== stablePublishString([...publishableIds].sort())) {
+    return invalid("The confirmation does not authorize the complete destination set.");
+  }
   const requested = [...requestedDestinationIds];
   if (!requested.length || new Set(requested).size !== requested.length) return invalid("Select at least one exact destination.");
-  if (requested.some(id => !publishableIds.includes(id))) return invalid("The request includes a destination the merchant did not confirm.");
+  if (requested.some(id => !dispatchDestinationIds.includes(id))) return invalid("The request includes a destination this confirmation did not authorize.");
 
   const normalizedMedia: ConfirmedPublishReceipt["media"] = media.flatMap(item => {
     const row = object(item);
@@ -157,6 +182,7 @@ export function validateImmediatePublishReceipt(
   const normalized = {
     ...receipt,
     intentId,
+    priorIntentId,
     draftId: text(value.draftId).trim(),
     contentId: text(value.contentId).trim(),
     sourceUpdatedAt: text(value.sourceUpdatedAt),
@@ -168,8 +194,9 @@ export function validateImmediatePublishReceipt(
     mode: { kind: "now" as const },
     destinations,
     publishableDestinations: publishable,
+    dispatchDestinationIds: [...dispatchDestinationIds].sort(),
     blockers: blockers as ConfirmedPublishReceipt["blockers"],
-    onlyPending: value.onlyPending === true,
+    onlyPending,
     confirmedAt: text(value.confirmedAt),
   };
   if (publishConfirmationFingerprint(normalized) !== text(value.fingerprint)) return invalid("The publish confirmation was changed after review.");
@@ -224,7 +251,20 @@ export async function validateStoredImmediatePublishReceipt(
   const row = data as { draft_id: string; updated_at: string; payload: Record<string, unknown> };
   const storedUpdatedAt = Date.parse(row.updated_at);
   const receiptUpdatedAt = Date.parse(receipt.sourceUpdatedAt);
-  if (!Number.isFinite(storedUpdatedAt) || !Number.isFinite(receiptUpdatedAt) || storedUpdatedAt !== receiptUpdatedAt) {
+  const storedIntentId = text(row.payload.publishIntentId).trim() || null;
+  const storedPriorIntentId = row.payload.publishIntentPriorIntentId === null
+    ? null
+    : text(row.payload.publishIntentPriorIntentId).trim() || null;
+  const preDispatchSnapshot = storedIntentId === receipt.priorIntentId
+    && storedUpdatedAt === receiptUpdatedAt;
+  const persistedDispatchSnapshot = storedIntentId === receipt.intentId
+    && storedPriorIntentId === receipt.priorIntentId
+    && text(row.payload.publishIntentFingerprint) === receipt.fingerprint
+    && text(row.payload.publishIntentConfirmedAt) === receipt.confirmedAt
+    && storedUpdatedAt >= receiptUpdatedAt;
+  if (!Number.isFinite(storedUpdatedAt)
+      || !Number.isFinite(receiptUpdatedAt)
+      || (!preDispatchSnapshot && !persistedDispatchSnapshot)) {
     return { ok: false, code: "invalid_confirmation", error: "The Content changed after confirmation. Review it again." };
   }
   const current = buildPublishConfirmation({
@@ -234,19 +274,21 @@ export async function validateStoredImmediatePublishReceipt(
     // browser's .000Z. The equality check above binds the instant; retain the
     // confirmed representation so canonical hashing is environment-independent.
     updatedAt: receipt.sourceUpdatedAt,
+    // A sync may persist publishContent's lifecycle metadata before this request
+    // reaches the route. Recompute against the frozen parent, not the new child.
+    publishIntentId: receipt.priorIntentId ?? undefined,
   } as unknown as PinDraft, {
     mode: receipt.mode,
     onlyPending: receipt.onlyPending,
     actionId: "server-recompute",
   });
   if (current.fingerprint !== receipt.fingerprint
+      || current.priorIntentId !== receipt.priorIntentId
+      || stablePublishString(current.dispatchDestinationIds) !== stablePublishString(receipt.dispatchDestinationIds)
       || stablePublishString(current.destinations) !== stablePublishString(receipt.destinations)
       || stablePublishString(current.publishableDestinations) !== stablePublishString(receipt.publishableDestinations)
       || stablePublishString(current.blockers) !== stablePublishString(receipt.blockers)) {
     return { ok: false, code: "invalid_confirmation", error: "The Content or publishing destinations changed after confirmation." };
   }
-  const priorIntentId = typeof row.payload.publishIntentId === "string" && row.payload.publishIntentId.trim()
-    ? row.payload.publishIntentId.trim()
-    : null;
-  return { ok: true, priorIntentId };
+  return { ok: true, priorIntentId: receipt.priorIntentId };
 }
