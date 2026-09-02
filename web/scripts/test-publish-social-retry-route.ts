@@ -23,6 +23,7 @@ const destinations = [
 
 type DurableStatus = "claimed" | "published" | "failed" | "delivery_unknown";
 let authoritative = new Map<string, { status: DurableStatus; retryAllowed: boolean }>();
+let priorIntentId: string | null = "publish:prior:route";
 let claimCalls = 0;
 let providerCalls = 0;
 let meterCalls = 0;
@@ -55,7 +56,7 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
         receipt: raw,
         destinations: raw.destinations,
       }),
-      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId: "publish:prior:route" }),
+      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId }),
     };
   }
   if (request === "@/lib/server/publish/publishIntentLedger" || request.endsWith("/server/publish/publishIntentLedger")) {
@@ -181,6 +182,7 @@ let passed = 0;
 let failed = 0;
 async function test(name: string, fn: () => Promise<void>) {
   authoritative = new Map();
+  priorIntentId = "publish:prior:route";
   claimCalls = 0;
   providerCalls = 0;
   meterCalls = 0;
@@ -193,6 +195,25 @@ async function test(name: string, fn: () => Promise<void>) {
     console.log(`  FAIL ${name}\n       ${(error as Error).stack ?? (error as Error).message}`);
   }
 }
+
+await test("onlyPending=true first attempt accepts the exact full social set without prior intent", async () => {
+  priorIntentId = null;
+  const response = await POST(request(true, [FACEBOOK_ID, INSTAGRAM_ID]));
+  assert.equal(response.status, 402);
+  assert.equal(claimCalls, 1);
+  assert.equal(meterCalls, 1);
+  assert.equal(providerCalls, 0);
+});
+
+await test("onlyPending=true first attempt still rejects a narrowed set without prior intent", async () => {
+  priorIntentId = null;
+  const response = await POST(request(true, [FACEBOOK_ID]));
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { code: string }).code, "retry_destination_not_allowed");
+  assert.equal(claimCalls, 0);
+  assert.equal(meterCalls, 0);
+  assert.equal(providerCalls, 0);
+});
 
 await test("onlyPending=false rejects a narrowed subset with 409 before claim", async () => {
   const response = await POST(request(false, [FACEBOOK_ID]));

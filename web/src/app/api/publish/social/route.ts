@@ -225,19 +225,25 @@ export async function POST(req: Request) {
         code: "publish_intent_unavailable",
       }, { status: 503 });
     }
+    // A first attempt may use the shared onlyPending default even though no
+    // durable intent exists yet. In that case it is safe only when the receipt
+    // contains the exact complete confirmed social fan-out; narrowing is
+    // authorized only by an existing prior intent's per-destination evidence.
     const priorById = new Map(priorIntent?.destinations.map(destination => [destination.destinationId, destination]) ?? []);
-    const retryIsAuthoritative = !!priorIntent
-      && priorIntent.draftId === confirmation.receipt.draftId
-      && priorIntent.contentId === confirmation.receipt.contentId
-      && requestedDestinationIds.every(destinationId => {
-        const destination = destinationById.get(destinationId);
-        const prior = priorById.get(destinationId);
-        return !!destination && !!prior
-          && prior.provider === destination.provider
-          && prior.socialConnectionId === destination.socialConnectionId
-          && prior.status === "failed"
-          && prior.retryAllowed;
-      });
+    const retryIsAuthoritative = !stored.priorIntentId
+      ? requestedDestinationIds.length === destinationById.size
+      : !!priorIntent
+        && priorIntent.draftId === confirmation.receipt.draftId
+        && priorIntent.contentId === confirmation.receipt.contentId
+        && requestedDestinationIds.every(destinationId => {
+          const destination = destinationById.get(destinationId);
+          const prior = priorById.get(destinationId);
+          return !!destination && !!prior
+            && prior.provider === destination.provider
+            && prior.socialConnectionId === destination.socialConnectionId
+            && prior.status === "failed"
+            && prior.retryAllowed;
+        });
     if (!retryIsAuthoritative) {
       return Response.json({
         error: "Retry may include only destinations whose latest durable result failed and allows retry.",
