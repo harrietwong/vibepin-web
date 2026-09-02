@@ -244,7 +244,7 @@ check("only EXPLICIT intent seeds a tick",
 
 const card = readFileSync("src/components/studio/PinBoardCard.tsx", "utf8");
 check("the card seeds its selection from the Content's own destinations",
-  /useState<PublishProvider\[\]>\(\(\) => \{[\s\S]{0,200}contentDestinations\(draft\)/.test(card));
+  /useState<PublishProvider\[\]>\(\(\) => \{[\s\S]{0,240}explicitPublishDestinations\(draft\)/.test(card));
 check("the card has no Pinterest fallback when intent is empty",
   /return Array\.from\(new Set\(providers\)\)/.test(card)
     && !/providers\.length \? Array\.from\(new Set\(providers\)\) : \["pinterest"\]/.test(card));
@@ -369,11 +369,11 @@ check("a payload with no destination intent needs nothing validated",
 section("the PUT route wires the destination-exists gate correctly");
 {
   const route = readFileSync("src/app/api/pin-drafts/route.ts", "utf8");
-  check("route calls requiredScheduleConnectionIds", route.includes("requiredScheduleConnectionIds("));
+  check("route calls requiredScheduleDestinations", route.includes("requiredScheduleDestinations("));
   check("route calls the server-side availability lookup",
     route.includes("unavailableScheduleDestinations("));
   check("it collects targets only when the draft is being scheduled",
-    /if \(incomingScheduledAt\) \{[\s\S]{0,240}requiredScheduleConnectionIds\(p\)/.test(route),
+    /if \(incomingScheduledAt\) \{[\s\S]{0,240}requiredScheduleDestinations\(p\)/.test(route),
     "an unscheduled draft must not be refused for naming a removed account");
   check("refusal is a per-draft destination_unavailable result",
     route.includes('code: "destination_unavailable"') && route.includes('status: "rejected"'));

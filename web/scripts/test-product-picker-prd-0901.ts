@@ -35,7 +35,7 @@ test("PO90-01a resets image state by keyed source remount without effect state s
   assert.match(image, /function productImageRenderKey/);
   assert.match(image, /<ProductImageForSource key=\{productImageRenderKey\(source\)\}/);
   assert.match(image, /useState<ProductImageState>\(\(\) => initialProductImageState\(src\)\)/);
-  assert.doesNotMatch(image, /useEffect\(\(\) => \{\s*loadSequence\.current \+= 1;\s*setState\(initialProductImageState\(src\)\)/s);
+  assert.doesNotMatch(image, /useEffect\(\(\) => \{[\s\S]*?loadSequence\.current \+= 1;[\s\S]*?setState\(initialProductImageState\(src\)\)/);
 });
 
 test("PO90-02 exposes only My Products and Product inspiration as primary product tabs", () => {

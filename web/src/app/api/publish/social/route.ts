@@ -65,6 +65,17 @@ import {
   type DeliveryOutcome,
 } from "@/lib/server/usage/deliveryOutcome";
 import { logEvent } from "@/lib/server/usage/meterGeneration";
+import {
+  validateImmediatePublishReceipt,
+  validateStoredImmediatePublishReceipt,
+} from "@/lib/server/publish/confirmationReceipt";
+import {
+  PublishIntentLedgerError,
+  claimPublishIntentDestinations,
+  settlePublishIntentDestination,
+  type PublishIntentClaim,
+} from "@/lib/server/publish/publishIntentLedger";
+import type { PublishDestination } from "@/lib/contentDraftModel";
 
 export const dynamic = "force-dynamic";
 
@@ -102,6 +113,36 @@ export async function POST(req: Request) {
   const requested = Array.isArray(body.destinations) ? body.destinations : [];
   if (!requested.length) {
     return Response.json({ error: "Select at least one destination to publish." }, { status: 400 });
+  }
+
+  const requestedDestinationIds = requested.map(raw => {
+    const item = raw as { provider?: unknown; socialConnectionId?: unknown };
+    const provider = typeof item.provider === "string" ? item.provider.trim().toLowerCase() : "";
+    const connectionId = typeof item.socialConnectionId === "string" ? item.socialConnectionId.trim() : "";
+    return `${provider}:${connectionId}`;
+  });
+  const confirmation = validateImmediatePublishReceipt(body.confirmation, {
+    draftId: postId ?? "",
+    title: post.title,
+    description: post.caption,
+    destinationUrl: post.destinationUrl,
+    altText: post.altText,
+    imageUrls: post.imageUrls,
+  }, requestedDestinationIds);
+  if (!confirmation.ok) {
+    return Response.json({ error: confirmation.error, code: confirmation.code }, { status: confirmation.code === "confirmation_required" ? 400 : 409 });
+  }
+  const expectedSocialDestinationIds = confirmation.destinations
+    .filter(destination => destination.provider !== "pinterest")
+    .map(destination => destination.id)
+    .sort();
+  const exactRequestedIds = [...requestedDestinationIds].sort();
+  if (expectedSocialDestinationIds.length !== exactRequestedIds.length
+      || expectedSocialDestinationIds.some((id, index) => id !== exactRequestedIds[index])) {
+    return Response.json({
+      error: "The social destination set no longer matches the confirmation.",
+      code: "invalid_confirmation",
+    }, { status: 409 });
   }
 
   // Resolve every exact owner-scoped account before metering, job creation or provider
@@ -151,6 +192,110 @@ export async function POST(req: Request) {
       code: "destination_validation_failed",
       results: validation,
     }, { status: 422 });
+  }
+
+  // Durable, per-destination idempotency is claimed only after the complete receipt
+  // and live capability checks pass, but before metering, job creation or dispatch.
+  // The database uniqueness constraint coordinates every server instance and survives
+  // restarts; the old usage key/process lock do not.
+  let db: ReturnType<typeof createServerClient>;
+  try {
+    db = createServerClient();
+  } catch {
+    return Response.json({ error: "Durable publish recovery is unavailable.", code: "publish_intent_unavailable" }, { status: 503 });
+  }
+  const stored = await validateStoredImmediatePublishReceipt(db, uid, confirmation.receipt);
+  if (!stored.ok) {
+    return Response.json({ error: stored.error, code: stored.code }, {
+      status: stored.code === "invalid_confirmation" ? 409 : 503,
+    });
+  }
+  const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
+  const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
+  try {
+    const destinations: PublishDestination[] = [];
+    for (const destinationId of [...requestedDestinationIds].sort()) {
+      const destination = destinationById.get(destinationId);
+      if (!destination || destination.provider === "pinterest") {
+        return Response.json({ error: "The confirmed destination set is invalid.", code: "invalid_confirmation" }, { status: 409 });
+      }
+      destinations.push(destination);
+    }
+    for (const claimed of await claimPublishIntentDestinations(db, uid, confirmation.receipt, destinations)) {
+      claims.set(claimed.destination.id, claimed);
+    }
+  } catch (error) {
+    const code = error instanceof PublishIntentLedgerError ? error.code : "unavailable";
+    return Response.json({ error: "Could not establish durable publish recovery.", code: `publish_intent_${code}` }, { status: code === "conflict" ? 409 : 503 });
+  }
+
+  const settleFreshClaimsNotSent = async (reason: string): Promise<boolean> => {
+    const settlements = await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
+      claim.claimed && claim.claimToken
+        ? [settlePublishIntentDestination(db, uid, {
+            intentId: confirmation.receipt.intentId,
+            destinationId: destination.id,
+            claimToken: claim.claimToken,
+            status: "failed",
+            retryAllowed: true,
+            evidence: { category: "not_sent", reason },
+          }).then(() => true).catch(() => false)]
+        : []));
+    return settlements.every(Boolean);
+  };
+
+  const recoveryClaim = [...claims.values()].find(({ claim }) =>
+    !claim.claimed && (claim.status === "claimed" || claim.status === "delivery_unknown"));
+  if (recoveryClaim) {
+    // If this request freshly re-claimed a known failure before discovering a sibling
+    // whose delivery is unknown, release the fresh claim as a typed not-sent failure.
+    // Nothing remains stuck merely because all destinations are claimed independently.
+    const released = await settleFreshClaimsNotSent("sibling_recovery_pending");
+    if (!released) {
+      return Response.json({
+        error: "Could not release a durable publish claim. Reconcile this intent before retrying.",
+        code: "publish_intent_settlement_unavailable",
+        intentId: confirmation.receipt.intentId,
+        intentJobId: recoveryClaim.claim.intentJobId,
+      }, { status: 503 });
+    }
+    return Response.json({
+      error: "A previous publish has unknown delivery. Reconcile the original intent before retrying.",
+      code: "delivery_recovery_pending",
+      intentId: confirmation.receipt.intentId,
+      jobId: recoveryClaim.claim.destinationJobId,
+      intentJobId: recoveryClaim.claim.intentJobId,
+      remoteEvidence: recoveryClaim.claim.evidence,
+    }, { status: 409 });
+  }
+
+  const dispatchDestinationIds = new Set([...claims.entries()].filter(([, value]) => value.claim.claimed).map(([id]) => id));
+  const replayedOutcomes: DestOutcome[] = [...claims.values()].flatMap(({ destination, claim }) => {
+    if (claim.claimed) return [];
+    return [{
+      provider: destination.provider,
+      socialConnectionId: destination.socialConnectionId,
+      status: claim.status === "published" ? "published" : "failed",
+      externalPostId: claim.remoteId,
+      externalPostUrl: claim.remoteUrl,
+      providerStatus: claim.providerStatus,
+      providerResourceId: claim.remoteId,
+      error: typeof claim.evidence.error === "string" ? claim.evidence.error : null,
+      errorCode: typeof claim.evidence.errorCode === "string" ? claim.evidence.errorCode : null,
+      attempt: claim.attempt,
+    } satisfies DestOutcome];
+  });
+
+  if (dispatchDestinationIds.size === 0) {
+    return Response.json({
+      ok: replayedOutcomes.every(outcome => outcome.status === "published"),
+      replayed: true,
+      jobId: replayedOutcomes.length === 1 ? [...claims.values()][0].claim.providerJobId : null,
+      intentId: confirmation.receipt.intentId,
+      intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+      status: rollUpJobStatus(replayedOutcomes),
+      destinations: replayedOutcomes,
+    });
   }
 
   // ── Metering: scheduled-post quota (PRD v3.1 decisions 3 & 4) ────────────────
@@ -235,6 +380,15 @@ export async function POST(req: Request) {
     // refund — an `insufficient` consume charged nothing to give back. In shadow
     // this branch is unreachable and the route behaves exactly as before.
     if (consumed.kind === "insufficient" && usageEnforceFor("scheduled_post")) {
+      const released = await settleFreshClaimsNotSent("scheduled_post_limit_reached");
+      if (!released) {
+        return Response.json({
+          error: "Could not release a durable publish claim.",
+          code: "publish_intent_settlement_unavailable",
+          intentId: confirmation.receipt.intentId,
+          intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+        }, { status: 503 });
+      }
       return Response.json(scheduledPostLimitResponseBody(), { status: 402 });
     }
   } else {
@@ -243,7 +397,7 @@ export async function POST(req: Request) {
     logEvent("usage_meter_skipped", { reason: "no_draft_identity", route: "publish_social" });
   }
 
-  const outcomes: DestOutcome[] = [];
+  const outcomes: DestOutcome[] = [...replayedOutcomes];
   // Parallel to `outcomes`, but only for targets we actually ATTEMPTED — the refund
   // classification (below) must not see skips, which are not delivery failures.
   const deliveries: DeliveryOutcome[] = [];
@@ -273,8 +427,7 @@ export async function POST(req: Request) {
    * about.
    */
   let dispatchStarted = false;
-  let db: ReturnType<typeof createServerClient>;
-  let jobId: Awaited<ReturnType<typeof createPublishJob>>;
+  let jobId: Awaited<ReturnType<typeof createPublishJob>> = null;
 
   try {
   // Create the attempt BEFORE dispatching anything. Previously the job row was
@@ -283,11 +436,18 @@ export async function POST(req: Request) {
   // refreshed during publishing had no in-flight state to recover — it simply
   // saw nothing. The row starts as `publishing` and is finalized once the
   // outcomes are known.
-  db = createServerClient();
-  jobId = await createPublishJob(db, uid, postId, productId);
+  jobId = await createPublishJob(db, uid, postId, productId, {
+    intentId: confirmation.receipt.intentId,
+    fingerprint: confirmation.receipt.fingerprint,
+  });
   for (const raw of requested) {
     const provider = (raw as { provider?: unknown }).provider;
     if (!isSocialProvider(provider)) continue;
+
+    const connectionId = typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
+      ? (raw as { socialConnectionId: string }).socialConnectionId.trim()
+      : "";
+    if (!dispatchDestinationIds.has(`${provider}:${connectionId}`)) continue;
 
     // Publishing capability is not the same thing as being connected (PRD 0809 §4).
     // A platform we cannot publish to is refused HERE, before any provider call, so the
@@ -304,9 +464,6 @@ export async function POST(req: Request) {
       continue;
     }
 
-    const connectionId = typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
-      ? (raw as { socialConnectionId: string }).socialConnectionId.trim()
-      : "";
     const connection: SocialConnection | null = await findConnection(uid, connectionId);
 
     if (!connection || connection.connectionStatus !== "connected") {
@@ -405,7 +562,31 @@ export async function POST(req: Request) {
         metadata: { source: "social_immediate", route: "publish_social", stage: "pre_dispatch" },
       });
     }
-    throw err;
+    const settlementStatus = dispatchStarted ? "delivery_unknown" as const : "failed" as const;
+    await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
+      claim.claimed && claim.claimToken
+        ? [settlePublishIntentDestination(db, uid, {
+            intentId: confirmation.receipt.intentId,
+            destinationId: destination.id,
+            claimToken: claim.claimToken,
+            status: settlementStatus,
+            retryAllowed: !dispatchStarted,
+            providerJobId: jobId,
+            evidence: {
+              category: dispatchStarted ? "delivery_unknown" : "not_sent",
+              error: (err as Error)?.message || "Publishing failed.",
+            },
+          }).catch(() => undefined)]
+        : []));
+    return Response.json({
+      error: dispatchStarted
+        ? "Delivery status is unknown. Reconcile the original publish intent before retrying."
+        : "Publishing could not start.",
+      code: dispatchStarted ? "delivery_unknown" : "publish_not_started",
+      intentId: confirmation.receipt.intentId,
+      intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+      jobId,
+    }, { status: 503 });
   }
 
   /**
@@ -470,9 +651,68 @@ export async function POST(req: Request) {
   // itself must not fail just because the record could not be kept.
   if (jobId) await recordOutcomes(db, jobId, outcomes);
 
+  // Finalize the durable receipt rows before returning anything to the browser. Every
+  // response can therefore be recovered by original intent id even if it is lost in
+  // transit after this point.
+  try {
+    for (const { destination, claim } of claims.values()) {
+      if (!claim.claimed || !claim.claimToken) continue;
+      const outcome = outcomes.find(item => item.provider === destination.provider
+        && item.socialConnectionId === destination.socialConnectionId);
+      const status = outcome?.status === "published"
+        ? "published" as const
+        : outcome?.status === "delivery_unknown"
+          ? "delivery_unknown" as const
+          : "failed" as const;
+      const preNetwork = outcome?.preNetwork === true || outcome?.status === "skipped";
+      const providerRejectedWithoutObject = typeof outcome?.providerStatus === "number"
+        && outcome.providerStatus >= 400
+        && outcome.providerStatus < 500
+        && !outcome.externalPostId
+        && !outcome.providerResourceId;
+      await settlePublishIntentDestination(db, uid, {
+        intentId: confirmation.receipt.intentId,
+        destinationId: destination.id,
+        claimToken: claim.claimToken,
+        status,
+        retryAllowed: status === "failed" && (preNetwork || providerRejectedWithoutObject),
+        providerJobId: jobId,
+        remoteId: outcome?.externalPostId,
+        remoteUrl: outcome?.externalPostUrl,
+        providerStatus: outcome?.providerStatus,
+        evidence: {
+          category: status,
+          error: outcome?.error ?? null,
+          errorCode: outcome?.errorCode ?? null,
+          providerResourceId: outcome?.providerResourceId ?? outcome?.externalPostId ?? null,
+          startedAt: outcome?.startedAt ?? requestStartedAt,
+          finishedAt: outcome?.finishedAt ?? new Date().toISOString(),
+        },
+      });
+    }
+  } catch {
+    return Response.json({
+      error: "The provider response could not be durably recorded. Reconcile this intent before retrying.",
+      code: "publish_intent_settlement_unavailable",
+      intentId: confirmation.receipt.intentId,
+      intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+      jobId,
+      remoteEvidence: outcomes.map(outcome => ({
+        provider: outcome.provider,
+        socialConnectionId: outcome.socialConnectionId,
+        status: outcome.status,
+        remoteId: outcome.externalPostId ?? null,
+        remoteUrl: outcome.externalPostUrl ?? null,
+        providerStatus: outcome.providerStatus ?? null,
+      })),
+    }, { status: 503 });
+  }
+
   return Response.json({
     ok: jobStatus === "published",
     jobId,
+    intentId: confirmation.receipt.intentId,
+    intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
     status: jobStatus,
     destinations: outcomes.map(o => ({
       provider: o.provider,
@@ -490,6 +730,14 @@ export async function POST(req: Request) {
       attempt: o.attempt ?? null,
       startedAt: o.startedAt ?? null,
       finishedAt: o.finishedAt ?? null,
+      intentId: confirmation.receipt.intentId,
+      jobId: claims.get(`${o.provider}:${o.socialConnectionId ?? ""}`)?.claim.destinationJobId ?? jobId,
+      remoteEvidence: {
+        remoteId: o.externalPostId ?? null,
+        remoteUrl: o.externalPostUrl ?? null,
+        providerStatus: o.providerStatus ?? null,
+        providerResourceId: o.providerResourceId ?? null,
+      },
     })),
   });
 }

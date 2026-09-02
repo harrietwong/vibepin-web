@@ -332,6 +332,7 @@ async function main() {
     // 客户端拿的是这行更早的副本,updatedAt 更"新"一点点,足以通过 LWW。
     const clientPayload = draftPayload("d1", "2026-06-02T00:00:00.000Z", {
       scheduledDate: "2026-06-10", scheduledTime: "09:00", plannedAt: "2026-06-10T09:00:00.000Z",
+      scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin-1", boardId: "board-1" }],
     });
     // cron 抢在写入落地之前:写进 destinationResults 并清掉排程。
     beforeWrite = () => {
@@ -429,6 +430,7 @@ async function main() {
       draftId: "dS", updatedAt: "2026-06-02T00:00:00.000Z",
       payload: draftPayload("dS", "2026-06-02T00:00:00.000Z", {
         scheduledDate: "2026-07-01", scheduledTime: "10:00",
+        scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin-1", boardId: "board-1" }],
       }),
     }]));
     assert.equal(res.status, 409);
@@ -442,6 +444,7 @@ async function main() {
       draftId: "dS", updatedAt: "2026-06-02T00:00:00.000Z",
       payload: draftPayload("dS", "2026-06-02T00:00:00.000Z", {
         scheduledDate: "2026-07-01", scheduledTime: "10:00",
+        scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin-1", boardId: "board-1" }],
       }),
     }]));
     assert.equal(res.status, 200);

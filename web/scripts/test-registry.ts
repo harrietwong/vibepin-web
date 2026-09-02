@@ -190,6 +190,7 @@ export const STUDIO: string[] = [
   "test-failure-banner",
   "test-publish-error-display",
   "test-publish-confirmation",
+  "test-publish-durable-intent",
   "test-publish-failure-consistency",
   // Multi-image publishing (WS-A 2026-08-27): per-platform media rules + the exact
   // Pinterest media_source a carousel produces.

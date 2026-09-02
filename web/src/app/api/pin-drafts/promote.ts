@@ -357,3 +357,29 @@ export function requiredScheduleConnectionIds(payload: Record<string, unknown>):
   }
   return out;
 }
+
+export type RequiredScheduleDestination = {
+  provider: SocialProvider;
+  socialConnectionId: string;
+  boardId?: string;
+};
+
+/** Exact provider/account/subdestination tuples the due worker will consume. */
+export function requiredScheduleDestinations(payload: Record<string, unknown>): RequiredScheduleDestination[] {
+  const raw = payload.scheduledDestinations;
+  if (!Array.isArray(raw)) return [];
+  const out: RequiredScheduleDestination[] = [];
+  for (const entry of raw) {
+    if (!isUsableDestination(entry) || !isSocialProvider(entry.provider)) continue;
+    const socialConnectionId = entry.socialConnectionId.trim();
+    const boardId = typeof entry.boardId === "string" ? entry.boardId.trim() : "";
+    const key = `${entry.provider}:${socialConnectionId}:${boardId}`;
+    if (out.some(item => `${item.provider}:${item.socialConnectionId}:${item.boardId ?? ""}` === key)) continue;
+    out.push({
+      provider: entry.provider,
+      socialConnectionId,
+      ...(boardId ? { boardId } : {}),
+    });
+  }
+  return out;
+}

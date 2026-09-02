@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
 import { parseLimitReached, type LimitReached } from "@/lib/usage/limitReached";
+import type { ConfirmedPublishReceipt } from "@/lib/studio/publishConfirmation";
 
 async function authHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -303,6 +304,8 @@ export async function validateDestinations(
 export type SocialPublishResult = {
   ok: boolean;
   jobId: string | null;
+  intentId: string;
+  intentJobId: string | null;
   status: "draft" | "publishing" | "published" | "partially_published" | "failed";
   destinations: Array<{
     provider: SocialProvider;
@@ -323,6 +326,9 @@ export type SocialPublishResult = {
     attempt?: number;
     startedAt?: string | null;
     finishedAt?: string | null;
+    intentId?: string;
+    jobId?: string | null;
+    remoteEvidence?: Record<string, unknown>;
   }>;
 };
 
@@ -331,6 +337,9 @@ export async function publishToSocial(input: {
   productId?: string;
   post: SocialPostPayload;
   destinations: DestinationInput[];
+  /** Complete merchant confirmation. The API recomputes its canonical SHA-256 and
+   *  compares every dispatched byte/account before it claims durable idempotency. */
+  confirmation: ConfirmedPublishReceipt;
   /** Server-minted immediate-publish UTC date bucket relayed from a pinterest call
    *  for this SAME Content (meterScheduledPost.ts). The server independently
    *  validates it (isAcceptableImmediateBucket + verifyImmediateBucket) before

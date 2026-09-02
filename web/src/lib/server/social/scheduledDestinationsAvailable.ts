@@ -27,10 +27,11 @@
  * prevents.
  *
  * Server-only: it reads the connection store. The rule that decides WHICH ids
- * matter is the pure `requiredScheduleConnectionIds` in api/pin-drafts/promote.ts,
+ * matter is the pure `requiredScheduleDestinations` in api/pin-drafts/promote.ts,
  * which stays importable under bare `tsx`.
  */
 
+import { resolveDestinationCapability, type DestinationDisabledReason } from "@/lib/social/destinationCapability";
 import { findConnection, listConnections } from "@/lib/social/server/socialConnectionStore";
 import type { SocialProvider } from "@/lib/social/platforms";
 
@@ -41,13 +42,22 @@ export interface UnavailableDestination {
   /** Known when we could identify the row; null when the id resolves to nothing. */
   provider: SocialProvider | null;
   /** "missing" — no such connection for this user. "disconnected" — row exists, cannot publish. */
-  reason: "missing" | "disconnected";
+  reason: "missing" | "disconnected" | DestinationDisabledReason;
 }
 
-/** A draft to validate: its id and the connection ids its schedule will use. */
+export interface ScheduledDestinationTarget {
+  provider: SocialProvider;
+  socialConnectionId: string;
+  boardId?: string;
+}
+
+/** A draft to validate against the same exact capability model due-time uses. */
 export interface ScheduleTarget {
   draftId: string;
-  connectionIds: readonly string[];
+  destinations?: readonly ScheduledDestinationTarget[];
+  mediaCount?: number;
+  /** @deprecated Compatibility for older focused callers; production passes destinations. */
+  connectionIds?: readonly string[];
 }
 
 /**
@@ -73,7 +83,10 @@ export async function unavailableScheduleDestinations(
   targets: readonly ScheduleTarget[],
 ): Promise<UnavailableDestination[]> {
   const wanted = new Set<string>();
-  for (const t of targets) for (const id of t.connectionIds) wanted.add(id);
+  for (const target of targets) {
+    for (const destination of target.destinations ?? []) wanted.add(destination.socialConnectionId);
+    for (const id of target.connectionIds ?? []) wanted.add(id);
+  }
   if (wanted.size === 0) return [];
 
   const connections = await listConnections(uid);
@@ -97,11 +110,33 @@ export async function unavailableScheduleDestinations(
   }
 
   const out: UnavailableDestination[] = [];
-  for (const t of targets) {
-    for (const id of t.connectionIds) {
+  for (const target of targets) {
+    for (const destination of target.destinations ?? []) {
+      const connection = byId.get(destination.socialConnectionId)
+        ?? (destination.socialConnectionId.includes(":")
+          ? await findConnection(uid, destination.socialConnectionId)
+          : null);
+      const capability = resolveDestinationCapability({
+        provider: destination.provider,
+        connection,
+        connectionId: destination.socialConnectionId,
+        subdestinationId: destination.boardId,
+        mediaCount: target.mediaCount ?? 0,
+        mode: "scheduled",
+      });
+      if (!capability.schedule) {
+        out.push({
+          draftId: target.draftId,
+          connectionId: destination.socialConnectionId,
+          provider: destination.provider,
+          reason: capability.unavailableReason ?? "disconnected",
+        });
+      }
+    }
+    for (const id of target.connectionIds ?? []) {
       const verdict = verdicts.get(id);
       if (!verdict) continue;
-      out.push({ draftId: t.draftId, connectionId: id, provider: verdict.provider, reason: verdict.reason });
+      out.push({ draftId: target.draftId, connectionId: id, provider: verdict.provider, reason: verdict.reason });
     }
   }
   return out;

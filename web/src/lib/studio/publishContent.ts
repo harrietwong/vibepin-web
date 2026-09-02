@@ -467,6 +467,8 @@ export async function publishContent(
           // A confirmed exact account is mandatory. The server is never asked to
           // resolve/adopt a default account for an immediate publish.
           connectionId: destination.socialConnectionId as string,
+          confirmation,
+          destinationId: destination.id,
           // Surface-specific extras (product attachment), passed through untouched.
           ...(options.extras?.attachedProducts?.length
             ? { attachedProducts: options.extras.attachedProducts }
@@ -485,6 +487,8 @@ export async function publishContent(
           destinationId: destination.id,
           remoteId: res.pin.id,
           postUrl: res.pin.url,
+          intentId: res.intentId,
+          jobId: res.jobId,
           publishedAt: deps.now(),
         });
       } catch (error) {
@@ -519,6 +523,10 @@ export async function publishContent(
         outcomes.push({
           ...baseRow(destination, ambiguous ? "delivery_unknown" : "failed", submittedAt),
           errorCode: err?.code,
+          intentId: err?.intentId ?? confirmation.intentId,
+          jobId: err?.jobId,
+          remoteId: typeof err?.remoteEvidence?.remoteId === "string" ? err.remoteEvidence.remoteId : undefined,
+          postUrl: typeof err?.remoteEvidence?.remoteUrl === "string" ? err.remoteEvidence.remoteUrl : undefined,
           errorMessage: ambiguous ? "Delivery status is unknown. Check the original publish before trying again." : (err?.message || "Publishing failed."),
         });
       }
@@ -540,6 +548,7 @@ export async function publishContent(
           destinations: socialTargets
             .filter(d => !!d.socialConnectionId)
             .map(d => ({ provider: d.provider, socialConnectionId: d.socialConnectionId as string })),
+          confirmation,
           // Relay the bucket a pinterest call in THIS SAME publish already metered
           // under, so this request buckets identically instead of computing its own
           // (see meterScheduledPost.ts's module header). Omitted entirely for a
@@ -588,6 +597,8 @@ export async function publishContent(
             errorCode: result.errorCode ?? undefined,
             providerStatus: result.providerStatus ?? undefined,
             attempt: result.attempt,
+            intentId: result.intentId ?? social.intentId,
+            jobId: result.jobId ?? social.jobId ?? undefined,
             startedAt: result.startedAt ?? undefined,
             finishedAt: result.finishedAt ?? undefined,
             errorMessage: result.status === "published"

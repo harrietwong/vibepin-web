@@ -11,6 +11,7 @@
 import { invalidateBoardsCache } from "@/lib/pinterest/boardsCache";
 import { invalidateConnectionsCache } from "@/lib/social/connectionsCache";
 import { freshAccessToken, refreshSessionOnce } from "@/lib/supabaseBrowser";
+import type { ConfirmedPublishReceipt } from "@/lib/studio/publishConfirmation";
 
 async function authHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -45,6 +46,10 @@ export type PinterestClientError = Error & {
    *  social route's verification is bound to THIS value, not its own "now". Absent
    *  whenever meteringBucketSig is (they always travel together). */
   meteringBucketMintedAt?: number;
+  intentId?: string;
+  jobId?: string;
+  intentJobId?: string;
+  remoteEvidence?: Record<string, unknown>;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -92,6 +97,11 @@ export type PublishResult = {
   /** The server instant the bucket+sig were minted at (Fix 5 relay-age binding).
    *  Absent whenever meteringBucketSig is. */
   meteringBucketMintedAt?: number;
+  intentId: string;
+  jobId: string;
+  intentJobId: string;
+  replayed?: boolean;
+  remoteEvidence?: Record<string, unknown>;
 };
 
 function currentReturnTo(): string {
@@ -241,6 +251,10 @@ type ParsedError = {
   /** The server instant the bucket+sig were minted at. Present on any failure body
    *  that also carries meteringBucketSig. */
   meteringBucketMintedAt?: number;
+  intentId?: string;
+  jobId?: string;
+  intentJobId?: string;
+  remoteEvidence?: Record<string, unknown>;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -261,6 +275,12 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       meteringBucket: typeof body?.meteringBucket === "string" ? body.meteringBucket : undefined,
       meteringBucketSig: typeof body?.meteringBucketSig === "string" ? body.meteringBucketSig : undefined,
       meteringBucketMintedAt: typeof body?.meteringBucketMintedAt === "number" ? body.meteringBucketMintedAt : undefined,
+      intentId: typeof body?.intentId === "string" ? body.intentId : undefined,
+      jobId: typeof body?.jobId === "string" ? body.jobId : undefined,
+      intentJobId: typeof body?.intentJobId === "string" ? body.intentJobId : undefined,
+      remoteEvidence: body?.remoteEvidence && typeof body.remoteEvidence === "object"
+        ? body.remoteEvidence as Record<string, unknown>
+        : undefined,
     };
   } catch {
     return {
@@ -281,6 +301,10 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.meteringBucket = body.meteringBucket;
   err.meteringBucketSig = body.meteringBucketSig;
   err.meteringBucketMintedAt = body.meteringBucketMintedAt;
+  err.intentId = body.intentId;
+  err.jobId = body.jobId;
+  err.intentJobId = body.intentJobId;
+  err.remoteEvidence = body.remoteEvidence;
   return err;
 }
 
@@ -535,6 +559,10 @@ export type PublishPinInput = {
   /** The Pin's pinned publish target (social_connections row id). Omitted ⇒ the server
    *  resolves the user's default connection and reports it back for adopt-once. */
   connectionId?: string;
+  /** Exact destination in the full merchant confirmation that this single provider
+   *  request is allowed to dispatch. */
+  confirmation: ConfirmedPublishReceipt;
+  destinationId: string;
   // ── VibePin-side commerce metadata (stored/used internally; never sent to the
   //    Pinterest API as official product tags) ──────────────────────────────────
   attachedProducts?: AttachedProduct[];

@@ -31,7 +31,7 @@ import {
   buildScheduleColumns,
   buildScheduledAt,
   blockedScheduleDestinations,
-  requiredScheduleConnectionIds,
+  requiredScheduleDestinations,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
 
@@ -50,6 +50,7 @@ type DraftSyncOutcome = {
   draftId: string;
   status: "applied" | "stale" | "rejected" | "deferred";
   code?: string;
+  reasonCode?: string;
   userMessageKey?: string;
   retryable: boolean;
 };
@@ -325,8 +326,21 @@ export async function PUT(req: Request) {
       // publish. Collected here (cheap, pure) and resolved in one batch below —
       // the actual lookup is a database read and must not run per draft.
       if (incomingScheduledAt) {
-        const connectionIds = requiredScheduleConnectionIds(p);
-        if (connectionIds.length) scheduleTargets.push({ draftId: d.draftId, connectionIds });
+        const destinations = requiredScheduleDestinations(p);
+        if (!destinations.length) {
+          rejected.set(d.draftId, {
+            draftId: d.draftId,
+            status: "rejected",
+            code: "no_destinations",
+            userMessageKey: "studioBoard.card.syncIssue.destinationUnavailable",
+            retryable: false,
+          });
+        } else {
+          const mediaCount = Array.isArray(p.media)
+            ? p.media.filter(item => item && typeof item === "object" && typeof (item as { url?: unknown }).url === "string").length
+            : (typeof p.imageUrl === "string" && p.imageUrl.trim() ? 1 : 0);
+          scheduleTargets.push({ draftId: d.draftId, destinations, mediaCount });
+        }
       }
     }
     rows.push({ draftId: d.draftId, row: {
@@ -388,6 +402,7 @@ export async function PUT(req: Request) {
           draftId: item.draftId,
           status: "rejected",
           code: "destination_unavailable",
+          reasonCode: item.reason,
           userMessageKey: "studioBoard.card.syncIssue.destinationUnavailable",
           retryable: false,
         });

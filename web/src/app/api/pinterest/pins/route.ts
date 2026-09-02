@@ -53,6 +53,17 @@ import {
   PUBLISH_EVENT_SUCCEEDED,
   type PublishEventBase,
 } from "@/lib/server/publishEvents";
+import {
+  validateImmediatePublishReceipt,
+  validateStoredImmediatePublishReceipt,
+} from "@/lib/server/publish/confirmationReceipt";
+import {
+  PublishIntentLedgerError,
+  claimPublishIntentDestination,
+  settlePublishIntentDestination,
+} from "@/lib/server/publish/publishIntentLedger";
+import { findConnection } from "@/lib/social/server/socialConnectionStore";
+import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +95,120 @@ export async function POST(req: Request) {
   const draftId = typeof body.draftId === "string" && body.draftId.trim() ? body.draftId.trim() : null;
   const source =
     body.source === "immediate" || body.source === "scheduled-cron" ? body.source : "immediate";
+
+  // Scheduled cron calls the server function directly and never enter this immediate
+  // HTTP shell. Every request here therefore needs a full merchant confirmation.
+  const destinationId = typeof body.destinationId === "string" ? body.destinationId.trim() : "";
+  const imageUrls = Array.isArray(body.imageUrls)
+    ? body.imageUrls.filter((item): item is string => typeof item === "string")
+    : (typeof body.imageUrl === "string" ? [body.imageUrl] : []);
+  const confirmation = validateImmediatePublishReceipt(body.confirmation, {
+    draftId: draftId ?? "",
+    title: typeof body.title === "string" ? body.title : undefined,
+    description: typeof body.description === "string" ? body.description : undefined,
+    destinationUrl: typeof body.link === "string" ? body.link : undefined,
+    altText: typeof body.altText === "string" ? body.altText : undefined,
+    imageUrls,
+  }, destinationId ? [destinationId] : []);
+  if (!confirmation.ok) {
+    return Response.json({ error: confirmation.error, code: confirmation.code }, { status: confirmation.code === "confirmation_required" ? 400 : 409 });
+  }
+  const confirmedDestination = confirmation.destinations.find(destination => destination.id === destinationId);
+  if (!confirmedDestination || confirmedDestination.provider !== "pinterest"
+      || confirmedDestination.boardId !== boardId
+      || confirmedDestination.socialConnectionId !== (typeof body.connectionId === "string" ? body.connectionId.trim() : "")) {
+    return Response.json({ error: "The Pinterest account or Board no longer matches the confirmation.", code: "invalid_confirmation" }, { status: 409 });
+  }
+
+  let durableDb: ReturnType<typeof createServerClient>;
+  try {
+    durableDb = createServerClient();
+    const stored = await validateStoredImmediatePublishReceipt(durableDb, uid, confirmation.receipt);
+    if (!stored.ok) {
+      return Response.json({ error: stored.error, code: stored.code }, {
+        status: stored.code === "invalid_confirmation" ? 409 : 503,
+      });
+    }
+    const connection = await findConnection(uid, confirmedDestination.socialConnectionId);
+    const capability = resolveDestinationCapability({
+      provider: "pinterest",
+      connection,
+      connectionId: confirmedDestination.socialConnectionId,
+      subdestinationId: boardId,
+      mediaCount: imageUrls.length,
+      mode: "now",
+    });
+    if (!capability.publishNow) {
+      return Response.json({
+        error: "This Pinterest destination is no longer available.",
+        code: "destination_validation_failed",
+        reasonCode: capability.unavailableReason,
+      }, { status: 422 });
+    }
+  } catch (error) {
+    console.error("[publish] durable preflight unavailable:", (error as Error)?.message ?? String(error));
+    return Response.json({ error: "Could not verify the publishing destination.", code: "publish_intent_unavailable" }, { status: 503 });
+  }
+
+  let durableClaim: Awaited<ReturnType<typeof claimPublishIntentDestination>>;
+  try {
+    durableClaim = await claimPublishIntentDestination(durableDb, uid, confirmation.receipt, confirmedDestination);
+  } catch (error) {
+    const code = error instanceof PublishIntentLedgerError ? error.code : "unavailable";
+    return Response.json({ error: "Could not establish durable publish recovery.", code: `publish_intent_${code}` }, { status: code === "conflict" ? 409 : 503 });
+  }
+  if (!durableClaim.claimed) {
+    if (durableClaim.status === "published" && durableClaim.remoteId && durableClaim.remoteUrl) {
+      return Response.json({
+        ok: true,
+        replayed: true,
+        pin: { id: durableClaim.remoteId, url: durableClaim.remoteUrl },
+        board: { id: boardId, name: typeof durableClaim.evidence.boardName === "string" ? durableClaim.evidence.boardName : (confirmedDestination.boardName ?? "") },
+        connectionId: confirmedDestination.socialConnectionId,
+        intentId: confirmation.receipt.intentId,
+        jobId: durableClaim.destinationJobId,
+        intentJobId: durableClaim.intentJobId,
+        remoteEvidence: durableClaim.evidence,
+      });
+    }
+    return Response.json({
+      error: durableClaim.status === "delivery_unknown"
+        ? "Delivery status is unknown. Reconcile the original intent before retrying."
+        : "This publish intent is already in progress.",
+      code: durableClaim.status === "delivery_unknown" ? "delivery_unknown" : "publish_in_progress",
+      intentId: confirmation.receipt.intentId,
+      jobId: durableClaim.destinationJobId,
+      intentJobId: durableClaim.intentJobId,
+      remoteEvidence: durableClaim.evidence,
+    }, { status: 409 });
+  }
+  const settleDurableClaim = async (input: {
+    status: "published" | "failed" | "delivery_unknown";
+    retryAllowed: boolean;
+    remoteId?: string | null;
+    remoteUrl?: string | null;
+    providerStatus?: number | null;
+    evidence?: Record<string, unknown>;
+  }): Promise<boolean> => {
+    if (!durableClaim.claimToken) return false;
+    try {
+      await settlePublishIntentDestination(durableDb, uid, {
+        intentId: confirmation.receipt.intentId,
+        destinationId,
+        claimToken: durableClaim.claimToken,
+        status: input.status,
+        retryAllowed: input.retryAllowed,
+        remoteId: input.remoteId,
+        remoteUrl: input.remoteUrl,
+        providerStatus: input.providerStatus,
+        evidence: input.evidence,
+      });
+      return true;
+    } catch (error) {
+      console.error("[publish] durable settlement unavailable:", (error as Error)?.message ?? String(error));
+      return false;
+    }
+  };
   const eventBase: PublishEventBase = {
     publishAttemptId: newPublishAttemptId(),
     userId: uid,
@@ -96,7 +221,7 @@ export async function POST(req: Request) {
   // (recordPublishEvent no-ops on null and swallows all write failures).
   let analyticsDb: ReturnType<typeof createServerClient> | null = null;
   try {
-    analyticsDb = createServerClient();
+    analyticsDb = durableDb;
   } catch (err) {
     console.warn("[publish] analytics client unavailable:", err instanceof Error ? err.message : String(err));
   }
@@ -106,9 +231,16 @@ export async function POST(req: Request) {
     if (_inFlightPublishes.has(lockKey)) {
       // A de-duped duplicate request never actually publishes — the winning request owns
       // this attempt's events, so emit nothing here (avoids double-counting one publish).
+      const persisted = await settleDurableClaim({
+        status: "failed",
+        retryAllowed: true,
+        evidence: { category: "not_sent", reason: "local_publish_in_progress" },
+      });
       return Response.json(
-        { error: "This Pin is already being published.", code: "publish_in_progress" },
-        { status: 409 },
+        persisted
+          ? { error: "This Pin is already being published.", code: "publish_in_progress" }
+          : { error: "Could not release the durable publish claim.", code: "publish_intent_settlement_unavailable" },
+        { status: persisted ? 409 : 503 },
       );
     }
     _inFlightPublishes.add(lockKey);
@@ -180,6 +312,20 @@ export async function POST(req: Request) {
         code: "scheduled_post_limit_reached",
         message: "Scheduled post limit reached",
       });
+      const persisted = await settleDurableClaim({
+        status: "failed",
+        retryAllowed: true,
+        evidence: { category: "not_sent", reason: "scheduled_post_limit_reached" },
+      });
+      if (!persisted) {
+        return Response.json({
+          error: "Could not release the durable publish claim.",
+          code: "publish_intent_settlement_unavailable",
+          intentId: confirmation.receipt.intentId,
+          jobId: durableClaim.destinationJobId,
+          intentJobId: durableClaim.intentJobId,
+        }, { status: 503 });
+      }
       return Response.json(scheduledPostLimitResponseBody(), { status: 402 });
     }
   }
@@ -268,6 +414,20 @@ export async function POST(req: Request) {
       // Every typed failure is decided before (or instead of) a successful create —
       // board_not_owned included, since Pinterest refused it and created nothing.
       await settleMetering(classifyDelivery({ preNetwork: true }));
+      const persisted = await settleDurableClaim({
+        status: "failed",
+        retryAllowed: true,
+        evidence: { category: "not_sent", error: result.error, errorCode: result.code },
+      });
+      if (!persisted) {
+        return Response.json({
+          error: "The failed attempt could not be durably recorded. Reconcile this intent before retrying.",
+          code: "publish_intent_settlement_unavailable",
+          intentId: confirmation.receipt.intentId,
+          jobId: durableClaim.destinationJobId,
+          intentJobId: durableClaim.intentJobId,
+        }, { status: 503 });
+      }
       // meteringBucket travels even on a typed failure: the client may still proceed to
       // publish this Content's other (social) destinations, and that call needs the
       // SAME bucket this request metered under (see meterScheduledPost.ts header).
@@ -277,6 +437,9 @@ export async function POST(req: Request) {
         {
           error: result.error,
           code: result.code,
+          intentId: confirmation.receipt.intentId,
+          jobId: durableClaim.destinationJobId,
+          intentJobId: durableClaim.intentJobId,
           meteringBucket,
           ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
         },
@@ -290,6 +453,28 @@ export async function POST(req: Request) {
       remotePinId: result.pin.id,
       remotePinUrl: result.pin.url,
     });
+    const persisted = await settleDurableClaim({
+      status: "published",
+      retryAllowed: false,
+      remoteId: result.pin.id,
+      remoteUrl: result.pin.url,
+      evidence: {
+        category: "published",
+        boardId: result.board.id,
+        boardName: result.board.name,
+        environment: result.environment ?? "production",
+      },
+    });
+    if (!persisted) {
+      return Response.json({
+        error: "Pinterest confirmed the Pin, but its recovery receipt could not be durably recorded. Do not retry; reconcile this intent.",
+        code: "publish_intent_settlement_unavailable",
+        intentId: confirmation.receipt.intentId,
+        jobId: durableClaim.destinationJobId,
+        intentJobId: durableClaim.intentJobId,
+        remoteEvidence: { remoteId: result.pin.id, remoteUrl: result.pin.url, boardId: result.board.id },
+      }, { status: 503 });
+    }
     return Response.json(
       {
         ok: true,
@@ -299,6 +484,10 @@ export async function POST(req: Request) {
         // Which account this published through, so the client can pin an adopted
         // (previously untargeted) draft to it — adopt-once (PRD §14).
         connectionId: result.connectionId,
+        intentId: confirmation.receipt.intentId,
+        jobId: durableClaim.destinationJobId,
+        intentJobId: durableClaim.intentJobId,
+        remoteEvidence: { remoteId: result.pin.id, remoteUrl: result.pin.url, boardId: result.board.id },
         // Server-minted immediate-publish bucket (see meterScheduledPost.ts header) —
         // additive field, relayed by the client to /api/publish/social so a second
         // fan-out call for this SAME Content buckets identically even across a UTC
@@ -320,18 +509,57 @@ export async function POST(req: Request) {
     // errors carry an HTTP `status` we chose (409/401) that no provider ever sent —
     // reading that as a provider rejection is exactly the bug the two-field rule
     // exists to prevent, so they are matched by class before any status is consulted.
+    let durableStatus: "failed" | "delivery_unknown" = "delivery_unknown";
+    let retryAllowed = false;
     if (err instanceof PinterestTrialAccessError) {
       // Not a delivery failure — an app-approval state. Charge stands (see above).
+      durableStatus = "failed";
+      retryAllowed = true;
     } else if (err instanceof NotConnectedError || err instanceof NeedsReconnectError) {
       await settleMetering(classifyDelivery({ preNetwork: true }));
+      durableStatus = "failed";
+      retryAllowed = true;
     } else {
-      await settleMetering(classifyDelivery(readProviderSignal(err)));
+      const signal = readProviderSignal(err);
+      const delivery = classifyDelivery(signal);
+      await settleMetering(delivery);
+      durableStatus = delivery === "delivery_unknown" ? "delivery_unknown" : "failed";
+      retryAllowed = durableStatus === "failed";
     }
+    const signal = readProviderSignal(err);
+    const persisted = await settleDurableClaim({
+      status: durableStatus,
+      retryAllowed,
+      providerStatus: signal.providerStatus,
+      remoteId: signal.providerResourceId,
+      evidence: {
+        category: durableStatus,
+        error: (err as Error)?.message ?? "Publishing failed.",
+        providerResourceId: signal.providerResourceId ?? null,
+      },
+    });
     // meteringBucket(+Sig) travels even on an UNTYPED (thrown) failure, for the same
     // reason it travels on a typed one above: the client may still proceed to this
     // Content's social destinations, and that call needs the identical bucket this
     // request metered under.
-    return pinterestErrorResponse(err, { meteringBucket, ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}) });
+    if (!persisted) {
+      return Response.json({
+        error: "The provider result could not be durably recorded. Reconcile this intent before retrying.",
+        code: "publish_intent_settlement_unavailable",
+        intentId: confirmation.receipt.intentId,
+        jobId: durableClaim.destinationJobId,
+        intentJobId: durableClaim.intentJobId,
+        remoteEvidence: { providerStatus: signal.providerStatus ?? null, remoteId: signal.providerResourceId ?? null },
+      }, { status: 503 });
+    }
+    return pinterestErrorResponse(err, {
+      meteringBucket,
+      ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
+      intentId: confirmation.receipt.intentId,
+      jobId: durableClaim.destinationJobId,
+      intentJobId: durableClaim.intentJobId,
+      remoteEvidence: { providerStatus: signal.providerStatus ?? null, remoteId: signal.providerResourceId ?? null },
+    });
   } finally {
     if (lockKey) _inFlightPublishes.delete(lockKey);
   }

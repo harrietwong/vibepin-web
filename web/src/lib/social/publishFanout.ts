@@ -76,15 +76,36 @@ export async function createPublishJob(
   uid: string,
   postId: string | null,
   productId: string | null,
+  intent?: { intentId: string; fingerprint: string },
 ): Promise<string | null> {
   const { data, error } = await db
     .from("social_publish_jobs")
     // `publishing`, not a terminal status: the attempt has started and has not yet
     // resolved. A crash therefore leaves an honest in-flight record.
-    .insert({ user_id: uid, post_id: postId, product_id: productId, status: "publishing" })
+    .insert({
+      user_id: uid,
+      post_id: postId,
+      product_id: productId,
+      status: "publishing",
+      ...(intent ? {
+        publish_intent_id: intent.intentId,
+        publish_intent_fingerprint: intent.fingerprint,
+      } : {}),
+    })
     .select("id")
     .single();
   if (error) {
+    if (error.code === "23505" && intent) {
+      const existing = await db.from("social_publish_jobs")
+        .select("id,publish_intent_fingerprint")
+        .eq("user_id", uid)
+        .eq("publish_intent_id", intent.intentId)
+        .maybeSingle();
+      if (!existing.error && existing.data
+          && (existing.data as { publish_intent_fingerprint?: string }).publish_intent_fingerprint === intent.fingerprint) {
+        return (existing.data as { id: string }).id;
+      }
+    }
     if (isMissingTable(error.code)) return null;
     console.error("[publishFanout] create job:", error.message);
     return null;

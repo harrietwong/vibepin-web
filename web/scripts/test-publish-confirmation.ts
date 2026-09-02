@@ -59,8 +59,8 @@ function deps(options: { ambiguous?: boolean } = {}) {
     }) as unknown as PublishContentDeps["publishPin"],
     publishToSocial: (async (input: { destinations: Array<{ provider: string; socialConnectionId?: string | null }> }) => {
       socialCalls.push(input as unknown as Record<string, unknown>);
-      return { ok: true, jobId: "job-1", status: "published", destinations: input.destinations.map(destination => ({ provider: destination.provider, socialConnectionId: destination.socialConnectionId, status: "published", externalPostId: `${destination.provider}-remote`, externalPostUrl: `https://${destination.provider}.test/post`, accountName: destination.socialConnectionId, error: null })) };
-    }) as PublishContentDeps["publishToSocial"],
+      return { ok: true, jobId: "job-1", intentId: "publish:test:fake", intentJobId: "intent-job-1", status: "published", destinations: input.destinations.map(destination => ({ provider: destination.provider, socialConnectionId: destination.socialConnectionId, status: "published", externalPostId: `${destination.provider}-remote`, externalPostUrl: `https://${destination.provider}.test/post`, accountName: destination.socialConnectionId, error: null })) };
+    }) as unknown as PublishContentDeps["publishToSocial"],
   };
   return { value, pinCalls, socialCalls };
 }
@@ -75,7 +75,7 @@ async function main() {
   });
   await test("legacy board/account never becomes a default Pinterest destination", async () => {
     const draft = seed({ legacyOnly: true }); const fake = deps();
-    assert.equal(contentDestinations(draft).length, 1, "legacy result projection remains available for historical records");
+    assert.equal(contentDestinations(draft).length, 0, "legacy board/account fields are never projected as current publish intent");
     assert.equal(explicitPublishDestinations(draft).length, 0, "legacy projection is not a saved publishing decision");
     const snapshot = buildPublishConfirmation(draft);
     assert.equal(snapshot.publishableDestinations.length, 0);
@@ -212,7 +212,7 @@ async function main() {
     assert(!card.includes("const destinations = contentDestinations(draft)"));
     assert(board.includes("publishTo: explicitPublishDestinations(draft)"));
     assert(!board.includes('|| "pinterest"'));
-    assert(batch.includes('data-empty={!p.publishTo ? "true" : "false"}'));
+    assert(batch.includes('data-empty={hasExactDestination ? "false" : "true"}'));
     assert(!batch.includes('p.publishTo || platformName("pinterest")'));
   });
   await test("CP-14 persistent blocker and three-locale copy contracts are present", () => {
