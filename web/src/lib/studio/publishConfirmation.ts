@@ -300,13 +300,19 @@ export function confirmPublishSnapshot(
 }
 
 export function receiptMatchesDispatch(receipt: ConfirmedPublishReceipt, draft: PinDraft): boolean {
-  if (receipt.draftId !== draft.id || receipt.sourceUpdatedAt !== draft.updatedAt || !receipt.publishableDestinations.length) return false;
+  const sameRevision = receipt.sourceUpdatedAt === draft.updatedAt
+    || draft.publishIntentFingerprint === receipt.fingerprint;
+  if (receipt.draftId !== draft.id || !sameRevision || !receipt.publishableDestinations.length) return false;
   const confirmedAt = Date.parse(receipt.confirmedAt);
   if (!Number.isFinite(confirmedAt)) return false;
   const ids = new Set(receipt.publishableDestinations.map(destination => destination.id));
   if (ids.size !== receipt.publishableDestinations.length) return false;
   const rebuilt = buildPublishConfirmation({
     ...draft,
+    // Runtime lifecycle metadata may advance updatedAt after the first provider
+    // returns. Rebuild the user-approved snapshot against its original revision;
+    // the stored intent fingerprint is the proof that only metadata changed.
+    updatedAt: receipt.sourceUpdatedAt,
     title: receipt.title,
     description: receipt.description,
     altText: receipt.altText,
