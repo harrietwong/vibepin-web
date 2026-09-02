@@ -125,9 +125,11 @@ async function main() {
               }
               return Promise.resolve({ error: null });
             },
-            insert(row: Record<string, unknown>) {
-              const key = `${row.publish_job_id}|${row.provider}|${row.social_connection_id}`;
-              rows.set(key, row);
+            insert(value: Record<string, unknown> | Array<Record<string, unknown>>) {
+              for (const row of Array.isArray(value) ? value : [value]) {
+                const key = `${row.publish_job_id}|${row.provider}|${row.social_connection_id}`;
+                rows.set(key, row);
+              }
               return Promise.resolve({ error: null });
             },
           };

@@ -562,19 +562,43 @@ export async function POST(req: Request) {
         metadata: { source: "social_immediate", route: "publish_social", stage: "pre_dispatch" },
       });
     }
-    const settlementStatus = dispatchStarted ? "delivery_unknown" as const : "failed" as const;
     const settlementResults = await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
       claim.claimed && claim.claimToken
         ? [settlePublishIntentDestination(db, uid, {
             intentId: confirmation.receipt.intentId,
             destinationId: destination.id,
             claimToken: claim.claimToken,
-            status: settlementStatus,
-            retryAllowed: !dispatchStarted,
+            status: (() => {
+              const outcome = outcomes.find(item => item.provider === destination.provider
+                && item.socialConnectionId === destination.socialConnectionId);
+              return outcome?.status === "published"
+                ? "published" as const
+                : outcome?.status === "failed"
+                  ? "failed" as const
+                  : "delivery_unknown" as const;
+            })(),
+            // Once any provider call started, only an explicit pre-network/4xx
+            // outcome may be retried. A destination with no outcome is unknown.
+            retryAllowed: !dispatchStarted && outcomes.some(item => item.provider === destination.provider
+              && item.socialConnectionId === destination.socialConnectionId
+              && item.status === "failed"),
             providerJobId: jobId,
+            remoteId: outcomes.find(item => item.provider === destination.provider
+              && item.socialConnectionId === destination.socialConnectionId)?.externalPostId,
+            remoteUrl: outcomes.find(item => item.provider === destination.provider
+              && item.socialConnectionId === destination.socialConnectionId)?.externalPostUrl,
+            providerStatus: outcomes.find(item => item.provider === destination.provider
+              && item.socialConnectionId === destination.socialConnectionId)?.providerStatus,
             evidence: {
-              category: dispatchStarted ? "delivery_unknown" : "not_sent",
-              error: (err as Error)?.message || "Publishing failed.",
+              category: outcomes.find(item => item.provider === destination.provider
+                && item.socialConnectionId === destination.socialConnectionId)?.status
+                ?? (dispatchStarted ? "delivery_unknown" : "not_sent"),
+              error: (outcomes.find(item => item.provider === destination.provider
+                && item.socialConnectionId === destination.socialConnectionId)?.error
+                ?? (err as Error)?.message) || "Publishing failed.",
+              providerResourceId: outcomes.find(item => item.provider === destination.provider
+                && item.socialConnectionId === destination.socialConnectionId)?.providerResourceId
+                ?? null,
             },
           }).then(() => true).catch(() => false)]
         : []));
@@ -667,7 +691,8 @@ export async function POST(req: Request) {
   // Write the per-destination results and move the job off `publishing`. Skipped
   // when the v32 tables are absent (createPublishJob returned null) — publishing
   // itself must not fail just because the record could not be kept.
-  if (jobId) await recordOutcomes(db, jobId, outcomes);
+  let outcomePersistenceFailed = false;
+  if (jobId) outcomePersistenceFailed = !(await recordOutcomes(db, jobId, outcomes));
 
   // Finalize the durable receipt rows before returning anything to the browser. Every
   // response can therefore be recovered by original intent id even if it is lost in
@@ -711,6 +736,24 @@ export async function POST(req: Request) {
   } catch {
     return Response.json({
       error: "The provider response could not be durably recorded. Reconcile this intent before retrying.",
+      code: "publish_intent_settlement_unavailable",
+      intentId: confirmation.receipt.intentId,
+      intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+      jobId,
+      remoteEvidence: outcomes.map(outcome => ({
+        provider: outcome.provider,
+        socialConnectionId: outcome.socialConnectionId,
+        status: outcome.status,
+        remoteId: outcome.externalPostId ?? null,
+        remoteUrl: outcome.externalPostUrl ?? null,
+        providerStatus: outcome.providerStatus ?? null,
+      })),
+    }, { status: 503 });
+  }
+
+  if (outcomePersistenceFailed) {
+    return Response.json({
+      error: "The publish result could not be durably recorded. Reconcile this intent before retrying.",
       code: "publish_intent_settlement_unavailable",
       intentId: confirmation.receipt.intentId,
       intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,

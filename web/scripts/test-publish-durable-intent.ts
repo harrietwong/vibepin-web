@@ -213,7 +213,7 @@ async function main() {
   await test("post-dispatch settlement failure keeps delivery evidence and blocks retry", () => {
     const route = readFileSync("src/app/api/publish/social/route.ts", "utf8");
     const start = route.indexOf("const settlementResults");
-    const source = route.slice(start, start + 2200);
+    const source = route.slice(start, start + 5000);
     assert.match(source, /settlementResults\.every\(Boolean\)/);
     assert.match(source, /publish_intent_settlement_unavailable/);
     assert.match(source, /dispatchStarted/);
@@ -221,9 +221,11 @@ async function main() {
   });
   await test("retrying a partial job upserts one exact destination row", () => {
     const fanout = readFileSync("src/lib/social/publishFanout.ts", "utf8");
-    assert.match(fanout, /onConflict: "publish_job_id,provider,social_connection_id"/);
+    assert.match(fanout, /resolve by the exact key/i);
+    assert.match(fanout, /persistenceOk/);
     assert.match(fanout, /null connection/);
     assert.match(fanout, /\.is\("social_connection_id", null\)/);
+    assert.match(fanout, /return persistenceOk/);
   });
 
   console.log(`\nPublish durable intent: ${passed} passed, ${failed} failed\n`);
