@@ -105,7 +105,13 @@ begin
   if not found then raise exception 'publish intent winner missing' using errcode = 'P0002'; end if;
   if v_intent.fingerprint is distinct from p_fingerprint
      or v_intent.draft_id is distinct from p_draft_id
-     or v_intent.content_id is distinct from p_content_id then
+     or v_intent.content_id is distinct from p_content_id
+     -- An intent is bound to the complete confirmation, not merely its content
+     -- fingerprint.  timestamptz comparison is by instant, so equivalent
+     -- serializations such as .000Z and +00:00 remain idempotent.
+     or v_intent.confirmed_at is distinct from p_confirmed_at
+     or v_intent.mode is distinct from p_mode
+     or v_intent.receipt is distinct from p_receipt then
     raise exception 'publish intent conflict' using errcode = '23505';
   end if;
 

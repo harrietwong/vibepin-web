@@ -563,7 +563,7 @@ export async function POST(req: Request) {
       });
     }
     const settlementStatus = dispatchStarted ? "delivery_unknown" as const : "failed" as const;
-    await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
+    const settlementResults = await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
       claim.claimed && claim.claimToken
         ? [settlePublishIntentDestination(db, uid, {
             intentId: confirmation.receipt.intentId,
@@ -576,8 +576,26 @@ export async function POST(req: Request) {
               category: dispatchStarted ? "delivery_unknown" : "not_sent",
               error: (err as Error)?.message || "Publishing failed.",
             },
-          }).catch(() => undefined)]
+          }).then(() => true).catch(() => false)]
         : []));
+    if (!settlementResults.every(Boolean)) {
+      return Response.json({
+        error: "The durable publish claim could not be settled. Reconcile this intent before retrying.",
+        code: "publish_intent_settlement_unavailable",
+        intentId: confirmation.receipt.intentId,
+        intentJobId: [...claims.values()][0]?.claim.intentJobId ?? null,
+        jobId,
+        dispatchStarted,
+        remoteEvidence: outcomes.map(outcome => ({
+          provider: outcome.provider,
+          socialConnectionId: outcome.socialConnectionId,
+          status: outcome.status,
+          remoteId: outcome.externalPostId ?? null,
+          remoteUrl: outcome.externalPostUrl ?? null,
+          providerStatus: outcome.providerStatus ?? null,
+        })),
+      }, { status: 503 });
+    }
     return Response.json({
       error: dispatchStarted
         ? "Delivery status is unknown. Reconcile the original publish intent before retrying."

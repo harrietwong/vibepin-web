@@ -191,6 +191,31 @@ async function main() {
     assert.match(migration, /revoke all .* authenticated/);
     assert.match(rollback, /Refusing v72 rollback: durable publish intent receipts exist/);
   });
+  await test("same intent binds confirmed time, mode and receipt immutably", () => {
+    const migration = readFileSync("../backend/db/migrate_v72_publish_intent_idempotency.sql", "utf8");
+    const conflict = migration.slice(migration.indexOf("if v_intent.fingerprint"), migration.indexOf("insert into publish_intent_destinations"));
+    assert.match(conflict, /v_intent\.confirmed_at is distinct from p_confirmed_at/);
+    assert.match(conflict, /v_intent\.mode is distinct from p_mode/);
+    assert.match(conflict, /v_intent\.receipt is distinct from p_receipt/);
+  });
+  await test("pre-dispatch settlement failure is surfaced and never reported as released", () => {
+    const route = readFileSync("src/app/api/publish/social/route.ts", "utf8");
+    const start = route.indexOf("const settleFreshClaimsNotSent");
+    const end = route.indexOf("const dispatchDestinationIds", start);
+    const source = route.slice(start, end);
+    assert.match(source, /Promise\.all/);
+    assert.match(source, /\.then\(\(\) => true\)\.catch\(\(\) => false\)/);
+    assert.match(source, /publish_intent_settlement_unavailable/);
+  });
+  await test("post-dispatch settlement failure keeps delivery evidence and blocks retry", () => {
+    const route = readFileSync("src/app/api/publish/social/route.ts", "utf8");
+    const start = route.indexOf("const settlementResults");
+    const source = route.slice(start, start + 2200);
+    assert.match(source, /settlementResults\.every\(Boolean\)/);
+    assert.match(source, /publish_intent_settlement_unavailable/);
+    assert.match(source, /dispatchStarted/);
+    assert.match(source, /remoteEvidence/);
+  });
 
   console.log(`\nPublish durable intent: ${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
