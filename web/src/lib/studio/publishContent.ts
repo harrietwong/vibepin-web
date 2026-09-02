@@ -48,6 +48,7 @@ import { publishPin, type AttachedProduct, type PinterestClientError } from "../
 import { publishToSocial, SocialApiError } from "../social/socialClient";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecycle";
 import { explicitPublishDestinations, receiptMatchesDispatch, type ConfirmedPublishReceipt } from "./publishConfirmation";
+import { freshAccessToken } from "@/lib/supabaseBrowser";
 
 export type PublishContentOptions = {
   /** Mandatory user confirmation receipt for every immediate provider dispatch. */
@@ -103,12 +104,18 @@ export type PublishIntentReconcileResponse = {
 };
 
 /** Owner-scoped, read-only recovery lookup; never dispatches or meters. */
-export async function reconcilePublishIntent(intentId: string, fetcher: typeof fetch = fetch): Promise<PublishIntentReconcileResponse | null> {
+export async function reconcilePublishIntent(intentId: string, fetcher: typeof fetch = fetch, accessToken?: string): Promise<PublishIntentReconcileResponse | null> {
   if (!intentId.trim()) return null;
-  const response = await fetcher(`/api/publish/reconcile?intentId=${encodeURIComponent(intentId)}`, { method: "GET", credentials: "include" });
+  const token = accessToken ?? await freshAccessToken();
+  if (!token) return null;
+  const response = await fetcher(`/api/publish/reconcile?intentId=${encodeURIComponent(intentId)}`, {
+    method: "GET",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!response.ok) return null;
-  const body = await response.json() as { intent?: PublishIntentReconcileResponse };
-  return body.intent ?? null;
+  const body = await response.json() as PublishIntentReconcileResponse & { ok?: boolean };
+  return body.intentId === intentId ? body : null;
 }
 
 export type PublishContentOutcome = {

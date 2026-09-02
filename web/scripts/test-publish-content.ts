@@ -595,11 +595,11 @@ async function main(): Promise<void> {
   await test("reconcile is owner-scoped and read-only", async () => {
     let called = "";
     const result = await reconcilePublishIntent("publish:test intent", async (input, init) => {
-      called = `${String(input)}|${String(init?.method)}|${String(init?.credentials)}`;
-      return new Response(JSON.stringify({ intent: { intentId: "publish:test intent", destinations: [] } }), { status: 200 });
-    });
+      called = `${String(input)}|${String(init?.method)}|${String(init?.credentials)}|${String((init?.headers as Record<string,string>)?.Authorization)}`;
+      return new Response(JSON.stringify({ ok: true, intentId: "publish:test intent", destinations: [] }), { status: 200 });
+    }, "test-token");
     assert.deepEqual(result?.destinations, []);
-    assert.match(called, /\/api\/publish\/reconcile\?intentId=publish%3Atest%20intent\|GET\|include/);
+    assert.match(called, /\/api\/publish\/reconcile\?intentId=publish%3Atest%20intent\|GET\|include\|Bearer/);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
