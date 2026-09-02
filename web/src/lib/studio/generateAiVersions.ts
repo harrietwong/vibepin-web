@@ -11,7 +11,12 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { LimitReachedError, parseLimitReachedResponse } from "@/lib/usage/limitReached";
-import { AmbiguousGenerationOutcomeError, generationRequestIdForGroup } from "@/lib/studio/generationIntent";
+import {
+  AmbiguousGenerationOutcomeError,
+  GenerationIntentPersistenceError,
+  GenerationOwnerChangedError,
+  generationRequestIdForGroup,
+} from "@/lib/studio/generationIntent";
 export { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
 
 // The server contract allows at most four outputs in one request. The visible
@@ -269,7 +274,7 @@ export async function enqueueGeneration(opts: {
   groupIndex?: number;
   /** Exact persisted group intent; preferred over reconstructing from batch metadata. */
   generationIntentId?: string;
-  onIntentPrepared?: (intentId: string, payload: Record<string, unknown>, ownerId: string) => void;
+  onIntentPrepared?: (intentId: string, payload: Record<string, unknown>, ownerId: string) => boolean | void;
 }, testDeps?: EnqueueGenerationTestDeps): Promise<EnqueueGenerationResult> {
   const { source, setup } = opts;
   const generationRequestId = opts.generationIntentId || (opts.batchRequestId
@@ -285,20 +290,22 @@ export async function enqueueGeneration(opts: {
     durableGenerationIntent: true,
   });
   const authContext = await (testDeps?.resolveAuthContext ?? verifiedGenerationAuthContext)();
-  opts.onIntentPrepared?.(generationRequestId, payload, authContext.ownerId);
+  const persisted = opts.onIntentPrepared?.(generationRequestId, payload, authContext.ownerId);
+  if (persisted === false) throw new GenerationIntentPersistenceError();
 
   const serialized = JSON.stringify(payload);
   const send = testDeps?.fetchImpl ?? fetch;
+  const requestHeaders = { ...authContext.headers, "X-Request-Id": generationRequestId };
   let res: Response;
   let earlierOutcomeUnknown = false;
   try {
-    res = await send("/api/generate", { method: "POST", headers: authContext.headers, body: serialized });
+    res = await send("/api/generate", { method: "POST", headers: requestHeaders, body: serialized });
   } catch {
     earlierOutcomeUnknown = true;
     // One bounded ambiguous-transport replay with the SAME durable intent. The DB
     // unique anchor returns the original job if the first response was lost.
     try {
-      res = await send("/api/generate", { method: "POST", headers: authContext.headers, body: serialized });
+      res = await send("/api/generate", { method: "POST", headers: requestHeaders, body: serialized });
     } catch {
       // Either request may already have committed. Never translate this into a
       // retryable failure: reload/recovery must replay this exact persisted intent.
@@ -349,6 +356,16 @@ export type AwaitedGenerationJobResult = AiVersionGenerateResult & {
 export type PollGenerationCallbacks = {
   onSlot: (slot: number, status: "done" | "failed", url?: string) => void;
   onEnd:  (status: GenerationJobStatus | "timeout") => void;
+  /** Internal cancellation seam; no user/store callback fires on owner switch. */
+  onAbort?: () => void;
+};
+
+export type PollGenerationOptions = {
+  intervalMs?: number;
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+  requestId?: string;
+  shouldContinue?: () => boolean;
 };
 
 const POLL_INTERVAL_MS = 4_000;
@@ -388,7 +405,7 @@ export function isPollingJob(jobId: string): boolean {
 export function pollGenerationJob(
   jobId: string,
   cb: PollGenerationCallbacks,
-  opts?: { intervalMs?: number; timeoutMs?: number },
+  opts?: PollGenerationOptions,
 ): { stop: () => void } {
   if (activePolls.has(jobId)) {
     return { stop: () => {} };
@@ -415,8 +432,20 @@ export function pollGenerationJob(
     cb.onEnd(status);
   }
 
+  function abort() {
+    if (stopped) return;
+    stopped = true;
+    clear();
+    activePolls.delete(jobId);
+    cb.onAbort?.();
+  }
+
   async function tick() {
     if (stopped) return;
+    if (opts?.shouldContinue && !opts.shouldContinue()) {
+      abort();
+      return;
+    }
 
     if (Date.now() - startedAt >= timeoutMs) {
       // Any slot never resolved is reported failed to the caller (client-side give-up).
@@ -428,13 +457,26 @@ export function pollGenerationJob(
     }
 
     try {
-      const res = await fetch(`/api/generation-jobs/${jobId}`, { headers: await authHeaders() });
+      const headers = opts?.headers ?? await authHeaders();
+      const res = await fetch(`/api/generation-jobs/${jobId}`, {
+        headers: { ...headers, "X-Request-Id": opts?.requestId ?? jobId },
+      });
+      if (opts?.shouldContinue && !opts.shouldContinue()) {
+        abort();
+        return;
+      }
       if (!res.ok) {
         // Transient fetch/auth hiccup — keep polling until the overall timeout.
         schedule();
         return;
       }
       const body = await res.json() as { status?: GenerationJobStatus; results?: GenerationJobResult[] };
+      // The session may have switched while the response body was being decoded.
+      // Never apply a terminal slot or end callback to the new owner's surface.
+      if (opts?.shouldContinue && !opts.shouldContinue()) {
+        abort();
+        return;
+      }
       const results = Array.isArray(body.results) ? body.results : [];
 
       for (const r of results) {
@@ -487,12 +529,12 @@ export function pollGenerationJob(
 export function awaitGenerationJob(
   jobId: string,
   slots: number,
-  opts?: { intervalMs?: number; timeoutMs?: number },
+  opts?: PollGenerationOptions,
 ): Promise<AwaitedGenerationJobResult> {
   const slotCount = Math.max(1, Math.floor(slots || 1));
   const slotOutputs: Array<string | null> = Array.from({ length: slotCount }, () => null);
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     pollGenerationJob(jobId, {
       onSlot: (slot, status, url) => {
         if (slot < 0 || slot >= slotOutputs.length) return;
@@ -506,6 +548,7 @@ export function awaitGenerationJob(
           source: "worker",
         });
       },
+      onAbort: () => reject(new GenerationOwnerChangedError()),
     }, opts);
   });
 }
@@ -523,24 +566,48 @@ export async function dispatchGenerationGroup(opts: {
   groupIndex: number;
   generationIntentId: string;
   placeholderIds: string[];
-  onIntentPrepared: (intentId: string, payload: Record<string, unknown>, ownerId: string, placeholderIds: string[]) => void;
+  onIntentPrepared: (intentId: string, payload: Record<string, unknown>, ownerId: string, placeholderIds: string[]) => boolean | void;
   onWorkerJob: (jobId: string, slots: number, placeholderIds: string[]) => void;
-  poll?: { intervalMs?: number; timeoutMs?: number };
+  poll?: PollGenerationOptions;
+  ownerStillActive?: (ownerId: string) => boolean;
   /** Test-only auth/transport seam; production callers omit it. */
   testDeps?: EnqueueGenerationTestDeps;
 }): Promise<AiVersionGenerateResult | AwaitedGenerationJobResult> {
+  const resolveAuthContext = opts.testDeps?.resolveAuthContext ?? verifiedGenerationAuthContext;
+  const authContext = await resolveAuthContext();
+  if (opts.ownerStillActive && !opts.ownerStillActive(authContext.ownerId)) {
+    throw new GenerationOwnerChangedError();
+  }
   const dispatched = await enqueueGeneration({
-    source: opts.source,
-    keyword: opts.keyword,
-    setup: opts.setup,
-    styleReference: opts.styleReference,
-    batchRequestId: opts.batchRequestId,
-    groupIndex: opts.groupIndex,
-    generationIntentId: opts.generationIntentId,
-    onIntentPrepared: (intentId, payload, ownerId) => opts.onIntentPrepared(intentId, payload, ownerId, opts.placeholderIds),
-  }, opts.testDeps);
+      source: opts.source,
+      keyword: opts.keyword,
+      setup: opts.setup,
+      styleReference: opts.styleReference,
+      batchRequestId: opts.batchRequestId,
+      groupIndex: opts.groupIndex,
+      generationIntentId: opts.generationIntentId,
+      onIntentPrepared: (intentId, payload, ownerId) => opts.onIntentPrepared(intentId, payload, ownerId, opts.placeholderIds),
+    }, { ...opts.testDeps, resolveAuthContext: async () => authContext }).catch(error => {
+    // enqueueGeneration awaits auth, response parsing, and error bodies. A scope
+    // switch during any of them must be converted to the owner sentinel before the
+    // caller can mark placeholders failed or raise a quota prompt under B.
+    if (opts.ownerStillActive && !opts.ownerStillActive(authContext.ownerId)) {
+      throw new GenerationOwnerChangedError();
+    }
+    throw error;
+  });
+  if (opts.ownerStillActive && !opts.ownerStillActive(authContext.ownerId)) {
+    throw new GenerationOwnerChangedError();
+  }
   if (dispatched.mode === "inline") return dispatched.result;
 
   opts.onWorkerJob(dispatched.jobId, dispatched.slots, opts.placeholderIds);
-  return awaitGenerationJob(dispatched.jobId, dispatched.slots, opts.poll);
+  return awaitGenerationJob(dispatched.jobId, dispatched.slots, {
+    ...opts.poll,
+    headers: authContext.headers,
+    requestId: opts.generationIntentId,
+    shouldContinue: opts.ownerStillActive
+      ? () => opts.ownerStillActive!(authContext.ownerId)
+      : undefined,
+  });
 }

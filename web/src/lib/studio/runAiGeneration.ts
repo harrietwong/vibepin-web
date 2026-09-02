@@ -21,7 +21,12 @@ import type { LinkedProduct } from "@/lib/pinMetadata";
 import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveProductPublicUrl, toLinkedProduct } from "@/lib/studio/productSelection";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
-import { generationRequestIdForGroup, isAmbiguousGenerationOutcomeError } from "@/lib/studio/generationIntent";
+import {
+  generationRequestIdForGroup,
+  isAmbiguousGenerationOutcomeError,
+  isGenerationIntentPersistenceError,
+  isGenerationOwnerChangedError,
+} from "@/lib/studio/generationIntent";
 import { deriveGenerationAttemptState, type GenerationAttemptState } from "@/lib/studio/generationAttemptState";
 import { isLimitReachedError, type LimitReached } from "@/lib/usage/limitReached";
 
@@ -140,6 +145,9 @@ export async function runAiGeneration(
   requestId: string;
   totalPins: number;
   state: GenerationAttemptState;
+  errorCode?: "generation_intent_persist_failed";
+  /** The verified session changed while an awaited request was in flight. */
+  ownerChanged: boolean;
   /** Non-null when the run was stopped by a usage limit rather than finishing. */
   limitReached: LimitReached | null;
 }> {
@@ -225,6 +233,8 @@ export async function runAiGeneration(
   let okCount = 0;
   let failCount = 0;
   let unknownOutcome = false;
+  let errorCode: "generation_intent_persist_failed" | undefined;
+  let ownerChanged = false;
   let limitReached: LimitReached | null = null;
   for (const group of groups) {
     if (limitReached) break;
@@ -295,6 +305,24 @@ export async function runAiGeneration(
         unknownOutcome = true;
         break;
       }
+      if (isGenerationIntentPersistenceError(err)) {
+        // No POST was sent. Remove every placeholder created for this user action
+        // so a local persistence failure never leaves retryable orphan cards or
+        // proceeds to a later reference group without a durable replay body.
+        for (let i = group.index; i < groups.length; i++) {
+          groupPlaceholders[i].forEach(placeholder => store.deleteDraft(placeholder.id));
+        }
+        errorCode = err.code;
+        break;
+      }
+      if (isGenerationOwnerChangedError(err)) {
+        // The active account changed. Do not mutate the new owner's store and do
+        // not fire terminal callbacks under that owner. A's durable placeholders
+        // remain available for A's recovery after signing back in.
+        ownerChanged = true;
+        unknownOutcome = true;
+        break;
+      }
       // This reference failed; keep going so the others still produce results.
       placeholders.forEach(p => store.failGeneratedDraft(p.id));
       failCount += placeholders.length;
@@ -312,6 +340,8 @@ export async function runAiGeneration(
     unknown: unknownOutcome,
     cancelled: limitReached !== null,
   });
-  deps.onSettled?.({ attemptId: requestId, state, okCount, failCount, expectedCount: totalPins });
-  return { okCount, failCount, requestId, totalPins, state, limitReached };
+  if (!ownerChanged) {
+    deps.onSettled?.({ attemptId: requestId, state, okCount, failCount, expectedCount: totalPins });
+  }
+  return { okCount, failCount, requestId, totalPins, state, errorCode, ownerChanged, limitReached };
 }

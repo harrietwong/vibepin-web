@@ -8,6 +8,7 @@
  */
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
   buildReferenceRequestBody,
   classifyAnalysisError,
@@ -74,6 +75,17 @@ test("no analysis available → imageAnalysis omitted (API answers category_fall
   const body = buildReferenceRequestBody({ primary: product(), draftImageSelected: false });
   assert.equal(body.imageAnalysis, undefined);
   assert.ok(body.product, "the product block is still sent (title/type/tags)");
+});
+
+test("stateless swapped-product analysis correlates the same request id in header and body", () => {
+  const source = readFileSync("src/components/studio/AiVersionDrawer.tsx", "utf8");
+  const start = source.indexOf('fetch("/api/ai-copy/analyze"');
+  const end = source.indexOf("});", start);
+  assert.ok(start >= 0 && end > start, "stateless analysis request block must remain discoverable");
+  const request = source.slice(start, end);
+  assert.match(request, /headers:\s*\{[\s\S]*?"X-Request-Id":\s*requestId/);
+  assert.match(request, /body:\s*JSON\.stringify\(\{[\s\S]*?requestId/);
+  assert.doesNotMatch(request, /draftId/, "stateless product analysis must not persist onto a draft");
 });
 
 // ── Honest fields, no fabrication ───────────────────────────────────────────

@@ -7,22 +7,10 @@
  */
 
 import { getPinDraftOwnerScope } from "@/lib/pinDraftStore";
-import type { SelectedReference } from "./selectedReferences";
-type VariationMode = "distinct" | "similar";
+import type { AiVersionDrawerSetup } from "@/components/studio/AiVersionDrawer";
+import type { CanonicalProductSelection } from "./productSelection";
 
-export type PersistedCreativeSetup = {
-  productImages: string[];
-  referenceImages: string[];
-  referenceSelections?: SelectedReference[];
-  count: number;
-  format: string;
-  modelKey: string;
-  variationMode: VariationMode;
-  selectedDirectionId: string | null;
-  selectedTagIds: string[];
-  directionBrief: string;
-  briefManuallyEdited: boolean;
-};
+export type PersistedCreativeSetup = AiVersionDrawerSetup;
 
 type SetupEnvelope = { version: 1; updatedAt: string; setups: Record<string, PersistedCreativeSetup> };
 const PREFIX = "vp:creative_setup:v1";
@@ -37,6 +25,32 @@ function storageKey(): string | null {
 
 function sanitizeKey(key: string): string {
   return key.trim().slice(0, 160);
+}
+
+function opaqueDigest(value: unknown): string {
+  const input = JSON.stringify(value);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Scratch setup keys never expose merchant URLs in localStorage key names. */
+export function creativeSetupKeyForScratchProduct(product?: CanonicalProductSelection | null): string {
+  if (!product) return "scratch:empty";
+  const id = product.id?.trim();
+  if (id && !/^(?:https?:|data:|blob:)/i.test(id)) return `scratch:product:${id}`;
+  return `scratch:digest:${opaqueDigest({
+    id: id || null,
+    imageUrl: product.imageUrl || null,
+    publicUrl: product.publicUrl || null,
+    canonicalUrl: product.canonicalUrl || null,
+    source: product.source || null,
+    store: product.store || null,
+    commerceIds: product.commerceIds || null,
+  })}`;
 }
 
 function readEnvelope(): SetupEnvelope {

@@ -16,6 +16,7 @@
  */
 
 import assert from "node:assert";
+import type { GenerationRecoveryOptions } from "../src/lib/studio/generationRecovery";
 
 // Dummy env so importing the supabase browser client chain never throws.
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://stub.supabase.co";
@@ -47,15 +48,15 @@ const listeners = new Set<() => void>();
 // third-party one — so `document` must exist too, or that handler throws.
 (globalThis as unknown as { document: unknown }).document = { visibilityState: "visible" };
 
-type FetchCall = { url: string };
+type FetchCall = { url: string; init?: RequestInit };
 let calls: FetchCall[] = [];
-let fetchImpl: (url: string) => Promise<Response> = async () => {
+let fetchImpl: (url: string, init?: RequestInit) => Promise<Response> = async () => {
   throw new Error("fetchImpl not configured for this test");
 };
-(globalThis as Record<string, unknown>).fetch = async (input: RequestInfo | URL): Promise<Response> => {
+(globalThis as Record<string, unknown>).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = String(input);
-  calls.push({ url });
-  return fetchImpl(url);
+  calls.push({ url, init });
+  return fetchImpl(url, init);
 };
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -71,6 +72,7 @@ async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const recovery = await import("../src/lib/studio/generationRecovery");
   const generation = await import("../src/lib/studio/generateAiVersions");
+  const attemptStore = await import("../src/lib/studio/generationSetupStore");
   const { runAiGeneration } = await import("../src/lib/studio/runAiGeneration");
   const { getPinLifecycle } = await import("../src/lib/studio/pinLifecycle");
 
@@ -80,14 +82,17 @@ async function main() {
     ownerId,
     headers: { "Content-Type": "application/json", Authorization: `Bearer test-${ownerId}` },
   });
-  const reconcile = (ownerId = OWNER_A, opts: { intervalMs?: number; timeoutMs?: number } = {}) =>
+  const reconcile = (ownerId = OWNER_A, opts: Pick<GenerationRecoveryOptions, "intervalMs" | "timeoutMs" | "onAttemptState"> = {}) =>
     recovery.reconcileGeneratingDrafts({
       ...opts,
       authContext: authContext(ownerId),
       fetchImpl: globalThis.fetch,
     });
 
-  function reset() { mem.clear(); calls = []; store.__resetMemoryCacheForTests(); }
+  function reset() {
+    mem.clear(); calls = []; store.__resetMemoryCacheForTests();
+    store.setPinDraftOwnerScope(OWNER_A, "workspace-a");
+  }
 
   function makePlaceholder(opts: {
     jobId?: string;
@@ -97,12 +102,14 @@ async function main() {
     intentPayload?: Record<string, unknown>;
     ownerId?: string;
     recoveryPending?: boolean;
+    sessionId?: string;
   }) {
     return store.createBoardDraft({
       imageUrl: "https://cdn/parent.jpg",
       source: "ai_generated_from_upload",
       idempotencyKey: opts.idem,
       generationStatus: "generating",
+      generationSessionId: opts.sessionId,
       generationJobId: opts.jobId,
       generationSlot: opts.slot,
       generationIntentId: opts.intentId,
@@ -149,6 +156,7 @@ async function main() {
     };
     await reconcile();
     assert.equal(postCount, 1, "one replay per intent group, not per placeholder");
+    assert.equal(new Headers(calls.find(call => call.url === "/api/generate")?.init?.headers).get("X-Request-Id"), "board_reload_g0", "replay carries the stable intent request id");
     assert.equal(store.getDraft(d0.id)?.generationJobId, "job-recovered-intent");
     assert.equal(store.getDraft(d0.id)?.imageUrl, "https://cdn/recovered-0.jpg");
     assert.equal(store.getDraft(d1.id)?.imageUrl, "https://cdn/recovered-1.jpg");
@@ -218,6 +226,7 @@ async function main() {
     // Simulated reload: lose module memory, keep durable localStorage. The next exact
     // replay returns the already-committed job and its original slot results.
     store.__resetMemoryCacheForTests();
+    store.setPinDraftOwnerScope(OWNER_A, "workspace-a");
     fetchImpl = async (url) => url === "/api/generate"
       ? jsonResponse({ jobId: "job-double-loss", slots: 2, replayed: true })
       : jsonResponse({
@@ -252,14 +261,17 @@ async function main() {
       recoveryPending: true,
     });
 
+    store.setPinDraftOwnerScope(OWNER_B, "workspace-a");
     fetchImpl = async () => { throw new Error("B must make zero recovery requests"); };
     await reconcile(OWNER_B);
     assert.equal(calls.length, 0, "wrong owner cannot POST payload or GET job status");
+    assert.equal(store.getDraft(draft.id), undefined, "B cannot read A's durable recovery record");
+
+    store.setPinDraftOwnerScope(OWNER_A, "workspace-a");
     const afterB = store.getDraft(draft.id)!;
-    assert.equal(afterB.generationStatus, "generating", "B mount does not mutate A's recovery record");
+    assert.equal(afterB.generationStatus, "generating", "A's recovery record remains intact after B mount");
     assert.equal(afterB.generationRecoveryPending, true);
     assert.equal(afterB.generationIntentPayload?.prompt, privatePayload.prompt);
-
     fetchImpl = async (url) => url === "/api/generate"
       ? jsonResponse({ jobId: "job-owner-a", slots: 1, replayed: true })
       : jsonResponse({
@@ -270,6 +282,25 @@ async function main() {
     assert.equal(calls.filter(call => call.url === "/api/generate").length, 1);
     assert.equal(store.getDraft(draft.id)?.generationStatus, "completed");
     assert.equal(store.getDraft(draft.id)?.imageUrl, "https://cdn/owner-a.jpg");
+  });
+
+  await test("mid-flight A → B switch applies zero mutation and zero UI callback under B", async () => {
+    reset();
+    const draft = makePlaceholder({ jobId: "job-mid-switch", slot: 0, idem: "mid-switch", sessionId: "attempt-mid-switch" });
+    let callbackCount = 0;
+    fetchImpl = async () => {
+      store.setPinDraftOwnerScope(OWNER_B, "workspace-a");
+      return jsonResponse({
+        status: "done",
+        results: [{ slot: 0, status: "done", imageUrl: "https://cdn/must-not-land-on-b.jpg", error: null }],
+      });
+    };
+    await reconcile(OWNER_A, { onAttemptState: () => { callbackCount++; } });
+    assert.equal(callbackCount, 0, "B receives no attempt callback from A's in-flight response");
+    assert.equal(store.getAllDrafts().length, 0, "B receives no draft mutation from A's response");
+    store.setPinDraftOwnerScope(OWNER_A, "workspace-a");
+    assert.equal(store.getDraft(draft.id)?.generationStatus, "generating", "A can still recover its untouched placeholder after signing back in");
+    assert.equal(store.getDraft(draft.id)?.imageUrl, "https://cdn/parent.jpg");
   });
 
   await test("queued/running job → card stays generating, poll loop registered", async () => {
@@ -344,13 +375,37 @@ async function main() {
   await test("network error → retried once; second unknown outcome remains recoverable", async () => {
     reset();
     const jobId = "job-network-err-1";
-    const d = makePlaceholder({ jobId, slot: 0, idem: "neterr-0" });
+    const attemptId = "attempt-unknown-terminal";
+    const d = makePlaceholder({ jobId, slot: 0, idem: "neterr-0", sessionId: attemptId });
+    attemptStore.prepareGenerationAttempt({
+      scope: { ownerUserId: OWNER_A, workspaceId: "workspace-a" },
+      setupKey: "draft-network",
+      attemptId,
+      expectedCount: 1,
+      setup: {
+        productImages: [], referenceImages: [], referenceSelections: [], count: 1,
+        format: "Pinterest 2:3", modelKey: "gemini_image", variationMode: "distinct",
+        selectedDirectionId: null, selectedTagIds: [], directionBrief: "", briefManuallyEdited: false,
+      },
+    });
+    const states: string[] = [];
     let attempt = 0;
     fetchImpl = async () => { attempt++; throw new Error("network down"); };
-    await reconcile();
+    await reconcile(OWNER_A, { onAttemptState: summary => { states.push(summary.state); } });
     assert.equal(attempt, 2, `expected exactly 2 attempts (1 + 1 retry), got ${attempt}`);
     assert.equal(store.getDraft(d.id)?.generationStatus, "generating");
     assert.equal(store.getDraft(d.id)?.generationRecoveryPending, true);
+    assert.equal(states.at(-1), "unknown");
+    assert.equal(attemptStore.getBlockingGenerationAttempt({ ownerUserId: OWNER_A, workspaceId: "workspace-a" })?.state, "unknown");
+
+    fetchImpl = async () => jsonResponse({
+      status: "done",
+      results: [{ slot: 0, status: "done", imageUrl: "https://cdn/unknown-resolved.jpg", error: null }],
+    });
+    await reconcile(OWNER_A, { onAttemptState: summary => { states.push(summary.state); } });
+    assert.equal(states.at(-1), "completed", "terminal recovery replaces unknown in the same attempt");
+    assert.equal(attemptStore.getBlockingGenerationAttempt({ ownerUserId: OWNER_A, workspaceId: "workspace-a" }), null, "terminal recovery releases the action lock");
+    assert.equal(store.getDraft(d.id)?.imageUrl, "https://cdn/unknown-resolved.jpg");
   });
 
   await test("network error then success on retry → job resolved normally, no premature kill", async () => {

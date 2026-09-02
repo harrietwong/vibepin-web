@@ -49,6 +49,7 @@ export type AnalyticsEvent =
   | "generation_kept"
   | "generation_deleted"
   | "generation_judged"
+  | "generation_attempt_failed"
   | "regenerate_clicked"
   | "draft_published"
   // Product Opportunities v3.7. Payloads carry only stable product ids and

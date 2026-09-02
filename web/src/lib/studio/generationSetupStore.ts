@@ -11,18 +11,13 @@ export type GenerationOwnerScope = {
   workspaceId: string;
 };
 
-export type StoredGenerationSetup = {
-  setupKey: string;
-  setupRevision: string;
-  savedAt: string;
-  setup: AiVersionDrawerSetup;
-};
-
 export type StoredGenerationAttempt = {
   attemptId: string;
   toastId: string;
   setupKey: string;
   setupRevision: string;
+  /** Deep-cloned effective setup for this attempt only; never a general drawer cache. */
+  effectiveSetup: AiVersionDrawerSetup;
   state: GenerationAttemptState;
   expectedCount: number;
   okCount: number;
@@ -34,7 +29,6 @@ type StoredGenerationState = {
   version: 1;
   ownerUserId: string;
   workspaceId: string;
-  setups: Record<string, StoredGenerationSetup>;
   activeAttempt?: StoredGenerationAttempt;
 };
 
@@ -62,7 +56,6 @@ function emptyState(scope: GenerationOwnerScope): StoredGenerationState {
     version: 1,
     ownerUserId: scope.ownerUserId,
     workspaceId: scope.workspaceId,
-    setups: {},
   };
 }
 
@@ -81,7 +74,6 @@ function read(scopeInput: GenerationOwnerScope | null | undefined): StoredGenera
       version: 1,
       ownerUserId: scope.ownerUserId,
       workspaceId: scope.workspaceId,
-      setups: parsed.setups && typeof parsed.setups === "object" ? parsed.setups : {},
       ...(parsed.activeAttempt ? { activeAttempt: parsed.activeAttempt } : {}),
     };
   } catch {
@@ -123,42 +115,29 @@ export function generationSetupRevision(setup: AiVersionDrawerSetup): string {
   return `gs_${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-export function saveGenerationSetup(
-  scope: GenerationOwnerScope | null | undefined,
-  setupKey: string,
+function cloneSetup(setup: AiVersionDrawerSetup): AiVersionDrawerSetup {
+  return JSON.parse(JSON.stringify(setup)) as AiVersionDrawerSetup;
+}
+
+/**
+ * Retry from one failed card is a new single-card action, not a replay of the
+ * original multi-reference batch. The attempt snapshot remains immutable while
+ * the retry receives only the failed group/reference and count=1.
+ */
+export function setupForSingleCardRetry(
   setup: AiVersionDrawerSetup,
-): StoredGenerationSetup | null {
-  const normalizedScope = exactScope(scope);
-  const key = setupKey.trim();
-  const state = read(normalizedScope);
-  if (!normalizedScope || !state || !key) return null;
-  const stored: StoredGenerationSetup = {
-    setupKey: key,
-    setupRevision: generationSetupRevision(setup),
-    savedAt: new Date().toISOString(),
-    setup,
-  };
-  state.setups[key] = stored;
-  return write(normalizedScope, state) ? stored : null;
-}
-
-export function loadGenerationSetup(
-  scope: GenerationOwnerScope | null | undefined,
-  setupKey: string,
-): StoredGenerationSetup | null {
-  const state = read(scope);
-  return state?.setups[setupKey] ?? null;
-}
-
-export function clearGenerationSetup(
-  scope: GenerationOwnerScope | null | undefined,
-  setupKey: string,
-): boolean {
-  const normalizedScope = exactScope(scope);
-  const state = read(normalizedScope);
-  if (!normalizedScope || !state) return false;
-  delete state.setups[setupKey];
-  return write(normalizedScope, state);
+  references: NonNullable<AiVersionDrawerSetup["referenceSelections"]>,
+): AiVersionDrawerSetup {
+  const exactReferences = references.map(reference => ({
+    ...reference,
+    patternTags: reference.patternTags ? JSON.parse(JSON.stringify(reference.patternTags)) : undefined,
+  }));
+  return cloneSetup({
+    ...setup,
+    referenceImages: exactReferences.map(reference => reference.imageUrl),
+    referenceSelections: exactReferences,
+    count: 1,
+  });
 }
 
 /** One localStorage write persists the visible setup and stable attempt before placeholders exist. */
@@ -177,12 +156,12 @@ export function prepareGenerationAttempt(input: {
 
   const setupRevision = generationSetupRevision(input.setup);
   const now = new Date().toISOString();
-  state.setups[setupKey] = { setupKey, setupRevision, savedAt: now, setup: input.setup };
   state.activeAttempt = {
     attemptId,
     toastId: generationToastId(attemptId),
     setupKey,
     setupRevision,
+    effectiveSetup: cloneSetup(input.setup),
     state: "persisting",
     expectedCount: Math.max(1, Math.floor(input.expectedCount) || 1),
     okCount: 0,

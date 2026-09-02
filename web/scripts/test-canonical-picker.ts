@@ -174,8 +174,8 @@ test("retry restores the model even with ZERO references", () => {
   const src = read("components/studio/StudioBoard.tsx");
   // Gating the setup on a reference meant a no-reference failure never restored it.
   assert.ok(
-    /const retrySetup = durableRetrySetup \?\? \(productImages\.length/.test(src),
-    "setup must not require a reference, and an exact durable setup may take priority",
+    /const retrySetup = attemptSetup[\s\S]*?setupForSingleCardRetry\(attemptSetup, groupReference\)[\s\S]*?: \(productImages\.length/.test(src),
+    "retry must prefer the attempt snapshot while still restoring a no-reference failure",
   );
   assert.ok(/KNOWN_MODELS\.includes\(snapshotModel\)/.test(src), "an unknown/blank persisted model must fall back");
 });

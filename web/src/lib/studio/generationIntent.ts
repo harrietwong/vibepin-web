@@ -24,3 +24,40 @@ export function isAmbiguousGenerationOutcomeError(error: unknown): error is Ambi
     || (!!error && typeof error === "object"
       && (error as { code?: unknown }).code === "generation_outcome_unknown");
 }
+
+/**
+ * The exact replay body could not be durably attached to every local placeholder.
+ * No network request is allowed after this error: without the recovery body an
+ * ambiguous response could create a charged server job that the client cannot
+ * reconcile after reload.
+ */
+export class GenerationIntentPersistenceError extends Error {
+  readonly code = "generation_intent_persist_failed";
+
+  constructor() {
+    super("Generation intent could not be persisted");
+    this.name = "GenerationIntentPersistenceError";
+  }
+}
+
+export function isGenerationIntentPersistenceError(error: unknown): error is GenerationIntentPersistenceError {
+  return error instanceof GenerationIntentPersistenceError
+    || (!!error && typeof error === "object"
+      && (error as { code?: unknown }).code === "generation_intent_persist_failed");
+}
+
+/** The authenticated owner changed while an operation was in flight. */
+export class GenerationOwnerChangedError extends Error {
+  readonly code = "generation_owner_changed";
+
+  constructor() {
+    super("Generation owner changed");
+    this.name = "GenerationOwnerChangedError";
+  }
+}
+
+export function isGenerationOwnerChangedError(error: unknown): error is GenerationOwnerChangedError {
+  return error instanceof GenerationOwnerChangedError
+    || (!!error && typeof error === "object"
+      && (error as { code?: unknown }).code === "generation_owner_changed");
+}

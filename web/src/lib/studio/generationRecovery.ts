@@ -64,12 +64,18 @@ async function fetchJobStatus(
   jobId: string,
   authContext: VerifiedGenerationAuthContext,
   send: typeof fetch,
+  isCurrentOwner: () => boolean,
 ): Promise<RecoveryProbe<JobStatusBody>> {
+  if (!isCurrentOwner()) return { kind: "unknown" };
   try {
-    const res = await send(`/api/generation-jobs/${jobId}`, { headers: authContext.headers });
+    const res = await send(`/api/generation-jobs/${jobId}`, {
+      headers: { ...authContext.headers, "X-Request-Id": `job:${jobId}`.slice(0, 128) },
+    });
+    if (!isCurrentOwner()) return { kind: "unknown" };
     if (res.status === 404) return { kind: "definitive_failure" };
     if (!res.ok) return res.status >= 500 ? { kind: "unknown" } : { kind: "definitive_failure" };
     const body = await res.json() as JobStatusBody;
+    if (!isCurrentOwner()) return { kind: "unknown" };
     if (!body || typeof body.status !== "string" || !Array.isArray(body.results)) {
       return { kind: "unknown" };
     }
@@ -84,14 +90,16 @@ async function fetchJobStatusWithRetry(
   jobId: string,
   authContext: VerifiedGenerationAuthContext,
   send: typeof fetch,
+  isCurrentOwner: () => boolean,
 ): Promise<RecoveryProbe<JobStatusBody>> {
-  const first = await fetchJobStatus(jobId, authContext, send);
+  const first = await fetchJobStatus(jobId, authContext, send, isCurrentOwner);
   if (first.kind !== "unknown") return first;
-  return fetchJobStatus(jobId, authContext, send);
+  return fetchJobStatus(jobId, authContext, send, isCurrentOwner);
 }
 
 /** Apply a terminal (done/partial/failed) job's results to its drafts, matched by generationSlot. */
-function applyTerminalResults(drafts: PinDraftLike[], results: GenerationJobResult[]) {
+function applyTerminalResults(drafts: PinDraftLike[], results: GenerationJobResult[], isCurrentOwner: () => boolean) {
+  if (!isCurrentOwner()) return;
   const bySlot = new Map(results.map(r => [r.slot, r]));
   for (const d of drafts) {
     const slot = d.generationSlot;
@@ -107,7 +115,8 @@ function applyTerminalResults(drafts: PinDraftLike[], results: GenerationJobResu
   }
 }
 
-function killDrafts(drafts: PinDraftLike[]) {
+function killDrafts(drafts: PinDraftLike[], isCurrentOwner: () => boolean) {
+  if (!isCurrentOwner()) return;
   for (const d of drafts) pinDraftStore.failGeneratedDraft(d.id);
 }
 
@@ -127,9 +136,15 @@ function notifyAttemptState(
   drafts: PinDraftLike[],
   authContext: VerifiedGenerationAuthContext,
   callback?: (summary: GenerationAttemptSummary) => void,
+  expectedScope?: { ownerUserId: string; workspaceId: string },
 ): void {
   const attemptIds = new Set(drafts.map(d => d.generationSessionId).filter((id): id is string => !!id));
   const scope = pinDraftStore.getPinDraftOwnerScope();
+  if (!scope
+    || scope.ownerUserId !== authContext.ownerId
+    || !expectedScope
+    || scope.ownerUserId !== expectedScope.ownerUserId
+    || scope.workspaceId !== expectedScope.workspaceId) return;
   for (const attemptId of attemptIds) {
     const all = pinDraftStore.getAllDrafts().filter(d => d.generationSessionId === attemptId);
     const summary = summarizeGenerationDrafts(attemptId, all);
@@ -142,20 +157,27 @@ async function recoverJobIdFromIntent(
   payload: Record<string, unknown>,
   authContext: VerifiedGenerationAuthContext,
   send: typeof fetch,
+  isCurrentOwner: () => boolean,
 ): Promise<RecoveryProbe<RecoveredIntentBody>> {
   const serialized = JSON.stringify(payload);
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (!isCurrentOwner()) return { kind: "unknown" };
     try {
       const response = await send("/api/generate", {
         method: "POST",
-        headers: authContext.headers,
+        headers: {
+          ...authContext.headers,
+          "X-Request-Id": String(payload.generationRequestId ?? "generation-recovery").slice(0, 128),
+        },
         body: serialized,
       });
+      if (!isCurrentOwner()) return { kind: "unknown" };
       if (!response.ok) {
         if (response.status >= 500) continue;
         return { kind: "definitive_failure" };
       }
       const body = await response.json() as RecoveredIntentBody;
+      if (!isCurrentOwner()) return { kind: "unknown" };
       return body.jobId && typeof body.slots === "number"
         ? { kind: "ok", body }
         : { kind: "unknown" };
@@ -190,6 +212,13 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
     return;
   }
   const send = options?.fetchImpl ?? fetch;
+  const expectedScope = pinDraftStore.getPinDraftOwnerScope();
+  if (!expectedScope || expectedScope.ownerUserId !== authContext.ownerId) return;
+  const isCurrentOwner = () => {
+    const current = pinDraftStore.getPinDraftOwnerScope();
+    return current?.ownerUserId === expectedScope.ownerUserId
+      && current.workspaceId === expectedScope.workspaceId;
+  };
 
   // localStorage is origin-wide. Only the exact verified owner may inspect/replay
   // its recovery records. Ownerless legacy rows and another user's rows remain
@@ -212,8 +241,8 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
       unrecoverable.push(draft);
     }
   }
-  killDrafts(unrecoverable);
-  notifyAttemptState(unrecoverable, authContext, options?.onAttemptState);
+  killDrafts(unrecoverable, isCurrentOwner);
+  notifyAttemptState(unrecoverable, authContext, options?.onAttemptState, expectedScope);
 
   // Group the jobId-bearing drafts by job so each job is checked exactly once
   // regardless of how many slots/cards it has.
@@ -227,25 +256,27 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
 
   for (const drafts of recoverable.values()) {
     const payload = drafts[0].generationIntentPayload;
-    if (!payload) { killDrafts(drafts); continue; }
-    const recovered = await recoverJobIdFromIntent(payload, authContext, send);
+    if (!isCurrentOwner()) return;
+    if (!payload) { killDrafts(drafts, isCurrentOwner); continue; }
+    const recovered = await recoverJobIdFromIntent(payload, authContext, send, isCurrentOwner);
+    if (!isCurrentOwner()) return;
     if (recovered.kind === "unknown") {
       drafts.forEach(draft => pinDraftStore.updateDraft(draft.id, {
         generationStatus: "generating",
         generationRecoveryPending: true,
       }));
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       continue;
     }
     if (recovered.kind === "definitive_failure") {
-      killDrafts(drafts);
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      killDrafts(drafts, isCurrentOwner);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       continue;
     }
     const { jobId } = recovered.body;
     if (!jobId) {
-      killDrafts(drafts);
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      killDrafts(drafts, isCurrentOwner);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       continue;
     }
     const slotDrafts = drafts.map((draft, slot) => ({
@@ -253,6 +284,7 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
       generationSlot: draft.generationSlot ?? slot,
     }));
     for (const draft of slotDrafts) {
+      if (!isCurrentOwner()) return;
       pinDraftStore.updateDraft(draft.id, {
         generationJobId: jobId,
         generationSlot: draft.generationSlot,
@@ -263,29 +295,31 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
   }
 
   await Promise.all(Array.from(byJob.entries()).map(async ([jobId, drafts]) => {
-    const result = await fetchJobStatusWithRetry(jobId, authContext, send);
+    if (!isCurrentOwner()) return;
+    const result = await fetchJobStatusWithRetry(jobId, authContext, send, isCurrentOwner);
+    if (!isCurrentOwner()) return;
     if (result.kind === "unknown") {
       drafts.forEach(draft => pinDraftStore.updateDraft(draft.id, {
         generationStatus: "generating",
         generationRecoveryPending: true,
       }));
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       return;
     }
     if (result.kind === "definitive_failure") {
-      killDrafts(drafts);
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      killDrafts(drafts, isCurrentOwner);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       return;
     }
 
     const { status, results } = result.body;
     if (status === "done" || status === "partial" || status === "failed") {
-      applyTerminalResults(drafts, results ?? []);
-      notifyAttemptState(drafts, authContext, options?.onAttemptState);
+      applyTerminalResults(drafts, results ?? [], isCurrentOwner);
+      notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       return;
     }
 
-    notifyAttemptState(drafts, authContext, options?.onAttemptState);
+    notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
 
     // queued/running — resume live polling. isPollingJob-style dedup lives inside
     // pollGenerationJob itself (activePolls) so a caller that already has a live
@@ -293,6 +327,7 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
     // StudioBoard's own enqueue-time poll still active) is a safe no-op here.
     pollGenerationJob(jobId, {
       onSlot: (slot, slotStatus, url) => {
+        if (!isCurrentOwner()) return;
         const draft = drafts.find(d => d.generationSlot === slot);
         if (!draft) return;
         if (slotStatus === "done" && url) {
@@ -300,11 +335,18 @@ export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOpti
         } else {
           pinDraftStore.failGeneratedDraft(draft.id);
         }
-        notifyAttemptState(drafts, authContext, options?.onAttemptState);
+        notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       },
       onEnd: () => {
-        notifyAttemptState(drafts, authContext, options?.onAttemptState);
+        if (!isCurrentOwner()) return;
+        notifyAttemptState(drafts, authContext, options?.onAttemptState, expectedScope);
       },
-    }, { intervalMs: options?.intervalMs, timeoutMs: options?.timeoutMs });
+    }, {
+      intervalMs: options?.intervalMs,
+      timeoutMs: options?.timeoutMs,
+      headers: authContext.headers,
+      requestId: `job:${jobId}`.slice(0, 128),
+      shouldContinue: isCurrentOwner,
+    });
   }));
 }

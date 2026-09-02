@@ -23,6 +23,9 @@ async function test(name: string, fn: () => Promise<void> | void) {
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).stack ?? (e as Error).message}`); failed++; }
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
+function headerValue(init: RequestInit | undefined, name: string): string | null {
+  return new Headers(init?.headers).get(name);
+}
 
 // Enqueue now requires a network-verified owner before persisting a replay body.
 // Pure-node tests provide that identity through the explicit test seam; polling's
@@ -91,6 +94,30 @@ async function main() {
     assert(result.jobId === "job-123", `expected jobId job-123, got ${result.jobId}`);
     assert(result.slots === 3, `expected slots 3, got ${result.slots}`);
     assert(calls.length === 1, `expected exactly 1 fetch call, got ${calls.length}`);
+    const body = JSON.parse(String(calls[0].init?.body ?? "{}")) as { generationRequestId?: string };
+    assert(headerValue(calls[0].init, "X-Request-Id") === body.generationRequestId, "POST request id must match the durable generation intent");
+  });
+
+  await test("enqueueGeneration: the stable generation intent is sent as X-Request-Id", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({ jobId: "job-request-id", slots: 3 });
+    const result = await enqueue({ setup: MOCK_SETUP, generationIntentId: "intent-request-id" });
+    assert(result.mode === "worker", "expected worker mode for request-id contract");
+    const headers = calls[0].init?.headers as Record<string, string>;
+    assert(headers["X-Request-Id"] === "intent-request-id", "POST must carry the same opaque intent id in X-Request-Id");
+  });
+
+  await test("enqueueGeneration: a failed intent persistence gate sends zero POSTs", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({ jobId: "must-not-exist", slots: 3 });
+    let code = "";
+    try {
+      await enqueue({ setup: MOCK_SETUP, onIntentPrepared: () => false });
+    } catch (error) {
+      code = String((error as { code?: unknown }).code ?? "");
+    }
+    assert(code === "generation_intent_persist_failed", `expected fixed persist error code, got ${code || "none"}`);
+    assert(calls.length === 0, "no network request may run before the intent gate succeeds");
   });
 
   await test("enqueueGeneration: one group sends only its own reference and keeps the batch identity", async () => {
@@ -137,6 +164,55 @@ async function main() {
     catch (error) { code = String((error as { code?: unknown }).code ?? ""); }
     assert(attempt === 2, `expected one replay, got ${attempt} attempts`);
     assert(code === "generation_outcome_unknown", `expected ambiguous outcome, got ${code || "no code"}`);
+    assert(calls.length === 2, `expected two captured transport attempts, got ${calls.length}`);
+    assert(headerValue(calls[0].init, "X-Request-Id") === headerValue(calls[1].init, "X-Request-Id"), "ambiguous replay must reuse the exact request id");
+    assert(calls[0].init?.body === calls[1].init?.body, "ambiguous replay must reuse the exact serialized payload");
+  });
+
+  await test("enqueueGeneration: intent persistence refusal performs zero POST", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({ jobId: "must-not-exist", slots: 1 });
+    let code = "";
+    try {
+      await enqueue({ setup: MOCK_SETUP, onIntentPrepared: () => false });
+    } catch (error) {
+      code = String((error as { code?: unknown }).code ?? "");
+    }
+    assert(code === "generation_intent_persist_failed", `expected persistence failure, got ${code || "no code"}`);
+    assert(calls.length === 0, `persistence failure must produce zero POST, got ${calls.length}`);
+  });
+
+  await test("dispatchGenerationGroup: owner switch after POST produces zero worker/store callback", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({ jobId: "job-owner-switch", slots: 1 });
+    let ownerChecks = 0;
+    let workerCallbacks = 0;
+    let code = "";
+    try {
+      await mod.dispatchGenerationGroup({
+        setup: { ...MOCK_SETUP, count: 1 },
+        styleReference: null,
+        batchRequestId: "batch-owner",
+        groupIndex: 0,
+        generationIntentId: "intent-owner",
+        placeholderIds: ["placeholder-owner"],
+        onIntentPrepared: () => true,
+        onWorkerJob: () => { workerCallbacks++; },
+        ownerStillActive: () => ++ownerChecks === 1,
+        testDeps: {
+          resolveAuthContext: async () => ({
+            ownerId: "11111111-1111-4111-8111-111111111111",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer test-user-a" },
+          }),
+          fetchImpl: (input, init) => (globalThis.fetch as typeof fetch)(input, init),
+        },
+      });
+    } catch (error) {
+      code = String((error as { code?: unknown }).code ?? "");
+    }
+    assert(code === "generation_owner_changed", `expected owner change, got ${code || "no code"}`);
+    assert(calls.length === 1, "the already-started POST is observed exactly once");
+    assert(workerCallbacks === 0, "new owner must receive zero worker/store callback");
   });
 
   await test("enqueueGeneration: inline-mode response is returned from the same request", async () => {
@@ -270,6 +346,36 @@ async function main() {
     assert(pollCount === 1, `expected polling to stop after the terminal response, got ${pollCount} calls`);
   });
 
+  await test("pollGenerationJob: owner mismatch after await aborts without slot/end callbacks", async () => {
+    calls = [];
+    let ownerActive = true;
+    const slots: number[] = [];
+    let ended = false;
+    fetchImpl = async (_url, init) => {
+      const headers = init?.headers as Record<string, string>;
+      assert(headers["X-Request-Id"] === "intent-owner-switch", "poll must retain the generation request id");
+      ownerActive = false; // simulate logout/account switch while this GET is in flight
+      return jsonResponse({ status: "done", results: [{ slot: 0, status: "done", imageUrl: "https://cdn/should-drop.jpg", error: null }] });
+    };
+    let aborted = false;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("owner mismatch poll did not abort")), 1_000);
+      mod.pollGenerationJob("job-owner-switch", {
+        onSlot: slot => { slots.push(slot); },
+        onEnd: () => { ended = true; clearTimeout(timeout); resolve(); },
+        onAbort: () => { aborted = true; clearTimeout(timeout); resolve(); },
+      }, {
+        intervalMs: 1,
+        headers: { Authorization: "Bearer owner-a" },
+        requestId: "intent-owner-switch",
+        shouldContinue: () => ownerActive,
+      });
+    });
+    // The owner check after the awaited response must run before onSlot/onEnd.
+    assert(aborted, "owner mismatch must abort the poll loop");
+    assert(slots.length === 0 && !ended, "owner mismatch must produce no result callbacks");
+  });
+
   await test("pollGenerationJob: wall-clock timeout fails remaining pending slots and stops", async () => {
     let pollCount = 0;
     fetchImpl = async () => {
@@ -298,6 +404,7 @@ async function main() {
     // slot 1 already resolved done before timeout — must not be re-reported as failed.
     const slot1AfterDone = slotEvents.filter(e => e.slot === 1 && e.status === "failed");
     assert(slot1AfterDone.length === 0, "slot 1 (already done) must never be downgraded to failed by the timeout sweep");
+    assert(pollCount >= 1, "timeout contract must exercise at least one real poll");
   });
 
   await test("pollGenerationJob: stop() cancels polling without firing onEnd", async () => {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 const source = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
 const helperSource = readFileSync("src/lib/studio/generateAiVersions.ts", "utf8");
+const attemptStoreSource = readFileSync("src/lib/studio/generationSetupStore.ts", "utf8");
 const start = source.indexOf("const handleAiGenerate = useCallback");
 const end = source.indexOf("// ── Bulk actions", start);
 
@@ -44,7 +45,7 @@ test("worker mode stamps each group's recovery job and local slot before polling
   assert.match(handler, /onIntentPrepared: \(intentId, payload, ownerId, ids\)[\s\S]*?generationIntentOwnerId: ownerId/);
   assert.match(handler, /onWorkerJob: \(jobId, _slots, ids\) => ids\.forEach\(\(id, slot\) => \{[\s\S]*?generationJobId: jobId,[\s\S]*?generationSlot: slot/);
   assert.match(helperSource, /opts\.onWorkerJob\(dispatched\.jobId, dispatched\.slots, opts\.placeholderIds\)/);
-  assert.match(helperSource, /return awaitGenerationJob\(dispatched\.jobId, dispatched\.slots, opts\.poll\)/);
+  assert.match(helperSource, /return awaitGenerationJob\(dispatched\.jobId, dispatched\.slots, \{[\s\S]*?headers: authContext\.headers,[\s\S]*?shouldContinue:/);
   assert.doesNotMatch(handler, /pollGenerationJob\(/);
 });
 
@@ -55,6 +56,47 @@ test("ambiguous owner-bound intent reconciles before any Try Again can create a 
 test("visible setup and attempt are committed before the generation run can create placeholders", () => {
   assert.match(handler, /prepareGenerationAttempt\([\s\S]*?await runAiGeneration\(\{ parent, opts, requestId: attemptId, setupKey \}/);
   assert.match(source, /onGenerate=\{\(opts, setup\) => handleAiGenerate\(opts, undefined, setup\)\}/);
+  assert.match(handler, /const setup = committedSetup \?\? setupFromGenerationOptions\(opts\);/);
+});
+
+test("creative setup is the only generic restore path; generation store is attempt-only", () => {
+  assert.match(source, /loadCreativeSetup\(/);
+  assert.match(source, /saveCreativeSetup\(/);
+  assert.doesNotMatch(source, /loadGenerationSetup|saveGenerationSetup|clearGenerationSetup/);
+  assert.doesNotMatch(helperSource, /loadGenerationSetup|saveGenerationSetup|clearGenerationSetup/);
+});
+
+test("card retry restores one failed reference group at count one", () => {
+  const start = source.indexOf("const handleTryAgain");
+  const end = source.indexOf("// Persist failure is re-read", start);
+  const retry = source.slice(start, end);
+  assert.match(retry, /setupForSingleCardRetry\(attemptSetup, groupReference\)/);
+  assert.match(attemptStoreSource, /referenceImages: exactReferences\.map/);
+  assert.match(attemptStoreSource, /referenceSelections: exactReferences/);
+  assert.match(attemptStoreSource, /count: 1/);
+});
+
+test("intent persistence and owner guards precede worker callbacks", () => {
+  assert.match(handler, /onIntentPrepared:[\s\S]*?hasPersistFailure\(\)[\s\S]*?return persisted/);
+  assert.match(handler, /ownerStillActive: ownerId =>/);
+  assert.match(helperSource, /if \(persisted === false\) throw new GenerationIntentPersistenceError\(\);[\s\S]*?send\("\/api\/generate"/);
+  assert.match(helperSource, /if \(opts\.ownerStillActive && !opts\.ownerStillActive\(authContext\.ownerId\)\) \{[\s\S]*?GenerationOwnerChangedError/);
+  assert.match(handler, /ownerChangedMidFlight = result\.ownerChanged/);
+  assert.match(handler, /if \(ownerChangedMidFlight\) \{[\s\S]*?aiGenerationLockRef\.current = null;[\s\S]*?\} else if \(!keepBlockedForUnknown\)/);
+});
+
+test("generation failure analytics carries only stable fields and fixed machine codes", () => {
+  const events = [...source.matchAll(/track\("generation_attempt_failed", \{([\s\S]*?)\}\);/g)].map(match => match[1]);
+  assert.equal(events.length, 2, "persist and intent failures each emit one event");
+  for (const event of events) {
+    assert.match(event, /requestId:/);
+    assert.match(event, /stage:/);
+    assert.match(event, /code:/);
+    assert.match(event, /expectedCount(?::|,)/);
+    assert.doesNotMatch(event, /prompt|directionBrief|imageUrl|error\.message/);
+  }
+  assert.match(source, /code: "generation_attempt_persist_failed"/);
+  assert.match(source, /result\.errorCode/);
 });
 
 test("pending and terminal feedback share the stable attempt toast id", () => {

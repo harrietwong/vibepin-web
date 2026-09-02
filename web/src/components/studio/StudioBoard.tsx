@@ -46,10 +46,10 @@ import {
   type GenerationAttemptSummary,
 } from "@/lib/studio/generationAttemptState";
 import {
+  getActiveGenerationAttempt,
   getBlockingGenerationAttempt,
-  loadGenerationSetup,
   prepareGenerationAttempt,
-  saveGenerationSetup,
+  setupForSingleCardRetry,
   updateGenerationAttempt,
 } from "@/lib/studio/generationSetupStore";
 import { limitMessageKeyForCode, offerableRemaining, type LimitReached } from "@/lib/usage/limitReached";
@@ -61,7 +61,7 @@ import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard, type PublishEntryIssue } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
-import { loadCreativeSetup } from "@/lib/studio/creativeSetupStore";
+import { creativeSetupKeyForScratchProduct, loadCreativeSetup, saveCreativeSetup } from "@/lib/studio/creativeSetupStore";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI, STUDIO_UI, canDockStudioPlan } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
@@ -106,6 +106,9 @@ function planDeepLink(draftId: string): string {
 function setupFromGenerationOptions(opts: AiVersionOptions): AiVersionDrawerSetup {
   return {
     productImages: [...opts.productImages],
+    productSelections: opts.primaryProductSelection
+      ? [{ ...opts.primaryProductSelection, selectionOrigin: "explicit_picker" }]
+      : undefined,
     referenceImages: [...opts.referenceImages],
     referenceSelections: opts.selectedReferences.map(reference => ({ ...reference })),
     count: opts.count,
@@ -342,6 +345,7 @@ export function StudioBoard() {
       requested: number;
       remaining: number;
       retryOpts: AiVersionOptions | null;
+      retrySetup: AiVersionDrawerSetup | null;
       /** The refused run's parent/target, so the retry does not need the closed drawer. */
       retryContext: { parent: PinDraft | null; targetMediaId?: string };
     } | null
@@ -362,7 +366,11 @@ export function StudioBoard() {
     const total = summary.expectedCount ?? Math.max(1, summary.okCount + summary.failCount);
     const scope = pinDraftStore.getPinDraftOwnerScope();
     if (scope) updateGenerationAttempt(scope, summary);
-    setAiGenerating(isBlockingGenerationState(summary.state));
+    const blocking = isBlockingGenerationState(summary.state);
+    setAiGenerating(blocking);
+    if (!blocking && aiGenerationLockRef.current === summary.attemptId) {
+      aiGenerationLockRef.current = null;
+    }
 
     if (command.kind === "loading") {
       toast.loading(total === 1
@@ -433,11 +441,8 @@ export function StudioBoard() {
   const aiSetupKey = aiDrawer?.mode === "version"
     ? aiDrawer.draft.id
     : aiDrawer?.mode === "scratch"
-      ? (aiDrawer.product ? `scratch:${aiDrawer.product.id ?? aiDrawer.product.imageUrl}` : "scratch")
+      ? creativeSetupKeyForScratchProduct(aiDrawer.product)
       : null;
-  const persistedAiSetup = aiSetupKey
-    ? loadGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), aiSetupKey)?.setup
-    : undefined;
   const batchPins = useMemo<BatchPinRow[]>(() => allItems.map(({ draft }) => ({
     pinId: draft.id,
     sessionId: draft.generationSessionId || "create-pins",
@@ -891,6 +896,7 @@ export function StudioBoard() {
     limit: LimitReached,
     requested: number,
     retryOpts: AiVersionOptions,
+    retrySetup: AiVersionDrawerSetup,
     retryContext: { parent: PinDraft | null; targetMediaId?: string },
   ) => {
     setAiGenerating(false);
@@ -898,7 +904,7 @@ export function StudioBoard() {
     // `null` means the server told us neither the recurring nor the bonus remainder —
     // unknown must degrade to the plain upgrade message, never to a guessed "0 instead".
     const remaining = offerable === null ? 0 : Math.min(offerable, Math.max(0, requested - 1));
-    setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null, retryContext });
+    setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null, retrySetup: remaining > 0 ? retrySetup : null, retryContext });
   }, []);
 
   /** Dismiss the quota dialog. Placeholders were already removed by the run itself. */
@@ -948,6 +954,12 @@ export function StudioBoard() {
     const expectedCount = computeTotalPins(opts.selectedReferences.length, opts.count);
     const prepared = prepareGenerationAttempt({ scope, setupKey, setup, attemptId, expectedCount });
     if (!prepared) {
+      track("generation_attempt_failed", {
+        requestId: attemptId,
+        stage: "attempt_persist",
+        code: "generation_attempt_persist_failed",
+        expectedCount,
+      });
       toast.error(tr("studioBoard.toast.generationSetupSaveFailed"));
       return;
     }
@@ -963,8 +975,9 @@ export function StudioBoard() {
     // directly; worker results are polled to terminal before the next group starts.
     let limitStopped = false;
     let keepBlockedForUnknown: boolean = false;
+    let ownerChangedMidFlight = false;
     try {
-      await runAiGeneration({ parent, opts, requestId: attemptId, setupKey }, {
+      const result = await runAiGeneration({ parent, opts, requestId: attemptId, setupKey }, {
         store: pinDraftStore,
         defaultDestinations: defaultDestinationsForNewContent(),
         generate: ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup: groupSetup, placeholderIds }) =>
@@ -976,14 +989,25 @@ export function StudioBoard() {
             groupIndex,
             generationIntentId,
             placeholderIds,
-            onIntentPrepared: (intentId, payload, ownerId, ids) => ids.forEach(id => {
-              pinDraftStore.updateDraft(id, {
-                generationIntentId: intentId,
-                generationIntentPayload: payload,
-                generationIntentOwnerId: ownerId,
-                generationRecoveryPending: false,
+            ownerStillActive: ownerId => {
+              const current = pinDraftStore.getPinDraftOwnerScope();
+              return current?.ownerUserId === ownerId
+                && current.workspaceId === scope?.workspaceId;
+            },
+            onIntentPrepared: (intentId, payload, ownerId, ids) => {
+              if (pinDraftStore.hasPersistFailure()) return false;
+              let persisted = true;
+              ids.forEach(id => {
+                const updated = pinDraftStore.updateDraft(id, {
+                  generationIntentId: intentId,
+                  generationIntentPayload: payload,
+                  generationIntentOwnerId: ownerId,
+                  generationRecoveryPending: false,
+                });
+                if (!updated || pinDraftStore.hasPersistFailure()) persisted = false;
               });
-            }),
+              return persisted;
+            },
             onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
               pinDraftStore.updateDraft(id, { generationJobId: jobId, generationSlot: slot });
             }),
@@ -1004,7 +1028,7 @@ export function StudioBoard() {
           limitStopped = true;
           keepBlockedForUnknown = false;
           presentGenerationAttempt({ attemptId, state: "cancelled", okCount: 0, failCount: 0, expectedCount });
-          handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
+          handleGenerationLimit(limit, retryCount, opts, setup, { parent, targetMediaId: retryTargetMediaId });
         },
         onSettled: summary => {
           if (limitStopped) return;
@@ -1012,11 +1036,24 @@ export function StudioBoard() {
           presentGenerationAttempt(summary);
         },
       });
+      ownerChangedMidFlight = result.ownerChanged;
+      if (result.errorCode) {
+        track("generation_attempt_failed", {
+          requestId: attemptId,
+          stage: "intent_persist",
+          code: result.errorCode,
+          expectedCount,
+        });
+      }
     } catch {
       keepBlockedForUnknown = false;
       presentGenerationAttempt({ attemptId, state: "failed", okCount: 0, failCount: expectedCount, expectedCount });
     } finally {
-      if (!keepBlockedForUnknown) {
+      if (ownerChangedMidFlight) {
+        // Internal cleanup only. The new owner must not receive A's toast/state
+        // callback; its own mount/owner lifecycle establishes the visible state.
+        if (aiGenerationLockRef.current === attemptId) aiGenerationLockRef.current = null;
+      } else if (!keepBlockedForUnknown) {
         if (aiGenerationLockRef.current === attemptId) aiGenerationLockRef.current = null;
         setAiGenerating(false);
       }
@@ -1038,7 +1075,11 @@ export function StudioBoard() {
     const prompt = limitPrompt;
     if (!prompt?.retryOpts || prompt.remaining <= 0) return;
     setLimitPrompt(null);
-    await handleAiGenerate({ ...prompt.retryOpts, count: prompt.remaining }, prompt.retryContext);
+    await handleAiGenerate(
+      { ...prompt.retryOpts, count: prompt.remaining },
+      prompt.retryContext,
+      prompt.retrySetup ? { ...prompt.retrySetup, count: prompt.remaining } : undefined,
+    );
   }, [handleAiGenerate, limitPrompt]);
 
 
@@ -1293,12 +1334,22 @@ export function StudioBoard() {
     // productImages may be empty here only when there is genuinely nothing to restore,
     // in which case no setup is cached at all (an empty list would otherwise be taken
     // as authoritative and leave Generate disabled).
-    const durableRetrySetup = d.generationSetupKey
-      ? loadGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), d.generationSetupKey)?.setup
+    const activeAttempt = getActiveGenerationAttempt(pinDraftStore.getPinDraftOwnerScope());
+    const attemptSetup = activeAttempt?.attemptId === d.generationSessionId
+      ? activeAttempt.effectiveSetup
       : undefined;
-    const retrySetup = durableRetrySetup ?? (productImages.length
+    // A card Retry is one exact failed card/group, never a replay of the original
+    // multi-reference × count batch.
+    const retrySetup = attemptSetup
+      ? setupForSingleCardRetry(attemptSetup, groupReference)
+      : (productImages.length
       ? {
           productImages,
+          productSelections: d.linkedProducts?.map((product, index) => ({
+            ...selectionFromLinkedProduct(product),
+            asPrimary: index === 0,
+            selectionOrigin: "linked_product" as const,
+          })),
           referenceImages: groupReference.map(r => r.imageUrl),
           referenceSelections: groupReference,
           count: 1,
@@ -1335,10 +1386,9 @@ export function StudioBoard() {
       : d.imageUrl ? { mode: "version", draft: d, product: retryProduct } : { mode: "scratch", product: retryProduct };
     const cacheKey = nextDrawer.mode === "version"
       ? nextDrawer.draft.id
-      : nextDrawer.product ? `scratch:${nextDrawer.product.id ?? nextDrawer.product.imageUrl}` : "scratch";
+      : creativeSetupKeyForScratchProduct(nextDrawer.product);
     if (retrySetup) {
       setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
-      saveGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), cacheKey, retrySetup);
     }
     setAiDrawer(nextDrawer);
   }, [presentGenerationAttempt, requestPublish]);
@@ -1596,8 +1646,7 @@ export function StudioBoard() {
           // A scratch drawer opened WITH a product gets a per-product key so a fresh
           // "Select product" never inherits a previous scratch session's cached setup.
           key={aiDrawer.mode === "version" ? aiDrawer.draft.id
-            : aiDrawer.product ? `scratch:${aiDrawer.product.id ?? aiDrawer.product.imageUrl}`
-            : "scratch"}
+            : creativeSetupKeyForScratchProduct(aiDrawer.product)}
           draft={aiDrawer.mode === "version" ? aiDrawer.draft : null}
           title={aiDrawer.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
           open generating={aiGenerating}
@@ -1615,7 +1664,7 @@ export function StudioBoard() {
           onSetupChange={setup => {
             if (!aiSetupKey) return;
             setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));
-            saveGenerationSetup(pinDraftStore.getPinDraftOwnerScope(), aiSetupKey, setup);
+            saveCreativeSetup(aiSetupKey, setup);
           }}
           onClose={() => setAiDrawer(null)}
           onGenerate={(opts, setup) => handleAiGenerate(opts, undefined, setup)}

@@ -66,7 +66,6 @@ import {
   type AnalysisErrorCode,
   type CreativeRequestError,
 } from "@/lib/studio/recommendationRequest";
-import { saveCreativeSetup } from "@/lib/studio/creativeSetupStore";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import {
   MAX_SELECTED_REFERENCES,
@@ -125,6 +124,8 @@ export type AiVersionOptions = {
 
 export type AiVersionDrawerSetup = {
   productImages: string[];
+  /** Canonical product records plus how each entered the drawer. */
+  productSelections?: DrawerProductSelection[];
   referenceImages: string[];
   /**
    * The selected references WITH provenance (Pinterest id, source, linkback, reason,
@@ -261,9 +262,12 @@ export function buildInitialProductSelections(input: {
     const primary: DrawerProductSelection = {
       ...initialProductSelection, asPrimary: true, selectionOrigin: "explicit_picker",
     };
+    const restoredSelections = initialSetup?.productSelections ?? [];
     const others = (initialSetup?.productImages ?? [])
       .filter(url => url && url !== initialProductSelection.imageUrl)
       .map(imageUrl => {
+        const restored = restoredSelections.find(selection => selection.imageUrl === imageUrl);
+        if (restored) return { ...restored, asPrimary: false };
         const match = linked.find(p => p.imageUrl === imageUrl);
         return match
           ? { ...selectionFromLinkedProduct(match), asPrimary: false, selectionOrigin: "linked_product" as const }
@@ -276,6 +280,9 @@ export function buildInitialProductSelections(input: {
   //    linked products BY imageUrl so title/productUrl/store/price survive a
   //    reopen; a URL with no matching linked product stays a bare image (it is a
   //    generation input, not a persistable product link).
+  if (initialSetup?.productSelections?.length) {
+    return initialSetup.productSelections.map((selection, i) => ({ ...selection, asPrimary: i === 0 }));
+  }
   if (initialSetup) {
     return initialSetup.productImages.map((imageUrl, i) => {
       const match = linked.find(p => p.imageUrl === imageUrl);
@@ -762,7 +769,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       try {
         res = await fetch("/api/ai-copy/analyze", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
           signal: controller.signal,
           body: JSON.stringify({
             requestId,
@@ -1276,6 +1283,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
   const currentSetup: AiVersionDrawerSetup = {
     productImages: productUrls,
+    productSelections: selectedProductSelections.map(selection => ({ ...selection, tags: selection.tags ? [...selection.tags] : undefined })),
     referenceImages: referenceUrls,
     referenceSelections: selectedReferences,
     count,
@@ -1284,13 +1292,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     variationMode,
     selectedDirectionId,
     selectedTagIds: effectiveSelectedTagIds,
-    directionBrief,
+    // Freeze the exact effective direction the user saw at Generate time. A derived
+    // direction must not be recomputed differently during retry/recovery.
+    directionBrief: effectiveDirectionBrief,
     briefManuallyEdited,
   };
 
-  const setupPersistenceKey = draft?.id ?? "scratch";
   const saveSetup = () => {
-    saveCreativeSetup(setupPersistenceKey, currentSetup);
     onSetupChange?.(currentSetup);
   };
 

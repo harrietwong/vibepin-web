@@ -20,9 +20,17 @@ const storage = new MemoryStorage();
 
 const setup = {
   productImages: ["https://cdn/product.jpg"],
-  referenceImages: ["https://cdn/ref.jpg"],
-  referenceSelections: [{ id: "ref-1", imageUrl: "https://cdn/ref.jpg", source: "recommended_pin" as const, sourceUrl: "https://pinterest.example/pin/1", role: "style_reference" as const }],
-  count: 2,
+  productSelections: [{
+    id: "shopify-product-1", title: "A linked product", source: "shopify" as const,
+    imageUrl: "https://cdn/product.jpg", publicUrl: "https://shop.example/products/1",
+    storeDomain: "shop.example", selectionOrigin: "explicit_picker" as const, asPrimary: true,
+  }],
+  referenceImages: ["https://cdn/ref.jpg", "https://cdn/ref-2.jpg"],
+  referenceSelections: [
+    { id: "ref-1", imageUrl: "https://cdn/ref.jpg", source: "recommended_pin" as const, sourceUrl: "https://pinterest.example/pin/1", reason: "palette", patternTags: { palette: ["warm"] }, role: "style_reference" as const },
+    { id: "ref-2", imageUrl: "https://cdn/ref-2.jpg", source: "upload" as const, role: "style_reference" as const },
+  ],
+  count: 4,
   format: "Pinterest 2:3",
   modelKey: "gemini_image",
   variationMode: "distinct" as const,
@@ -40,6 +48,24 @@ async function main(): Promise<void> {
   assert.equal(setupStore.saveCreativeSetup("draft-1", setup), true);
   assert.deepEqual(setupStore.loadCreativeSetup("draft-1"), setup, "close/reopen restores provenance and committed direction");
 
+  const stored = setupStore.loadCreativeSetup("draft-1")!;
+  assert.equal(stored.productSelections?.[0]?.id, "shopify-product-1", "product id provenance survives reopen");
+  assert.equal(stored.productSelections?.[0]?.publicUrl, "https://shop.example/products/1", "product link provenance survives reopen");
+  assert.equal(stored.productSelections?.[0]?.selectionOrigin, "explicit_picker", "selection origin survives reopen");
+  assert.equal(stored.referenceSelections?.[0]?.source, "recommended_pin", "reference source survives reopen");
+  assert.equal(stored.referenceSelections?.[0]?.sourceUrl, "https://pinterest.example/pin/1", "reference linkback survives reopen");
+  assert.deepEqual(stored.referenceSelections?.[0]?.patternTags, { palette: ["warm"] }, "reference pattern provenance survives reopen");
+  assert.equal(stored.referenceSelections?.length, 2, "all selected references survive reopen");
+  assert.equal(stored.count, 4, "count 4 survives reopen");
+  stored.directionBrief = "local mutation";
+  const mutableTags = stored.referenceSelections![0].patternTags as { palette?: string[] };
+  mutableTags.palette![0] = "local mutation";
+  assert.equal(setupStore.loadCreativeSetup("draft-1")?.directionBrief, "Committed direction only", "loaded objects cannot mutate the persisted setup");
+  assert.deepEqual(setupStore.loadCreativeSetup("draft-1")?.referenceSelections?.[0]?.patternTags, { palette: ["warm"] });
+
+  pinDraftStore.setPinDraftOwnerScope("owner-a", "workspace-2");
+  assert.equal(setupStore.loadCreativeSetup("draft-1"), undefined, "workspace 2 cannot see workspace 1 setup");
+
   pinDraftStore.setPinDraftOwnerScope("owner-b", "workspace-1");
   assert.equal(setupStore.loadCreativeSetup("draft-1"), undefined, "owner B cannot see owner A's setup");
   assert.equal(setupStore.saveCreativeSetup("draft-1", { ...setup, directionBrief: "Owner B" }), true);
@@ -51,12 +77,27 @@ async function main(): Promise<void> {
     setupStore.creativeSetupStorageKeyForTest("owner-b", "workspace-1"),
   );
 
+  const scratchProduct = {
+    title: "Scratch", imageUrl: "https://cdn/scratch.jpg", source: "manual" as const,
+    publicUrl: "https://merchant.example/product/42",
+  };
+  const scratchKey = setupStore.creativeSetupKeyForScratchProduct(scratchProduct);
+  assert.equal(scratchKey, setupStore.creativeSetupKeyForScratchProduct({ ...scratchProduct }), "scratch key is stable for the same product");
+  assert.match(scratchKey, /^scratch:digest:[0-9a-f]{8}$/, "URL-only scratch identity uses an opaque digest");
+  assert.doesNotMatch(scratchKey, /merchant\.example|scratch\.jpg/i, "scratch key never exposes merchant URL or image URL");
+  assert.notEqual(
+    scratchKey,
+    setupStore.creativeSetupKeyForScratchProduct({ ...scratchProduct, publicUrl: "https://merchant.example/product/43" }),
+    "different URL-only products do not share scratch state",
+  );
+  assert.equal(setupStore.creativeSetupKeyForScratchProduct({ ...scratchProduct, id: "stable-product-id" }), "scratch:product:stable-product-id", "stable product id gets a readable non-URL key");
+
   const serialized = JSON.stringify(setupStore.loadCreativeSetup("draft-1"));
   for (const forbidden of ["generationJobId", "placeholder", "toast", "usage", "reservation", "providerResponse"]) {
     assert.ok(!serialized.includes(forbidden), `setup persistence must not create ${forbidden}`);
   }
 
-  console.log("Creative setup persistence: 6 passed, 0 failed");
+  console.log("Creative setup persistence: 18 passed, 0 failed");
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

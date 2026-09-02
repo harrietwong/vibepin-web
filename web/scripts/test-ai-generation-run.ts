@@ -34,6 +34,7 @@ async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const { runAiGeneration } = await import("../src/lib/studio/runAiGeneration");
   const { dispatchGenerationGroup } = await import("../src/lib/studio/generateAiVersions");
+  const { GenerationIntentPersistenceError, GenerationOwnerChangedError } = await import("../src/lib/studio/generationIntent");
   const reset = () => { mem.clear(); store.__resetMemoryCacheForTests(); };
 
   // Typed as the real AiVersionOptions (not `as never`, which makes spreading it a
@@ -111,6 +112,21 @@ async function main() {
     );
     assert.equal(r.okCount, 2);
     assert.equal(r.failCount, 1);
+  });
+
+  await test("intent persistence failure releases every persisting orphan and reports a fixed code", async () => {
+    reset();
+    let settled = 0;
+    const r = await runAiGeneration(
+      { parent: null, opts: { ...baseOpts, count: 2, selectedReferences: [ref("a"), ref("b")] } },
+      {
+        ...deps(async () => { throw new GenerationIntentPersistenceError(); }),
+        onSettled: () => { settled++; },
+      },
+    );
+    assert.equal(r.errorCode, "generation_intent_persist_failed", "analytics/UI receive a stable machine code");
+    assert.equal(store.getAllDrafts().filter(d => d.generationSessionId === r.requestId).length, 0, "all groups' placeholders are removed");
+    assert.equal(settled, 1, "the terminal callback still runs once after orphan cleanup");
   });
 
   await test("worker sparse slots never shift a successful image onto the wrong placeholder", async () => {
@@ -329,6 +345,60 @@ async function main() {
       }),
     );
     assert.equal(seenAtFirstCall, 6, "batch size visible immediately, not group by group");
+  });
+
+  await test("intent persistence failure sends no later group and releases every orphan placeholder", async () => {
+    reset();
+    let generateCalls = 0;
+    const deleted: string[] = [];
+    const r = await runAiGeneration(
+      { parent: null, requestId: "persist-fail", opts: { ...baseOpts, count: 2, selectedReferences: [ref("a"), ref("b")] } },
+      {
+        ...deps(async () => {
+          generateCalls++;
+          throw new GenerationIntentPersistenceError();
+        }),
+        store: { ...store, deleteDraft: (id: string) => { deleted.push(id); store.deleteDraft(id); } } as never,
+      },
+    );
+    assert.equal(generateCalls, 1, "later groups must not run without a durable intent");
+    assert.equal(r.errorCode, "generation_intent_persist_failed");
+    assert.equal(deleted.length, 4, "current and not-yet-started placeholders must all be released");
+    assert.equal(store.getAllDrafts().filter(draft => draft.generationSessionId === "persist-fail").length, 0, "no retryable orphan draft may remain");
+  });
+
+  await test("mid-flight owner switch performs zero subsequent store mutation and zero UI callback", async () => {
+    let switched = false;
+    let postSwitchMutations = 0;
+    let settledCalls = 0;
+    const records = new Map<string, { id: string }>();
+    let sequence = 0;
+    const guardedStore = {
+      createBoardDraft: () => {
+        const draft = { id: `owner-draft-${++sequence}` };
+        records.set(draft.id, draft);
+        return draft;
+      },
+      updateDraft: () => { if (switched) postSwitchMutations++; },
+      completeGeneratedDraft: () => { if (switched) postSwitchMutations++; },
+      failGeneratedDraft: () => { if (switched) postSwitchMutations++; },
+      deleteDraft: () => { if (switched) postSwitchMutations++; },
+    };
+    const r = await runAiGeneration(
+      { parent: null, requestId: "owner-switch", opts: { ...baseOpts, count: 1, selectedReferences: [ref("a")] } },
+      {
+        store: guardedStore as never,
+        generate: async () => { switched = true; throw new GenerationOwnerChangedError(); },
+        resolveModelLabel: () => "Gemini",
+        onSettled: () => { settledCalls++; },
+        now: () => 1,
+        randomId: () => "owner",
+      },
+    );
+    assert.equal(r.state, "unknown");
+    assert.equal(r.ownerChanged, true);
+    assert.equal(postSwitchMutations, 0, "new owner must receive zero mutation after the switch");
+    assert.equal(settledCalls, 0, "new owner must receive zero terminal UI callback");
   });
 
   await test("generated placeholders keep connected-account default destinations", async () => {
