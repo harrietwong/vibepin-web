@@ -25,8 +25,29 @@ export type ConfirmationValidation =
   | { ok: false; code: "confirmation_required" | "invalid_confirmation"; error: string };
 
 export type StoredConfirmationValidation =
-  | { ok: true }
+  | { ok: true; priorIntentId: string | null }
   | { ok: false; code: "invalid_confirmation" | "publish_intent_unavailable"; error: string };
+
+/**
+ * A new social publish must dispatch the complete confirmed social fan-out.
+ * Retry may narrow that set, but durable ledger state authorizes the narrowed
+ * destinations separately; this helper proves only receipt membership and mode.
+ */
+export function isConfirmedSocialDestinationSelection(
+  requestedDestinationIds: readonly string[],
+  confirmedDestinations: readonly PublishDestination[],
+  onlyPending: boolean,
+): boolean {
+  if (!requestedDestinationIds.length || new Set(requestedDestinationIds).size !== requestedDestinationIds.length) return false;
+  const confirmedSocialIds = confirmedDestinations
+    .filter(destination => destination.provider !== "pinterest")
+    .map(destination => destination.id);
+  const confirmedSet = new Set(confirmedSocialIds);
+  if (confirmedSet.size !== confirmedSocialIds.length
+      || requestedDestinationIds.some(id => !confirmedSet.has(id))) return false;
+  if (onlyPending) return true;
+  return requestedDestinationIds.length === confirmedSocialIds.length;
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -224,5 +245,8 @@ export async function validateStoredImmediatePublishReceipt(
       || stablePublishString(current.blockers) !== stablePublishString(receipt.blockers)) {
     return { ok: false, code: "invalid_confirmation", error: "The Content or publishing destinations changed after confirmation." };
   }
-  return { ok: true };
+  const priorIntentId = typeof row.payload.publishIntentId === "string" && row.payload.publishIntentId.trim()
+    ? row.payload.publishIntentId.trim()
+    : null;
+  return { ok: true, priorIntentId };
 }

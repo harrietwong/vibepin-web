@@ -67,11 +67,13 @@ import {
 import { logEvent } from "@/lib/server/usage/meterGeneration";
 import {
   validateImmediatePublishReceipt,
+  isConfirmedSocialDestinationSelection,
   validateStoredImmediatePublishReceipt,
 } from "@/lib/server/publish/confirmationReceipt";
 import {
   PublishIntentLedgerError,
   claimPublishIntentDestinations,
+  reconcilePublishIntent,
   settlePublishIntentDestination,
   type PublishIntentClaim,
 } from "@/lib/server/publish/publishIntentLedger";
@@ -132,15 +134,15 @@ export async function POST(req: Request) {
   if (!confirmation.ok) {
     return Response.json({ error: confirmation.error, code: confirmation.code }, { status: confirmation.code === "confirmation_required" ? 400 : 409 });
   }
-  const expectedSocialDestinationIds = confirmation.destinations
-    .filter(destination => destination.provider !== "pinterest")
-    .map(destination => destination.id)
-    .sort();
-  const exactRequestedIds = [...requestedDestinationIds].sort();
-  if (expectedSocialDestinationIds.length !== exactRequestedIds.length
-      || expectedSocialDestinationIds.some((id, index) => id !== exactRequestedIds[index])) {
+  if (!isConfirmedSocialDestinationSelection(
+    requestedDestinationIds,
+    confirmation.destinations,
+    confirmation.receipt.onlyPending,
+  )) {
     return Response.json({
-      error: "The social destination set no longer matches the confirmation.",
+      error: confirmation.receipt.onlyPending
+        ? "The submitted retry destinations are not confirmed."
+        : "The social destination set no longer matches the confirmation.",
       code: "invalid_confirmation",
     }, { status: 409 });
   }
@@ -211,6 +213,38 @@ export async function POST(req: Request) {
     });
   }
   const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
+  if (confirmation.receipt.onlyPending) {
+    let priorIntent: Awaited<ReturnType<typeof reconcilePublishIntent>>;
+    try {
+      priorIntent = stored.priorIntentId
+        ? await reconcilePublishIntent(db, uid, stored.priorIntentId)
+        : null;
+    } catch {
+      return Response.json({
+        error: "Could not verify which destinations are safe to retry.",
+        code: "publish_intent_unavailable",
+      }, { status: 503 });
+    }
+    const priorById = new Map(priorIntent?.destinations.map(destination => [destination.destinationId, destination]) ?? []);
+    const retryIsAuthoritative = !!priorIntent
+      && priorIntent.draftId === confirmation.receipt.draftId
+      && priorIntent.contentId === confirmation.receipt.contentId
+      && requestedDestinationIds.every(destinationId => {
+        const destination = destinationById.get(destinationId);
+        const prior = priorById.get(destinationId);
+        return !!destination && !!prior
+          && prior.provider === destination.provider
+          && prior.socialConnectionId === destination.socialConnectionId
+          && prior.status === "failed"
+          && prior.retryAllowed;
+      });
+    if (!retryIsAuthoritative) {
+      return Response.json({
+        error: "Retry may include only destinations whose latest durable result failed and allows retry.",
+        code: "retry_destination_not_allowed",
+      }, { status: 409 });
+    }
+  }
   const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
   try {
     const destinations: PublishDestination[] = [];

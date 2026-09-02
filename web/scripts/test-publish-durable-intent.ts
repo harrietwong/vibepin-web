@@ -7,6 +7,7 @@ import {
   sha256Hex,
 } from "../src/lib/studio/publishConfirmation";
 import {
+  isConfirmedSocialDestinationSelection,
   validateImmediatePublishReceipt,
   validateStoredImmediatePublishReceipt,
 } from "../src/lib/server/publish/confirmationReceipt";
@@ -87,14 +88,32 @@ async function main() {
     }, ["pinterest:not-confirmed"], Date.parse(NOW));
     assert.equal(widened.ok, false);
   });
+  await test("new social publish is exact; Retry may narrow only within the confirmed social set", () => {
+    const allSocial = ["instagram:ig-connection", "facebook:fb-connection"];
+    assert.equal(isConfirmedSocialDestinationSelection(
+      allSocial, snapshot.destinations, false,
+    ), true, "initial fan-out submits the complete confirmed social set");
+    assert.equal(isConfirmedSocialDestinationSelection(
+      ["instagram:ig-connection"], snapshot.destinations, false,
+    ), false, "onlyPending=false may not silently narrow the initial fan-out");
+    assert.equal(isConfirmedSocialDestinationSelection(
+      ["instagram:ig-connection"], snapshot.destinations, true,
+    ), true, "Retry may submit a confirmed social subset before ledger authorization");
+    assert.equal(isConfirmedSocialDestinationSelection(
+      ["pinterest:pin-connection"], snapshot.destinations, true,
+    ), false, "Pinterest is owned by its dedicated route");
+    assert.equal(isConfirmedSocialDestinationSelection(
+      ["instagram:not-confirmed"], snapshot.destinations, true,
+    ), false, "an unconfirmed destination remains a 409-class rejection");
+  });
 
   console.log("\n=== durable owner revision ===");
   const storedRow = { draft_id: draft.id, updated_at: NOW, payload: draft, deleted_at: null };
   await test("server recomputes fingerprint from the owner's current stored draft", async () => {
-    assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({ row: storedRow }), OWNER, receipt), { ok: true });
+    assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({ row: storedRow }), OWNER, receipt), { ok: true, priorIntentId: null });
     assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({
       row: { ...storedRow, updated_at: "2026-09-01T12:00:00+00:00" },
-    }), OWNER, receipt), { ok: true }, "equivalent Postgres timestamptz serialization must not make a valid receipt stale");
+    }), OWNER, receipt), { ok: true, priorIntentId: null }, "equivalent Postgres timestamptz serialization must not make a valid receipt stale");
   });
   await test("stale revision and changed destination fail before claim/usage/provider", async () => {
     const stale = await validateStoredImmediatePublishReceipt(storedDb({ row: { ...storedRow, updated_at: "2026-09-01T12:01:00.000Z" } }), OWNER, receipt);
@@ -179,8 +198,10 @@ async function main() {
     assert.match(pinQuota, /settleDurableClaim\(/);
     const socialQuota = social.slice(social.indexOf('consumed.kind === "insufficient"'), social.indexOf("const outcomes"));
     assert.match(socialQuota, /settleFreshClaimsNotSent\("scheduled_post_limit_reached"\)/);
-    assert.match(social, /expectedSocialDestinationIds\.length !== exactRequestedIds\.length/);
-    assert.match(social, /The social destination set no longer matches the confirmation/);
+    assert.match(social, /isConfirmedSocialDestinationSelection\(/);
+    assert.match(social, /prior\.status === "failed"/);
+    assert.match(social, /prior\.retryAllowed/);
+    assert.match(social, /retry_destination_not_allowed/);
   });
   await test("v72 source owns atomic claim, recovery evidence, RLS and data-safe rollback", () => {
     const migration = readFileSync("../backend/db/migrate_v72_publish_intent_idempotency.sql", "utf8");
