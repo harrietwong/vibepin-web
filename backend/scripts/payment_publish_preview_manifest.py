@@ -63,6 +63,26 @@ MIGRATION_ORDER = [
         "recovery": "backend/db/rollback_v71_generation_intent_idempotency.sql",
         "recoveryMode": "sql_rollback",
     },
+    {
+        "version": 72,
+        "apply": "backend/db/migrate_v72_publish_intent_idempotency.sql",
+        "recovery": "backend/db/rollback_v72_publish_intent_idempotency.sql",
+        "recoveryMode": "sql_rollback_before_durable_publish_receipts",
+        "reason": (
+            "v72 rollback refuses once durable publish intent receipts exist; "
+            "rollback the application first and retain the ledger after any dispatch attempt."
+        ),
+    },
+    {
+        "version": 73,
+        "apply": "backend/db/migrate_v73_publish_intent_retry_lineage.sql",
+        "recovery": "backend/db/rollback_v73_publish_intent_retry_lineage.sql",
+        "recoveryMode": "sql_rollback_before_retry_lineage",
+        "reason": (
+            "v73 rollback refuses once retry lineage exists; rollback the application first "
+            "and retain retry evidence after any child intent has been created."
+        ),
+    },
 ]
 
 REQUIRED_EVIDENCE = [
