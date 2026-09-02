@@ -12,6 +12,7 @@ import {
   Minus,
   Trophy,
   Gauge,
+  Activity,
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getActionCenter, type BlockerItem, type BlockerType } from "@/lib/server/adminActionCenter";
@@ -19,7 +20,8 @@ import type { AccountKind } from "@/lib/server/adminAccountKind";
 import { getActivationFunnel, type StageCount } from "@/lib/server/adminActivationFunnel";
 import { getAiAdoption } from "@/lib/server/adminAiAdoption";
 import { getQuotaWatch, type QuotaWatchItem } from "@/lib/server/adminUsage";
-import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY, USAGE_METRIC_KEY } from "@/lib/admin/adminConsoleKeys";
+import { getFeatureAdoption, selectFeatureAdoptionAnomalies } from "@/lib/server/adminFeatureAdoption";
+import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY, USAGE_METRIC_KEY, FEATURE_LABEL_KEY } from "@/lib/admin/adminConsoleKeys";
 import { AdminT, AdminTFmt } from "../AdminT";
 import { BlockerReason } from "../_components/BlockerReason";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
@@ -317,6 +319,54 @@ function QuotaWatchCard({ result }: { result: Awaited<ReturnType<typeof getQuota
   );
 }
 
+// ── Feature Adoption Summary (PRD §3.4: no anomaly → no card, no version) ────
+//
+// Deliberately NOT a persistent card. It fetches every render (server component,
+// no cache) and renders `null` when `selectFeatureAdoptionAnomalies` finds
+// nothing — a feature with zero real-customer usage, or the whole scan being
+// unavailable. Absolute counts only; never a percentage (PRD §3.6).
+
+function FeatureAdoptionSummary({ result }: { result: Awaited<ReturnType<typeof getFeatureAdoption>> }) {
+  const anomalies = selectFeatureAdoptionAnomalies(result);
+  if (anomalies.length === 0) return null;
+
+  const unavailableFeatures = anomalies.filter(a => a.kind === "unavailable");
+  const zeroUsageFeatures = anomalies.filter(a => a.kind === "zero_usage");
+
+  return (
+    <Card icon={Activity} title={<AdminT k="today.featureAdoption.title" />} right={<span className="text-[12px] font-bold text-amber-600">{anomalies.length}</span>}>
+      <div className="flex flex-col gap-2 px-4 py-3 text-[12.5px]" style={{ color: "var(--admin-text, #111827)" }}>
+        {unavailableFeatures.length > 0 && (
+          <p className="flex flex-wrap items-baseline gap-1">
+            <AlertTriangle className="mr-1 inline h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <AdminT k="today.featureAdoption.unavailable" />
+            {unavailableFeatures.map((a, i) => (
+              <span key={a.feature} className="font-semibold">
+                {i > 0 && ", "}
+                <AdminT k={FEATURE_LABEL_KEY[a.feature]} />
+              </span>
+            ))}
+          </p>
+        )}
+        {zeroUsageFeatures.map(a => {
+          const featureView = result.features.find(f => f.feature === a.feature);
+          const total = featureView?.firstUse.totalCustomers ?? result.totalCustomers;
+          return (
+            <p key={a.feature} className="flex flex-wrap items-baseline gap-1">
+              <AlertTriangle className="mr-1 inline h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span className="font-semibold"><AdminT k={FEATURE_LABEL_KEY[a.feature]} />:</span>
+              <AdminTFmt k="today.featureAdoption.zeroUsage" vars={{ days: result.windowDays, total }} />
+            </p>
+          );
+        })}
+      </div>
+      <p className="border-t px-4 py-2 text-[11px] text-gray-400" style={{ borderColor: "var(--admin-border-soft, #EEF0F3)" }}>
+        <AdminT k="today.featureAdoption.footer" />
+      </p>
+    </Card>
+  );
+}
+
 // ── page ────────────────────────────────────────────────────────────────────
 
 /**
@@ -361,14 +411,15 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
   const includeNonCustomers = accounts === "all";
   const options = { includeNonCustomers };
 
-  const [actionCenter, funnel, adoption, quotaWatch] = await Promise.all([
+  const [actionCenter, funnel, adoption, quotaWatch, featureAdoption] = await Promise.all([
     getActionCenter(undefined, options),
     getActivationFunnel(undefined, options),
     getAiAdoption(undefined, options),
     getQuotaWatch(undefined, options),
+    getFeatureAdoption(undefined, options),
   ]);
 
-  const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings, ...quotaWatch.warnings];
+  const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings, ...quotaWatch.warnings, ...featureAdoption.warnings];
 
   const firstPublishSplit = funnel.publishSplit.find(s => s.stage === "firstPublish");
   const repeatPublishSplit = funnel.publishSplit.find(s => s.stage === "repeatPublish");
@@ -453,6 +504,11 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
               </div>
             )}
           </Card>
+
+          {/* 6. Feature Adoption Summary — renders null when there is no anomaly
+                 (PRD 3.4). Deliberately last: it is a diagnostic footnote, not a
+                 headline metric. */}
+          <FeatureAdoptionSummary result={featureAdoption} />
         </div>
 
         <div className="mt-5 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-semibold" style={{ background: "var(--admin-surface, #FFFFFF)", borderColor: "var(--admin-border, #E5E7EB)", color: "var(--admin-text-secondary, #6B7280)" }}>

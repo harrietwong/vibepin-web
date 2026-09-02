@@ -259,6 +259,20 @@ const en = {
   "today.quotaWatch.daysLeft": "in {n}d",
   "today.quotaWatch.hoursLeft": "in {n}h",
   "today.quotaWatch.excludedNote": "Excludes unlimited allowances, users with no usage account, and users whose usage could not be read.",
+
+  // ── Feature Adoption Summary (only rendered when there is an anomaly) ────
+  "today.featureAdoption.title": "Feature adoption",
+  "today.featureAdoption.unavailable": "Feature adoption unavailable — analytics_events could not be read for:",
+  "today.featureAdoption.zeroUsage": "had zero real-customer usage in the last {days} days ({total} customer(s) tracked).",
+  "today.featureAdoption.footer": "Only shown when a feature is flagged — no anomalies means no card. Absolute counts only, never a percentage.",
+  "today.featureAdoption.feature.aiImageGeneration": "AI image generation",
+  "today.featureAdoption.feature.referenceRecommendations": "Reference recommendations",
+  "today.featureAdoption.feature.creativeDirection": "Creative direction",
+  "today.featureAdoption.feature.aiCopy": "AI copy",
+  "today.featureAdoption.feature.imageAnalysis": "Image analysis",
+  "today.featureAdoption.feature.keywordRecommendations": "Keyword recommendations",
+  "today.featureAdoption.feature.publish": "Publish",
+  "today.featureAdoption.feature.scheduling": "Scheduling",
 } as const;
 
 const zh: Record<keyof typeof en, string> = {
@@ -480,6 +494,20 @@ const zh: Record<keyof typeof en, string> = {
   "today.quotaWatch.daysLeft": "还有 {n} 天",
   "today.quotaWatch.hoursLeft": "还有 {n} 小时",
   "today.quotaWatch.excludedNote": "不含不限量额度、没有用量账户的用户，以及用量读取失败的用户。",
+
+  // ── 功能采用摘要（只在存在异常信号时出现） ──────────────────────────────
+  "today.featureAdoption.title": "功能采用",
+  "today.featureAdoption.unavailable": "功能采用数据不可用 —— 以下功能的 analytics_events 读取失败：",
+  "today.featureAdoption.zeroUsage": "在最近 {days} 天内没有任何真实客户使用（共追踪 {total} 个客户）。",
+  "today.featureAdoption.footer": "仅在有异常标记时显示 —— 无异常则不出现此卡片。全部为绝对数，绝不显示百分比。",
+  "today.featureAdoption.feature.aiImageGeneration": "AI 图片生成",
+  "today.featureAdoption.feature.referenceRecommendations": "参考图推荐",
+  "today.featureAdoption.feature.creativeDirection": "创意方向",
+  "today.featureAdoption.feature.aiCopy": "AI 文案",
+  "today.featureAdoption.feature.imageAnalysis": "图片分析",
+  "today.featureAdoption.feature.keywordRecommendations": "关键词推荐",
+  "today.featureAdoption.feature.publish": "发布",
+  "today.featureAdoption.feature.scheduling": "排期",
 };
 
 export type AdminMessageKey = keyof typeof en;

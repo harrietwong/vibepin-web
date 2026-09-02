@@ -52,6 +52,7 @@ export const CORE: string[] = [
   "test-admin-action-center",
   "test-admin-usage",
   "test-admin-alerts",
+  "test-feature-adoption",
   "test-generation-record",
   "test-activation-funnel",
   "test-ai-adoption",
