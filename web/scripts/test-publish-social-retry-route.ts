@@ -16,7 +16,7 @@ const CONTENT_ID = "content-social-retry-route";
 const FACEBOOK_ID = "facebook:fb-connection";
 const INSTAGRAM_ID = "instagram:ig-connection";
 
-const destinations = [
+const pinterestDestination = { id: "pinterest:pin-connection", provider: "pinterest", socialConnectionId: "pin-connection" };\n\nconst destinations = [
   { id: FACEBOOK_ID, provider: "facebook", socialConnectionId: "fb-connection" },
   { id: INSTAGRAM_ID, provider: "instagram", socialConnectionId: "ig-connection" },
 ];
@@ -196,7 +196,7 @@ async function test(name: string, fn: () => Promise<void>) {
   }
 }
 
-await test("onlyPending=true first attempt accepts the exact full social set without prior intent", async () => {
+await test("onlyPending=true first attempt compares only confirmed non-Pinterest destinations", async () => {\n  priorIntentId = null;\n  const response = await POST(request(true, [FACEBOOK_ID, INSTAGRAM_ID]));\n  assert.equal(response.status, 402);\n  assert.equal(claimCalls, 1);\n  assert.equal(meterCalls, 1);\n  assert.equal(providerCalls, 0);\n});\n\nawait test("onlyPending=true first attempt accepts the exact full social set without prior intent", async () => {
   priorIntentId = null;
   const response = await POST(request(true, [FACEBOOK_ID, INSTAGRAM_ID]));
   assert.equal(response.status, 402);
@@ -262,3 +262,4 @@ for (const [label, status, retryAllowed] of [
 console.log(`\nPublish social retry route: ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);
 })();
+
