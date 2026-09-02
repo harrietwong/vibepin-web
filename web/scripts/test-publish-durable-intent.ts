@@ -18,6 +18,7 @@ import {
 import { requiredScheduleDestinations } from "../src/app/api/pin-drafts/promote";
 import type { PinDraft } from "../src/lib/pinDraftStore";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { classifyDispatchSettlement } from "../src/lib/social/publishRules";
 
 let passed = 0;
 let failed = 0;
@@ -199,7 +200,17 @@ async function main() {
     const conflict = migration.slice(migration.indexOf("if v_intent.fingerprint"), migration.indexOf("insert into publish_intent_destinations"));
     assert.match(conflict, /v_intent\.confirmed_at is distinct from p_confirmed_at/);
     assert.match(conflict, /v_intent\.mode is distinct from p_mode/);
-    assert.match(conflict, /v_intent\.receipt is distinct from p_receipt/);
+    assert.match(conflict, /v_intent\.receipt - 'confirmedAt'/);
+    const comparable = (value: Record<string, unknown>) => {
+      const copy = { ...value };
+      delete copy.confirmedAt;
+      return JSON.stringify(copy);
+    };
+    const original = { confirmedAt: "2026-09-01T12:00:00.000Z", mode: { kind: "now" }, destinations: ["ig"] };
+    const equivalent = { ...original, confirmedAt: "2026-09-01T12:00:00+00:00" };
+    assert.equal(comparable(original), comparable(equivalent), "same instant differs only in JSON timestamp text");
+    assert.notEqual(comparable(original), comparable({ ...original, destinations: ["fb"] }));
+    assert.notEqual(comparable(original), comparable({ ...original, mode: { kind: "scheduled" } }));
   });
   await test("pre-dispatch settlement failure is surfaced and never reported as released", () => {
     const route = readFileSync("src/app/api/publish/social/route.ts", "utf8");
@@ -218,6 +229,21 @@ async function main() {
     assert.match(source, /publish_intent_settlement_unavailable/);
     assert.match(source, /dispatchStarted/);
     assert.match(source, /remoteEvidence/);
+  });
+  await test("dispatch settlement classifies pre-dispatch, known and unknown legs independently", () => {
+    const ig = { provider: "instagram" as const, socialConnectionId: "ig-1" };
+    const fb = { provider: "facebook" as const, socialConnectionId: "fb-1" };
+    const published = [{ provider: "instagram" as const, socialConnectionId: "ig-1", status: "published" as const, externalPostId: "ig-remote", externalPostUrl: "https://ig/p/1" }];
+    const preNetwork = [{ provider: "facebook" as const, socialConnectionId: "fb-1", status: "failed" as const, preNetwork: true }];
+    const known = classifyDispatchSettlement(ig, published, true);
+    assert.deepEqual({ status: known.status, retryAllowed: known.retryAllowed, remoteId: known.outcome?.externalPostId }, { status: "published", retryAllowed: false, remoteId: "ig-remote" });
+    const retryable = classifyDispatchSettlement(fb, preNetwork, true);
+    assert.equal(retryable.status, "failed");
+    assert.equal(retryable.retryAllowed, true);
+    const unknown = classifyDispatchSettlement(fb, [], true);
+    assert.deepEqual({ status: unknown.status, retryAllowed: unknown.retryAllowed }, { status: "delivery_unknown", retryAllowed: false });
+    const notSent = classifyDispatchSettlement(fb, [], false);
+    assert.deepEqual({ status: notSent.status, retryAllowed: notSent.retryAllowed }, { status: "failed", retryAllowed: true });
   });
   await test("retrying a partial job upserts one exact destination row", () => {
     const fanout = readFileSync("src/lib/social/publishFanout.ts", "utf8");

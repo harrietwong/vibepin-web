@@ -141,7 +141,9 @@ begin
      -- serializations such as .000Z and +00:00 remain idempotent.
      or v_intent.confirmed_at is distinct from p_confirmed_at
      or v_intent.mode is distinct from p_mode
-     or v_intent.receipt is distinct from p_receipt then
+     -- The timestamp is compared as timestamptz above; remove its textual
+     -- representation from JSONB so .000Z and +00:00 are the same receipt.
+     or (v_intent.receipt - 'confirmedAt') is distinct from (p_receipt - 'confirmedAt') then
     raise exception 'publish intent conflict' using errcode = '23505';
   end if;
 

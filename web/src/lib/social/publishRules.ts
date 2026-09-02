@@ -57,6 +57,40 @@ export type DestinationOutcome = {
   errorCode?: string | null;
 };
 
+export type DispatchSettlement = {
+  status: Extract<DestinationStatus, "published" | "failed" | "delivery_unknown">;
+  retryAllowed: boolean;
+  outcome: DestinationOutcome | null;
+};
+
+/**
+ * Preserve per-destination evidence when a later leg throws. A missing outcome
+ * after dispatch is unknown; before dispatch it is a not-sent, retryable failure.
+ * Explicit pre-network/4xx failures remain retryable even when a sibling already
+ * dispatched, while published outcomes retain their remote identifiers.
+ */
+export function classifyDispatchSettlement(
+  destination: { provider: SocialProvider; socialConnectionId: string | null },
+  outcomes: readonly DestinationOutcome[],
+  dispatchStarted: boolean,
+): DispatchSettlement {
+  const outcome = outcomes.find(item => item.provider === destination.provider
+    && item.socialConnectionId === destination.socialConnectionId) ?? null;
+  if (!outcome) {
+    return { status: dispatchStarted ? "delivery_unknown" : "failed", retryAllowed: !dispatchStarted, outcome: null };
+  }
+  if (outcome.status === "published") return { status: "published", retryAllowed: false, outcome };
+  if (outcome.status !== "failed") return { status: "delivery_unknown", retryAllowed: false, outcome };
+  const providerRejectedWithoutObject = typeof outcome.providerStatus === "number"
+    && outcome.providerStatus >= 400 && outcome.providerStatus < 500
+    && !outcome.externalPostId && !outcome.providerResourceId;
+  return {
+    status: "failed",
+    retryAllowed: outcome.preNetwork === true || providerRejectedWithoutObject,
+    outcome,
+  };
+}
+
 /** A Pinterest result produced by the dedicated Pinterest path, folded in here. */
 export type PinterestOutcome = {
   ok: boolean;

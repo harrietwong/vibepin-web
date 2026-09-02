@@ -48,7 +48,7 @@ import { resolveDestinationCapability } from "@/lib/social/destinationCapability
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
-import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
+import { classifyDispatchSettlement, rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
 import {
   consumeScheduledPost,
   deriveScheduledPostKey,
@@ -562,45 +562,27 @@ export async function POST(req: Request) {
         metadata: { source: "social_immediate", route: "publish_social", stage: "pre_dispatch" },
       });
     }
-    const settlementResults = await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
+  const settlementResults = await Promise.all([...claims.values()].flatMap(({ destination, claim }) =>
       claim.claimed && claim.claimToken
-        ? [settlePublishIntentDestination(db, uid, {
+        ? [(() => {
+          const settlement = classifyDispatchSettlement(destination, outcomes, dispatchStarted);
+          return settlePublishIntentDestination(db, uid, {
             intentId: confirmation.receipt.intentId,
             destinationId: destination.id,
             claimToken: claim.claimToken,
-            status: (() => {
-              const outcome = outcomes.find(item => item.provider === destination.provider
-                && item.socialConnectionId === destination.socialConnectionId);
-              return outcome?.status === "published"
-                ? "published" as const
-                : outcome?.status === "failed"
-                  ? "failed" as const
-                  : "delivery_unknown" as const;
-            })(),
-            // Once any provider call started, only an explicit pre-network/4xx
-            // outcome may be retried. A destination with no outcome is unknown.
-            retryAllowed: !dispatchStarted && outcomes.some(item => item.provider === destination.provider
-              && item.socialConnectionId === destination.socialConnectionId
-              && item.status === "failed"),
+            status: settlement.status,
+            retryAllowed: settlement.retryAllowed,
             providerJobId: jobId,
-            remoteId: outcomes.find(item => item.provider === destination.provider
-              && item.socialConnectionId === destination.socialConnectionId)?.externalPostId,
-            remoteUrl: outcomes.find(item => item.provider === destination.provider
-              && item.socialConnectionId === destination.socialConnectionId)?.externalPostUrl,
-            providerStatus: outcomes.find(item => item.provider === destination.provider
-              && item.socialConnectionId === destination.socialConnectionId)?.providerStatus,
+            remoteId: settlement.outcome?.externalPostId,
+            remoteUrl: settlement.outcome?.externalPostUrl,
+            providerStatus: settlement.outcome?.providerStatus,
             evidence: {
-              category: outcomes.find(item => item.provider === destination.provider
-                && item.socialConnectionId === destination.socialConnectionId)?.status
-                ?? (dispatchStarted ? "delivery_unknown" : "not_sent"),
-              error: (outcomes.find(item => item.provider === destination.provider
-                && item.socialConnectionId === destination.socialConnectionId)?.error
-                ?? (err as Error)?.message) || "Publishing failed.",
-              providerResourceId: outcomes.find(item => item.provider === destination.provider
-                && item.socialConnectionId === destination.socialConnectionId)?.providerResourceId
-                ?? null,
+              category: settlement.outcome?.status ?? (dispatchStarted ? "delivery_unknown" : "not_sent"),
+              error: (settlement.outcome?.error ?? (err as Error)?.message) || "Publishing failed.",
+              providerResourceId: settlement.outcome?.providerResourceId ?? null,
             },
-          }).then(() => true).catch(() => false)]
+          }).then(() => true).catch(() => false);
+        })()]
         : []));
     if (!settlementResults.every(Boolean)) {
       return Response.json({
