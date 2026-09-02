@@ -58,6 +58,36 @@ create index if not exists publish_intents_user_created
 create index if not exists publish_intent_destinations_recovery
   on publish_intent_destinations(publish_intent_id, status, updated_at desc);
 
+-- v32 allowed duplicate destination rows when a retry reused its (user,intent)
+-- job.  Refuse the additive migration if historical duplicates exist; silently
+-- deleting them would destroy delivery evidence.  Null connection ids (skipped
+-- or provider-refused rows) get their own per-job/provider uniqueness rule.
+do $$
+begin
+  if exists (
+    select 1 from social_publish_job_destinations
+    where social_connection_id is not null
+    group by publish_job_id, provider, social_connection_id
+    having count(*) > 1
+  ) then
+    raise exception 'Refusing v72 destination uniqueness: historical non-null duplicates exist';
+  end if;
+  if exists (
+    select 1 from social_publish_job_destinations
+    where social_connection_id is null
+    group by publish_job_id, provider
+    having count(*) > 1
+  ) then
+    raise exception 'Refusing v72 destination uniqueness: historical null-connection duplicates exist';
+  end if;
+end $$;
+create unique index if not exists social_publish_job_destinations_exact_unique
+  on social_publish_job_destinations (publish_job_id, provider, social_connection_id)
+  where social_connection_id is not null;
+create unique index if not exists social_publish_job_destinations_null_connection_unique
+  on social_publish_job_destinations (publish_job_id, provider)
+  where social_connection_id is null;
+
 alter table publish_intents enable row level security;
 alter table publish_intent_destinations enable row level security;
 

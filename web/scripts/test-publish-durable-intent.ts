@@ -189,6 +189,9 @@ async function main() {
     assert.match(migration, /delivery_unknown/);
     assert.match(migration, /enable row level security/);
     assert.match(migration, /revoke all .* authenticated/);
+    assert.match(migration, /social_publish_job_destinations_exact_unique/);
+    assert.match(migration, /historical non-null duplicates exist/);
+    assert.match(migration, /social_publish_job_destinations_null_connection_unique/);
     assert.match(rollback, /Refusing v72 rollback: durable publish intent receipts exist/);
   });
   await test("same intent binds confirmed time, mode and receipt immutably", () => {
@@ -215,6 +218,12 @@ async function main() {
     assert.match(source, /publish_intent_settlement_unavailable/);
     assert.match(source, /dispatchStarted/);
     assert.match(source, /remoteEvidence/);
+  });
+  await test("retrying a partial job upserts one exact destination row", () => {
+    const fanout = readFileSync("src/lib/social/publishFanout.ts", "utf8");
+    assert.match(fanout, /onConflict: "publish_job_id,provider,social_connection_id"/);
+    assert.match(fanout, /null connection/);
+    assert.match(fanout, /\.is\("social_connection_id", null\)/);
   });
 
   console.log(`\nPublish durable intent: ${passed} passed, ${failed} failed\n`);

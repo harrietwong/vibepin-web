@@ -71,7 +71,7 @@ const outcomes: DestinationOutcome[] = [
 
 async function main() {
   const { createPublishJob, recordOutcomes } = await import("../src/lib/social/publishFanout");
-  const { rollUpJobStatus } = await import("../src/lib/social/publishRules");
+  const { rollUpJobStatus, pendingDestinations } = await import("../src/lib/social/publishRules");
 
   section("the attempt row exists before any result is known");
   {
@@ -109,6 +109,52 @@ async function main() {
     check("the roll-up helper agrees", rollUpJobStatus(outcomes) === "partially_published");
     check("one row is written per destination",
       log.some(l => l === "insert:social_publish_job_destinations(rows=2)"));
+  }
+
+  section("a partial retry updates the same destination rows");
+  {
+    const rows = new Map<string, Record<string, unknown>>();
+    const db = {
+      from(table: string) {
+        if (table === "social_publish_job_destinations") {
+          return {
+            upsert(values: Array<Record<string, unknown>>) {
+              for (const row of values) {
+                const key = `${row.publish_job_id}|${row.provider}|${row.social_connection_id}`;
+                rows.set(key, { ...rows.get(key), ...row });
+              }
+              return Promise.resolve({ error: null });
+            },
+            insert(row: Record<string, unknown>) {
+              const key = `${row.publish_job_id}|${row.provider}|${row.social_connection_id}`;
+              rows.set(key, row);
+              return Promise.resolve({ error: null });
+            },
+          };
+        }
+        return { update: () => ({ eq: async () => ({ error: null }) }) };
+      },
+    } as never;
+    const first = [
+      { provider: "instagram", status: "published", socialConnectionId: "c1", externalPostId: "ig-1" },
+      { provider: "facebook", status: "failed", socialConnectionId: "c2", error: "Page unavailable", attempt: 1 },
+    ] satisfies DestinationOutcome[];
+    const second = [
+      { provider: "instagram", status: "published", socialConnectionId: "c1", externalPostId: "ig-1" },
+      { provider: "facebook", status: "published", socialConnectionId: "c2", externalPostId: "fb-2", attempt: 2 },
+    ] satisfies DestinationOutcome[];
+    await recordOutcomes(db, "job-retry", first);
+    await recordOutcomes(db, "job-retry", second);
+    check("partial retry keeps exactly two destination rows", rows.size === 2, `row count=${rows.size}`);
+    check("the already-published Instagram row remains one row", rows.get("job-retry|instagram|c1")?.external_post_id === "ig-1");
+    check("the Facebook row is updated to its second attempt",
+      (rows.get("job-retry|facebook|c2")?.payload as { attempt?: number })?.attempt === 2
+      && rows.get("job-retry|facebook|c2")?.status === "published");
+    check("retry selection excludes the already-published Instagram destination",
+      pendingDestinations([
+        { provider: "instagram", socialConnectionId: "c1", capturedAt: "now" },
+        { provider: "facebook", socialConnectionId: "c2", capturedAt: "now" },
+      ], [{ provider: "instagram", status: "published" }]).length === 1);
   }
 
   section("publishing still works when the record cannot be kept");

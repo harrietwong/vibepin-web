@@ -147,9 +147,54 @@ export async function recordOutcomes(
     },
     published_at: o.status === "published" ? nowIso : null,
   }));
-  const { error: destErr } = await db.from("social_publish_job_destinations").insert(rows);
-  if (destErr && !isMissingTable(destErr.code)) {
-    console.error("[publishFanout] persist destinations:", destErr.message);
+  const destinationTable = db.from("social_publish_job_destinations");
+  const connectedRows = rows.filter(row => row.social_connection_id !== null);
+  const nullConnectionRows = rows.filter(row => row.social_connection_id === null);
+
+  // The exact (job,provider,connection) key makes partial retries update the
+  // original row instead of appending a second History/in-flight record. Keep a
+  // compatibility fallback for the tiny pre-v32 test doubles that only expose
+  // insert(); real Supabase builders always provide upsert().
+  if (connectedRows.length) {
+    const upsert = (destinationTable as unknown as {
+      upsert?: (values: unknown, options?: { onConflict?: string }) => Promise<{ error: { code?: string; message: string } | null }>;
+    }).upsert;
+    const result = upsert
+      ? await upsert.call(destinationTable, connectedRows, { onConflict: "publish_job_id,provider,social_connection_id" })
+      : await (destinationTable as unknown as { insert: (values: unknown) => Promise<{ error: { code?: string; message: string } | null }> }).insert(connectedRows);
+    if (result.error && !isMissingTable(result.error.code)) {
+      console.error("[publishFanout] persist destinations:", result.error.message);
+    }
+  }
+
+  // A null connection is a deliberate skipped/refused destination. PostgreSQL
+  // NULLs do not conflict in the non-null unique key, so resolve that reserved
+  // per-job/provider row explicitly before updating/inserting it.
+  for (const row of nullConnectionRows) {
+    const table = db.from("social_publish_job_destinations");
+    const lookup = table.select("id").eq("publish_job_id", jobId).eq("provider", row.provider).is("social_connection_id", null);
+    const { data: existing, error: lookupError } = await lookup.maybeSingle();
+    if (lookupError) {
+      if (!isMissingTable(lookupError.code)) console.error("[publishFanout] find null destination:", lookupError.message);
+      continue;
+    }
+    if (existing && typeof (existing as { id?: unknown }).id === "string") {
+      const { error } = await db.from("social_publish_job_destinations").update(row).eq("id", (existing as { id: string }).id);
+      if (error && !isMissingTable(error.code)) console.error("[publishFanout] update null destination:", error.message);
+      continue;
+    }
+    const { error: insertError } = await db.from("social_publish_job_destinations").insert(row);
+    if (insertError && insertError.code === "23505") {
+      // A concurrent writer won the null-key race; update that canonical row.
+      const winner = await db.from("social_publish_job_destinations")
+        .select("id").eq("publish_job_id", jobId).eq("provider", row.provider)
+        .is("social_connection_id", null).maybeSingle();
+      if (!winner.error && winner.data && typeof (winner.data as { id?: unknown }).id === "string") {
+        await db.from("social_publish_job_destinations").update(row).eq("id", (winner.data as { id: string }).id);
+      }
+    } else if (insertError && !isMissingTable(insertError.code)) {
+      console.error("[publishFanout] persist null destination:", insertError.message);
+    }
   }
   const { error: jobErr } = await db
     .from("social_publish_jobs")
