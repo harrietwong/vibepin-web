@@ -44,7 +44,7 @@ const storage = new FakeStorage();
 // The stubs above must be in place BEFORE pinDraftStore initializes, so these are
 // required here rather than statically imported (static imports hoist above them).
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { publishContent } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
+const { publishContent, reconcilePublishIntent } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
 const { buildPublishConfirmation, confirmPublishSnapshot } = require("../src/lib/studio/publishConfirmation") as typeof import("../src/lib/studio/publishConfirmation");
 const pinDraftStore = require("../src/lib/pinDraftStore") as typeof import("../src/lib/pinDraftStore");
 const { contentDestinationResults } = require("../src/lib/contentDraftModel") as typeof import("../src/lib/contentDraftModel");
@@ -52,6 +52,8 @@ const { contentDestinationResults } = require("../src/lib/contentDraftModel") as
 import type { PinDraft } from "../src/lib/pinDraftStore";
 import type { PublishContentDeps } from "../src/lib/studio/publishContent";
 import { SocialApiError } from "../src/lib/social/socialClient";
+
+void reconcilePublishIntent;
 
 let pass = 0;
 let fail = 0;
@@ -578,6 +580,26 @@ async function main(): Promise<void> {
     assert.equal(ig.status, "delivery_unknown");
     assert.equal(ig.errorCode, undefined);
     assert.match(ig.errorMessage ?? "", /Delivery status is unknown/);
+  });
+
+  await test("Pinterest recovery machine codes remain ambiguous", async () => {
+    const draft = seedDraft({ id: "pin-recovery-code", destinations: [{ provider: "pinterest", socialConnectionId: PIN_CONN, boardId: "board-1" }] });
+    const { deps } = makeDeps({ pinFails: { code: "delivery_recovery_pending", message: "Reconcile first." } });
+    const out = await publishConfirmed(draft.id, { deps });
+    const pin = out.results.find(r => r.provider === "pinterest")!;
+    assert.equal(pin.status, "delivery_unknown");
+    assert.equal(pin.errorCode, "delivery_recovery_pending");
+    assert.equal(out.recoveryPending, true);
+  });
+
+  await test("reconcile is owner-scoped and read-only", async () => {
+    let called = "";
+    const result = await reconcilePublishIntent("publish:test intent", async (input, init) => {
+      called = `${String(input)}|${String(init?.method)}|${String(init?.credentials)}`;
+      return new Response(JSON.stringify({ intent: { intentId: "publish:test intent", destinations: [] } }), { status: 200 });
+    });
+    assert.deepEqual(result?.destinations, []);
+    assert.match(called, /\/api\/publish\/reconcile\?intentId=publish%3Atest%20intent\|GET\|include/);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

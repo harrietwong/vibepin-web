@@ -97,6 +97,20 @@ export type PublishContentDeps = {
   now: () => string;
 };
 
+export type PublishIntentReconcileResponse = {
+  intentId: string;
+  destinations: Array<{ destinationId: string; provider: string; status: string; retryAllowed: boolean; remoteId: string | null; remoteUrl: string | null; evidence: Record<string, unknown> }>;
+};
+
+/** Owner-scoped, read-only recovery lookup; never dispatches or meters. */
+export async function reconcilePublishIntent(intentId: string, fetcher: typeof fetch = fetch): Promise<PublishIntentReconcileResponse | null> {
+  if (!intentId.trim()) return null;
+  const response = await fetcher(`/api/publish/reconcile?intentId=${encodeURIComponent(intentId)}`, { method: "GET", credentials: "include" });
+  if (!response.ok) return null;
+  const body = await response.json() as { intent?: PublishIntentReconcileResponse };
+  return body.intent ?? null;
+}
+
 export type PublishContentOutcome = {
   published: DestinationPublishResult[];
   failed: DestinationPublishResult[];
@@ -520,7 +534,8 @@ export async function publishContent(
           });
           continue;
         }
-        const ambiguous = typeof err?.httpStatus !== "number" || err.httpStatus >= 500;
+        const ambiguous = err?.code === "delivery_unknown" || err?.code === "delivery_recovery_pending"
+          || typeof err?.httpStatus !== "number" || err.httpStatus >= 500;
         outcomes.push({
           ...baseRow(destination, ambiguous ? "delivery_unknown" : "failed", submittedAt),
           errorCode: err?.code,
