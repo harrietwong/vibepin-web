@@ -96,6 +96,7 @@ export interface PinDraft {
   previousResults?:     DestinationPublishResult[];
   /** Stable user-confirmed immediate-publish intent; persisted before provider dispatch. */
   publishIntentId?:      string;
+  publishIntentFingerprint?: string;
   publishIntentStatus?:  "publishing" | "completed" | "recovery_pending";
   publishIntentConfirmedAt?: string;
   /** Exact provider/account/Board/Page snapshot the confirmation dialog displayed. */

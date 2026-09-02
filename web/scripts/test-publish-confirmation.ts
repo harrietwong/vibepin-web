@@ -153,7 +153,8 @@ async function main() {
       replay.blocked === "invalid_confirmation" || replay.nothingToRetry === true,
       "a duplicate confirmation must fail closed or resolve as a completed no-op",
     );
-    assert.equal(buildPublishConfirmation(pinDraftStore.getDraft(draft.id)!, { onlyPending: true }).intentId, snapshot.intentId);
+    assert.notEqual(buildPublishConfirmation(pinDraftStore.getDraft(draft.id)!, { onlyPending: true }).intentId, snapshot.intentId,
+      "changing publish mode from full republish to retry must create a new intent");
   });
   await test("ambiguous delivery locks resubmit under the same intent", async () => {
     const draft = seed({ destinations: [{ provider: "pinterest", socialConnectionId: "pin-account", boardId: "board-42", capturedAt: NOW }] });

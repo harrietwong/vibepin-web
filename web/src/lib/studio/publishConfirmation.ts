@@ -270,7 +270,7 @@ export function buildPublishConfirmation(
   const generatedActionId = options.actionId?.trim()
     || globalThis.crypto?.randomUUID?.().replaceAll("-", "")
     || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-  const intentId = options.onlyPending && draft.publishIntentId
+  const intentId = options.onlyPending && draft.publishIntentId && draft.publishIntentFingerprint === fingerprint
     ? draft.publishIntentId
     : `publish:${identity.contentId}:${generatedActionId}`;
   return {

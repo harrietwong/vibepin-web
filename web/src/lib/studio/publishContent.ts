@@ -399,6 +399,7 @@ export async function publishContent(
     pinDraftStore.updateDraft(draftId, {
       publishError: undefined,
       publishIntentId: confirmation.intentId,
+      publishIntentFingerprint: confirmation.fingerprint,
       publishIntentStatus: "publishing",
       publishIntentConfirmedAt: confirmation.confirmedAt,
       title: confirmation.title,
@@ -624,7 +625,9 @@ export async function publishContent(
         // has none, and this stays undefined exactly as it did before — the message is
         // still shown, StudioBoard's limit UI just does not fire for it.
         const errorCode = error instanceof SocialApiError ? error.code : undefined;
-        const ambiguous = !(error instanceof SocialApiError) || error.status >= 500;
+        const recoveryCode = error instanceof SocialApiError
+          && (error.code === "delivery_unknown" || error.code === "delivery_recovery_pending");
+        const ambiguous = recoveryCode || !(error instanceof SocialApiError) || error.status >= 500;
         errors.push({ provider: "social", error });
         for (const destination of socialTargets) {
           outcomes.push({ ...baseRow(destination, ambiguous ? "delivery_unknown" : "failed", submittedAt), errorCode,
