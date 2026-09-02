@@ -35,7 +35,12 @@ import { uploadPinImage, UploadPinImageError } from "@/lib/studio/uploadPinImage
 import type { CreativeRequestError } from "@/lib/studio/recommendationRequest";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
-import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
+import {
+  generationOwnerScopeKey,
+  isGenerationOwnerScopeCurrent,
+  reconcileGeneratingDrafts,
+} from "@/lib/studio/generationRecovery";
+import { resetAiScopeEphemeralState } from "@/lib/studio/aiScopeLifecycle";
 import { totalPins as computeTotalPins, type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
 import {
@@ -328,7 +333,13 @@ export function StudioBoard() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [publishConfirmation, setPublishConfirmation] = useState<PublishConfirmationSnapshot | null>(null);
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
-  const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
+  // Drawer state is ephemeral and must never cross a verified owner/workspace
+  // transition. The durable setup is read from creativeSetupStore under the current
+  // scope; this ref only records which scope owns the currently open drawer.
+  const ownerScope = pinDraftStore.getPinDraftOwnerScope();
+  const ownerScopeKey = generationOwnerScopeKey(ownerScope);
+  const aiDrawerOwnerScopeRef = useRef<string | null>(ownerScopeKey);
+  const [aiDrawerScopeKey, setAiDrawerScopeKey] = useState<string | null>(ownerScopeKey);
   const [aiGenerating, setAiGenerating] = useState(false);
   const aiGenerationLockRef = useRef<string | null>(null);
   /**
@@ -359,6 +370,32 @@ export function StudioBoard() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const setScopedAiDrawer = useCallback((next: AiDrawerState) => {
+    aiDrawerOwnerScopeRef.current = next ? ownerScopeKey : null;
+    setAiDrawerScopeKey(next ? ownerScopeKey : null);
+    setAiDrawer(next);
+  }, [ownerScopeKey]);
+
+  useEffect(() => {
+    const nextEphemeral = resetAiScopeEphemeralState({
+      scopeKey: aiDrawerOwnerScopeRef.current,
+      drawer: aiDrawer,
+      generating: aiGenerating,
+      limitPrompt,
+      lock: aiGenerationLockRef.current,
+    }, ownerScopeKey);
+    // Close A's ephemeral drawer and clear its in-memory action lock before B can
+    // interact with the surface. B will only hydrate its own scoped setup.
+    aiDrawerOwnerScopeRef.current = nextEphemeral.scopeKey;
+    setAiDrawerScopeKey(nextEphemeral.scopeKey);
+    if (nextEphemeral.drawer === null && aiDrawer !== null) setAiDrawer(null);
+    if (!nextEphemeral.generating && aiGenerating) setAiGenerating(false);
+    if (nextEphemeral.limitPrompt === null && limitPrompt !== null) setLimitPrompt(null);
+    if (nextEphemeral.lock === null && aiGenerationLockRef.current !== null) {
+      aiGenerationLockRef.current = null;
+    }
+  }, [aiDrawer, aiGenerating, limitPrompt, ownerScopeKey]);
 
   const presentGenerationAttempt = useCallback((summary: GenerationAttemptSummary) => {
     const command = generationToastCommand(summary);
@@ -397,10 +434,15 @@ export function StudioBoard() {
   useEffect(() => {
     if (!hydrated) return;
     const scope = pinDraftStore.getPinDraftOwnerScope();
+    const capturedScopeKey = generationOwnerScopeKey(scope);
+    if (capturedScopeKey !== ownerScopeKey) return;
     const blocking = getBlockingGenerationAttempt(scope);
     let cancelled = false;
+    const isCurrentScope = () => !cancelled
+      && capturedScopeKey === ownerScopeKey
+      && isGenerationOwnerScopeCurrent(scope, pinDraftStore.getPinDraftOwnerScope);
     queueMicrotask(() => {
-      if (cancelled) return;
+      if (!isCurrentScope()) return;
       if (blocking) {
         presentGenerationAttempt({
           attemptId: blocking.attemptId,
@@ -412,10 +454,14 @@ export function StudioBoard() {
       }
       // Rebuild the exact attempt from durable job/slot records. The callback updates
       // the same toast id after reload; another owner cannot reach these records.
-      void reconcileGeneratingDrafts({ onAttemptState: presentGenerationAttempt });
+      void reconcileGeneratingDrafts({
+        onAttemptState: summary => {
+          if (isCurrentScope()) presentGenerationAttempt(summary);
+        },
+      });
     });
     return () => { cancelled = true; };
-  }, [hydrated, presentGenerationAttempt]);
+  }, [hydrated, ownerScopeKey, presentGenerationAttempt]);
 
   /**
    * PRD §17 — the destinations NEW content should be seeded with, narrowed to the
@@ -438,10 +484,11 @@ export function StudioBoard() {
   const openFilePicker = useCallback(() => fileRef.current?.click(), []);
 
   const hasCards = items.length > 0 || counts.all > 0;
-  const aiSetupKey = aiDrawer?.mode === "version"
-    ? aiDrawer.draft.id
-    : aiDrawer?.mode === "scratch"
-      ? creativeSetupKeyForScratchProduct(aiDrawer.product)
+  const drawerForScope = aiDrawerScopeKey === ownerScopeKey ? aiDrawer : null;
+  const aiSetupKey = drawerForScope?.mode === "version"
+    ? drawerForScope.draft.id
+    : drawerForScope?.mode === "scratch"
+      ? creativeSetupKeyForScratchProduct(drawerForScope.product)
       : null;
   const batchPins = useMemo<BatchPinRow[]>(() => allItems.map(({ draft }) => ({
     pinId: draft.id,
@@ -865,24 +912,16 @@ export function StudioBoard() {
     }
 
     if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
-    // Drop any cached scratch setup so a NEW product never inherits a previous scratch
-    // session's references/settings. (A retry seeds this key deliberately and opens the
-    // drawer itself, so it is unaffected.)
-    setAiSetupCache(prev => {
-      if (!prev.scratch) return prev;
-      const { scratch: _dropped, ...rest } = prev;
-      return rest;
-    });
-    setAiDrawer({ mode: "scratch", product });
-  }, [flashSaved, productPickerTargetId, tr]);
+    setScopedAiDrawer({ mode: "scratch", product });
+  }, [flashSaved, productPickerTargetId, setScopedAiDrawer, tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
   // The card names WHICH image to regenerate (the selected thumbnail = the cover).
   // It rides the drawer state so the completion path can replace that one media item
   // instead of the whole set — regenerating image 3 of 4 must not delete the other 3.
   const handleGenerateAiImage = useCallback((d: PinDraft, mediaId?: string) =>
-    setAiDrawer({ mode: "version", draft: d, targetMediaId: mediaId }), []);
-  const handleCreateWithAi = useCallback(() => setAiDrawer({ mode: "scratch" }), []);
+    setScopedAiDrawer({ mode: "version", draft: d, targetMediaId: mediaId }), [setScopedAiDrawer]);
+  const handleCreateWithAi = useCallback(() => setScopedAiDrawer({ mode: "scratch" }), [setScopedAiDrawer]);
   /**
    * A generation was refused for lack of quota. Decide between the two PRD outcomes
    * and stage the dialog; the actual re-request happens only on the user's click.
@@ -930,7 +969,7 @@ export function StudioBoard() {
     retryContext?: { parent: PinDraft | null; targetMediaId?: string },
     committedSetup?: AiVersionDrawerSetup,
   ) => {
-    if (!aiDrawer && !retryContext) return;
+    if ((!aiDrawer || aiDrawerOwnerScopeRef.current !== ownerScopeKey) && !retryContext) return;
     const parent = retryContext
       ? retryContext.parent
       : aiDrawer!.mode === "version" ? aiDrawer!.draft : null;
@@ -964,7 +1003,6 @@ export function StudioBoard() {
       return;
     }
 
-    setAiSetupCache(previous => ({ ...previous, [setupKey]: setup }));
     aiGenerationLockRef.current = attemptId;
     setAiGenerating(true);
     presentGenerationAttempt({ attemptId, state: "persisting", okCount: 0, failCount: 0, expectedCount });
@@ -1016,7 +1054,7 @@ export function StudioBoard() {
         onAnalyze: id => { void startImageAnalysis(id); },
         onJudge: id => { void startQualityJudge(id); },
         onPlaceholdersReady: total => {
-          setAiDrawer(null);
+          setScopedAiDrawer(null);
           presentGenerationAttempt({ attemptId, state: "generating", okCount: 0, failCount: 0, expectedCount: total });
         },
         onGroupProgress: (current, total) => {
@@ -1058,7 +1096,7 @@ export function StudioBoard() {
         setAiGenerating(false);
       }
     }
-  }, [aiDrawer, aiSetupKey, defaultDestinationsForNewContent, handleGenerationLimit, presentGenerationAttempt, tr]);
+  }, [aiDrawer, aiDrawerOwnerScopeRef, aiSetupKey, defaultDestinationsForNewContent, handleGenerationLimit, ownerScopeKey, presentGenerationAttempt, setScopedAiDrawer, tr]);
 
   /**
    * "Generate R instead" (product decision #6, option B).
@@ -1364,10 +1402,8 @@ export function StudioBoard() {
       : undefined);
 
     // The drawer opens in version mode when there is a parent or an own image, and
-    // reads aiSetupCache under the DRAFT ID in that case; a true scratch drawer reads
-    // the literal key "scratch". Cache under whichever key will actually be read —
-    // keying a scratch retry by draft id silently discarded the restored reference.
-    // Carry the failed draft's OWN product forward. A scratch retry reopens without a
+    // restores only from the owner/workspace-scoped creativeSetupStore. Carry the failed
+    // draft's OWN product forward. A scratch retry reopens without a
     // parent, and a restored image URL alone is classified as an implicit draft image
     // — which sends primaryProductSelection: null and silently drops the product link,
     // its Shopify id, and the Website URL the failed run had. Passing the product as
@@ -1384,14 +1420,12 @@ export function StudioBoard() {
     const nextDrawer: AiDrawerState = parent
       ? { mode: "version", draft: parent, product: retryProduct }
       : d.imageUrl ? { mode: "version", draft: d, product: retryProduct } : { mode: "scratch", product: retryProduct };
-    const cacheKey = nextDrawer.mode === "version"
+    const setupKey = nextDrawer.mode === "version"
       ? nextDrawer.draft.id
       : creativeSetupKeyForScratchProduct(nextDrawer.product);
-    if (retrySetup) {
-      setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
-    }
-    setAiDrawer(nextDrawer);
-  }, [presentGenerationAttempt, requestPublish]);
+    if (retrySetup) saveCreativeSetup(setupKey, retrySetup);
+    setScopedAiDrawer(nextDrawer);
+  }, [presentGenerationAttempt, requestPublish, setScopedAiDrawer]);
 
   // Persist failure is re-read on every render; the store emits (via
   // usePinBoardDrafts' subscription) after every write, including failed ones.
@@ -1641,32 +1675,24 @@ export function StudioBoard() {
         )}
       </div>
 
-      {aiDrawer && (
+      {drawerForScope && (
         <AiVersionDrawer
-          // A scratch drawer opened WITH a product gets a per-product key so a fresh
-          // "Select product" never inherits a previous scratch session's cached setup.
-          key={aiDrawer.mode === "version" ? aiDrawer.draft.id
-            : creativeSetupKeyForScratchProduct(aiDrawer.product)}
-          draft={aiDrawer.mode === "version" ? aiDrawer.draft : null}
-          title={aiDrawer.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
+          // A scratch drawer opened WITH a product gets a per-product key, and the
+          // owner/workspace-scoped creative setup store is the sole general restore.
+          key={drawerForScope.mode === "version" ? drawerForScope.draft.id
+            : creativeSetupKeyForScratchProduct(drawerForScope.product)}
+          draft={drawerForScope.mode === "version" ? drawerForScope.draft : null}
+          title={drawerForScope.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
           open generating={aiGenerating}
-          // A product prefill takes precedence over a cached scratch setup.
-          // A cached setup wins when one exists (a retry seeds it with the failed
-          // run's reference + products). Only a FRESH Select-product scratch — which
-          // has a product but no cached setup — starts clean, so a previous scratch
-          // session's settings are not inherited by a different product.
-          initialSetup={aiSetupKey
-            ? (aiSetupCache[aiSetupKey] ?? persistedAiSetup ?? loadCreativeSetup(aiSetupKey))
-            : undefined}
+          initialSetup={aiSetupKey ? loadCreativeSetup(aiSetupKey) : undefined}
           // Both modes may carry a product: scratch from Select product, version from
           // a retry restoring the failed draft's own product.
-          initialProductSelection={aiDrawer.product ?? null}
+          initialProductSelection={drawerForScope.product ?? null}
           onSetupChange={setup => {
             if (!aiSetupKey) return;
-            setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));
             saveCreativeSetup(aiSetupKey, setup);
           }}
-          onClose={() => setAiDrawer(null)}
+          onClose={() => setScopedAiDrawer(null)}
           onGenerate={(opts, setup) => handleAiGenerate(opts, undefined, setup)}
         />
       )}

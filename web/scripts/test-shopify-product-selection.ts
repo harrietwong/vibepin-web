@@ -276,7 +276,7 @@ async function main() {
     // The corrective commit replaced silent draft creation with the prefilled drawer.
     // Order-independent: the handler also clears the stale scratch setup cache before
     // opening, so asserting adjacency here would break on unrelated edits.
-    assert.match(handler, /setAiDrawer\(\{\s*mode: "scratch",\s*product\s*\}\)/);
+    assert.match(handler, /set(?:Scoped)?AiDrawer\(\{\s*mode: "scratch",\s*product\s*\}\)/);
     assert.doesNotMatch(handler, /createBoardDraft/, "selection must not create a draft");
   });
 

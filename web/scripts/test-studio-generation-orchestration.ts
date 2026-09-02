@@ -62,8 +62,17 @@ test("visible setup and attempt are committed before the generation run can crea
 test("creative setup is the only generic restore path; generation store is attempt-only", () => {
   assert.match(source, /loadCreativeSetup\(/);
   assert.match(source, /saveCreativeSetup\(/);
+  assert.doesNotMatch(source, /aiSetupCache|setAiSetupCache/, "no unscoped in-memory setup restore can cross owner/workspace");
+  assert.match(source, /drawerForScope[\s\S]*?initialSetup=\{aiSetupKey \? loadCreativeSetup\(aiSetupKey\)/, "drawer restore reads the scoped store directly");
   assert.doesNotMatch(source, /loadGenerationSetup|saveGenerationSetup|clearGenerationSetup/);
   assert.doesNotMatch(helperSource, /loadGenerationSetup|saveGenerationSetup|clearGenerationSetup/);
+});
+
+test("owner/workspace transition closes the ephemeral drawer before B can see A's product", () => {
+  assert.match(source, /ownerScopeKey/);
+  assert.match(source, /aiDrawerScopeKey === ownerScopeKey/);
+  assert.match(source, /setAiDrawer\(null\)[\s\S]*?setLimitPrompt\(null\)/);
+  assert.match(source, /initialProductSelection=\{drawerForScope\.product \?\? null\}/);
 });
 
 test("card retry restores one failed reference group at count one", () => {

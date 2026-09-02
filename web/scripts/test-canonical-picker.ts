@@ -113,7 +113,7 @@ test("StudioBoard's product select opens the AI drawer, not a bare draft", () =>
   const end = src.indexOf("\n  }, [", start);
   assert.ok(start > -1 && end > start, "handleProductSelect not found");
   const handler = src.slice(start, end);
-  assert.ok(handler.includes('setAiDrawer({ mode: "scratch"'), "must open the scratch AI drawer");
+  assert.ok(handler.includes('setScopedAiDrawer({ mode: "scratch"'), "must open the scratch AI drawer");
   assert.ok(!handler.includes("createBoardDraft"), "must NOT create a draft on selection");
 });
 
@@ -121,6 +121,8 @@ test("scratch drawer carries the product prefill", () => {
   const src = read("components/studio/StudioBoard.tsx");
   assert.ok(src.includes("initialProductSelection="), "AiVersionDrawer must receive the prefilled product");
   assert.ok(/mode: "scratch"; product\?: CanonicalProductSelection/.test(src), "scratch state carries a product");
+  assert.ok(src.includes("creativeSetupKeyForScratchProduct"), "scratch restore must be keyed by product identity");
+  assert.ok(!src.includes("prev.scratch"), "obsolete unscoped scratch cache cleanup must not be the isolation mechanism");
 });
 
 test("AiVersionDrawer seeds product images from the prefill", () => {
@@ -160,12 +162,12 @@ test("EVERY retry branch carries the failed draft's own product, not just scratc
   // retryProduct used to be computed and then dropped by both version branches, so a
   // failed run that chose product B was retried with the PARENT's product A.
   const src = read("components/studio/StudioBoard.tsx");
-  const block = src.slice(src.indexOf("const nextDrawer: AiDrawerState"), src.indexOf("setAiDrawer(nextDrawer);"));
+  const block = src.slice(src.indexOf("const nextDrawer: AiDrawerState"), src.indexOf("setScopedAiDrawer(nextDrawer);"));
   const branches = block.match(/product: retryProduct/g) ?? [];
   assert.equal(branches.length, 3, `all three branches must carry it (found ${branches.length})`);
   // …and the drawer must actually receive it in version mode too.
   assert.ok(
-    /initialProductSelection=\{aiDrawer\.product \?\? null\}/.test(src),
+    /initialProductSelection=\{drawerForScope\.product \?\? null\}/.test(src),
     "the drawer prop must not be gated on scratch mode",
   );
 });

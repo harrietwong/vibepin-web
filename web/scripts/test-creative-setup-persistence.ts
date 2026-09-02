@@ -92,12 +92,31 @@ async function main(): Promise<void> {
   );
   assert.equal(setupStore.creativeSetupKeyForScratchProduct({ ...scratchProduct, id: "stable-product-id" }), "scratch:product:stable-product-id", "stable product id gets a readable non-URL key");
 
+  // Runtime A→B→A coverage for every scratch key shape used by StudioBoard. The
+  // drawer may remain mounted during an auth/workspace transition, so this must be
+  // proven through the scoped store rather than only a source-string guard.
+  const scratchSetups = [
+    ["scratch:empty", "A empty scratch"],
+    ["scratch:product:stable-product-id", "A stable-product scratch"],
+    [scratchKey, "A digest scratch"],
+  ] as const;
+  for (const [key, directionBrief] of scratchSetups) {
+    assert.equal(setupStore.saveCreativeSetup(key, { ...setup, directionBrief }), true);
+  }
+  pinDraftStore.setPinDraftOwnerScope("owner-b", "workspace-2");
+  for (const [key] of scratchSetups) assert.equal(setupStore.loadCreativeSetup(key), undefined, `B cannot read A ${key}`);
+  assert.equal(setupStore.saveCreativeSetup("scratch:product:stable-product-id", { ...setup, directionBrief: "B scratch" }), true);
+  pinDraftStore.setPinDraftOwnerScope("owner-a", "workspace-1");
+  for (const [key, directionBrief] of scratchSetups) {
+    assert.equal(setupStore.loadCreativeSetup(key)?.directionBrief, directionBrief, `A restores its own ${key}`);
+  }
+
   const serialized = JSON.stringify(setupStore.loadCreativeSetup("draft-1"));
   for (const forbidden of ["generationJobId", "placeholder", "toast", "usage", "reservation", "providerResponse"]) {
     assert.ok(!serialized.includes(forbidden), `setup persistence must not create ${forbidden}`);
   }
 
-  console.log("Creative setup persistence: 18 passed, 0 failed");
+  console.log("Creative setup persistence: 27 passed, 0 failed");
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

@@ -60,6 +60,21 @@ export type GenerationRecoveryOptions = {
   onAttemptState?: (summary: GenerationAttemptSummary) => void;
 };
 
+/** Stable, testable identity for the owner/workspace boundary used by recovery UI. */
+export function generationOwnerScopeKey(
+  scope: { ownerUserId: string; workspaceId: string } | null | undefined,
+): string | null {
+  return scope ? `${scope.ownerUserId}:${scope.workspaceId}` : null;
+}
+
+/** Pure lifecycle gate: callbacks queued for an old scope must become no-ops. */
+export function isGenerationOwnerScopeCurrent(
+  expectedScope: { ownerUserId: string; workspaceId: string } | null | undefined,
+  getCurrentScope: () => { ownerUserId: string; workspaceId: string } | null,
+): boolean {
+  return generationOwnerScopeKey(expectedScope) === generationOwnerScopeKey(getCurrentScope());
+}
+
 async function fetchJobStatus(
   jobId: string,
   authContext: VerifiedGenerationAuthContext,

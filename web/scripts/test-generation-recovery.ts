@@ -16,7 +16,12 @@
  */
 
 import assert from "node:assert";
-import type { GenerationRecoveryOptions } from "../src/lib/studio/generationRecovery";
+import {
+  generationOwnerScopeKey,
+  isGenerationOwnerScopeCurrent,
+  type GenerationRecoveryOptions,
+} from "../src/lib/studio/generationRecovery";
+import { resetAiScopeEphemeralState } from "../src/lib/studio/aiScopeLifecycle";
 
 // Dummy env so importing the supabase browser client chain never throws.
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://stub.supabase.co";
@@ -67,6 +72,57 @@ async function test(name: string, fn: () => Promise<void> | void) {
   try { await fn(); console.log(`  OK ${name}`); passed++; }
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).stack ?? (e as Error).message}`); failed++; }
 }
+
+test("owner/workspace lifecycle gate rejects queued A callbacks after A→B and restores A on A→B→A", async () => {
+  const a = { ownerUserId: "user-a", workspaceId: "workspace-a" };
+  const b = { ownerUserId: "user-b", workspaceId: "workspace-b" };
+  let current: typeof a | null = a;
+  assert.equal(generationOwnerScopeKey(a), "user-a:workspace-a");
+  assert.equal(isGenerationOwnerScopeCurrent(a, () => current), true);
+  let cancelled = false;
+  const callbacks: string[] = [];
+  const queueForScope = (scope: typeof a) => {
+    queueMicrotask(() => {
+      if (!cancelled && isGenerationOwnerScopeCurrent(scope, () => current)) callbacks.push(scope.ownerUserId);
+    });
+  };
+  queueForScope(a);
+  current = b;
+  cancelled = true;
+  await Promise.resolve();
+  assert.deepEqual(callbacks, [], "A microtask is cancelled and scope-gated after switching to B");
+  assert.equal(isGenerationOwnerScopeCurrent(a, () => current), false);
+
+  cancelled = false;
+  queueForScope(b);
+  await Promise.resolve();
+  assert.deepEqual(callbacks, ["user-b"], "B gets only its own queued callback");
+
+  current = a;
+  queueForScope(a);
+  await Promise.resolve();
+  assert.deepEqual(callbacks, ["user-b", "user-a"], "A gets one fresh callback after A→B→A");
+  assert.equal(isGenerationOwnerScopeCurrent(a, () => current), true);
+});
+
+test("same-component owner transition clears drawer, generation lock, and limit prompt", () => {
+  const state = resetAiScopeEphemeralState({
+    scopeKey: "user-a:workspace-a",
+    drawer: { mode: "scratch" },
+    generating: true,
+    limitPrompt: { requested: 4 },
+    lock: "attempt-a",
+  }, "user-b:workspace-b");
+  assert.deepEqual(state, {
+    scopeKey: "user-b:workspace-b",
+    drawer: null,
+    generating: false,
+    limitPrompt: null,
+    lock: null,
+  });
+  const unchanged = resetAiScopeEphemeralState(state, "user-b:workspace-b");
+  assert.equal(unchanged, state, "same scope does not clear valid ephemeral state");
+});
 
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
