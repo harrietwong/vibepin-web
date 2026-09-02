@@ -1606,7 +1606,9 @@ export function StudioBoard() {
           // run's reference + products). Only a FRESH Select-product scratch — which
           // has a product but no cached setup — starts clean, so a previous scratch
           // session's settings are not inherited by a different product.
-          initialSetup={aiSetupKey ? (aiSetupCache[aiSetupKey] ?? loadCreativeSetup(aiSetupKey)) : undefined}
+          initialSetup={aiSetupKey
+            ? (aiSetupCache[aiSetupKey] ?? persistedAiSetup ?? loadCreativeSetup(aiSetupKey))
+            : undefined}
           // Both modes may carry a product: scratch from Select product, version from
           // a retry restoring the failed draft's own product.
           initialProductSelection={aiDrawer.product ?? null}
