@@ -50,6 +50,10 @@ export const CORE: string[] = [
   "test-admin-auth-security",
   "test-admin-account-kind",
   "test-admin-action-center",
+  "test-admin-usage",
+  "test-admin-alerts",
+  "test-feature-adoption",
+  "test-generation-record",
   "test-activation-funnel",
   "test-ai-adoption",
   "test-admin-today-i18n",
@@ -61,6 +65,7 @@ export const CORE: string[] = [
   // Facebook Page OAuth
   "test-facebook-pages",
   "test-customer360-plan",
+  "test-admin-users-plan-filter",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",

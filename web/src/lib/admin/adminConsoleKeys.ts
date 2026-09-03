@@ -12,6 +12,8 @@
 import type { BlockerType, UserHealth } from "@/lib/server/adminActionCenter";
 import type { FunnelStage } from "@/lib/server/adminActivationFunnel";
 import type { AccountKind } from "@/lib/server/adminAccountKind";
+import type { UsageMetricKey } from "@/lib/server/adminUsage";
+import type { FeatureKey } from "@/lib/server/adminFeatureAdoption";
 import type { GenerationErrorType } from "@/lib/studioPersistence";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
@@ -91,3 +93,30 @@ export function generationErrorKey(raw: string | null | undefined): AdminMessage
   if (!raw) return null;
   return (GENERATION_ERROR_KEY as Record<string, AdminMessageKey | undefined>)[raw] ?? null;
 }
+
+/**
+ * Label per usage metric. Keyed by the full UsageMetricKey union, so adding a
+ * fourth metered allowance without a label is a compile error rather than a raw
+ * camelCase key leaking onto the operator's screen.
+ */
+export const USAGE_METRIC_KEY: Record<UsageMetricKey, AdminMessageKey> = {
+  aiImages: "usage.metric.aiImages",
+  aiTextGenerations: "usage.metric.aiTextGenerations",
+  scheduledPosts: "usage.metric.scheduledPosts",
+};
+
+/**
+ * Label per feature-adoption feature. Keyed by the full FeatureKey union, so
+ * adding a feature to adminFeatureAdoption.ts without a label is a compile
+ * error rather than a raw camelCase key leaking onto the operator's screen.
+ */
+export const FEATURE_LABEL_KEY: Record<FeatureKey, AdminMessageKey> = {
+  aiImageGeneration: "today.featureAdoption.feature.aiImageGeneration",
+  referenceRecommendations: "today.featureAdoption.feature.referenceRecommendations",
+  creativeDirection: "today.featureAdoption.feature.creativeDirection",
+  aiCopy: "today.featureAdoption.feature.aiCopy",
+  imageAnalysis: "today.featureAdoption.feature.imageAnalysis",
+  keywordRecommendations: "today.featureAdoption.feature.keywordRecommendations",
+  publish: "today.featureAdoption.feature.publish",
+  scheduling: "today.featureAdoption.feature.scheduling",
+};

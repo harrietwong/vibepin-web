@@ -127,17 +127,41 @@ async function main() {
   // DraftDetailsDrawer.tsx / BatchEditDrawer.tsx) ─────────────────────────────
   // These components render React and aren't unit-tested here; instead this locks
   // down the CONTRACT those call sites rely on: track() with the exact payload keys
-  // they send (draftId, sourceGenerationId when available, remotePinId), fired only
-  // on success and wrapped so a publish that succeeds is never affected by analytics.
-  //
-  // `PinDraft` carries TWO different generation ids — `generationSessionId` (the
-  // client-side batch session) and `sourceGenerationId` (the server's
-  // generation_request_id). The payload key must be `sourceGenerationId` because that
-  // is the field the value is actually read from; sending it under the OTHER field's
-  // name would make every downstream consumer join on the wrong id.
+  // they send (draftId or sourcePinId, sourceGenerationId when available, remotePinId),
+  // fired only on success and wrapped so a publish that succeeds is never affected by
+  // analytics. `sourceGenerationId` is the server's generation_request_id — NOT the
+  // draft's separate client-side `generationSessionId` batch id; the payload key names
+  // the field the value actually came from (see the call sites' own comments).
+
+  // GUARD — added after a mutation test exposed a gap: every assertion below runs
+  // against the local mock, so renaming the key in the REAL components would not
+  // fail any of them (verified: the suite stayed green while the shipped payload
+  // said generationSessionId). This test reads the three call sites' own source so
+  // the contract is pinned to the code that ships, not to this file's restatement.
+  test("draft_published: the real call sites send sourceGenerationId, never the old key", () => {
+    const CALL = 'track("draft_published"';
+    for (const rel of [
+      "src/components/studio/StudioBoard.tsx",
+      "src/components/plan/DraftDetailsDrawer.tsx",
+      "src/components/studio/BatchEditDrawer.tsx",
+    ]) {
+      const src = readFileSync(join(process.cwd(), rel), "utf8");
+      const at = src.indexOf(CALL);
+      assert.notStrictEqual(at, -1, rel + " must still fire draft_published");
+      // End the window at the call's own "});" — slicing to the first "}" would
+      // stop inside the payload's spread and hide the key we are guarding.
+      const rest = src.slice(at);
+      const payload = rest.slice(0, rest.indexOf("});") + 3);
+      assert.ok(
+        payload.indexOf("generationSessionId") === -1,
+        rel + " must send the server generation_request_id under sourceGenerationId, " +
+        "not under the client-side batch id's name generationSessionId",
+      );
+    }
+  });
 
   /** Mirrors the try/catch each publish-success call site wraps track() in. */
-  function trackPublishSuccessBestEffort(props: { draftId?: string; sourceGenerationId?: string; remotePinId?: string }): void {
+  function trackPublishSuccessBestEffort(props: { draftId?: string; sourcePinId?: string; sourceGenerationId?: string; remotePinId?: string }): void {
     try { analytics.track("draft_published", props); }
     catch { /* analytics must never affect publish */ }
   }
@@ -154,7 +178,7 @@ async function main() {
     assert.equal(sent.events[0].draftId, "pd_42");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_123");
     assert.equal("sourceGenerationId" in sent.events[0].payload!, false, "omitted, not guessed, when the draft has no sourceGenerationId");
-    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "the client-side batch id is a DIFFERENT field and must never leak into this payload");
   });
 
   test("draft_published: includes sourceGenerationId when the draft carries one", () => {
@@ -165,6 +189,23 @@ async function main() {
     const sent = JSON.parse(beacons[0].body) as { events: Array<{ payload?: Record<string, unknown> }> };
     assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_9");
     assert.equal(sent.events[0].payload!.remotePinId, "pin_456");
+    assert.equal("generationSessionId" in sent.events[0].payload!, false, "must be sent under sourceGenerationId, not the old key name");
+  });
+
+  test("draft_published: BatchEditDrawer's sourcePinId fallback when the id can't be proven to be a draft id", () => {
+    // Mirrors BatchEditDrawer.tsx: p.pinId is only a real pinDraftStore draft id in the
+    // Weekly-Plan context. When a SUCCESSFUL getDraft can't confirm that (Studio
+    // context), the value is reported under the neutral `sourcePinId` key instead of
+    // asserting it is a `draftId` that joins to nothing.
+    analytics.__resetAnalyticsForTests();
+    beacons.length = 0;
+    trackPublishSuccessBestEffort({ sourcePinId: "studio_pin_7", sourceGenerationId: "gen_req_11", remotePinId: "pin_789" });
+    analytics.__flushAnalyticsForTests();
+    const sent = JSON.parse(beacons[0].body) as { events: Array<{ draftId?: string; payload?: Record<string, unknown> }> };
+    assert.equal(sent.events[0].draftId, undefined, "not asserted as a draftId when unproven");
+    assert.equal(sent.events[0].payload!.sourcePinId, "studio_pin_7");
+    assert.equal(sent.events[0].payload!.sourceGenerationId, "gen_req_11");
+    assert.equal(sent.events[0].payload!.remotePinId, "pin_789");
     assert.equal("generationSessionId" in sent.events[0].payload!, false, "must never appear -- wrong field's name");
   });
 

@@ -7,6 +7,7 @@ import {
   Plug,
   Activity,
   Sparkles,
+  Gauge,
   Lock,
   AlertTriangle,
   ShieldCheck,
@@ -15,9 +16,11 @@ import {
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getUserDetail, type UserDetail } from "@/lib/server/customer360";
 import { getUserBlockers, type BlockerItem, type UserHealth } from "@/lib/server/adminActionCenter";
+import { getUserUsageSummary } from "@/lib/server/adminUsage";
 import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
 import type { AccountKind } from "@/lib/server/adminAccountKind";
 import { BlockerReason } from "../../_components/BlockerReason";
+import { UsagePanel } from "../../_components/UsagePanel";
 import SupportNotesClient from "./SupportNotesClient";
 import { AdminT } from "../../AdminT";
 
@@ -42,7 +45,7 @@ function fmtRelative(iso: string | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-function Card({ icon: Icon, title, right, children }: { icon: React.ComponentType<{ className?: string }>; title: string; right?: React.ReactNode; children: React.ReactNode }) {
+function Card({ icon: Icon, title, right, children }: { icon: React.ComponentType<{ className?: string }>; title: React.ReactNode; right?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="rounded-xl border" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
       <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "#E5E7EB" }}>
@@ -191,6 +194,17 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
     getUserBlockers(id),
   ]);
 
+  // Usage is read AFTER the detail because it needs the plan that customer360
+  // already extracted through the trusted path (planOf reads app_metadata only —
+  // the raw metadata bag deliberately never leaves that layer, so re-deriving the
+  // plan here would mean re-opening it).
+  //
+  // This is a pure read: no ensureAccount, no lazy account creation. An admin
+  // opening a page must never mint billing state for the customer.
+  const { summary: usage, warnings: usageWarnings } = detail.found && detail.account
+    ? await getUserUsageSummary({ id, app_metadata: { plan: detail.account.plan } })
+    : { summary: null, warnings: [] as string[] };
+
   if (!detail.found || !detail.account) {
     return (
       <main className="h-full overflow-y-auto" style={{ background: "#F8FAFC", color: "#111827" }}>
@@ -239,9 +253,22 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
         <AlertStrip blockers={userBlockers.blockers} />
         <HealthBadgeRow health={userBlockers.health} />
 
-        {detail.warnings.length > 0 && (
+        {/* Usage & Plan — placed directly under the health signals because "what
+            is this customer entitled to, and how much of it have they burned" is
+            the next question after "is anything broken". Kept OUT of the health
+            score on purpose: being near a quota is a commercial signal, not a
+            fault (PRD 3.2). */}
+        {usage && (
+          <div className="mb-4">
+            <Card icon={Gauge} title={<AdminT k="usage.card.title" />}>
+              <UsagePanel summary={usage} />
+            </Card>
+          </div>
+        )}
+
+        {(detail.warnings.length > 0 || usageWarnings.length > 0) && (
           <div className="mb-4 rounded-lg border px-4 py-3 text-[11.5px] text-gray-500" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>
-            {detail.warnings.map((w, i) => <p key={i}>· {w}</p>)}
+            {[...detail.warnings, ...usageWarnings].map((w, i) => <p key={i}>· {w}</p>)}
           </div>
         )}
 

@@ -11,13 +11,17 @@ import {
   TrendingDown,
   Minus,
   Trophy,
+  Gauge,
+  Activity,
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getActionCenter, type BlockerItem, type BlockerType } from "@/lib/server/adminActionCenter";
 import type { AccountKind } from "@/lib/server/adminAccountKind";
 import { getActivationFunnel, type StageCount } from "@/lib/server/adminActivationFunnel";
 import { getAiAdoption } from "@/lib/server/adminAiAdoption";
-import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
+import { getQuotaWatch, type QuotaWatchItem } from "@/lib/server/adminUsage";
+import { getFeatureAdoption, selectFeatureAdoptionAnomalies } from "@/lib/server/adminFeatureAdoption";
+import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY, USAGE_METRIC_KEY, FEATURE_LABEL_KEY } from "@/lib/admin/adminConsoleKeys";
 import { AdminT, AdminTFmt } from "../AdminT";
 import { BlockerReason } from "../_components/BlockerReason";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
@@ -223,6 +227,146 @@ function TrendArrow({ direction }: { direction: -1 | 0 | 1 }) {
   return <span className="inline-flex items-center gap-1 text-gray-400"><Minus className="h-4 w-4" /><AdminT k="today.aiAdoption.trend.flat" /></span>;
 }
 
+// ── Quota Watch ────────────────────────────────────────────────────────────
+//
+// A SEPARATE card from the blocker list, on purpose (PRD 3.2). A blocker means
+// "this customer's creation flow is broken — go unblock them"; being at 85% of a
+// plan allowance means "this customer may be outgrowing their plan". Different
+// urgency, different action, different definition of done. Merging them (even
+// with a different colour) teaches the operator to skim both.
+//
+// Everything here is metered with a finite positive allowance; the derivation
+// excludes unlimited plans, users with no usage account, and users whose usage
+// could not be read, so nothing in this table is extrapolated from missing data.
+
+/** Time left in the billing period — the number that turns a % into urgency. */
+function PeriodLeft({ ms }: { ms: number | null }) {
+  if (ms === null) return <>—</>;
+  if (ms <= 0) return <span className="text-amber-700"><AdminT k="today.quotaWatch.periodEnded" /></span>;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 48) return <AdminTFmt k="today.quotaWatch.hoursLeft" vars={{ n: hours }} />;
+  return <AdminTFmt k="today.quotaWatch.daysLeft" vars={{ n: Math.round(hours / 24) }} />;
+}
+
+function QuotaWatchCard({ result }: { result: Awaited<ReturnType<typeof getQuotaWatch>> }) {
+  const rows: Array<{ item: QuotaWatchItem; metricIndex: number }> = [];
+  for (const item of result.items) {
+    item.metrics.forEach((_, i) => rows.push({ item, metricIndex: i }));
+  }
+
+  return (
+    <Card
+      icon={Gauge}
+      title={<AdminT k="today.quotaWatch.title" />}
+      right={rows.length > 0 ? <span className="text-[12px] font-bold text-amber-600">{result.items.length}</span> : undefined}
+    >
+      {!result.available ? (
+        <Unavailable><AdminT k="today.quotaWatch.unavailable" /></Unavailable>
+      ) : rows.length === 0 ? (
+        <p className="px-4 py-8 text-center text-[12.5px]" style={{ color: "var(--admin-text-muted, #9CA3AF)" }}>
+          <AdminT k="today.quotaWatch.empty" />
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px]">
+            <thead>
+              <tr className="border-b text-left" style={{ borderColor: "var(--admin-border, #E5E7EB)" }}>
+                {(["today.quotaWatch.col.user", "today.quotaWatch.col.plan", "today.quotaWatch.col.quota", "today.quotaWatch.col.usage", "today.quotaWatch.col.remaining", "today.quotaWatch.col.periodEnds"] as AdminMessageKey[]).map(h => (
+                  <th key={h} className="px-4 py-2.5 text-[11px] font-bold uppercase text-gray-400"><AdminT k={h} /></th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ item, metricIndex }) => {
+                const m = item.metrics[metricIndex];
+                const first = metricIndex === 0;
+                return (
+                  <tr key={`${item.userId}-${m.key}`} className="border-b last:border-0" style={{ borderColor: "var(--admin-border-soft, #EEF0F3)" }}>
+                    <td className="px-4 py-2.5">
+                      {first ? (
+                        <Link href={`/admin/users/${item.userId}`} className="font-semibold text-indigo-700 hover:underline">
+                          {item.email ?? item.userId}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-300">↳</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 capitalize text-gray-600">{first ? item.plan : ""}</td>
+                    <td className="px-3 py-2.5 text-gray-700"><AdminT k={USAGE_METRIC_KEY[m.key]} /></td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-semibold" style={{ color: m.overage !== null ? "#B91C1C" : "#B45309" }}>
+                        {m.used.toLocaleString()} / {m.limit.toLocaleString()}
+                      </span>
+                      <span className="ml-1.5 text-[11px] text-gray-400">{Math.round(m.ratio * 1000) / 10}%</span>
+                    </td>
+                    {/* Absolute remaining, not just the percentage: 10 left on a
+                        small plan and 400 left on a big one can share a ratio. */}
+                    <td className="px-3 py-2.5 font-semibold text-gray-800">{m.remaining.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{first ? <PeriodLeft ms={item.msUntilPeriodEnd} /> : ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="px-4 py-2 text-[11px] text-gray-400">
+        <AdminTFmt k="today.quotaWatch.subtitle" vars={{ pct: result.thresholdPct }} />
+        {" "}
+        <AdminT k="today.quotaWatch.excludedNote" />
+      </p>
+    </Card>
+  );
+}
+
+// ── Feature Adoption Summary (PRD §3.4: no anomaly → no card, no version) ────
+//
+// Deliberately NOT a persistent card. It fetches every render (server component,
+// no cache) and renders `null` when `selectFeatureAdoptionAnomalies` finds
+// nothing — a feature with zero real-customer usage, or the whole scan being
+// unavailable. Absolute counts only; never a percentage (PRD §3.6).
+
+function FeatureAdoptionSummary({ result }: { result: Awaited<ReturnType<typeof getFeatureAdoption>> }) {
+  const anomalies = selectFeatureAdoptionAnomalies(result);
+  if (anomalies.length === 0) return null;
+
+  const unavailableFeatures = anomalies.filter(a => a.kind === "unavailable");
+  const zeroUsageFeatures = anomalies.filter(a => a.kind === "zero_usage");
+
+  return (
+    <Card icon={Activity} title={<AdminT k="today.featureAdoption.title" />} right={<span className="text-[12px] font-bold text-amber-600">{anomalies.length}</span>}>
+      <div className="flex flex-col gap-2 px-4 py-3 text-[12.5px]" style={{ color: "var(--admin-text, #111827)" }}>
+        {unavailableFeatures.length > 0 && (
+          <p className="flex flex-wrap items-baseline gap-1">
+            <AlertTriangle className="mr-1 inline h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <AdminT k="today.featureAdoption.unavailable" />
+            {unavailableFeatures.map((a, i) => (
+              <span key={a.feature} className="font-semibold">
+                {i > 0 && ", "}
+                <AdminT k={FEATURE_LABEL_KEY[a.feature]} />
+              </span>
+            ))}
+          </p>
+        )}
+        {zeroUsageFeatures.map(a => {
+          const featureView = result.features.find(f => f.feature === a.feature);
+          const total = featureView?.firstUse.totalCustomers ?? result.totalCustomers;
+          return (
+            <p key={a.feature} className="flex flex-wrap items-baseline gap-1">
+              <AlertTriangle className="mr-1 inline h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span className="font-semibold"><AdminT k={FEATURE_LABEL_KEY[a.feature]} />:</span>
+              <AdminTFmt k="today.featureAdoption.zeroUsage" vars={{ days: result.windowDays, total }} />
+            </p>
+          );
+        })}
+      </div>
+      <p className="border-t px-4 py-2 text-[11px] text-gray-400" style={{ borderColor: "var(--admin-border-soft, #EEF0F3)" }}>
+        <AdminT k="today.featureAdoption.footer" />
+      </p>
+    </Card>
+  );
+}
+
 // ── page ────────────────────────────────────────────────────────────────────
 
 /**
@@ -267,13 +411,15 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
   const includeNonCustomers = accounts === "all";
   const options = { includeNonCustomers };
 
-  const [actionCenter, funnel, adoption] = await Promise.all([
+  const [actionCenter, funnel, adoption, quotaWatch, featureAdoption] = await Promise.all([
     getActionCenter(undefined, options),
     getActivationFunnel(undefined, options),
     getAiAdoption(undefined, options),
+    getQuotaWatch(undefined, options),
+    getFeatureAdoption(undefined, options),
   ]);
 
-  const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings];
+  const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings, ...quotaWatch.warnings, ...featureAdoption.warnings];
 
   const firstPublishSplit = funnel.publishSplit.find(s => s.stage === "firstPublish");
   const repeatPublishSplit = funnel.publishSplit.find(s => s.stage === "repeatPublish");
@@ -302,7 +448,11 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
           {/* 1. Action Center */}
           <ActionCenterCard items={actionCenter.items} available={actionCenter.available} windowHours={actionCenter.windowHours} />
 
-          {/* 2. Activation Funnel */}
+          {/* 2. Quota Watch — deliberately its own card, never merged into the
+                 blocker list above (see the component comment). */}
+          <QuotaWatchCard result={quotaWatch} />
+
+          {/* 3. Activation Funnel */}
           <Card icon={Sparkles} title={<AdminT k="today.funnel.title" />}>
             {!funnel.available ? (
               <Unavailable><AdminT k="today.funnel.unavailable" /></Unavailable>
@@ -325,14 +475,14 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
             )}
           </Card>
 
-          {/* 3. Top Creators placeholder */}
+          {/* 4. Top Creators placeholder */}
           <Card icon={Trophy} title={<AdminT k="today.topCreators.title" />}>
             <p className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--admin-text-muted, #9CA3AF)" }}>
               <AdminT k="today.topCreators.note" />
             </p>
           </Card>
 
-          {/* 4. AI Adoption */}
+          {/* 5. AI Adoption */}
           <Card icon={Sparkles} title={<AdminT k="today.aiAdoption.title" />}>
             {!adoption.available ? (
               <Unavailable><AdminT k="today.aiAdoption.unavailable" /></Unavailable>
@@ -354,6 +504,11 @@ export default async function AdminTodayPage({ searchParams }: { searchParams: P
               </div>
             )}
           </Card>
+
+          {/* 6. Feature Adoption Summary — renders null when there is no anomaly
+                 (PRD 3.4). Deliberately last: it is a diagnostic footnote, not a
+                 headline metric. */}
+          <FeatureAdoptionSummary result={featureAdoption} />
         </div>
 
         <div className="mt-5 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-semibold" style={{ background: "var(--admin-surface, #FFFFFF)", borderColor: "var(--admin-border, #E5E7EB)", color: "var(--admin-text-secondary, #6B7280)" }}>

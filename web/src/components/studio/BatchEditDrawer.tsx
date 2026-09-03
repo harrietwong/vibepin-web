@@ -1301,18 +1301,23 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         }
         // Fires this event for the first time in the codebase (defined as a type + funnel
         // constant but never called). Best-effort — never affects the publish outcome
-        // already recorded above. p.pinId is only sometimes a pinDraftStore draft id (see
-        // the comment on the publishPin call above); when it isn't, getDraft returns null
-        // and sourceGenerationId is simply omitted rather than guessed at.
+        // already recorded above.
         //
-        // Key name = the field the value is READ FROM. `PinDraft` carries TWO different
-        // generation ids — `generationSessionId` (the client-side batch session) and
-        // `sourceGenerationId` (the server's generation_request_id) — and this is the
-        // latter, so it is sent under its own name, not the other field's name.
+        // p.pinId is the pinDraftStore draft id in the Weekly-Plan context but NOT in the
+        // Studio context (see the comment on the publishPin call above). `draftId` is the
+        // column analytics_events joins on, so writing a Studio pin id into it would salt
+        // that column with ids that join to nothing and are indistinguishable from real
+        // ones after the fact. A SUCCESSFUL getDraft is the proof: if the store has a
+        // draft under this id then it IS a draft id; if it does not, the value is reported
+        // under the neutral `sourcePinId` key rather than asserting something unproven.
+        //
+        // Same reasoning for the generation id — PinDraft carries TWO different ones, and
+        // this is `sourceGenerationId` (the server's generation_request_id), not the
+        // client-side `generationSessionId` batch id — so it is sent under its own name.
         try {
           const draftForGen = pinDraftStore.getDraft(p.pinId);
           track("draft_published", {
-            draftId: p.pinId,
+            ...(draftForGen ? { draftId: p.pinId } : { sourcePinId: p.pinId }),
             ...(draftForGen?.sourceGenerationId ? { sourceGenerationId: draftForGen.sourceGenerationId } : {}),
             remotePinId: res.pin.id,
           });
