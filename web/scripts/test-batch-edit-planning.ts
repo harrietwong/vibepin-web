@@ -121,6 +121,15 @@ test("Publish time is a default column; Plan replaces Status", () => {
   assert.doesNotMatch(batchSource, /label: "Status"/);
 });
 
+test("Publish time is optional and row inputs stay collapsed until explicit action", () => {
+  assert.match(batchSource, /expandedScheduleRows/);
+  assert.match(batchSource, /data-testid="batch-edit-time-expand"/);
+  assert.match(batchSource, /studioModals\.schedule\.setTime/);
+  assert.match(batchSource, /studioModals\.schedule\.clearInline/);
+  assert.match(batchSource, /studioModals\.schedule\.cancelInline/);
+  assert.match(batchSource, /setExpandedScheduleRows\(new Set\(\)\)/);
+});
+
 test("Table supports resizable columns + horizontal width", () => {
   assert.match(batchSource, /startResize/);
   assert.match(batchSource, /col-resize/);

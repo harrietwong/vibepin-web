@@ -816,6 +816,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   const [drawerTab,   setDrawerTab]   = useState<"details" | "products">("details");
   const [quickAddPinId, setQuickAddPinId] = useState<string | null>(null);
   const [productPopoverPinId, setProductPopoverPinId] = useState<string | null>(null);
+  const [expandedScheduleRows, setExpandedScheduleRows] = useState<Set<string>>(new Set());
   const [colW,        setColW]        = useState<Record<ColId, number>>({ ...DEFAULT_W });
   // Which account this selection publishes through (Phase D ④). Boards belong to one
   // account, so the picker can only offer a correct list when every selected Pin shares
@@ -888,6 +889,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     setDrawerPinId(null);
     setQuickAddPinId(null);
     setSearch("");
+    setExpandedScheduleRows(new Set());
     setStatusFilter("all");
     setBoardFilter("all");
     setPublishPhase(null);
@@ -1764,14 +1766,25 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "time":
                               // Publish time is an optional override/reschedule. Empty is fine —
                               // Schedule assigns a Smart Schedule slot. Editing here does not gate Schedule.
-                              return (
-                                <td key={c.id} style={td}>
-                                  <div data-testid="batch-edit-time-cell" style={{ display: "flex", gap: 4 }}>
-                                    <input type="time" value={time} onChange={e => patchRow(p.pinId, { plannedTime: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
-                                    <input type="date" value={date} onChange={e => patchRow(p.pinId, { plannedDate: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
-                                  </div>
-                                </td>
-                              );
+                              {
+                                const expanded = expandedScheduleRows.has(p.pinId);
+                                return (
+                                  <td key={c.id} style={td}>
+                                    {expanded ? (
+                                      <div data-testid="batch-edit-time-cell" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                        <input aria-label={tr("studioModals.schedule.time")} type="time" value={time} onChange={e => patchRow(p.pinId, { plannedTime: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
+                                        <input aria-label={tr("studioModals.schedule.date")} type="date" value={date} onChange={e => patchRow(p.pinId, { plannedDate: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
+                                        <button type="button" aria-label={tr("studioModals.schedule.clearInline")} onClick={() => { patchRow(p.pinId, { plannedDate: "", plannedTime: "", plannedAt: "" }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.clearInline")}</button>
+                                        <button type="button" aria-label={tr("studioModals.schedule.cancelInline")} onClick={() => setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; })} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.cancelInline")}</button>
+                                      </div>
+                                    ) : (
+                                      <button type="button" data-testid="batch-edit-time-expand" onClick={() => setExpandedScheduleRows(prev => new Set(prev).add(p.pinId))} style={{ ...btnBase, padding: "4px 7px", fontSize: 10.5, color: UI.textMuted }}>
+                                        {date || time ? `${date || "—"} ${time || ""}`.trim() : tr("studioModals.schedule.setTime")}
+                                      </button>
+                                    )}
+                                  </td>
+                                );
+                              }
                             case "plan":
                               return <td key={c.id} style={td}><span data-testid="batch-edit-plan-cell" style={{ color: UI.textSec, fontSize: 11 }}>{tr(PLAN_LABEL_KEY[planLabel(p, rowEdits)])}</span></td>;
                             case "more":

@@ -26,6 +26,9 @@ export const studioModalsMessages = {
   "studioModals.col.altText": "Alt text",
   "studioModals.col.product": "Product",
   "studioModals.col.publishTime": "Publish time",
+  "studioModals.schedule.setTime": "Set publish time",
+  "studioModals.schedule.clearInline": "Clear",
+  "studioModals.schedule.cancelInline": "Cancel",
   "studioModals.col.plan": "Plan",
 
   // ── Header / toolbar ──
