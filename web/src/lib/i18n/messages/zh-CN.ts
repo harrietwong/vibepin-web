@@ -2390,6 +2390,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioModals.schedule.setTime": "设置发布时间",
   "studioModals.schedule.clearInline": "清除",
   "studioModals.schedule.cancelInline": "取消",
+  "studioModals.schedule.saveInline": "保存",
   "studioModals.col.plan": "排期",
   "studioModals.header.title": "批量编辑详情",
   "studioModals.header.subtitle": "批量编辑、排期和发布你的 Pin。",

@@ -127,6 +127,8 @@ test("Publish time is optional and row inputs stay collapsed until explicit acti
   assert.match(batchSource, /studioModals\.schedule\.setTime/);
   assert.match(batchSource, /studioModals\.schedule\.clearInline/);
   assert.match(batchSource, /studioModals\.schedule\.cancelInline/);
+  assert.match(batchSource, /studioModals\.schedule\.saveInline/);
+  assert.match(batchSource, /setScheduleDrafts/);
   assert.match(batchSource, /setExpandedScheduleRows\(new Set\(\)\)/);
 });
 

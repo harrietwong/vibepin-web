@@ -817,6 +817,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   const [quickAddPinId, setQuickAddPinId] = useState<string | null>(null);
   const [productPopoverPinId, setProductPopoverPinId] = useState<string | null>(null);
   const [expandedScheduleRows, setExpandedScheduleRows] = useState<Set<string>>(new Set());
+  const [scheduleDrafts, setScheduleDrafts] = useState<Record<string, { date: string; time: string }>>({});
   const [colW,        setColW]        = useState<Record<ColId, number>>({ ...DEFAULT_W });
   // Which account this selection publishes through (Phase D ④). Boards belong to one
   // account, so the picker can only offer a correct list when every selected Pin shares
@@ -890,6 +891,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     setQuickAddPinId(null);
     setSearch("");
     setExpandedScheduleRows(new Set());
+    setScheduleDrafts({});
     setStatusFilter("all");
     setBoardFilter("all");
     setPublishPhase(null);
@@ -1768,17 +1770,19 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                               // Schedule assigns a Smart Schedule slot. Editing here does not gate Schedule.
                               {
                                 const expanded = expandedScheduleRows.has(p.pinId);
+                                const draft = scheduleDrafts[p.pinId] ?? { date, time };
                                 return (
                                   <td key={c.id} style={td}>
                                     {expanded ? (
                                       <div data-testid="batch-edit-time-cell" style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                        <input aria-label={tr("studioModals.schedule.time")} type="time" value={time} onChange={e => patchRow(p.pinId, { plannedTime: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
-                                        <input aria-label={tr("studioModals.schedule.date")} type="date" value={date} onChange={e => patchRow(p.pinId, { plannedDate: e.target.value })} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
-                                        <button type="button" aria-label={tr("studioModals.schedule.clearInline")} onClick={() => { patchRow(p.pinId, { plannedDate: "", plannedTime: "", plannedAt: "" }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.clearInline")}</button>
-                                        <button type="button" aria-label={tr("studioModals.schedule.cancelInline")} onClick={() => setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; })} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.cancelInline")}</button>
+                                        <input aria-label={tr("studioModals.schedule.time")} type="time" value={draft.time} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { ...(prev[p.pinId] ?? { date, time }), time: e.target.value } }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
+                                        <input aria-label={tr("studioModals.schedule.date")} type="date" value={draft.date} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { ...(prev[p.pinId] ?? { date, time }), date: e.target.value } }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
+                                        <button type="button" aria-label={tr("studioModals.schedule.saveInline")} onClick={() => { patchRow(p.pinId, { plannedDate: draft.date, plannedTime: draft.time, plannedAt: combineLocalPlannedAt(draft.date, draft.time) }); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.saveInline")}</button>
+                                        <button type="button" aria-label={tr("studioModals.schedule.clearInline")} onClick={() => { patchRow(p.pinId, { plannedDate: "", plannedTime: "", plannedAt: "" }); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.clearInline")}</button>
+                                        <button type="button" aria-label={tr("studioModals.schedule.cancelInline")} onClick={() => { setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.cancelInline")}</button>
                                       </div>
                                     ) : (
-                                      <button type="button" data-testid="batch-edit-time-expand" onClick={() => setExpandedScheduleRows(prev => new Set(prev).add(p.pinId))} style={{ ...btnBase, padding: "4px 7px", fontSize: 10.5, color: UI.textMuted }}>
+                                      <button type="button" data-testid="batch-edit-time-expand" onClick={() => { setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { date, time } })); setExpandedScheduleRows(prev => new Set(prev).add(p.pinId)); }} style={{ ...btnBase, padding: "4px 7px", fontSize: 10.5, color: UI.textMuted }}>
                                         {date || time ? `${date || "—"} ${time || ""}`.trim() : tr("studioModals.schedule.setTime")}
                                       </button>
                                     )}

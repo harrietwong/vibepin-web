@@ -2630,6 +2630,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioModals.schedule.setTime": "設定發布時間",
   "studioModals.schedule.clearInline": "清除",
   "studioModals.schedule.cancelInline": "取消",
+  "studioModals.schedule.saveInline": "儲存",
   "studioModals.col.plan": "排程",
   "studioModals.header.title": "批次編輯詳情",
   "studioModals.header.subtitle": "批次編輯、排程並發布你的 Pin。",

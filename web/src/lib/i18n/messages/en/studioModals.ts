@@ -29,6 +29,7 @@ export const studioModalsMessages = {
   "studioModals.schedule.setTime": "Set publish time",
   "studioModals.schedule.clearInline": "Clear",
   "studioModals.schedule.cancelInline": "Cancel",
+  "studioModals.schedule.saveInline": "Save",
   "studioModals.col.plan": "Plan",
 
   // ── Header / toolbar ──
