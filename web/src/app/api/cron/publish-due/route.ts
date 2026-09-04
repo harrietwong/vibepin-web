@@ -42,6 +42,7 @@ import {
   type DeliveryOutcome,
 } from "@/lib/server/usage/deliveryOutcome";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
+import { requiresPublishAsset } from "@/lib/server/publishMedia";
 import {
   NeedsReconnectError,
   NotConnectedError,
@@ -77,6 +78,7 @@ import {
   RUN_DEADLINE_MS,
   staleClaimCutoffIso,
   payloadToPublishInput,
+  publishMediaUrls,
   destinationPublishInput,
   describeThrown,
   owedDestinations,
@@ -237,8 +239,19 @@ export async function GET(req: Request): Promise<Response> {
     return json({ error: "scan_failed", code: "database_unavailable" }, 503);
   }
 
-  const candidates = (dueRows ?? []) as DueRow[];
+  let candidates = (dueRows ?? []) as DueRow[];
   if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
+
+  // Scheduled execution has no user session/owner confirmation to resolve private
+  // media. Defer before claim, metering, job creation, or any provider work.
+  const requestOrigin = new URL(req.url).origin;
+  const safeCandidates = candidates.filter(row => {
+    const media = publishMediaUrls(row.payload);
+    return !media.some(url => requiresPublishAsset(url, requestOrigin));
+  });
+  const deferredMedia = candidates.length - safeCandidates.length;
+  candidates = safeCandidates;
+  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: deferredMedia });
 
   // ── 2+3) CLAIM then PUBLISH, one row at a time ───────────────────────────────
   //
@@ -254,7 +267,7 @@ export async function GET(req: Request): Promise<Response> {
   const staleCutoff = staleClaimCutoffIso(nowMs);
   let claimedCount = 0;
   let skipped = 0;
-  let deferred = 0;
+  let deferred = deferredMedia;
   let published = 0;
   let failed = 0;
 

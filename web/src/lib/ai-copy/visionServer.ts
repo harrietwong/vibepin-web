@@ -12,6 +12,8 @@
  */
 
 import { isPlausibleModelId } from "./modelId";
+import { handleStorageImageGet } from "@/lib/server/storageImageHandler";
+import { fetchWithSafeRedirects } from "@/app/api/fetch-og/handler";
 
 
 // ── Errors + user-safe messages ───────────────────────────────────────────────
@@ -105,6 +107,43 @@ export type CopyOutput = {
 export type PreviousCopy = { title?: string; description?: string };
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+async function fetchSafePublicImage(rawUrl: string): Promise<Response> {
+  const upstream = await fetchWithSafeRedirects(rawUrl);
+  const status = upstream.statusCode ?? 502;
+  if (status < 200 || status >= 300) {
+    upstream.destroy();
+    return new Response(null, { status });
+  }
+
+  const rawType = upstream.headers["content-type"];
+  const contentType = (Array.isArray(rawType) ? rawType[0] : rawType) ?? "";
+  const rawLength = upstream.headers["content-length"];
+  const contentLength = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength);
+  if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
+    upstream.destroy();
+    throw new Error("image_too_large");
+  }
+
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  for await (const chunk of upstream) {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk);
+    bytesRead += bytes.byteLength;
+    if (bytesRead > MAX_IMAGE_BYTES) {
+      upstream.destroy();
+      throw new Error("image_too_large");
+    }
+    chunks.push(bytes);
+  }
+  const body = new Uint8Array(bytesRead);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Response(body, { status, headers: { "content-type": contentType, "content-length": String(bytesRead) } });
+}
 
 const GENERIC_TITLE_RE = /\b(home decor product inspiration|product inspiration|home decor product|pin idea|pin ideas|beautiful ideas|pinterest look|pinterest inspiration|inspiration \d+|content inspiration)\b/i;
 const GENERIC_DESC_RE = /\b(use .* as inspiration for a pinterest look|use .* product as inspiration|pinterest-ready idea|relevant ideas|discover beautiful ideas|save this pin|for your space)\b/i;
@@ -392,24 +431,46 @@ export async function chatJson(opts: {
  * Server-side fetch the image → base64 data URL (grounds the model on real bytes).
  * Throws CopyError(422) when the image is missing, non-public, non-image, or unreachable.
  */
-export async function fetchImageAsDataUrl(imageUrl: string | undefined): Promise<{
+export async function fetchImageAsDataUrl(imageUrl: string | undefined, options?: {
+  ownerUserId?: string;
+  privateFetch?: (ownerUserId: string, objectPath: string) => Promise<Response>;
+  fetchImpl?: typeof fetch;
+}): Promise<{
   dataUrl: string;
   contentType: string;
   bytes: number;
   latencyMs: number;
 }> {
-  const url = safeImageUrl(imageUrl);
-  if (!url) throw new CopyError(imageUrl ? "invalid_image_url" : "missing_image_url", 422, IMAGE_MESSAGE);
+  const raw = imageUrl?.trim() ?? "";
+  let protectedPath: string | null = null;
+  if (raw.startsWith("/api/storage-image?")) {
+    try {
+      const parsed = new URL(raw, "https://vibepin.invalid");
+      if (parsed.pathname === "/api/storage-image" && parsed.searchParams.getAll("path").length === 1) {
+        protectedPath = parsed.searchParams.get("path");
+      }
+    } catch {
+      protectedPath = null;
+    }
+  }
+  const url = protectedPath ? null : safeImageUrl(imageUrl);
+  if (!protectedPath && !url) throw new CopyError(imageUrl ? "invalid_image_url" : "missing_image_url", 422, IMAGE_MESSAGE);
+  if (protectedPath && !options?.ownerUserId) throw new CopyError("protected_image_owner_required", 422, IMAGE_MESSAGE);
   const start = performance.now();
   let res: Response;
   try {
-    res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; VibePin/1.0)",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
+    if (protectedPath && options?.ownerUserId) {
+      res = options.privateFetch
+        ? await options.privateFetch(options.ownerUserId, protectedPath)
+        : await handleStorageImageGet(
+          new Request(`https://vibepin.invalid/api/storage-image?path=${encodeURIComponent(protectedPath)}`),
+          { getUserId: async () => options.ownerUserId ?? null },
+        );
+    } else {
+      res = options?.fetchImpl
+        ? await options.fetchImpl(url!)
+        : await fetchSafePublicImage(url!.toString());
+    }
   } catch (err) {
     throw new CopyError(`image_fetch_failed:${(err as Error)?.message?.slice(0, 100) || "unknown"}`, 422, IMAGE_MESSAGE);
   }

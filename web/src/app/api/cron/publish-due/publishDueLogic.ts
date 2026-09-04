@@ -106,6 +106,13 @@ function readMediaUrls(payload: Record<string, unknown>): string[] {
   return urls;
 }
 
+/** Exact media URL set that payloadToPublishInput will hand to providers. */
+export function publishMediaUrls(payload: Record<string, unknown>): string[] {
+  const mediaUrls = readMediaUrls(payload);
+  const storedImage = mediaUrls[0] || firstString(payload.imageUrl, payload.sourceImageUrl);
+  return (mediaUrls.length ? mediaUrls : (storedImage ? [storedImage] : [])).map(toProxyUrl);
+}
+
 export interface DuePublishInput {
   uid: string;
   /**
@@ -212,7 +219,7 @@ export function payloadToPublishInput(
   // EVERY image is resolved, not just the cover: a carousel whose 2nd image kept the
   // relative proxy path would fail the same way — publishable by hand, broken on a
   // schedule — which is precisely the divergence this resolution exists to close.
-  const imageUrls = (mediaUrls.length ? mediaUrls : [storedImage]).map(toProxyUrl);
+  const imageUrls = publishMediaUrls(payload);
   return {
     uid,
     // Omitted rather than "" when there is none, so the type tells the truth: a

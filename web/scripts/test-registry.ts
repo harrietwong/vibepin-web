@@ -154,6 +154,7 @@ export const CORE: string[] = [
   "test-user-store-adapters",
   "test-user-store-media-adapters",
   "test-media-offload",
+  "test-media-privacy-architecture",
   // Shopify
   "test-connection-limit",
   "test-settle-generation-job",

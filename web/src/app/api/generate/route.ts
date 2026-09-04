@@ -131,7 +131,22 @@ function logHash(value: string): string {
 function safeGeneratorUrls(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((url): url is string => typeof url === "string" && /^https:\/\//i.test(url) && url.length <= 4096)
+    .filter((url): url is string => {
+      if (typeof url !== "string" || url.length > 4096) return false;
+      if (/^https:\/\//i.test(url)) return true;
+      if (!url.startsWith("/api/storage-image?")) return false;
+      try {
+        const parsed = new URL(url, "https://vibepin.invalid");
+        return parsed.origin === "https://vibepin.invalid"
+          && parsed.pathname === "/api/storage-image"
+          && !parsed.hash
+          && parsed.searchParams.getAll("path").length === 1
+          && [...parsed.searchParams.keys()].every(key => key === "path")
+          && Boolean(parsed.searchParams.get("path"));
+      } catch {
+        return false;
+      }
+    })
     .slice(0, 8);
 }
 
@@ -233,6 +248,8 @@ interface GeneratorPayload {
   countClamped?: boolean;
   generationRequestId?: string;
   generationOwnerId?: string;
+  /** Server-injected only. The public request body is never spread into GeneratorPayload. */
+  _trustedGenerationOwnerId?: string;
   studioClientId?: string;
   providerMode?: "real" | "mock";
   mockProviderBehavior?: string;
@@ -825,6 +842,13 @@ export async function POST(req: NextRequest) {
   const mockProviderDelayMs = Math.max(0, Math.min(60_000, Number(body.mock_provider_delay_ms ?? 1500) || 1500));
   const imageInputs = buildImageInputs(productImages, styleRef);
 
+  // Every real generation stores private media and therefore requires a durable
+  // owner. Anonymous access is limited to the explicit mock seam used by local/E2E
+  // tests; it must never reach moderation, a paid provider, or private Storage.
+  if (providerMode !== "mock" && !authUserId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   if (!keyword) {
     return NextResponse.json({ error: "keyword is required" }, { status: 400 });
   }
@@ -927,7 +951,9 @@ export async function POST(req: NextRequest) {
       productImageCountRequested, referenceImageCountRequested, outputCount,
       variationMode, outputVariants, requestedImageCount: imageCountClamp.requested,
       actualImageCount: count, countClamped: imageCountClamp.clamped,
-      generationRequestId, generationOwnerId: `user:${userId}`, studioClientId,
+      // Provenance owner is the raw authenticated UUID. The rate-limit identity
+      // intentionally has a `user:` prefix and must never cross this boundary.
+      generationRequestId, generationOwnerId: userId, studioClientId,
       providerMode, mockProviderBehavior, mockProviderDelayMs,
       mode: isRetrySingleOutput ? "retry_single_output" : undefined,
       retryOfOutputId: body.retryOfOutputId,
@@ -1302,8 +1328,10 @@ export async function POST(req: NextRequest) {
   // Same identity the rate limiter keyed on in Step 2b — resolved once, reused, so
   // the durable window and the per-instance lock can never disagree about who the
   // caller is.
-  const generationOwnerId = rateLimitIdentity;
-  const userLock = await acquireTtlLock("active-generation", generationOwnerId, USER_GENERATION_LOCK_TTL_MS);
+  // Locks use the prefixed rate-limit identity; media provenance uses only the
+  // raw auth UUID (or empty for anonymous inline callers).
+  const generationOwnerId = authUserId ?? "";
+  const userLock = await acquireTtlLock("active-generation", rateLimitIdentity, USER_GENERATION_LOCK_TTL_MS);
   if (!userLock.acquired) {
     console.warn(JSON.stringify({
       event: "user_generation_limit",
@@ -1370,7 +1398,7 @@ export async function POST(req: NextRequest) {
       actualImageCount: count,
       countClamped: imageCountClamp.clamped,
       generationRequestId,
-      generationOwnerId,
+      _trustedGenerationOwnerId: generationOwnerId,
       studioClientId,
       providerMode,
       mockProviderBehavior,

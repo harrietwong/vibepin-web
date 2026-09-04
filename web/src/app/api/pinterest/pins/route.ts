@@ -65,6 +65,7 @@ import {
 } from "@/lib/server/publish/publishIntentLedger";
 import { findConnection } from "@/lib/social/server/socialConnectionStore";
 import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
+import { requiresPublishAsset } from "@/lib/server/publishMedia";
 
 export const dynamic = "force-dynamic";
 
@@ -119,6 +120,12 @@ export async function POST(req: Request) {
       || confirmedDestination.boardId !== boardId
       || confirmedDestination.socialConnectionId !== (typeof body.connectionId === "string" ? body.connectionId.trim() : "")) {
     return Response.json({ error: "The Pinterest account or Board no longer matches the confirmation.", code: "invalid_confirmation" }, { status: 409 });
+  }
+  if (imageUrls.some(url => requiresPublishAsset(url, new URL(req.url).origin))) {
+    return Response.json({
+      error: "Publish media asset is not materialized for provider delivery.",
+      code: "publish_asset_required",
+    }, { status: 409 });
   }
 
   let durableDb: ReturnType<typeof createServerClient>;

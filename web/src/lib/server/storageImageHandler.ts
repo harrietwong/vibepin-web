@@ -1,34 +1,21 @@
 import { NextResponse } from "next/server";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
-import { createServerClient } from "@/lib/supabase";
-import { authorizeStudioStoragePath, ownedGenerationJobsContainPath } from "@/lib/server/storagePathAuth";
+import { authorizeStudioStoragePath } from "@/lib/server/storagePathAuth";
+import { createMediaProvenanceStore, type MediaProvenance } from "@/lib/server/mediaProvenance";
 
 const DEFAULT_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const DEFAULT_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-const BUCKET = "generated";
+const BUCKET = process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private";
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"]);
 
-type GenerationJobResultRow = { results?: unknown };
-
 export type StorageImageRouteDeps = {
   getUserId?: (req: Request) => Promise<string | null>;
-  loadGenerationResults?: (userId: string) => Promise<{ data: GenerationJobResultRow[]; error: boolean }>;
+  findProvenance?: (userId: string, path: string) => Promise<MediaProvenance | null>;
   fetchImpl?: typeof fetch;
   supabaseUrl?: string;
   serviceRoleKey?: string;
 };
-
-async function loadGenerationResults(userId: string): Promise<{ data: GenerationJobResultRow[]; error: boolean }> {
-  const db = createServerClient();
-  const { data, error } = await db
-    .from("generation_jobs")
-    .select("results")
-    .eq("vibepin_user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(500);
-  return { data: (data ?? []) as GenerationJobResultRow[], error: Boolean(error) };
-}
 
 export async function readLimitedImageBody(response: Response): Promise<Uint8Array | null> {
   const reader = response.body?.getReader();
@@ -53,6 +40,7 @@ export async function readLimitedImageBody(response: Response): Promise<Uint8Arr
   }
 
   const body = new Uint8Array(total);
+  if (total === 0) return null;
   let offset = 0;
   for (const chunk of chunks) {
     body.set(chunk, offset);
@@ -75,11 +63,12 @@ export async function handleStorageImageGet(req: Request, deps: StorageImageRout
   const authorization = authorizeStudioStoragePath(path, userId);
   if (!authorization.ok) return new NextResponse(null, { status: authorization.status });
 
-  if (authorization.scope === "legacy-job") {
-    const ownedResults = await (deps.loadGenerationResults ?? loadGenerationResults)(userId);
-    if (ownedResults.error || !ownedGenerationJobsContainPath(ownedResults.data, authorization.path, configuredUrl)) {
-      return new NextResponse(null, { status: 403 });
-    }
+  // Every object, including legacy paths, requires a durable exact owner/path
+  // record. Missing or unresolved provenance is fail-closed; no bounded job scan.
+  const provenance = await (deps.findProvenance ?? ((owner, objectPath) =>
+    createMediaProvenanceStore().findExact(owner, BUCKET, objectPath)))(userId, authorization.path).catch(() => null);
+  if (!provenance || provenance.lifecycle_state === "unresolved" || provenance.lifecycle_state === "failed") {
+    return new NextResponse(null, { status: 403 });
   }
 
   const encodedPath = authorization.path.split("/").map(encodeURIComponent).join("/");

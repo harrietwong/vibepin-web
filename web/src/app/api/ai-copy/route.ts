@@ -396,7 +396,7 @@ export async function POST(req: Request) {
       // ── VISION FALLBACK: analysis not cached → page context + image fetch + vision.
       const page = await getPageContext(body.destinationUrl);
       pageContext = page.value;
-      const img = await fetchImageAsDataUrl(body.imageUrl);
+      const img = await fetchImageAsDataUrl(body.imageUrl, { ownerUserId: userId });
       timings.imageFetch = img.latencyMs;
       mark("imageFetched");
       const hints = keywordHints({ analysis: null, productContext, pageContext, boardContext, category: body.category });

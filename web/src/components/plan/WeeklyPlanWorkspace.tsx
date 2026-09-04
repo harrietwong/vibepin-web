@@ -5,6 +5,7 @@ import type { DragEvent as RDragEvent, CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
+import { toProxyUrl as toOwnedProxyUrl } from "@/lib/imageProxy";
 
 // Converts Supabase Storage public URLs to the server-side proxy so images load
 // even when the "generated" bucket doesn't have public access enabled. For
@@ -19,14 +20,7 @@ function toProxyUrl(url: string): string {
     const pin = url.replace(/(\/\/i\.pinimg\.com\/)originals\//, "$1736x/");
     if (pin !== url) return pin;
   }
-  if (url.startsWith("/")) return url;
-  const MARKER = "/storage/v1/object/public/generated/studio/";
-  const idx = url.indexOf(MARKER);
-  if (idx !== -1) {
-    const filename = url.slice(idx + MARKER.length);
-    return `/api/storage-image?path=studio/${filename}`;
-  }
-  return url;
+  return toOwnedProxyUrl(url);
 }
 
 import { ACTIVE_CATEGORIES, CATEGORIES } from "@/lib/categories";

@@ -170,7 +170,7 @@ async function main() {
     let dbCalls = 0;
     let storageCalls = 0;
     const baseDeps = {
-      loadGenerationResults: async () => { dbCalls++; return { data: [], error: false }; },
+      findProvenance: async () => { dbCalls++; return null; },
       fetchImpl: async () => { storageCalls++; return new Response(); },
       supabaseUrl: "https://project.supabase.co",
       serviceRoleKey: "test-key",
@@ -211,23 +211,24 @@ async function main() {
 
     const unmatched = await handleStorageImageGet(request, {
       ...shared,
-      loadGenerationResults: async () => ({ data: [], error: false }),
+      findProvenance: async () => null,
     });
     assert.equal(unmatched.status, 403);
     assert.equal(storageCalls, 0);
 
     const dbFailure = await handleStorageImageGet(request, {
       ...shared,
-      loadGenerationResults: async () => ({ data: [], error: true }),
+      findProvenance: async () => { throw new Error("db unavailable"); },
     });
     assert.equal(dbFailure.status, 403);
     assert.equal(storageCalls, 0);
 
     const matched = await handleStorageImageGet(request, {
       ...shared,
-      loadGenerationResults: async userId => {
+      findProvenance: async (userId, objectPath) => {
         assert.equal(userId, "user-1");
-        return { data: [{ results: [{ status: "done", imageUrl: "/api/storage-image?path=studio%2Fowned.png" }] }], error: false };
+        assert.equal(objectPath, "studio/owned.png");
+        return { owner_user_id: userId, object_path: objectPath, source_type: "legacy", intent_id: null, lifecycle_state: "draft" };
       },
     });
     assert.equal(matched.status, 200);
@@ -241,6 +242,7 @@ async function main() {
     const request = new Request("https://app.test/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fimage.png");
     const shared = {
       getUserId: async () => "user-1",
+      findProvenance: async (userId: string, objectPath: string) => ({ owner_user_id: userId, object_path: objectPath, source_type: "upload", intent_id: null, lifecycle_state: "draft" }),
       supabaseUrl: "https://project.supabase.co",
       serviceRoleKey: "test-key",
     };
@@ -307,6 +309,7 @@ async function main() {
           }],
         };
       },
+      findProvenance: async (_userId, objectPath) => ({ object_path: objectPath, lifecycle_state: "draft" }),
     });
     const body = await ok.json() as { entries: Array<{ groups: Array<{ images: string[] }> }> };
     assert.deepStrictEqual(body.entries[0].groups[0].images, ["/api/storage-image?path=studio%2Flegacy.png"]);

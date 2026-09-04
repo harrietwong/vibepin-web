@@ -2,7 +2,7 @@
 
 /**
  * Client helper for POST /api/studio/upload — uploads a board Pin image and returns
- * stable hosted URLs. Uses the Supabase browser session for the Bearer token (same
+ * a stable owner-protected proxy URL. Uses the Supabase browser session for the Bearer token (same
  * convention as pinterestClient). Never sets Content-Type so the browser writes the
  * multipart boundary.
  */
@@ -31,9 +31,9 @@ async function bearer(): Promise<Record<string, string>> {
 
 export type UploadedPinImage = {
   path: string;
-  /** Public URL for publishing (Pinterest fetches this unauthenticated). */
+  /** Deprecated compatibility alias; intentionally the protected proxy. */
   publicUrl: string;
-  /** In‑app display URL that works even if the bucket is private. */
+  /** In‑app display URL; requires the authenticated owner session. */
   proxyUrl: string;
   /** Client id joining upload UI/analytics/support evidence. */
   requestId: string;

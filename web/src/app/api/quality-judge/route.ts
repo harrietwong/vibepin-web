@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
 
     // 1) Fetch the generated image (422 on bad/unreadable image via fetchImageAsDataUrl).
-    const img = await fetchImageAsDataUrl(body.imageUrl);
+    const img = await fetchImageAsDataUrl(body.imageUrl, { ownerUserId: userId });
 
     // 2) Grade it (raw scores only — 502 on genuine upstream/parse failure).
     const graded = await judgeImageQuality({

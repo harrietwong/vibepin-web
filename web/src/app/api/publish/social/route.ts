@@ -45,6 +45,7 @@ import { createServerClient } from "@/lib/supabase";
 import { isSocialProvider, platformName, PLATFORMS } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
+import { requiresPublishAsset } from "@/lib/server/publishMedia";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
@@ -144,6 +145,15 @@ export async function POST(req: Request) {
         ? "The submitted retry destinations are not confirmed."
         : "The social destination set no longer matches the confirmation.",
       code: "invalid_confirmation",
+    }, { status: 409 });
+  }
+  // Draft media is owner-protected and cannot be handed to providers that fetch
+  // unauthenticated URLs. A future intent-bound materializer must run here after
+  // confirmation; fail closed until that seam is wired, never silently dispatch.
+  if (post.imageUrls.some(url => typeof url === "string" && requiresPublishAsset(url, new URL(req.url).origin))) {
+    return Response.json({
+      error: "Publish media asset is not materialized for provider delivery.",
+      code: "publish_asset_required",
     }, { status: 409 });
   }
 

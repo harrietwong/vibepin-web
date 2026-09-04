@@ -85,7 +85,7 @@ export async function POST(req: Request) {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
 
     // 1) Fetch + analyze the image (structured JSON, no copy).
-    const img = await fetchImageAsDataUrl(body.imageUrl);
+    const img = await fetchImageAsDataUrl(body.imageUrl, { ownerUserId: userId });
     const analysis = await analyzeImageStructured({
       cfg,
       dataUrl: img.dataUrl,

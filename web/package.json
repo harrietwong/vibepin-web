@@ -17,6 +17,7 @@
     "test:user-store-adapters": "npx tsx scripts/test-user-store-adapters.ts",
     "test:user-store-media-adapters": "npx tsx scripts/test-user-store-media-adapters.ts",
     "test:media-offload": "npx tsx scripts/test-media-offload.ts",
+    "test:media-privacy-architecture": "npx tsx scripts/test-media-privacy-architecture.ts",
     "test:user-store-route": "npx tsx scripts/test-user-store-route.ts",
     "test:facebook-pages": "npx tsx scripts/test-facebook-pages.ts",
     "test:shopify-entitlements": "npx tsx scripts/test-shopify-entitlements.ts",

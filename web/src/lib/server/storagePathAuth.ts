@@ -73,12 +73,43 @@ export function pathFromGeneratedImageUrl(value: string, supabaseUrl = process.e
     const prefixes = [
       "/storage/v1/object/public/generated/",
       "/storage/v1/object/generated/",
+      "/storage/v1/object/public/generated-private/",
+      "/storage/v1/object/generated-private/",
     ];
     const prefix = prefixes.find(candidate => parsed.pathname.startsWith(candidate));
     return prefix ? decodeURIComponent(parsed.pathname.slice(prefix.length)) : null;
   } catch {
     return null;
   }
+}
+
+/** Parse only exact-origin Supabase object URLs or the exact app proxy route. */
+export function canonicalStorageReference(value: string, supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""):
+  { bucket: string; path: string; legacy: boolean } | null {
+  try {
+    const appBase = "https://vibepin.invalid";
+    const parsed = new URL(value, appBase);
+    if (
+      parsed.origin === appBase
+      && parsed.pathname === "/api/storage-image"
+      && !parsed.hash
+      && parsed.searchParams.getAll("path").length === 1
+      && [...parsed.searchParams.keys()].every(key => key === "path")
+    ) {
+      const path = parsed.searchParams.get("path");
+      return path ? { bucket: process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private", path, legacy: false } : null;
+    }
+    const configured = new URL(supabaseUrl);
+    const parsedHost = parsed.hostname.replace(/\.$/, "").toLowerCase();
+    const configuredHost = configured.hostname.replace(/\.$/, "").toLowerCase();
+    // Any HTTP(S) spelling of the configured Storage host remains protected:
+    // fragments are client-only, and http/default-port variants may redirect to
+    // the same signed object without changing its bucket/path identity.
+    if (!/^https?:$/.test(parsed.protocol) || !parsedHost || parsedHost !== configuredHost) return null;
+    const match = parsed.pathname.match(/^\/storage\/v1\/(?:object|render\/image)\/(?:(?:public|authenticated|sign)\/)?([^/]+)\/(.+)$/);
+    if (!match) return null;
+    return { bucket: match[1], path: decodeURIComponent(match[2]), legacy: match[1] === "generated" };
+  } catch { return null; }
 }
 
 export function generationJobImageUrls(row: GenerationJobRow): string[] {
@@ -99,9 +130,21 @@ export function generationJobImageProxyUrls(
   supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
 ): string[] {
   return [...new Set(generationJobImageUrls(row).flatMap(url => {
-    const path = pathFromGeneratedImageUrl(url, supabaseUrl);
-    if (!path || !authorizeStudioStoragePath(path, userId).ok) return [];
-    return [`/api/storage-image?path=${encodeURIComponent(path)}`];
+    const ref = canonicalStorageReference(url, supabaseUrl);
+    if (!ref) return [];
+    if (ref.legacy) {
+      // Legacy compatibility is deliberately narrower than private-media
+      // classification: only the canonical public object URL is retained.
+      try {
+        const parsed = new URL(url);
+        const configured = new URL(supabaseUrl);
+        if (parsed.origin !== configured.origin || parsed.search || parsed.hash) return [];
+      } catch { return []; }
+      return [url]; // exact-origin legacy public object remains legacy debt
+    }
+    if (ref.bucket !== (process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private")) return [];
+    if (!authorizeStudioStoragePath(ref.path, userId).ok) return [];
+    return [`/api/storage-image?path=${encodeURIComponent(ref.path)}`];
   }))];
 }
 

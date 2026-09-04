@@ -32,6 +32,11 @@ import sys
 import tempfile
 import time
 import uuid
+import ipaddress
+import socket
+import ssl
+import http.client
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from pathlib import Path
 
 # Force UTF-8 on Windows where the default console encoding is cp936/GBK.
@@ -138,7 +143,7 @@ def _normalize_image_inputs(data: dict, product_images: list[str], style_ref: st
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "").strip()
-            source_url = str(item.get("sourceUrl") or item.get("source_url") or "").strip()
+            source_url = str(item.get("sourceUrl") or item.get("source_url") or item.get("source") or "").strip()
             if role not in ("product", "reference") or not source_url:
                 continue
             normalized.append({
@@ -263,7 +268,7 @@ def _variant_prompt_suffix(index: int, count: int, variation_mode: str, output_v
     return "\n".join(lines)
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SVC_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-STORAGE_BUCKET   = "generated"
+STORAGE_BUCKET   = os.environ.get("VIBEPIN_DRAFT_BUCKET", "generated-private")
 
 STYLE_PROMPTS: dict[str, str] = {
     "editorial":          "Minimalist editorial flat-lay, pure white background, hero product shot, Pinterest-worthy, 35mm f/2.8, no text",
@@ -315,6 +320,8 @@ def _opaque_id(value: object) -> str | None:
 # ── Image input helpers ────────────────────────────────────────────────────────
 
 _SUPPORTED_IMAGE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/heic", "image/heif"}
+_MAX_REMOTE_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_IMAGE_REDIRECTS = 4
 
 
 def _sniff_image_mime(raw: bytes) -> str | None:
@@ -389,6 +396,111 @@ def _data_url_to_part(data_url: str) -> dict | None:
     return _bytes_to_inline_part(raw, mime)
 
 
+def _resolve_public_image_url(url: str) -> tuple[str, str] | None:
+    """Reject non-public image endpoints before opening a socket."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+            return None
+        expected_port = 443 if parsed.scheme == "https" else 80
+        if parsed.port is not None and parsed.port != expected_port:
+            return None
+        host = (parsed.hostname or "").rstrip(".").lower()
+        if not host or host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+            return None
+        try:
+            literal_ip = ipaddress.ip_address(host)
+            if literal_ip.is_global is not True:
+                return None
+        except ValueError:
+            pass
+        addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        for address in addresses:
+            ip = ipaddress.ip_address(address[4][0])
+            if ip.is_global is not True:
+                return None
+        # Pin this request to the checked address.  The original hostname is
+        # returned separately for Host/SNI semantics; no second DNS lookup is
+        # performed by the fetch loop.
+        return str(ipaddress.ip_address(addresses[0][4][0])), host
+    except Exception:
+        return None
+
+
+def _safe_image_url(url: str) -> bool:
+    return _resolve_public_image_url(url) is not None
+
+
+async def _safe_remote_image_bytes(url: str, headers: dict[str, str]) -> tuple[bytes, str] | None:
+    """Fetch an image with explicit SSRF, redirect, timeout, and size controls."""
+    current = url
+    try:
+        for _ in range(_MAX_IMAGE_REDIRECTS + 1):
+            resolved = _resolve_public_image_url(current)
+            if not resolved:
+                return None
+            ip, host = resolved
+            result = await asyncio.to_thread(_pinned_http_fetch, current, ip, headers)
+            if not result:
+                return None
+            status, location, content_type, body = result
+            if status in {301, 302, 303, 307, 308}:
+                if not location:
+                    return None
+                current = urljoin(current, location)
+                continue
+            if status < 200 or status >= 300:
+                return None
+            return body, content_type
+    except Exception:
+        return None
+    return None
+
+
+def _pinned_http_fetch(url: str, ip: str, headers: dict[str, str], connection_factory=None):
+    """One synchronous, pinned hop; called via asyncio.to_thread."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    timeout = 20.0
+    context = ssl.create_default_context()
+
+    class _PinnedHTTP(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.create_connection((ip, self.port), self.timeout)
+
+    class _PinnedHTTPS(http.client.HTTPSConnection):
+        def connect(self):
+            raw = socket.create_connection((ip, self.port), self.timeout)
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+
+    if connection_factory is not None:
+        conn = connection_factory(parsed.scheme, host, port, ip, timeout, context)
+    else:
+        conn = (_PinnedHTTPS if parsed.scheme == "https" else _PinnedHTTP)(host, port, timeout=timeout, context=context) if parsed.scheme == "https" else _PinnedHTTP(host, port, timeout=timeout)
+    try:
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        request_headers = {**headers, "Host": host}
+        conn.request("GET", path, headers=request_headers)
+        response = conn.getresponse()
+        length = response.getheader("Content-Length")
+        if length and (not length.isdigit() or int(length) > _MAX_REMOTE_IMAGE_BYTES):
+            return response.status, response.getheader("Location"), response.getheader("Content-Type", ""), None
+        body = bytearray()
+        while True:
+            chunk = response.read(min(64 * 1024, _MAX_REMOTE_IMAGE_BYTES + 1 - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+            if len(body) > _MAX_REMOTE_IMAGE_BYTES:
+                return response.status, response.getheader("Location"), response.getheader("Content-Type", ""), None
+        return response.status, response.getheader("Location"), response.getheader("Content-Type", ""), bytes(body)
+    finally:
+        conn.close()
+
+
 async def _url_to_part(url: str) -> dict | None:
     """Download a remote image URL and return a Gemini inlineData part (canonical base64)."""
     headers = {
@@ -402,27 +514,121 @@ async def _url_to_part(url: str) -> dict | None:
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            r = await client.get(url, headers=headers)
-            r.raise_for_status()
-            if not r.content:
+        fetched = await _safe_remote_image_bytes(url, headers)
+        if not fetched:
+            return None
+        raw, content_type = fetched
+        if not raw:
                 print("[generator] reference image returned an empty body", file=sys.stderr)
                 return None
-            mime = r.headers.get("content-type", "").split(";")[0].strip().lower()
-            part = _bytes_to_inline_part(r.content, mime)  # re-encodes from raw bytes
-            if not part:
+        mime = content_type.split(";")[0].strip().lower()
+        part = _bytes_to_inline_part(raw, mime)  # re-encodes from raw bytes
+        if not part:
                 print("[generator] reference image has unsupported mime", file=sys.stderr)
                 return None
-            kb = len(r.content) // 1024
-            print(f"[generator] reference image loaded ({kb}KB)", file=sys.stderr)
-            return part
+        kb = len(raw) // 1024
+        print(f"[generator] reference image loaded ({kb}KB)", file=sys.stderr)
+        return part
     except Exception as e:
         print(f"[generator] reference image load failed category={type(e).__name__}", file=sys.stderr)
         return None
 
 
-async def _image_input_to_part(inp: str) -> dict | None:
+def _storage_image_path(inp: str) -> str | None:
+    """Extract only the exact path from the internal storage-image endpoint."""
+    try:
+        parsed = urlparse(inp)
+        if parsed.path != "/api/storage-image":
+            return None
+        path = parse_qs(parsed.query, keep_blank_values=True).get("path", [])
+        value = path[0] if len(path) == 1 else ""
+        if not value or value.startswith("/") or "\\" in value or ".." in value.split("/"):
+            return None
+        return value
+    except Exception:
+        return None
+
+
+def _supabase_private_storage_path(inp: str) -> str | None:
+    """Extract a private-bucket object path from an exact-origin Supabase URL."""
+    if not SUPABASE_URL:
+        return None
+    try:
+        parsed = urlparse(inp)
+        configured = urlparse(SUPABASE_URL)
+        parsed_host = (parsed.hostname or "").rstrip(".").lower()
+        configured_host = (configured.hostname or "").rstrip(".").lower()
+        # Classify every HTTP(S) spelling of the configured Storage host as
+        # protected. Fragments never reach the server and explicit default ports
+        # or scheme redirects must not make a signed private URL look public.
+        if parsed.scheme not in {"http", "https"} or not parsed_host or parsed_host != configured_host:
+            return None
+        match = re.match(
+            r"^/storage/v1/(?:object|render/image)/(?:(?:public|authenticated|sign)/)?([^/]+)/(.+)$",
+            parsed.path,
+        )
+        if not match or match.group(1) != STORAGE_BUCKET:
+            return None
+        path = unquote(match.group(2))
+        if not path or path.startswith("/") or "\\" in path or ".." in path.split("/"):
+            return None
+        return path or None
+    except Exception:
+        return None
+
+
+async def _private_storage_to_part(inp: str, trusted_owner_id: str) -> dict | None:
+    """Read a private object only after exact owner-bound provenance verification."""
+    path = _storage_image_path(inp)
+    if not path or not trusted_owner_id or not SUPABASE_URL or not SUPABASE_SVC_KEY:
+        return None
+    auth = {"Authorization": f"Bearer {SUPABASE_SVC_KEY}", "apikey": SUPABASE_SVC_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            provenance = await client.get(
+                f"{SUPABASE_URL}/rest/v1/media_asset_provenance",
+                params={"select": "bucket_id,object_path,owner_user_id", "bucket_id": f"eq.{STORAGE_BUCKET}", "object_path": f"eq.{path}",
+                        "owner_user_id": f"eq.{trusted_owner_id}", "lifecycle_state": "eq.draft", "limit": "1"},
+                headers=auth,
+            )
+            provenance.raise_for_status()
+            rows = provenance.json()
+            if not isinstance(rows, list) or len(rows) != 1 or rows[0].get("object_path") != path:
+                return None
+            obj = await client.get(f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{path}", headers=auth)
+            obj.raise_for_status()
+            if len(obj.content) > _MAX_REMOTE_IMAGE_BYTES:
+                return None
+            return _bytes_to_inline_part(obj.content, obj.headers.get("content-type", ""))
+    except Exception:
+        return None
+
+
+async def _lookup_generation_job_owner(job_id: str) -> str:
+    """Load the owner from the service-role-only generation_jobs row."""
+    if not job_id or not SUPABASE_URL or not SUPABASE_SVC_KEY:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/generation_jobs",
+                params={"select": "vibepin_user_id", "id": f"eq.{job_id}", "limit": "1"},
+                headers={"Authorization": f"Bearer {SUPABASE_SVC_KEY}", "apikey": SUPABASE_SVC_KEY},
+            )
+            response.raise_for_status()
+            rows = response.json()
+            owner = rows[0].get("vibepin_user_id") if isinstance(rows, list) and len(rows) == 1 else ""
+            return str(owner or "")
+    except Exception:
+        return ""
+
+
+async def _image_input_to_part(inp: str, *, trusted_owner_id: str = "") -> dict | None:
     """Dispatch: data URL → parse locally, http URL → download. Rejects blob:/file:/other."""
+    private_path = _storage_image_path(inp) or _supabase_private_storage_path(inp)
+    if private_path:
+        proxy = inp if _storage_image_path(inp) else f"/api/storage-image?path={quote(private_path, safe='')}"
+        return await _private_storage_to_part(proxy, trusted_owner_id)
     if inp.startswith("data:"):
         return _data_url_to_part(inp)
     if inp.startswith("http://") or inp.startswith("https://"):
@@ -956,7 +1162,22 @@ def _build_creative_direction_v2_prompt(
 
 # ── Supabase upload ────────────────────────────────────────────────────────────
 
-def _upload_to_supabase(img_bytes: bytes, filename: str) -> str:
+def _record_media_cleanup(owner_id: str, filename: str, reason: str) -> None:
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(
+                f"{SUPABASE_URL}/rest/v1/media_cleanup_outbox",
+                json={"owner_user_id": owner_id, "bucket_id": STORAGE_BUCKET, "object_path": filename, "reason": reason},
+                headers={"Authorization": f"Bearer {SUPABASE_SVC_KEY}", "apikey": SUPABASE_SVC_KEY, "Prefer": "return=minimal"},
+            )
+            response.raise_for_status()
+    except Exception:
+        print("[generator] durable media cleanup recording failed", file=sys.stderr)
+
+
+def _upload_to_supabase(img_bytes: bytes, filename: str, owner_id: str = "", intent_id: str = "") -> str:
+    if not owner_id:
+        raise ValueError("generation owner is required before private storage upload")
     if not SUPABASE_URL or not SUPABASE_SVC_KEY:
         raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set")
     upload_url = f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{filename}"
@@ -968,11 +1189,36 @@ def _upload_to_supabase(img_bytes: bytes, filename: str) -> str:
                 "Authorization": f"Bearer {SUPABASE_SVC_KEY}",
                 "apikey": SUPABASE_SVC_KEY,
                 "Content-Type": "image/png",
-                "x-upsert": "true",
+                "x-upsert": "false",
             },
         )
         r.raise_for_status()
-    return f"{SUPABASE_URL}/storage/v1/object/public/{STORAGE_BUCKET}/{filename}"
+    if owner_id:
+        provenance_url = f"{SUPABASE_URL}/rest/v1/media_asset_provenance"
+        with httpx.Client(timeout=20.0) as client:
+            p = client.post(provenance_url, params={"on_conflict": "bucket_id,object_path"}, json={
+                "owner_user_id": owner_id, "bucket_id": STORAGE_BUCKET, "object_path": filename,
+                "source_type": "generation", "intent_id": intent_id or None,
+                "lifecycle_state": "draft",
+            }, headers={"Authorization": f"Bearer {SUPABASE_SVC_KEY}", "apikey": SUPABASE_SVC_KEY, "Prefer": "resolution=merge-duplicates,return=minimal"})
+            try:
+                p.raise_for_status()
+            except Exception:
+                removed = False
+                try:
+                    with httpx.Client(timeout=20.0) as cleanup:
+                        deletion = cleanup.delete(
+                            f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{filename}",
+                            headers={"Authorization": f"Bearer {SUPABASE_SVC_KEY}", "apikey": SUPABASE_SVC_KEY},
+                        )
+                        deletion.raise_for_status()
+                        removed = True
+                except Exception:
+                    pass
+                if not removed:
+                    _record_media_cleanup(owner_id, filename, "provenance_registration_failed")
+                raise
+    return f"/api/storage-image?path={filename}"
 
 
 # ── Error type constants (embedded in exception messages as "type::detail") ──────
@@ -1526,6 +1772,7 @@ async def _call_api(
     image_input_order: list[dict] | None = None,
     image_manifest: str | None = None,
     generation_request_id: str = "",
+    generation_owner_id: str = "",
     output_index: int | None = None,
     variant_role: str | None = None,
     provider_mode: str = "real",
@@ -1608,11 +1855,14 @@ async def _generate_one(
     image_input_order: list[dict] | None = None,
     image_manifest: str | None = None,
     generation_request_id: str = "",
+    generation_owner_id: str = "",
     variant_role: str | None = None,
     provider_mode: str = "real",
     mock_provider_behavior: str = "success",
     mock_provider_delay_ms: int = 1500,
 ) -> str:
+    if provider_mode != "mock" and not generation_owner_id:
+        raise ValueError("image_generation_failed::generation owner is required")
     final_prompt = prompt or _build_prompt(keyword, style, pin_format)
     img_bytes = await _call_api(
         final_prompt, image_parts, pin_format, model_id=model_id,
@@ -1627,7 +1877,7 @@ async def _generate_one(
     if provider_mode == "mock":
         return f"https://mock.vibepin.local/studio/{_opaque_id(generation_request_id) or 'anonymous'}/{idx}_{uuid.uuid4().hex[:8]}.png"
     filename = f"studio/{int(time.time())}_{idx}_{uuid.uuid4().hex[:8]}.png"
-    return _upload_to_supabase(img_bytes, filename)
+    return _upload_to_supabase(img_bytes, filename, generation_owner_id, generation_request_id)
 
 
 # ── Entry points ───────────────────────────────────────────────────────────────
@@ -1683,8 +1933,13 @@ async def prepare_generation(data: dict) -> dict:
     if retry_single_output:
         count = 1
     custom_prompt      = str(data.get("prompt") or "").strip() or None
-    style_ref          = str(data.get("style_ref") or "").strip() or None
-    product_images     = [str(s) for s in (data.get("product_images") or []) if s]
+    raw_style_ref      = data.get("style_ref")
+    style_ref          = str((raw_style_ref.get("source") if isinstance(raw_style_ref, dict) else raw_style_ref) or "").strip() or None
+    product_images     = [
+        str((s.get("source") if isinstance(s, dict) else s) or "").strip()
+        for s in (data.get("product_images") or [])
+        if (s.get("source") if isinstance(s, dict) else s)
+    ]
     category           = str(data.get("category") or "").strip()
     # Prompt-enhancer inputs (optional — defaults used when not sent by frontend)
     text_overlay       = bool(data.get("text_overlay", False))
@@ -1703,7 +1958,10 @@ async def prepare_generation(data: dict) -> dict:
     actual_image_count = int(data.get("actualImageCount") or count)
     count_clamped     = bool(data.get("countClamped", actual_image_count != requested_image_count))
     generation_request_id = str(data.get("generationRequestId") or f"gen_{int(time.time())}_{uuid.uuid4().hex[:8]}")
-    generation_owner_id = str(data.get("generationOwnerId") or "")
+    # Only server-side runners may provide these underscore-prefixed fields.
+    # Public request fields are intentionally ignored for storage authorization.
+    generation_owner_id = str(data.get("_trustedGenerationOwnerId") or "")
+    generation_job_id = str(data.get("_trustedGenerationJobId") or "")
     provider_mode = str(data.get("providerMode") or "real").strip().lower()
     if provider_mode != "mock":
         provider_mode = "real"
@@ -1719,6 +1977,20 @@ async def prepare_generation(data: dict) -> dict:
     primary_format_tag = str(data.get("primaryFormatTag") or "").strip()
     direction_brief    = str(data.get("directionBrief") or "").strip()
     image_inputs = _normalize_image_inputs(data, product_images, style_ref)
+    has_private_inputs = any(
+        _storage_image_path(str(i.get("sourceUrl") or ""))
+        or _supabase_private_storage_path(str(i.get("sourceUrl") or ""))
+        for i in image_inputs
+    )
+    if has_private_inputs:
+        # The client-supplied generationOwnerId is deliberately not authoritative.
+        # Protected inputs require the owner on the queued generation_jobs row.
+        if not generation_owner_id and generation_job_id:
+            generation_owner_id = await _lookup_generation_job_owner(generation_job_id)
+        if not generation_owner_id:
+            return {"ok": False, "phase": "prepare", "emit": {
+                "ok": False, "error": "Private image provenance could not be verified.",
+                "error_type": ERR_IMAGE_LOAD, "urls": []}}
     image_manifest = _build_image_manifest(image_inputs)
     # Defense in depth. The web route validates model_key at the trust boundary, but
     # this worker also runs against queued generation_jobs.params written elsewhere
@@ -1773,7 +2045,7 @@ async def prepare_generation(data: dict) -> dict:
 
     if load_targets:
         raw_results = await asyncio.gather(
-            *[_image_input_to_part(str(t["sourceUrl"])) for t in load_targets],
+            *[_image_input_to_part(str(t["sourceUrl"]), trusted_owner_id=generation_owner_id) for t in load_targets],
             return_exceptions=True,
         )
     else:
@@ -1927,10 +2199,21 @@ async def prepare_generation(data: dict) -> dict:
     enhancer_result: dict = {}
     enhanced_custom_prompt = custom_prompt
     if _ENHANCER_AVAILABLE:
-        ref_urls_for_enhancer: list[str] = [style_ref] if style_ref else []
+        # Never hand the enhancer relative proxy URLs.  Only already-validated
+        # inline bytes may cross this boundary.
+        enhancer_product_urls = []
+        enhancer_ref_urls = []
+        for loaded in loaded_inputs:
+            inline = (loaded.get("part") or {}).get("inlineData") or {}
+            encoded = str(inline.get("data") or "")
+            mime = str(inline.get("mimeType") or "image/jpeg")
+            if not encoded:
+                continue
+            safe_data_url = f"data:{mime};base64,{encoded}"
+            (enhancer_product_urls if loaded.get("role") == "product" else enhancer_ref_urls).append(safe_data_url)
         enhancer_result = await _enhancer.enhance(
-            product_image_urls=product_images,
-            reference_image_urls=ref_urls_for_enhancer,
+            product_image_urls=enhancer_product_urls,
+            reference_image_urls=enhancer_ref_urls,
             user_raw_text=custom_prompt,
             output_type=output_type,
             reference_strength=reference_strength,
@@ -2103,6 +2386,7 @@ async def prepare_generation(data: dict) -> dict:
         "image_input_order": image_input_order,
         "image_manifest": image_manifest,
         "generation_request_id": generation_request_id,
+        "generation_owner_id": generation_owner_id,
         "variation_mode": variation_mode,
         "output_variants": output_variants,
         "provider_mode": provider_mode,
@@ -2158,6 +2442,7 @@ async def generate_slot(plan: dict, slot_index: int) -> str:
         image_input_order=plan["image_input_order"],
         image_manifest=plan["image_manifest"],
         generation_request_id=plan["generation_request_id"],
+        generation_owner_id=plan["generation_owner_id"],
         variant_role=plan["variant_roles"][slot_index],
         provider_mode=plan["provider_mode"],
         mock_provider_behavior=plan["mock_provider_behavior"],

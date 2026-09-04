@@ -7,7 +7,7 @@
  * sync engine's 200KB per-doc cap. This module:
  *
  *   1) Converts a `data:` URL to a real hosted image via POST /api/studio/upload
- *      (the SAME endpoint the studio board uses) and returns its STABLE publicUrl.
+ *      (the SAME endpoint the studio board uses) and returns its STABLE owner proxy.
  *   2) Runs a low-concurrency, self-terminating background sweep that finds every
  *      `data:`/`blob:` image still living in those three stores, uploads it, and
  *      replaces it in place — stamping a fresh updatedAt + firing the store's
@@ -143,7 +143,7 @@ async function uploadBlob(blob: Blob, token: string, endpoint: string, fetchImpl
 }
 
 /**
- * Upload one `data:` URL and return its stable publicUrl. Throws when there is no
+ * Upload one `data:` URL and return its stable owner-protected proxy. Throws when there is no
  * token or the upload fails (so callers can decide to keep the data URL). Fetch is
  * injectable for tests.
  */

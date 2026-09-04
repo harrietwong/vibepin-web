@@ -22,6 +22,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinDraft } from "@/lib/pinDraftStore";
 // Canonical status types — generation and planning are independent dimensions.
 import type { GenerationStatus } from "@/lib/status/pinStatuses";
+import { toProxyUrl } from "@/lib/imageProxy";
 
 // Lazily loaded — a heavy drawer not needed for the initial paint, so keeping
 // it out of the main route chunk lets the My Pins page shell mount faster
@@ -31,14 +32,6 @@ const PinDetailsModal = dynamic(() =>
   import("@/components/pin-details/PinDetailsModal").then(m => m.PinDetailsModal), { ssr: false });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function toProxyUrl(url: string): string {
-  if (!url) return url;
-  if (url.startsWith("/") || url.startsWith("data:") || url.startsWith("blob:")) return url;
-  const MARKER = "/storage/v1/object/public/generated/studio/";
-  const idx = url.indexOf(MARKER);
-  if (idx !== -1) return `/api/storage-image?path=studio/${url.slice(idx + MARKER.length)}`;
-  return url;
-}
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })

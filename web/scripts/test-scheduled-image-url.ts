@@ -1,14 +1,14 @@
 /**
- * test-scheduled-image-url.ts — a scheduled publish must send Pinterest an
- * absolute image URL, exactly like Publish now does.
+ * test-scheduled-image-url.ts — protected scheduled media must never be sent to
+ * a provider before a publish-asset materializer exists.
  *
  * The defect: some drafts store the relative proxy path
  * `/api/storage-image?path=studio/…` (written when NEXT_PUBLIC_SUPABASE_URL was
  * unset at generation time). Publish now resolved it via toProxyUrl before
  * publishing; the scheduled path passed the raw value through. Pinterest fetches
  * the image itself and cannot resolve a relative path, so server validation
- * rejected it with "imageUrl is not a valid URL" — the same draft could publish
- * by hand and fail on a schedule.
+ * rejected it with "imageUrl is not a valid URL". The security architecture now
+ * keeps that proxy protected and the cron route defers it before claim/meter/provider.
  *
  * Asserted against the REAL validator the publish route uses, so this cannot
  * drift from what actually gates a publish.
@@ -33,24 +33,24 @@ const RELATIVE = "/api/storage-image?path=studio/1780637848_0_14c017a5.png";
 const ABSOLUTE = "https://example.supabase.co/storage/v1/object/public/generated/studio/x.png";
 
 async function main() {
-  const { payloadToPublishInput } = await import("../src/app/api/cron/publish-due/publishDueLogic");
+  const { payloadToPublishInput, publishMediaUrls } = await import("../src/app/api/cron/publish-due/publishDueLogic");
   const { validatePublicImageUrl } = await import("../src/lib/server/pinterest/validatePublish");
+  const { requiresPublishAsset } = await import("../src/lib/server/publishMedia");
 
   const base = { boardId: "b1", title: "t" };
 
-  section("the stored relative path is resolved before publishing");
+  section("the stored protected path remains protected");
   {
     const input = payloadToPublishInput("u1", { ...base, imageUrl: RELATIVE });
     check("an input is produced", !!input);
-    check("the relative path is NOT sent as-is", input?.imageUrl !== RELATIVE,
+    check("the relative proxy is not laundered into a public URL", input?.imageUrl === RELATIVE,
       `got ${input?.imageUrl}`);
-    check("it becomes an absolute https URL", !!input && /^https:\/\//.test(input.imageUrl),
-      `got ${input?.imageUrl}`);
+    check("it is classified for pre-dispatch deferral", !!input && requiresPublishAsset(input.imageUrl, "https://app.test"));
     check("the original filename is preserved",
       !!input?.imageUrl.includes("1780637848_0_14c017a5.png"), `got ${input?.imageUrl}`);
   }
 
-  section("the real publish validator now accepts it");
+  section("the provider validator still refuses the protected URL");
   {
     // This is the exact check that produced "imageUrl is not a valid URL".
     const before = validatePublicImageUrl(RELATIVE);
@@ -58,10 +58,7 @@ async function main() {
       "if this passes, the bug never existed and the fix is pointless");
     if (!before.ok) console.log(`       raw → "${before.message}"`);
 
-    const input = payloadToPublishInput("u1", { ...base, imageUrl: RELATIVE });
-    const after = validatePublicImageUrl(input?.imageUrl);
-    check("the RESOLVED value passes validation", after.ok === true,
-      after.ok ? "" : `still rejected: ${after.message}`);
+    check("protected media is not provider-readable", validatePublicImageUrl(RELATIVE).ok === false);
   }
 
   section("already-absolute URLs are untouched");
@@ -79,11 +76,25 @@ async function main() {
     check("empty image ⇒ null", payloadToPublishInput("u1", { ...base, imageUrl: "   " }) === null);
   }
 
-  section("sourceImageUrl fallback is resolved too");
+  section("sourceImageUrl fallback remains protected too");
   {
     const input = payloadToPublishInput("u1", { boardId: "b1", sourceImageUrl: RELATIVE });
-    check("the fallback field also becomes absolute", !!input && /^https:\/\//.test(input.imageUrl),
+    check("the fallback is classified for pre-dispatch deferral", !!input && requiresPublishAsset(input.imageUrl, "https://app.test"),
       `got ${input?.imageUrl}`);
+  }
+
+  section("cron safety uses the exact publish media fallback set");
+  {
+    const protectedUrl = RELATIVE;
+    for (const payload of [
+      { media: [], sourceImageUrl: protectedUrl },
+      { sourceImageUrl: protectedUrl },
+      { media: [{ id: "empty", url: "" }], imageUrl: protectedUrl },
+    ]) {
+      const urls = publishMediaUrls(payload);
+      check("fallback media is returned for cron gating", urls.length === 1 && urls[0] === protectedUrl);
+      check("fallback media is deferred before claim", requiresPublishAsset(urls[0], "https://app.test"));
+    }
   }
 
   section("a data:/blob: image is still refused by the validator");

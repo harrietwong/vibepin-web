@@ -360,7 +360,11 @@ async def process_job(job: dict, client=None) -> str:
     """
     client = client or get_client()
     job_id = str(job["id"])
-    params = job.get("params") or {}
+    params = dict(job.get("params") or {})
+    # The queue row is the trust boundary.  Never let client-controlled params
+    # select the owner or job used for private-media authorization.
+    params["_trustedGenerationJobId"] = job_id
+    params["_trustedGenerationOwnerId"] = str(job.get("vibepin_user_id") or "")
     count = max(1, int(params.get("count") or params.get("outputCount") or 1))
 
     # Phase 4I: the usage reservation this job settles against (None when the job

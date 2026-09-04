@@ -199,6 +199,30 @@ def _fake_prepare_ok(count=2):
 
 class GenerationWorkerTest(unittest.IsolatedAsyncioTestCase):
 
+    async def test_worker_overrides_forged_private_media_owner_with_claimed_row(self):
+        job = _seed_job("trusted-job", "running", count=1)
+        job["vibepin_user_id"] = "trusted-owner"
+        job["params"].update({
+            "_trustedGenerationOwnerId": "attacker-owner",
+            "_trustedGenerationJobId": "attacker-job",
+        })
+        db = FakeSupabase(seed={"generation_jobs": [job]})
+        captured = {}
+
+        async def _prep(params):
+            captured.update(params)
+            return {"ok": True, "plan": {"count": 1}}
+
+        async def _slot(_plan, _slot):
+            return "https://example.test/generated.png"
+
+        with patch.object(worker.generator, "prepare_generation", _prep), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            await worker.process_job(db.job("trusted-job"), client=db)
+
+        self.assertEqual(captured["_trustedGenerationOwnerId"], "trusted-owner")
+        self.assertEqual(captured["_trustedGenerationJobId"], "trusted-job")
+
     # ── CAS claim: two workers race, exactly one wins ────────────────────────
     def test_claim_cas_single_winner(self):
         db = FakeSupabase(seed={"generation_jobs": [_seed_job("j1", "queued")]})
