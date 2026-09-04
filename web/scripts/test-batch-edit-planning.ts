@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { getPinReadiness } from "../src/lib/pinReadiness";
 import { combineLocalPlannedAt, splitLocalPlannedAt } from "../src/lib/weeklyPlanHandoff";
+import {
+  clearInlineScheduleDraft,
+  openInlineScheduleDraft,
+  saveInlineScheduleDraft,
+  updateInlineScheduleDraft,
+} from "../src/lib/studio/inlineScheduleDraft";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -64,6 +70,41 @@ test("clearing planned time preserves the local date", () => {
 
 test("clearing date removes plannedAt", () => {
   assert.equal(combineLocalPlannedAt("", "11:30"), "");
+});
+
+test("inline schedule edits remain local until explicit save", () => {
+  let applyCalls = 0;
+  const opened = openInlineScheduleDraft("2026-09-04", "09:00");
+  const edited = updateInlineScheduleDraft(opened, { date: "2026-09-06", time: "14:30" });
+  assert.equal(applyCalls, 0);
+  assert.deepEqual(edited, { date: "2026-09-06", time: "14:30" });
+  const committed = saveInlineScheduleDraft(edited);
+  applyCalls++;
+  assert.equal(applyCalls, 1);
+  assert.deepEqual(committed, {
+    plannedDate: "2026-09-06",
+    plannedTime: "14:30",
+    plannedAt: "2026-09-06T14:30",
+  });
+});
+
+test("inline schedule cancel discards the draft without a persistence effect", () => {
+  const applyCalls = 0;
+  const saved = { date: "2026-09-04", time: "09:00" };
+  let draft: ReturnType<typeof openInlineScheduleDraft> | null = openInlineScheduleDraft(saved.date, saved.time);
+  draft = updateInlineScheduleDraft(draft, { date: "2026-09-07" });
+  draft = null;
+  assert.equal(applyCalls, 0);
+  assert.equal(draft, null);
+  assert.deepEqual(saved, { date: "2026-09-04", time: "09:00" });
+});
+
+test("inline schedule clear produces one explicit empty patch", () => {
+  let applyCalls = 0;
+  const patch = clearInlineScheduleDraft();
+  applyCalls++;
+  assert.equal(applyCalls, 1);
+  assert.deepEqual(patch, { plannedDate: "", plannedTime: "", plannedAt: "" });
 });
 
 const batchSource = readFileSync("src/components/studio/BatchEditDrawer.tsx", "utf8");

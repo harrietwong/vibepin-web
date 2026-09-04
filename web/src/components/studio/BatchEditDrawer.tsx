@@ -34,6 +34,12 @@ import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput 
 import { combineLocalPlannedAt } from "@/lib/weeklyPlanHandoff";
 import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
 import { resolveProductLinkDisplay, isAmazonProduct, linkDomain } from "@/lib/studio/productLink";
+import {
+  clearInlineScheduleDraft,
+  openInlineScheduleDraft,
+  saveInlineScheduleDraft,
+  updateInlineScheduleDraft,
+} from "@/lib/studio/inlineScheduleDraft";
 import type { ProductSnapshot } from "@/lib/studioPersistence";
 import { useBackButtonClose } from "@/lib/useBackButtonClose";
 import { toast } from "sonner";
@@ -876,6 +882,8 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   function startResize(e: React.MouseEvent, id: ColId) {
     e.preventDefault(); e.stopPropagation();
     resizeRef.current = { id, startX: e.clientX, startW: colW[id] };
+    // This is transient pointer feedback, not React-owned render state.
+    // eslint-disable-next-line react-hooks/immutability
     document.body.style.cursor = "col-resize";
   }
 
@@ -1775,14 +1783,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                   <td key={c.id} style={td}>
                                     {expanded ? (
                                       <div data-testid="batch-edit-time-cell" style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                        <input aria-label={tr("studioModals.schedule.time")} type="time" value={draft.time} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { ...(prev[p.pinId] ?? { date, time }), time: e.target.value } }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
-                                        <input aria-label={tr("studioModals.schedule.date")} type="date" value={draft.date} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { ...(prev[p.pinId] ?? { date, time }), date: e.target.value } }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
-                                        <button type="button" aria-label={tr("studioModals.schedule.saveInline")} onClick={() => { patchRow(p.pinId, { plannedDate: draft.date, plannedTime: draft.time, plannedAt: combineLocalPlannedAt(draft.date, draft.time) }); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.saveInline")}</button>
-                                        <button type="button" aria-label={tr("studioModals.schedule.clearInline")} onClick={() => { patchRow(p.pinId, { plannedDate: "", plannedTime: "", plannedAt: "" }); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.clearInline")}</button>
+                                        <input aria-label={tr("studioModals.schedule.time")} type="time" value={draft.time} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: updateInlineScheduleDraft(prev[p.pinId] ?? openInlineScheduleDraft(date, time), { time: e.target.value }) }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px", width: 78 }} />
+                                        <input aria-label={tr("studioModals.schedule.date")} type="date" value={draft.date} onChange={e => setScheduleDrafts(prev => ({ ...prev, [p.pinId]: updateInlineScheduleDraft(prev[p.pinId] ?? openInlineScheduleDraft(date, time), { date: e.target.value }) }))} onFocus={onInlineFocus} onBlur={onInlineBlur} style={{ ...inlineInput, colorScheme: "dark", padding: "4px 5px" }} />
+                                        <button type="button" disabled={!draft.date} aria-label={tr("studioModals.schedule.saveInline")} onClick={() => { patchRow(p.pinId, saveInlineScheduleDraft(draft)); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10, opacity: draft.date ? 1 : 0.55 }}>{tr("studioModals.schedule.saveInline")}</button>
+                                        <button type="button" aria-label={tr("studioModals.schedule.clearInline")} onClick={() => { patchRow(p.pinId, clearInlineScheduleDraft()); setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.clearInline")}</button>
                                         <button type="button" aria-label={tr("studioModals.schedule.cancelInline")} onClick={() => { setScheduleDrafts(prev => { const n = { ...prev }; delete n[p.pinId]; return n; }); setExpandedScheduleRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} style={{ ...btnBase, padding: "3px 5px", fontSize: 10 }}>{tr("studioModals.schedule.cancelInline")}</button>
                                       </div>
                                     ) : (
-                                      <button type="button" data-testid="batch-edit-time-expand" onClick={() => { setScheduleDrafts(prev => ({ ...prev, [p.pinId]: { date, time } })); setExpandedScheduleRows(prev => new Set(prev).add(p.pinId)); }} style={{ ...btnBase, padding: "4px 7px", fontSize: 10.5, color: UI.textMuted }}>
+                                      <button type="button" data-testid="batch-edit-time-expand" onClick={() => { setScheduleDrafts(prev => ({ ...prev, [p.pinId]: openInlineScheduleDraft(date, time) })); setExpandedScheduleRows(prev => new Set(prev).add(p.pinId)); }} style={{ ...btnBase, padding: "4px 7px", fontSize: 10.5, color: UI.textMuted }}>
                                         {date || time ? `${date || "—"} ${time || ""}`.trim() : tr("studioModals.schedule.setTime")}
                                       </button>
                                     )}
