@@ -178,8 +178,11 @@ function blockedLookupError(): NodeJS.ErrnoException {
   return error;
 }
 
-export const guardedDnsLookup: LookupFunction = (hostname, options, callback) => {
-  defaultResolveHostname(hostname).then((addresses) => {
+export function createGuardedDnsLookup(
+  resolveHostname: ResolveHostname = defaultResolveHostname,
+): LookupFunction {
+  return (hostname, options, callback) => {
+    resolveHostname(hostname).then((addresses) => {
     if (!addressesArePublic(addresses)) {
       callback(blockedLookupError(), "", 0);
       return;
@@ -191,8 +194,11 @@ export const guardedDnsLookup: LookupFunction = (hostname, options, callback) =>
     }
 
     callback(null, addresses[0].address, addresses[0].family);
-  }).catch(() => callback(blockedLookupError(), "", 0));
-};
+    }).catch(() => callback(blockedLookupError(), "", 0));
+  };
+}
+
+export const guardedDnsLookup: LookupFunction = createGuardedDnsLookup();
 
 export async function safeOutboundUrl(
   input: string,
@@ -213,6 +219,18 @@ export async function safeOutboundUrl(
     (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
     parsedUrl.username ||
     parsedUrl.password
+  ) {
+    throw new UnsafeOutboundUrlError();
+  }
+
+  // Restrict the port surface to web defaults. This also rejects alternate
+  // ports commonly used to expose internal services (e.g. :8080/:3000).
+  if (
+    parsedUrl.port
+    && !(
+      (parsedUrl.protocol === "http:" && parsedUrl.port === "80")
+      || (parsedUrl.protocol === "https:" && parsedUrl.port === "443")
+    )
   ) {
     throw new UnsafeOutboundUrlError();
   }

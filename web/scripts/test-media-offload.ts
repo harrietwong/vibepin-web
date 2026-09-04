@@ -13,7 +13,12 @@
  */
 
 import assert from "node:assert";
-import { authorizeStudioStoragePath } from "../src/lib/server/storagePathAuth";
+import {
+  authorizeStudioStoragePath,
+  generationJobImageUrls,
+  generationJobImageProxyUrls,
+  ownedGenerationJobsContainPath,
+} from "../src/lib/server/storagePathAuth";
 
 // ── window + localStorage shim (events routed by type) ─────────────────────────
 const _ls = new Map<string, string>();
@@ -78,6 +83,10 @@ const FAST = { backoffBaseMs: 3, backoffMaxMs: 12 } as const;
 const getToken = async () => "test-token";
 
 async function main() {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= "https://test-placeholder.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "test-placeholder-anon-key";
+  const { handleStorageImageGet } = await import("../src/lib/server/storageImageHandler");
+  const { handleHistoryStorageGet } = await import("../src/lib/server/historyStorageHandler");
   const mo = await import("../src/lib/mediaOffload");
   const lib = await import("../src/lib/productLibraryStore");
   const assets = await import("../src/lib/assetStore");
@@ -96,11 +105,37 @@ async function main() {
   await test("storage scope accepts legacy files and the current user's upload subtree", () => {
     assert.deepStrictEqual(
       authorizeStudioStoragePath("studio/legacy-file.png", "user-1"),
-      { ok: true, path: "studio/legacy-file.png" },
+      { ok: true, path: "studio/legacy-file.png", scope: "legacy-job" },
     );
     assert.deepStrictEqual(
       authorizeStudioStoragePath("studio/uploads/user-1/image.png", "user-1"),
-      { ok: true, path: "studio/uploads/user-1/image.png" },
+      { ok: true, path: "studio/uploads/user-1/image.png", scope: "owned-upload" },
+    );
+  });
+
+  await test("legacy storage access accepts only exact done outputs from the owner's jobs", () => {
+    const rows = [{ results: [
+      { status: "done", imageUrl: "https://example.supabase.co/storage/v1/object/public/generated/studio/owned.png" },
+      { status: "failed", imageUrl: "https://example.supabase.co/storage/v1/object/public/generated/studio/failed.png" },
+      { status: "done", imageUrl: "/api/storage-image?path=studio%2Fproxy.png" },
+    ] }];
+
+    assert.deepStrictEqual(generationJobImageUrls(rows[0]), [
+      "https://example.supabase.co/storage/v1/object/public/generated/studio/owned.png",
+      "/api/storage-image?path=studio%2Fproxy.png",
+    ]);
+    assert.equal(ownedGenerationJobsContainPath(rows, "studio/owned.png", "https://example.supabase.co"), true);
+    assert.equal(ownedGenerationJobsContainPath(rows, "studio/proxy.png", "https://example.supabase.co"), true);
+    assert.equal(ownedGenerationJobsContainPath(rows, "studio/failed.png", "https://example.supabase.co"), false);
+    assert.equal(ownedGenerationJobsContainPath(rows, "studio/other-user.png", "https://example.supabase.co"), false);
+    assert.equal(ownedGenerationJobsContainPath([{ results: "client-value" }], "studio/owned.png", "https://example.supabase.co"), false);
+    assert.deepStrictEqual(
+      generationJobImageProxyUrls({ results: [
+        { status: "done", imageUrl: "/api/storage-image?path=studio%2Fproxy.png" },
+        { status: "done", imageUrl: "/api/storage-image?path=studio%2Fproxy.png&extra=1" },
+        { status: "done", imageUrl: "https://evil.example/storage/v1/object/public/generated/studio/forged.png" },
+      ] }, "user-1", "https://example.supabase.co"),
+      ["/api/storage-image?path=studio%2Fproxy.png"],
     );
   });
 
@@ -129,6 +164,153 @@ async function main() {
         path,
       );
     }
+  });
+
+  await test("storage-image checks auth and owner before DB or Storage I/O", async () => {
+    let dbCalls = 0;
+    let storageCalls = 0;
+    const baseDeps = {
+      loadGenerationResults: async () => { dbCalls++; return { data: [], error: false }; },
+      fetchImpl: async () => { storageCalls++; return new Response(); },
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: "test-key",
+    };
+
+    const unauthenticated = await handleStorageImageGet(
+      new Request("https://app.test/api/storage-image?path=studio%2Flegacy.png"),
+      { ...baseDeps, getUserId: async () => null },
+    );
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(dbCalls, 0);
+    assert.equal(storageCalls, 0);
+
+    const crossOwner = await handleStorageImageGet(
+      new Request("https://app.test/api/storage-image?path=studio%2Fuploads%2Fuser-2%2Fimage.png"),
+      { ...baseDeps, getUserId: async () => "user-1" },
+    );
+    assert.equal(crossOwner.status, 403);
+    assert.equal(dbCalls, 0);
+    assert.equal(storageCalls, 0);
+  });
+
+  await test("storage-image legacy access fails closed and successful responses are private/nosniff", async () => {
+    let storageCalls = 0;
+    const request = new Request("https://app.test/api/storage-image?path=studio%2Fowned.png");
+    const shared = {
+      getUserId: async () => "user-1",
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: "test-key",
+      fetchImpl: async () => {
+        storageCalls++;
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/png", "content-length": "3" },
+        });
+      },
+    };
+
+    const unmatched = await handleStorageImageGet(request, {
+      ...shared,
+      loadGenerationResults: async () => ({ data: [], error: false }),
+    });
+    assert.equal(unmatched.status, 403);
+    assert.equal(storageCalls, 0);
+
+    const dbFailure = await handleStorageImageGet(request, {
+      ...shared,
+      loadGenerationResults: async () => ({ data: [], error: true }),
+    });
+    assert.equal(dbFailure.status, 403);
+    assert.equal(storageCalls, 0);
+
+    const matched = await handleStorageImageGet(request, {
+      ...shared,
+      loadGenerationResults: async userId => {
+        assert.equal(userId, "user-1");
+        return { data: [{ results: [{ status: "done", imageUrl: "/api/storage-image?path=studio%2Fowned.png" }] }], error: false };
+      },
+    });
+    assert.equal(matched.status, 200);
+    assert.equal(storageCalls, 1);
+    assert.equal(matched.headers.get("cache-control"), "private, max-age=86400, immutable");
+    assert.equal(matched.headers.get("vary"), "Authorization, Cookie");
+    assert.equal(matched.headers.get("x-content-type-options"), "nosniff");
+  });
+
+  await test("storage-image rejects untrusted MIME and oversized streamed bodies", async () => {
+    const request = new Request("https://app.test/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fimage.png");
+    const shared = {
+      getUserId: async () => "user-1",
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: "test-key",
+    };
+    const html = await handleStorageImageGet(request, {
+      ...shared,
+      fetchImpl: async () => new Response("<html>", { status: 200, headers: { "content-type": "text/html" } }),
+    });
+    assert.equal(html.status, 404);
+
+    const empty = await handleStorageImageGet(request, {
+      ...shared,
+      fetchImpl: async () => new Response(null, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+    assert.equal(empty.status, 404);
+
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+        controller.enqueue(new Uint8Array(5 * 1024 * 1024));
+        controller.close();
+      },
+    });
+    const oversized = await handleStorageImageGet(request, {
+      ...shared,
+      fetchImpl: async () => new Response(oversizedStream, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+    assert.equal(oversized.status, 404);
+  });
+
+  await test("history-storage is auth-first, user-scoped, proxy-only, and fail-closed on DB errors", async () => {
+    let loadCalls = 0;
+    const unauthenticated = await handleHistoryStorageGet(new Request("https://app.test/api/history-storage"), {
+      getUserId: async () => null,
+      loadGenerationJobs: async () => { loadCalls++; return { data: [], error: false }; },
+    });
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(loadCalls, 0);
+
+    const failed = await handleHistoryStorageGet(new Request("https://app.test/api/history-storage"), {
+      getUserId: async () => "user-1",
+      loadGenerationJobs: async userId => {
+        loadCalls++;
+        assert.equal(userId, "user-1");
+        return { data: [], error: true };
+      },
+    });
+    assert.deepStrictEqual(await failed.json(), { entries: [] });
+
+    const ok = await handleHistoryStorageGet(new Request("https://app.test/api/history-storage"), {
+      getUserId: async () => "user-1",
+      loadGenerationJobs: async userId => {
+        assert.equal(userId, "user-1");
+        return {
+          error: false,
+          data: [{
+            id: "job-1",
+            created_at: "2026-09-04T00:00:00.000Z",
+            status: "done",
+            params: { keyword: "lamp", product_images: ["p"] },
+            results: [
+              { status: "done", imageUrl: "/api/storage-image?path=studio%2Flegacy.png" },
+              { status: "done", imageUrl: "https://evil.example/storage/v1/object/public/generated/studio/forged.png" },
+            ],
+          }],
+        };
+      },
+    });
+    const body = await ok.json() as { entries: Array<{ groups: Array<{ images: string[] }> }> };
+    assert.deepStrictEqual(body.entries[0].groups[0].images, ["/api/storage-image?path=studio%2Flegacy.png"]);
+    assert.equal(loadCalls, 1);
   });
 
   // ── data URL → stable URL, with updatedAt bump ─────────────────────────────

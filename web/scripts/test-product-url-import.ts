@@ -7,7 +7,7 @@ import {
   validateImportUrl,
 } from "../src/lib/productUrlImport";
 import { parseProductImportUrls, autoSelectTopCandidates } from "../src/lib/productUrlImportClient";
-import { isPublicIpAddress, safeOutboundUrl } from "../src/app/api/fetch-og/safeOutboundUrl";
+import { createGuardedDnsLookup, isPublicIpAddress, safeOutboundUrl } from "../src/app/api/fetch-og/safeOutboundUrl";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -364,6 +364,9 @@ async function runProviderTests() {
 }
 
 async function run() {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= "https://test-placeholder.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "test-placeholder-anon-key";
+  const { fetchWithSafeRedirects, handleGet, readLimitedText } = await import("../src/app/api/fetch-og/handler");
   console.log("\n── Original tests ────────────────────────────────────────────────────────");
   await runOriginalTests();
 
@@ -423,6 +426,130 @@ async function run() {
     assert(!isPublicIpAddress("192.168.1.1"), "private IPv4 should fail");
     assert(!isPublicIpAddress("::ffff:127.0.0.1"), "mapped loopback should fail");
     assert(!isPublicIpAddress("fc00::1"), "unique-local IPv6 should fail");
+  });
+
+  await test("17. only default/explicit HTTP(S) ports are allowed", async () => {
+    for (const input of [
+      "https://example.com:3000",
+      "http://example.com:8080",
+      "https://example.com:80",
+      "http://example.com:443",
+    ]) {
+      let rejected = false;
+      try { await safeOutboundUrl(input, publicDns); } catch { rejected = true; }
+      assert(rejected, `expected non-web port rejection for ${input}`);
+    }
+    await safeOutboundUrl("https://example.com:443", publicDns);
+    await safeOutboundUrl("http://example.com:80", publicDns);
+  });
+
+  const fakeResponse = (statusCode: number, headers: Record<string, string>, chunks: Uint8Array[] = []) => ({
+    statusCode,
+    headers,
+    destroy: () => undefined,
+    async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield chunk; },
+  });
+  const allowFetchOg = async () => ({ allowed: true as const, reason: "under_limit" as const, remaining: 59 });
+
+  await test("18. auth is checked before any outbound request", async () => {
+    let networkCalls = 0;
+    const response = await handleGet(new Request("https://app.test/api/fetch-og?url=https://example.com"), {
+      getUserId: async () => null,
+      consumeRateLimit: allowFetchOg,
+      fetchWithSafeRedirects: async () => { networkCalls++; throw new Error("network must not run"); },
+    });
+    assert(response.status === 401, "expected unauthorized response");
+    assert(networkCalls === 0, "outbound request ran before auth");
+  });
+
+  await test("19. connection-time DNS rebinding is rejected", async () => {
+    let resolutions = 0;
+    const resolveRebinding = async () => (++resolutions === 1
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "127.0.0.1", family: 4 }]);
+    let rejected = false;
+    try {
+      await fetchWithSafeRedirects("https://example.com/start", {
+        resolveHostname: resolveRebinding,
+        requestUrl: async (_url, lookup) => new Promise((resolve, reject) => {
+          lookup("example.com", {}, error => {
+            if (error) reject(error);
+            else resolve(fakeResponse(200, {}) as never);
+          });
+        }),
+      });
+    } catch { rejected = true; }
+    assert(rejected, "private connection-time answer should be rejected after public preflight");
+    assert(resolutions === 2, `expected preflight plus connection lookup, got ${resolutions}`);
+  });
+
+  await test("20. redirect to private host is rejected before second request", async () => {
+    let calls = 0;
+    let rejected = false;
+    try {
+      await fetchWithSafeRedirects("https://example.com/start", {
+        resolveHostname: publicDns,
+        requestUrl: async () => {
+          calls++;
+          return fakeResponse(302, { location: "http://127.0.0.1/secret" }) as never;
+        },
+      });
+    } catch { rejected = true; }
+    assert(rejected, "private redirect should be rejected");
+    assert(calls === 1, "request was made after private redirect");
+  });
+
+  await test("21. redirect limit is enforced", async () => {
+    let calls = 0;
+    let rejected = false;
+    try {
+      await fetchWithSafeRedirects("https://example.com/start", {
+        resolveHostname: publicDns,
+        requestUrl: async () => {
+          calls++;
+          return fakeResponse(302, { location: "/again" }) as never;
+        },
+      });
+    } catch { rejected = true; }
+    assert(rejected, "redirect chain should fail at limit");
+    assert(calls === 4, `expected 4 allowed requests, got ${calls}`);
+  });
+
+  await test("22. Content-Length and chunked bodies share a 256 KiB ceiling", async () => {
+    const tooLarge = new Uint8Array(256 * 1024 + 1);
+    let rejected = false;
+    try { await readLimitedText(fakeResponse(200, { "content-length": String(tooLarge.byteLength) }) as never); } catch { rejected = true; }
+    assert(rejected, "oversized Content-Length should fail before reading");
+    rejected = false;
+    try { await readLimitedText(fakeResponse(200, {}, [tooLarge]) as never); } catch { rejected = true; }
+    assert(rejected, "oversized chunked body should fail while reading");
+  });
+
+  await test("23. handler errors use generic messages without upstream details", async () => {
+    const response = await handleGet(new Request("https://app.test/api/fetch-og?url=https://example.com"), {
+      getUserId: async () => "user-1",
+      consumeRateLimit: allowFetchOg,
+      fetchWithSafeRedirects: async () => { throw new Error("secret-host:5432 ECONNREFUSED"); },
+    });
+    const body = await response.json() as { error?: string };
+    assert(response.status === 502, "expected upstream failure status");
+    assert(body.error === "Unable to fetch URL", "unexpected error detail leaked");
+    assert(!JSON.stringify(body).includes("secret-host"), "upstream host leaked");
+  });
+
+  await test("24. per-user limiter runs before outbound fetch and returns a bounded retry", async () => {
+    let networkCalls = 0;
+    const response = await handleGet(new Request("https://app.test/api/fetch-og?url=https://example.com"), {
+      getUserId: async () => "user-1",
+      consumeRateLimit: async userId => {
+        assert(userId === "user-1", "limiter subject must be the authenticated user");
+        return { allowed: false, reason: "limit_exceeded", retryAfterSeconds: 17, limit: 60, windowSeconds: 300 };
+      },
+      fetchWithSafeRedirects: async () => { networkCalls++; throw new Error("network must not run"); },
+    });
+    assert(response.status === 429, "expected rate-limited response");
+    assert(response.headers.get("retry-after") === "17", "missing bounded Retry-After");
+    assert(networkCalls === 0, "outbound request ran after rate-limit refusal");
   });
 
   console.log(`\nProduct URL import tests: ${passed} passed, ${failed} failed`);

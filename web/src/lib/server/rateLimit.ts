@@ -80,7 +80,7 @@ import { createServerClient } from "@/lib/supabase";
 const TABLE = "ai_rate_limit_windows";
 
 /** Logical route keys. Limits are per-route: exhausting one must not disable another. */
-export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation";
+export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation" | "fetch_og";
 
 export type RateLimitRule = {
   /** Maximum admitted requests per window. */
@@ -182,6 +182,14 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
    * default. See the block comment at the top of the file; do not unify it.
    */
   image_generation: { limit: 40, windowSeconds: 300, failClosed: true },
+
+  /**
+   * GET /api/fetch-og — authenticated outbound metadata fetch. This does not buy
+   * a model call, but without a durable user ceiling an account could use many
+   * serverless instances as a public-port scanner or connection-time amplifier.
+   * 60/5min leaves ample room for the picker while bounding that abuse surface.
+   */
+  fetch_og: { limit: 60, windowSeconds: 300 },
 };
 
 /**
