@@ -133,6 +133,8 @@ def test_build_binds_v71_pair_to_git_blob_hashes(
     artifacts = {str(item["path"]): item for item in payload["artifacts"]}
 
     assert payload["migrationOrder"] == manifest.MIGRATION_ORDER
+    assert payload["candidateBranch"] == _git(repo, "branch", "--show-current")
+    assert payload["candidateBranchTipAtBuild"] == runtime
     for path in (V71_APPLY, V71_ROLLBACK):
         raw = _git_bytes(repo, "show", f"{runtime}:{path}")
         assert artifacts[path] == {
@@ -195,6 +197,35 @@ def test_build_rejects_runtime_missing_v74_rollback(
 
     with pytest.raises(manifest.ManifestError, match="rollback_v74_security_invoker_rls"):
         manifest.build(repo, runtime)
+
+
+def test_build_rejects_runtime_that_is_not_current_branch_tip(
+    synthetic_release_repo: tuple[Path, str],
+) -> None:
+    repo, runtime = synthetic_release_repo
+    _write(repo, "later.txt", b"later\n")
+    _git(repo, "add", "later.txt")
+    _git(repo, "commit", "--quiet", "-m", "later")
+
+    with pytest.raises(
+        manifest.ManifestError,
+        match="runtime commit must equal the current candidate branch tip",
+    ):
+        manifest.build(repo, runtime)
+
+
+def test_verifier_rejects_candidate_branch_tip_tampering(
+    synthetic_release_repo: tuple[Path, str],
+    tmp_path: Path,
+) -> None:
+    repo, runtime = synthetic_release_repo
+    payload = manifest.build(repo, runtime)
+    payload["candidateBranchTipAtBuild"] = "0" * 40
+    path, digest = _manifest_file(tmp_path, payload)
+
+    receipt = manifest.verify(repo, path, digest)
+    assert receipt["ok"] is False
+    assert "candidateBranchTipAtBuild must equal runtimeCandidateCommit" in receipt["errors"]
 
 
 def test_verifier_rejects_v71_hash_and_pair_tampering(

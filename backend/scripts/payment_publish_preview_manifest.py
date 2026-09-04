@@ -20,7 +20,6 @@ CENTRAL = "5fe929355c0531f47934aec84248898741be2f6a"
 MULTICHANNEL = "f1beaa877a2367cec1c0d4f7eb164b805ded8e97"
 USAGE = "af7eed8f2028a9eb5d32bd760c02339428fa44e8"
 PRODUCTION_ANCHOR = "5bcc1a6a0068347c6397b463c713aba82e45a6d9"
-BRANCH = "codex/payment-publish-handoff-0830"
 
 MIGRATION_ORDER = [
     {
@@ -167,6 +166,14 @@ def build(repo: Path, runtime: str) -> dict[str, object]:
     assert isinstance(actual_runtime, str)
     if actual_runtime != runtime:
         raise ManifestError("runtime commit does not resolve exactly")
+    candidate_branch = str(git(repo, "branch", "--show-current"))
+    if not candidate_branch:
+        raise ManifestError("manifest build requires a named candidate branch")
+    branch_tip = str(git(repo, "rev-parse", "HEAD"))
+    if branch_tip != runtime:
+        raise ManifestError(
+            "runtime commit must equal the current candidate branch tip at manifest build time"
+        )
     for label, source in (("central", CENTRAL), ("multichannel", MULTICHANNEL), ("usage", USAGE)):
         if not is_ancestor(repo, source, runtime):
             raise ManifestError(f"{label} source is not an ancestor of runtime commit")
@@ -180,7 +187,8 @@ def build(repo: Path, runtime: str) -> dict[str, object]:
     return {
         "schemaVersion": 1,
         "generatedAtUtc": generated,
-        "candidateBranch": BRANCH,
+        "candidateBranch": candidate_branch,
+        "candidateBranchTipAtBuild": branch_tip,
         "verdict": "READY_FOR_PREVIEW_VALIDATION_NOT_PRODUCTION",
         "productionAnchor": PRODUCTION_ANCHOR,
         "sourceCommits": {
@@ -223,8 +231,11 @@ def verify(repo: Path, manifest_path: Path, expected_sha256: str) -> dict[str, o
         errors.append(str(exc))
     if manifest.get("schemaVersion") != 1:
         errors.append("schemaVersion must be 1")
-    if manifest.get("candidateBranch") != BRANCH:
-        errors.append("candidateBranch mismatch")
+    candidate_branch = manifest.get("candidateBranch")
+    if not isinstance(candidate_branch, str) or not candidate_branch.strip():
+        errors.append("candidateBranch must be a non-empty branch name")
+    if manifest.get("candidateBranchTipAtBuild") != runtime:
+        errors.append("candidateBranchTipAtBuild must equal runtimeCandidateCommit")
     if manifest.get("verdict") != "READY_FOR_PREVIEW_VALIDATION_NOT_PRODUCTION":
         errors.append("verdict must remain Preview-only")
     if manifest.get("sourceCommits") != {
