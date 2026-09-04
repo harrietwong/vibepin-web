@@ -12,6 +12,8 @@ from scripts import payment_publish_preview_manifest as manifest
 
 V71_APPLY = "backend/db/migrate_v71_generation_intent_idempotency.sql"
 V71_ROLLBACK = "backend/db/rollback_v71_generation_intent_idempotency.sql"
+V74_APPLY = "backend/db/migrate_v74_security_invoker_rls.sql"
+V74_ROLLBACK = "backend/db/rollback_v74_security_invoker_rls.sql"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -150,6 +152,48 @@ def test_build_rejects_runtime_missing_v71_rollback(
     runtime = _git(repo, "rev-parse", "HEAD")
 
     with pytest.raises(manifest.ManifestError, match="rollback_v71_generation_intent_idempotency"):
+        manifest.build(repo, runtime)
+
+
+def test_migration_order_pairs_v74_security_hardening() -> None:
+    assert manifest.MIGRATION_ORDER[-1] == {
+        "version": 74,
+        "apply": V74_APPLY,
+        "recovery": V74_ROLLBACK,
+        "recoveryMode": "sql_rollback_fail_closed_security_retained",
+        "reason": (
+            "v74 rollback removes only marker-verified v74 policies; RLS/FORCE RLS and "
+            "security_invoker remain enabled because their pre-migration state is not persisted."
+        ),
+    }
+
+
+def test_build_binds_v74_pair_to_git_blob_hashes(
+    synthetic_release_repo: tuple[Path, str],
+) -> None:
+    repo, runtime = synthetic_release_repo
+    payload = manifest.build(repo, runtime)
+    artifacts = {str(item["path"]): item for item in payload["artifacts"]}
+
+    for path in (V74_APPLY, V74_ROLLBACK):
+        raw = _git_bytes(repo, "show", f"{runtime}:{path}")
+        assert artifacts[path] == {
+            "path": path,
+            "gitBlobSha1": _git(repo, "rev-parse", f"{runtime}:{path}"),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "bytes": len(raw),
+        }
+
+
+def test_build_rejects_runtime_missing_v74_rollback(
+    synthetic_release_repo: tuple[Path, str],
+) -> None:
+    repo, _runtime = synthetic_release_repo
+    _git(repo, "rm", V74_ROLLBACK)
+    _git(repo, "commit", "--quiet", "-m", "remove v74 rollback")
+    runtime = _git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(manifest.ManifestError, match="rollback_v74_security_invoker_rls"):
         manifest.build(repo, runtime)
 
 

@@ -4,7 +4,7 @@ import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 from app.core.config import get_settings
-from app.api.routes import tasks, auth
+from app.api.routes import tasks
 
 settings = get_settings()
 
@@ -30,7 +30,9 @@ app.add_middleware(
 )
 
 app.include_router(tasks.router)
-app.include_router(auth.router)
+# The legacy api/app OAuth router persisted raw provider tokens without a
+# verified owner or one-time state. Current OAuth lives in web/src/app/api/auth;
+# do not expose the unsafe legacy endpoints.
 
 
 @app.get("/health")

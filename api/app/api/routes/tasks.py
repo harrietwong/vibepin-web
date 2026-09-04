@@ -10,35 +10,30 @@ PATCH /api/tasks/{id}   — update assets/copy (user edits)
 import asyncio
 import json
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from arq import create_pool
 from arq.connections import RedisSettings
 
 from app.core.config import get_settings
+from app.core.auth import require_authenticated_user_id
 from app.core.database import get_supabase
+from app.core.row_shape import InvalidSingleRowShape, exact_single_mapping
 from app.models.task import TaskCreate, TaskPublish
 from app.services.publisher import publish_all
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
-def _get_user_id(request) -> str:
-    """Extract user_id from Supabase JWT. Simplified for now."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    # In production: verify JWT with Supabase
-    return auth.split(" ")[1][:36]  # Use token prefix as user_id for dev
-
-
 @router.post("")
-async def create_task(body: TaskCreate, request=None):
+async def create_task(body: TaskCreate, request: Request):
     settings = get_settings()
     db = get_supabase()
+    user_id = require_authenticated_user_id(request)
 
     # Insert task
     result = db.table("tasks").insert({
+        "user_id": user_id,
         "product_url": str(body.product_url),
         "style_preset": body.style_preset,
         "platforms": body.platforms,
@@ -57,32 +52,49 @@ async def create_task(body: TaskCreate, request=None):
 
 
 @router.get("")
-async def list_tasks():
+async def list_tasks(request: Request):
     db = get_supabase()
-    result = db.table("tasks").select("*").order("created_at", desc=True).limit(50).execute()
+    user_id = require_authenticated_user_id(request)
+    result = (
+        db.table("tasks")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
     return result.data
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: UUID):
+async def get_task(task_id: UUID, request: Request):
     db = get_supabase()
-    result = db.table("tasks").select("*").eq("id", str(task_id)).single().execute()
+    user_id = require_authenticated_user_id(request)
+    result = (
+        db.table("tasks")
+        .select("*")
+        .eq("id", str(task_id))
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
     if not result.data:
         raise HTTPException(status_code=404, detail="Task not found")
     return result.data
 
 
 @router.get("/{task_id}/stream")
-async def stream_task_status(task_id: UUID):
+async def stream_task_status(task_id: UUID, request: Request):
     """Server-Sent Events — poll DB every 2s and push status changes."""
     db = get_supabase()
+    user_id = require_authenticated_user_id(request)
 
     async def event_generator():
         last_status = None
         for _ in range(150):  # 5 min max stream (150 × 2s)
             result = db.table("tasks").select("status, assets, error_message").eq(
                 "id", str(task_id)
-            ).single().execute()
+            ).eq("user_id", user_id).single().execute()
             data = result.data or {}
             status = data.get("status")
 
@@ -108,37 +120,64 @@ async def stream_task_status(task_id: UUID):
 
 
 @router.patch("/{task_id}")
-async def update_task_assets(task_id: UUID, body: dict):
+async def update_task_assets(task_id: UUID, body: dict, request: Request):
     """User edits copy or swaps image before publishing."""
     db = get_supabase()
+    user_id = require_authenticated_user_id(request)
     allowed_fields = {
         "assets", "copy_pinterest_title", "copy_pinterest_description", "copy_instagram_caption"
     }
     update_data = {k: v for k, v in body.items() if k in allowed_fields}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
-    db.table("tasks").update(update_data).eq("id", str(task_id)).execute()
+    result = (
+        db.table("tasks")
+        .update(update_data)
+        .eq("id", str(task_id))
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True}
 
 
 @router.post("/{task_id}/publish")
-async def publish_task(task_id: UUID, body: TaskPublish):
+async def publish_task(task_id: UUID, body: TaskPublish, request: Request):
     db = get_supabase()
+    user_id = require_authenticated_user_id(request)
 
     # Fetch task + assets
-    result = db.table("tasks").select("*").eq("id", str(task_id)).single().execute()
+    result = (
+        db.table("tasks")
+        .select("*")
+        .eq("id", str(task_id))
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
     task = result.data
     if not task:
         raise HTTPException(404, "Task not found")
     if task["status"] != "awaiting_review":
         raise HTTPException(400, f"Task is in status '{task['status']}', not awaiting_review")
 
-    # Fetch user platform tokens (from user_settings table)
-    # TODO: replace with actual user auth
-    settings_result = db.table("user_settings").select("*").limit(1).execute()
-    user_settings = settings_result.data[0] if settings_result.data else {}
+    # The service-role client bypasses RLS, so keep the owner predicate explicit.
+    settings_result = (
+        db.table("user_settings")
+        .select("*")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    try:
+        user_settings = exact_single_mapping(settings_result.data)
+    except InvalidSingleRowShape as exc:
+        raise HTTPException(status_code=502, detail="Invalid settings response") from exc
 
-    db.table("tasks").update({"status": "publishing"}).eq("id", str(task_id)).execute()
+    db.table("tasks").update({"status": "publishing"}).eq(
+        "id", str(task_id)
+    ).eq("user_id", user_id).execute()
 
     from app.models.task import GeneratedAssets, ProductMetadata
     assets = GeneratedAssets(**task.get("assets", {}))
@@ -167,5 +206,7 @@ async def publish_task(task_id: UUID, body: TaskPublish):
         if not publish_result.get("pinterest") and not publish_result.get("instagram"):
             update_data["status"] = "failed"
 
-    db.table("tasks").update(update_data).eq("id", str(task_id)).execute()
+    db.table("tasks").update(update_data).eq("id", str(task_id)).eq(
+        "user_id", user_id
+    ).execute()
     return {**update_data, "publish_details": publish_result}

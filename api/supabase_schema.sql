@@ -78,8 +78,69 @@ create table if not exists audit_log (
 
 create index on audit_log(user_id, created_at desc);
 
--- ─── Row Level Security (enable in production) ───────────────────────────────
--- alter table tasks enable row level security;
--- alter table user_settings enable row level security;
--- create policy "Users own their tasks" on tasks
---   for all using (auth.uid()::text = user_id);
+-- ─── Row Level Security ───────────────────────────────────────────────────────
+-- The deployable/idempotent hardening lives in backend/db/migrate_v74_*.sql.
+-- Keep fresh legacy installs safe by default as well.
+alter table tasks enable row level security;
+alter table tasks force row level security;
+alter table user_settings enable row level security;
+alter table user_settings force row level security;
+alter table audit_log enable row level security;
+alter table audit_log force row level security;
+
+create policy vibepin_v74_tasks_owner_access on tasks
+  as permissive for all to authenticated
+  using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_tasks_owner_access on tasks
+  is 'vibepin:v74:owner-access';
+create policy vibepin_v74_tasks_owner_boundary on tasks
+  as restrictive for all to authenticated
+  using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_tasks_owner_boundary on tasks
+  is 'vibepin:v74:owner-boundary';
+
+create policy vibepin_v74_user_settings_owner_access on user_settings
+  as permissive for all to authenticated
+  using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_user_settings_owner_access on user_settings
+  is 'vibepin:v74:owner-access';
+create policy vibepin_v74_user_settings_owner_boundary on user_settings
+  as restrictive for all to authenticated
+  using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_user_settings_owner_boundary on user_settings
+  is 'vibepin:v74:owner-boundary';
+
+create policy vibepin_v74_audit_owner_select on audit_log
+  as permissive for select to authenticated
+  using (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_audit_owner_select on audit_log
+  is 'vibepin:v74:audit-owner-select';
+create policy vibepin_v74_audit_owner_select_boundary on audit_log
+  as restrictive for select to authenticated
+  using (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_audit_owner_select_boundary on audit_log
+  is 'vibepin:v74:audit-owner-select-boundary';
+
+create policy vibepin_v74_audit_owner_insert on audit_log
+  as permissive for insert to authenticated
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_audit_owner_insert on audit_log
+  is 'vibepin:v74:audit-owner-insert';
+create policy vibepin_v74_audit_owner_insert_boundary on audit_log
+  as restrictive for insert to authenticated
+  with check (auth.uid()::text = user_id::text);
+comment on policy vibepin_v74_audit_owner_insert_boundary on audit_log
+  is 'vibepin:v74:audit-owner-insert-boundary';
+
+create policy vibepin_v74_audit_deny_update on audit_log
+  as restrictive for update to authenticated using (false) with check (false);
+comment on policy vibepin_v74_audit_deny_update on audit_log
+  is 'vibepin:v74:audit-deny-update';
+create policy vibepin_v74_audit_deny_delete on audit_log
+  as restrictive for delete to authenticated using (false);
+comment on policy vibepin_v74_audit_deny_delete on audit_log
+  is 'vibepin:v74:audit-deny-delete';

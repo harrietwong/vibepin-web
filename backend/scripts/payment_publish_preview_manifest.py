@@ -83,6 +83,16 @@ MIGRATION_ORDER = [
             "and retain retry evidence after any child intent has been created."
         ),
     },
+    {
+        "version": 74,
+        "apply": "backend/db/migrate_v74_security_invoker_rls.sql",
+        "recovery": "backend/db/rollback_v74_security_invoker_rls.sql",
+        "recoveryMode": "sql_rollback_fail_closed_security_retained",
+        "reason": (
+            "v74 rollback removes only marker-verified v74 policies; RLS/FORCE RLS and "
+            "security_invoker remain enabled because their pre-migration state is not persisted."
+        ),
+    },
 ]
 
 REQUIRED_EVIDENCE = [
