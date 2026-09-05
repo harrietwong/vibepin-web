@@ -83,6 +83,9 @@ async function bootstrap(db) {
     create function public.uuid_generate_v4() returns uuid language sql volatile as $$
       select gen_random_uuid()
     $$;
+    -- Mirror Supabase's service-role default function EXECUTE surface. Every
+    -- v76 function is created under this precondition on the initial apply.
+    alter default privileges in schema public grant execute on functions to service_role;
   `);
   // pinterest_connections is an explicit v59 prerequisite. Use its real schema
   // and real v49 CAS migration rather than a local table approximation.
@@ -261,10 +264,13 @@ async function regressionRound(round) {
       const beforeMigration = await graphSnapshot(db);
       if (phase.startsWith("rollback")) await db.exec(rollback);
       if (phase.startsWith("reapply")) {
-        // Supabase's default function ACL can make every public function
-        // executable again between applies. Reapply must explicitly narrow all
-        // trigger-only guards, including service_role.
+        // Simulate both Supabase's default service-role function ACL and a
+        // drifted existing ACL between applies. Reapply must explicitly narrow
+        // all trigger-only guards, including service_role, while restoring the
+        // eleven service RPCs.
+        await db.exec("alter default privileges in schema public grant execute on functions to service_role");
         await db.exec("grant execute on all functions in schema public to public");
+        await db.exec("grant execute on all functions in schema public to service_role");
         await db.exec(v76);
       }
       if (phase !== "fresh") {
