@@ -260,26 +260,40 @@ async function regressionRound(round) {
     for (const phase of ["fresh", "rollback-1", "rollback-2", "reapply-1", "reapply-2"]) {
       const beforeMigration = await graphSnapshot(db);
       if (phase.startsWith("rollback")) await db.exec(rollback);
-      if (phase.startsWith("reapply")) await db.exec(v76);
+      if (phase.startsWith("reapply")) {
+        // Supabase's default function ACL can make every public function
+        // executable again between applies. Reapply must explicitly narrow all
+        // trigger-only guards, including service_role.
+        await db.exec("grant execute on all functions in schema public to public");
+        await db.exec(v76);
+      }
       if (phase !== "fresh") {
         await check(round, `${phase}: migration preserves every publish graph row`, async () =>
           JSON.stringify(beforeMigration) === JSON.stringify(await graphSnapshot(db)));
       }
 
-      await check(round, `${phase}: legacy guard denies direct EXECUTE to PUBLIC and all API roles`, async () => {
-        const acl = (await db.query(`select not exists (
-            select 1 from pg_proc p, lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
-            where p.oid='public.v76_legacy_transition_guard()'::regprocedure
-              and a.grantee=0 and a.privilege_type='EXECUTE') as public_denied,
-          has_function_privilege('anon','public.v76_legacy_transition_guard()','execute') as anon,
-          has_function_privilege('authenticated','public.v76_legacy_transition_guard()','execute') as authenticated,
-          has_function_privilege('service_role','public.v76_legacy_transition_guard()','execute') as service_role`)).rows[0];
+      await check(round, `${phase}: all trigger-only guards deny direct EXECUTE to PUBLIC and API roles`, async () => {
+        const guards = [
+          "public.v76_bind_publish_owner()",
+          "public.v76_evidence_owner_guard()",
+          "public.v76_legacy_transition_guard()",
+        ];
+        const acl = (await db.query(`select p.oid::regprocedure::text as guard,
+            not exists (
+              select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+              where a.grantee=0 and a.privilege_type='EXECUTE') as public_denied,
+            has_function_privilege('anon',p.oid,'execute') as anon,
+            has_function_privilege('authenticated',p.oid,'execute') as authenticated,
+            has_function_privilege('service_role',p.oid,'execute') as service_role
+          from pg_proc p where p.oid = any(array[${guards.map(guard => `'${guard}'::regprocedure`).join(",")}])
+          order by guard`)).rows;
         const errors = [];
-        for (const role of ["anon", "authenticated", "service_role"]) {
-          errors.push(await asRole(db, role, () => rejected(() => db.query(
-            "select public.v76_legacy_transition_guard()"))));
+        for (const guard of guards) {
+          for (const role of ["anon", "authenticated", "service_role"]) {
+            errors.push(await asRole(db, role, () => rejected(() => db.query(`select ${guard}`))));
+          }
         }
-        return (acl.public_denied && !acl.anon && !acl.authenticated && !acl.service_role
+        return (acl.length === guards.length && acl.every(row => row.public_denied && !row.anon && !row.authenticated && !row.service_role)
             && errors.every(error => error?.code === "42501"))
           || JSON.stringify({ acl, errors });
       });

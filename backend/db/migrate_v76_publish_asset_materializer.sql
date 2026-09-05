@@ -380,7 +380,7 @@ begin
   new.owner_user_id := v_owner;
   return new;
 end $fn$;
-revoke all on function public.v76_bind_publish_owner() from public,anon,authenticated;
+revoke all on function public.v76_bind_publish_owner() from public,anon,authenticated,service_role;
 drop trigger if exists v76_bind_publish_owner on public.publish_intent_destinations;
 create trigger v76_bind_publish_owner before insert or update on public.publish_intent_destinations
   for each row execute function public.v76_bind_publish_owner();
@@ -560,7 +560,7 @@ begin
   end if;
   return new;
 end $fn$;
-revoke all on function public.v76_evidence_owner_guard() from public,anon,authenticated;
+revoke all on function public.v76_evidence_owner_guard() from public,anon,authenticated,service_role;
 drop trigger if exists v76_evidence_owner_guard on public.publish_asset_delivery_items;
 create trigger v76_evidence_owner_guard before insert or update on public.publish_asset_delivery_items
   for each row execute function public.v76_evidence_owner_guard();
