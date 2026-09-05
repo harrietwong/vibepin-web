@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 // Match Git's LF SQL source on Windows too. CRLF checkout otherwise changes the
 // function sentinel immediately before the pinned, newline-normalized body hash.
-const load = path => readFileSync(resolve(root, path), "utf8").replaceAll("\r\n", "\n");
+const load = path => readFileSync(resolve(root, path), "utf8").replace(/\r\n?/g, "\n");
 const pinterestV1 = load("api/migrations/001_pinterest_connections.sql");
 const pinterestV49 = load("backend/db/migrate_v49_pinterest_token_version.sql");
 const chain = [
@@ -19,6 +19,8 @@ const chain = [
 ];
 const v76 = chain.at(-1)[1];
 const rollback = load("backend/db/rollback_v76_publish_asset_materializer.sql");
+const v76DiskCrlf = readFileSync(resolve(root, "backend/db/migrate_v76_publish_asset_materializer.sql"), "utf8")
+  .replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n");
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -411,6 +413,27 @@ async function runRound(round) {
         to_regclass('public.publish_intents')::text as intents,
         to_regclass('public.media_asset_provenance')::text as provenance`)).rows[0];
       return Object.values(row).every(Boolean);
+    });
+
+    await check(round, "CRLF-installed v76 function definition replays with exact sentinel/body semantics", async () => {
+      const definition = (await db.query(`select pg_get_functiondef(
+        'public.publish_cleanup_lease(bigint,uuid,integer)'::regprocedure) as value`)).rows[0].value;
+      // This is an exact installed-definition fixture: only line endings change;
+      // signature, language, search_path, marker, and non-newline body bytes stay fixed.
+      await db.exec(definition.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n"));
+      const error = await rejected(() => db.exec(v76));
+      return error === null || `expected CRLF replay to pass, got ${JSON.stringify(error)}`;
+    });
+
+    await check(round, "CRLF SQL file loads with unchanged migration semantics", async () => {
+      const crlfDb = await freshV75Db();
+      try {
+        await seedConnections(crlfDb);
+        const error = await rejected(() => crlfDb.exec(v76DiskCrlf));
+        return error === null || `expected CRLF SQL migration to pass, got ${JSON.stringify(error)}`;
+      } finally {
+        await crlfDb.close();
+      }
     });
 
     await check(round, "v72→v73→v75 secret-bearing legacy receipt makes v76 fail closed or canonicalize explicitly", async () => {
@@ -2383,8 +2406,8 @@ for (let round = 1; round <= 2; round += 1) {
 
 const report = { verdict: failures.length ? "fail" : "pass", rounds: 2,
   assertions, passes, failed: failures.length,
-  newAssertions: 154, expectedNewRed: 0,
-  baseline: { commit: "c374862ea47213670ee3b72eb3004b47b0d67977",
+  newAssertions: 158, expectedNewRed: 0,
+  baseline: { commit: "41089316849352f677852f7944a5fbd465dd2eb7",
     assertions: 122, passes: 122, failed: 0 },
   failures };
 console.log(JSON.stringify(report, null, 2));

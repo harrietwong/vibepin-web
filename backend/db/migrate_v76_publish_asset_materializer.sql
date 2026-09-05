@@ -60,9 +60,12 @@ begin
           or v_proc.proretset or v_proc.provariadic<>0
           or v_proc.prolang<>(select oid from pg_language where lanname='plpgsql')
           or v_proc.proconfig is distinct from array['search_path=public, pg_temp']::text[]
-          or position('-- '||v_expected.marker||chr(10) in pg_get_functiondef(v_oid))=0
+          -- pg_get_functiondef may preserve CRLF/CR from an installed definition;
+          -- newline normalization is the only canonicalization allowed here.
+          or position('-- '||v_expected.marker||chr(10) in
+                replace(replace(pg_get_functiondef(v_oid),chr(13)||chr(10),chr(10)),chr(13),chr(10)))=0
           -- Pin the body as well: retaining a sentinel cannot bless edited code.
-          or md5(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)))<>v_expected.body_hash then
+          or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>v_expected.body_hash then
         raise exception using errcode='P0001',message='v76_definition_tamper';
       end if;
     end if;
