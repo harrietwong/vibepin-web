@@ -24,6 +24,8 @@
     "test:shopify-entitlements": "npx tsx scripts/test-shopify-entitlements.ts",
     "test:plan-entitlements": "npx tsx scripts/test-plan-entitlements.ts",
     "test:usage-metering": "npx tsx scripts/test-usage-metering.ts",
+    "test:credit-e2e-harness": "npx tsx scripts/test-credit-e2e-harness.ts",
+    "credit-e2e": "npx tsx scripts/credit-e2e-harness.ts",
     "test:shopify-connection-store": "npx tsx scripts/test-shopify-connection-store.ts",
     "test:shopify-hmac": "npx tsx scripts/test-shopify-hmac.ts",
     "test:shopify-oauth-state": "npx tsx scripts/test-shopify-oauth-state.ts",
