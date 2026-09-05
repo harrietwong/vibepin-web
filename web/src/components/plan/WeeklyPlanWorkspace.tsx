@@ -1772,22 +1772,16 @@ export function WeeklyPlanWorkspace() {
     const returnMonth = params.get("month");
     const returnCategory = params.get("category");
 
-    if (returnView === "calendar" || returnView === "list") setViewMode(returnView);
-    if (returnScope === "week" || returnScope === "month") {
-      setCalendarScope(returnScope);
-      persistCalendarScope(returnScope);
-    }
-    if (returnCategory && (returnCategory === ALL_CATEGORIES || ACTIVE_CATEGORIES.some(c => c.id === returnCategory))) {
-      setCategory(returnCategory);
-    }
-    if (returnWeekStart) {
-      const nextWeekOffset = weekOffsetFromStartISO(returnWeekStart);
-      if (nextWeekOffset !== null) setWeekOffset(nextWeekOffset);
-    }
-    if (returnMonth) {
-      const nextMonthOffset = monthOffsetFromAnchorISO(returnMonth);
-      if (nextMonthOffset !== null) setMonthOffset(nextMonthOffset);
-    }
+    const nextViewMode = returnView === "calendar" || returnView === "list" ? returnView : null;
+    const nextScope = returnScope === "week" || returnScope === "month" ? returnScope : null;
+    const nextCategory = returnCategory && (returnCategory === ALL_CATEGORIES || ACTIVE_CATEGORIES.some(c => c.id === returnCategory))
+      ? returnCategory
+      : null;
+    let nextWeekOffset: number | null = null;
+    let nextMonthOffset: number | null = null;
+    if (returnWeekStart) nextWeekOffset = weekOffsetFromStartISO(returnWeekStart);
+    if (returnMonth) nextMonthOffset = monthOffsetFromAnchorISO(returnMonth);
+    if (nextScope) persistCalendarScope(nextScope);
 
     // Clean up OAuth / modal params without triggering a navigation. The calendar
     // view (week/month) survives the OAuth round-trip on its own via the persisted
@@ -1841,9 +1835,21 @@ export function WeeklyPlanWorkspace() {
     }
 
     const draft = pinDraftStore.getDraft(pinIdParam);
+    queueMicrotask(() => {
+      if (nextViewMode) setViewMode(nextViewMode);
+      if (nextScope) setCalendarScope(nextScope);
+      if (nextCategory) setCategory(nextCategory);
+      if (nextWeekOffset !== null) setWeekOffset(nextWeekOffset);
+      if (nextMonthOffset !== null) setMonthOffset(nextMonthOffset);
+      if (draft) setCalendarEditDraft(draft);
+      else setRestoreNotice(isConnected
+        ? tr("plan.restore.connectedSelectAgain")
+        : tr("plan.restore.notCompletedSelectAgain"));
+      // "Finished" means restore state has been queued after the synchronous
+      // localStorage read; it is not gated on the Plan query or Pinterest sync.
+      logPlanTiming("drawer restore finished", performance.now() - planPageMountedAt, `outcome=${draft ? "opened" : "not_found"}`);
+    });
     if (draft) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCalendarEditDraft(draft);
       if (isConnected) {
         toast.success(tr("plan.restore.pinterestConnectedContinue"));
       } else if (isCancelled) {
@@ -1851,19 +1857,7 @@ export function WeeklyPlanWorkspace() {
       } else if (isFailure) {
         toast.error(tr("plan.restore.pinterestFailed"));
       }
-    } else {
-      // Drawer context is gone (draft no longer in local storage) — render Plan
-      // normally with a safe, actionable message instead of a blank/failed state.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setRestoreNotice(isConnected
-        ? tr("plan.restore.connectedSelectAgain")
-        : tr("plan.restore.notCompletedSelectAgain"));
     }
-    // "Finished" here means the drawer's `open` prop flipped (or the not-found
-    // banner was decided) — a synchronous localStorage read, NOT gated on the
-    // useWeeklyPlan Supabase query or the Pinterest sync call above, which is why
-    // this timestamp should stay small even when the plan-row query is slow.
-    logPlanTiming("drawer restore finished", performance.now() - planPageMountedAt, `outcome=${draft ? "opened" : "not_found"}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2218,10 +2212,10 @@ export function WeeklyPlanWorkspace() {
   // Review-failures entry (Banner CTA + stats-bar "N failed"). Create Pins Failed is
   // now the workspace-wide canonical recovery list, including Plan/cron/legacy sources.
   // Carry the displayed week so the destination can explain and apply the Plan scope.
-  const openFailedList = useCallback(() => {
+  const openFailedList = () => {
     const params = new URLSearchParams({ filter: "failed", sub: "publish", week: displayWeekStart });
     window.location.assign(`/app/studio?${params.toString()}`);
-  }, [displayWeekStart]);
+  };
 
   // ── Dev-only Plan identity diagnostics (Issue B) ──────────────────────────────
   // Makes the "same account, different browser/incognito shows different Plan"
