@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const load = path => readFileSync(resolve(root, path), "utf8");
+// Match Git's LF SQL source on Windows too. CRLF checkout otherwise changes the
+// function sentinel immediately before the pinned, newline-normalized body hash.
+const load = path => readFileSync(resolve(root, path), "utf8").replaceAll("\r\n", "\n");
 const pinterestV1 = load("api/migrations/001_pinterest_connections.sql");
 const pinterestV49 = load("backend/db/migrate_v49_pinterest_token_version.sql");
 const chain = [
@@ -216,7 +218,189 @@ async function failedRetryParent(db, owner, value, leaseToken, claimToken) {
     where i.user_id=$1 and i.intent_id=$2`, [owner, value.intentId])).rows[0];
 }
 
+async function asRole(db, role, action) {
+  // Autocommit each statement: a successful forbidden write must remain visible
+  // to the snapshot assertion, rather than being hidden by a test ROLLBACK.
+  await db.exec(`set role ${role}`);
+  try { return await action(); }
+  finally { await db.exec("reset role"); }
+}
+
+const graphTables = ["publish_intents", "publish_intent_destinations", "publish_assets",
+  "publish_asset_deliveries", "publish_asset_delivery_items", "provider_publish_attempts"];
+async function graphSnapshot(db) {
+  return (await db.query(`select jsonb_build_object(${graphTables.map(table =>
+    `'${table}',(select coalesce(jsonb_agg(to_jsonb(t) order by id),'[]'::jsonb) from public.${table} t)`
+  ).join(",")}) as state`)).rows[0].state;
+}
+
+async function regressionRound(round) {
+  const db = await freshV75Db();
+  try {
+    await seedConnections(db);
+    // Create genuinely pre-v76 claims through the existing definer RPC. Never
+    // manufacture frozen flags, receipts, claims or terminal states with DML.
+    const legacy = receipt(`publish:v76:frozen-compat:r${round}`,
+      [destination("frozen-pin", "pinterest", connections.aPin, { boardId: "board-a" })]);
+    const legacyResult = await asRole(db, "service_role", () => legacyClaim(db, A, legacy));
+    const legacyBefore = (await db.query(`select i.receipt,d.claim_token::text,d.status
+      from public.publish_intents i join public.publish_intent_destinations d on d.publish_intent_id=i.id
+      where i.user_id=$1 and i.intent_id=$2`, [A, legacy.intentId])).rows[0];
+    await db.exec(v76);
+
+    const value = receipt(`publish:v76:service-flow:r${round}`,
+      [destination("service-flow-pin", "pinterest", connections.aPin, { boardId: "board-a" })]);
+    await asRole(db, "service_role", () => fixturePreparedRows(db, A, value));
+    const ids = (await db.query(`select i.id::text as intent,d.id::text as destination
+      from public.publish_intents i join public.publish_intent_destinations d on d.publish_intent_id=i.id
+      where i.user_id=$1 and i.intent_id=$2`, [A, value.intentId])).rows[0];
+
+    for (const phase of ["fresh", "rollback-1", "rollback-2", "reapply-1", "reapply-2"]) {
+      const beforeMigration = await graphSnapshot(db);
+      if (phase.startsWith("rollback")) await db.exec(rollback);
+      if (phase.startsWith("reapply")) await db.exec(v76);
+      if (phase !== "fresh") {
+        await check(round, `${phase}: migration preserves every publish graph row`, async () =>
+          JSON.stringify(beforeMigration) === JSON.stringify(await graphSnapshot(db)));
+      }
+
+      await check(round, `${phase}: legacy guard denies direct EXECUTE to PUBLIC and all API roles`, async () => {
+        const acl = (await db.query(`select not exists (
+            select 1 from pg_proc p, lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+            where p.oid='public.v76_legacy_transition_guard()'::regprocedure
+              and a.grantee=0 and a.privilege_type='EXECUTE') as public_denied,
+          has_function_privilege('anon','public.v76_legacy_transition_guard()','execute') as anon,
+          has_function_privilege('authenticated','public.v76_legacy_transition_guard()','execute') as authenticated,
+          has_function_privilege('service_role','public.v76_legacy_transition_guard()','execute') as service_role`)).rows[0];
+        const errors = [];
+        for (const role of ["anon", "authenticated", "service_role"]) {
+          errors.push(await asRole(db, role, () => rejected(() => db.query(
+            "select public.v76_legacy_transition_guard()"))));
+        }
+        return (acl.public_denied && !acl.anon && !acl.authenticated && !acl.service_role
+            && errors.every(error => error?.code === "42501"))
+          || JSON.stringify({ acl, errors });
+      });
+
+      for (const table of ["publish_intents", "publish_intent_destinations"]) {
+        const id = table === "publish_intents" ? ids.intent : ids.destination;
+        const attacks = [
+          ["INSERT", `insert into public.${table} select * from public.${table} where id=$1`, [id]],
+          ["DELETE", `delete from public.${table} where id=$1`, [id]],
+          ["TRUNCATE", `truncate table public.${table} cascade`, []],
+          ...(table === "publish_intents" ? [
+            ["UPDATE frozen flag", `update public.${table} set v76_frozen_legacy=true where id=$1`, [id]],
+            ["UPDATE receipt", `update public.${table} set receipt='{}'::jsonb where id=$1`, [id]],
+            ["UPDATE lifecycle", `update public.${table} set lifecycle_status='settled' where id=$1`, [id]],
+          ] : [
+            ["UPDATE claim", `update public.${table} set claim_token=$2 where id=$1`, [id, tokens.three]],
+            ["UPDATE status", `update public.${table} set status='published' where id=$1`, [id]],
+          ]),
+        ];
+        for (const [operation, sql, params] of attacks) {
+          await check(round, `${phase}: service_role ${table} ${operation} is 42501 with zero graph change`, async () => {
+            const before = await graphSnapshot(db);
+            const error = await asRole(db, "service_role", () => rejected(() => db.query(sql, params)));
+            const after = await graphSnapshot(db);
+            return (error?.code === "42501" && JSON.stringify(before) === JSON.stringify(after))
+              || JSON.stringify({ error, before, after });
+          });
+        }
+        await check(round, `${phase}: service_role SELECT remains available on ${table}`, async () => {
+          const row = (await asRole(db, "service_role", () => db.query(
+            `select to_jsonb(t) as row from public.${table} t where id=$1`, [id]))).rows[0]?.row;
+          return row?.id === id || JSON.stringify(row);
+        });
+      }
+    }
+
+    await check(round, "explicit NULL materialization lease is atomic and cannot enable a second token takeover", async () => {
+      const lease = (token, seconds) => asRole(db, "service_role", () => db.query(
+        "select public.publish_asset_lease_materialization($1,$2,$3,$4,$5::integer) as value",
+        [A, value.intentId, value.destinations[0].id, token, seconds]));
+      const results = [];
+      const assertRejectedUnchanged = async (token, seconds, expected) => {
+        const before = await graphSnapshot(db);
+        const error = await rejected(() => lease(token, seconds));
+        const after = await graphSnapshot(db);
+        results.push({ error, expected, unchanged: JSON.stringify(before) === JSON.stringify(after) });
+      };
+      await assertRejectedUnchanged(tokens.one, null, "invalid_materialization_lease");
+      await assertRejectedUnchanged(null, 60, "invalid_materialization_lease");
+      const leased = (await lease(tokens.one, 60)).rows[0].value;
+      await assertRejectedUnchanged(tokens.one, null, "invalid_materialization_lease");
+      await assertRejectedUnchanged(tokens.two, null, "invalid_materialization_lease");
+      await assertRejectedUnchanged(tokens.two, 60, "materialization_already_leased");
+      const state = (await db.query(`select d.lease_token::text,d.lease_expires_at is not null as finite,
+          delivery.lease_token::text as delivery_token,delivery.lease_expires_at=d.lease_expires_at as same_expiry,
+          d.attempt,(select count(*)::int from public.provider_publish_attempts where publish_intent_id=i.id) as attempts
+        from public.publish_intents i join public.publish_intent_destinations d on d.publish_intent_id=i.id
+        join public.publish_asset_deliveries delivery on delivery.publish_intent_id=i.id
+        where i.user_id=$1 and i.intent_id=$2`, [A, value.intentId])).rows[0];
+      return (leased.leased && results.every(item => item.unchanged
+          && item.error?.message === item.expected
+          && item.error?.code === (item.expected === "invalid_materialization_lease" ? "22023" : "40001"))
+          && state.lease_token === tokens.one && state.delivery_token === tokens.one
+          && state.finite && state.same_expiry && state.attempt === 1 && state.attempts === 0)
+        || JSON.stringify({ leased, results, state });
+    });
+
+    await check(round, "service_role definer RPCs complete confirm→lease→materialize→claim→attempt→settle", async () => {
+      const objectPath = `${A}/service-flow-${round}.png`;
+      // Provenance is the separate materializer prerequisite, not a forged
+      // publish intent/destination. All publish transitions below run as service.
+      await seedMaterializedProvenance(db, A, value.intentId, objectPath);
+      const output = await asRole(db, "service_role", async () => {
+        const replay = (await db.query("select public.publish_intent_confirm_prepare($1,$2::jsonb) as value",
+          [A, JSON.stringify(value)])).rows[0].value;
+        const materialized = (await db.query(`select public.publish_asset_settle_materialization(
+          $1,$2,$3,$4,'ready','generated-private',$5,'image/png',128,$6,null) as value`,
+          [A, value.intentId, value.destinations[0].id, tokens.one, objectPath, "b".repeat(64)])).rows[0].value;
+        const claim = (await db.query("select public.publish_asset_claim_ready($1,$2,$3,$4) as value",
+          [A, value.intentId, value.destinations[0].id, tokens.three])).rows[0].value;
+        const attempt = (await db.query("select public.publish_provider_attempt_start($1,$2,$3,$4,1) as value",
+          [A, value.intentId, value.destinations[0].id, tokens.three])).rows[0].value;
+        const settled = (await db.query(`select public.publish_provider_attempt_settle(
+          $1,$2,$3,'succeeded',201,'remote-service','https://www.pinterest.com/pin/123',
+          '{"provider":"pinterest"}'::jsonb) as value`, [A, attempt.attemptId, tokens.three])).rows[0].value;
+        return { replay, materialized, claim, attempt, settled };
+      });
+      const state = await graphSnapshot(db);
+      const intent = state.publish_intents.find(row => row.id === ids.intent);
+      const target = state.publish_intent_destinations.find(row => row.id === ids.destination);
+      const attempts = state.provider_publish_attempts.filter(row => row.publish_intent_id === ids.intent);
+      return (output.replay.replayed && output.materialized.settled && output.claim.claimed
+          && !output.attempt.replayed && output.settled.status === "succeeded"
+          && intent.lifecycle_status === "settled" && !intent.v76_frozen_legacy
+          && target.status === "published" && target.materialization_status === "materialized"
+          && target.claim_token === null && attempts.length === 1 && attempts[0].status === "succeeded")
+        || JSON.stringify({ output, intent, target, attempts });
+    });
+
+    await check(round, "pre-v76 frozen claim and legacy settlement survive rollback twice and reapply twice", async () => {
+      const before = (await db.query(`select i.receipt,i.v76_frozen_legacy,d.claim_token::text,d.status
+        from public.publish_intents i join public.publish_intent_destinations d on d.publish_intent_id=i.id
+        where i.user_id=$1 and i.intent_id=$2`, [A, legacy.intentId])).rows[0];
+      const settled = (await asRole(db, "service_role", () => db.query(`select public.publish_intent_settle_destination(
+        $1,$2,$3,$4,'published',false,null,'legacy-remote',null,201,'{}'::jsonb) as value`,
+        [A, legacy.intentId, legacy.destinations[0].id, legacyBefore.claim_token]))).rows[0].value;
+      const after = (await db.query(`select i.v76_frozen_legacy,d.status,d.claim_token::text,
+          (select count(*)::int from public.publish_assets where publish_intent_id=i.id) as assets,
+          (select count(*)::int from public.provider_publish_attempts where publish_intent_id=i.id) as attempts
+        from public.publish_intents i join public.publish_intent_destinations d on d.publish_intent_id=i.id
+        where i.user_id=$1 and i.intent_id=$2`, [A, legacy.intentId])).rows[0];
+      return (legacyResult.length === 1 && before.v76_frozen_legacy && before.status === "claimed"
+          && before.claim_token === legacyBefore.claim_token
+          && JSON.stringify(before.receipt) === JSON.stringify(legacyBefore.receipt)
+          && settled.ok && after.v76_frozen_legacy && after.status === "published"
+          && after.claim_token === null && after.assets === 0 && after.attempts === 0)
+        || JSON.stringify({ legacyResult, legacyBefore, before, settled, after });
+    });
+  } finally { await db.close(); }
+}
+
 async function runRound(round) {
+  await regressionRound(round);
   const db = await freshDb();
   try {
     await seedConnections(db);
@@ -2108,6 +2292,19 @@ async function runRound(round) {
           to_regprocedure('public.publish_cleanup_lease(bigint,uuid,integer)')) as value`)).rows[0].value,
       },
       {
+        // Preserve language, signature, search_path and both ownership markers;
+        // only the body hash can detect this otherwise plausible replacement.
+        name: "cleanup-lease-body-hash",
+        expected: "v76_definition_tamper",
+        tamper: async tamperDb => {
+          const definition = (await tamperDb.query(`select pg_get_functiondef(
+            'public.publish_cleanup_lease(bigint,uuid,integer)'::regprocedure) as value`)).rows[0].value;
+          await tamperDb.exec(definition.replace("begin", "begin\n  perform 1;"));
+        },
+        definition: async tamperDb => (await tamperDb.query(`select pg_get_functiondef(
+          'public.publish_cleanup_lease(bigint,uuid,integer)'::regprocedure) as value`)).rows[0].value,
+      },
+      {
         name: "lifecycle-check-true",
         expected: "v76_check_constraint_tamper",
         tamper: tamperDb => tamperDb.exec(`alter table public.publish_intents
@@ -2186,8 +2383,9 @@ for (let round = 1; round <= 2; round += 1) {
 
 const report = { verdict: failures.length ? "fail" : "pass", rounds: 2,
   assertions, passes, failed: failures.length,
-  newAssertions: 4, expectedNewRed: 4,
-  baseline: { assertions: 118, passes: 118, failed: 0 },
+  newAssertions: 154, expectedNewRed: 0,
+  baseline: { commit: "c374862ea47213670ee3b72eb3004b47b0d67977",
+    assertions: 122, passes: 122, failed: 0 },
   failures };
 console.log(JSON.stringify(report, null, 2));
 if (failures.length) process.exitCode = 1;
