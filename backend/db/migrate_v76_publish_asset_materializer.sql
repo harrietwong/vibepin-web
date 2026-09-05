@@ -29,7 +29,7 @@ begin
   for v_expected in select * from (values
     ('publish_intent_confirm_prepare','public.publish_intent_confirm_prepare(uuid,jsonb)','vibepin:v76:publish-intent-confirm-prepare','jsonb','cec4333de13036aa19bff218b3f5f32f'),
     ('publish_intent_prepare','public.publish_intent_prepare(uuid,text,text,text,jsonb,timestamptz,jsonb)','vibepin:v76:publish-intent-prepare','jsonb','8b1223d07ca4ffe76ccc8527ccb99b0a'),
-    ('publish_asset_lease_materialization','public.publish_asset_lease_materialization(uuid,text,text,uuid,integer)','vibepin:v76:publish-asset-lease-materialization','jsonb','93bfbc72b79582a8a72a3f5de7afcd02'),
+    ('publish_asset_lease_materialization','public.publish_asset_lease_materialization(uuid,text,text,uuid,integer)','vibepin:v76:publish-asset-lease-materialization','jsonb','31041499144013fbe173873bab7b02f2'),
     ('publish_asset_settle_materialization','public.publish_asset_settle_materialization(uuid,text,text,uuid,text,text,text,text,bigint,text,text)','vibepin:v76:publish-asset-settle-materialization','jsonb','05aeaf68837a95a5cdc6177383ee6092'),
     ('publish_asset_claim_ready','public.publish_asset_claim_ready(uuid,text,text,uuid)','vibepin:v76:publish-asset-claim-ready','jsonb','35acedfaf1a8ee6c1d2658b423614987'),
     ('publish_asset_settle_item','public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)','vibepin:v76:publish-asset-settle-item','jsonb','a05aef6619c3ec795b6ceee080e04843'),
@@ -589,6 +589,10 @@ revoke all on public.publish_asset_delivery_items,public.provider_publish_attemp
 -- RPCs. Service callers may inspect evidence but cannot forge it with table DML.
 revoke insert,update,delete on public.publish_asset_delivery_items,public.provider_publish_attempts from public,anon,authenticated,service_role;
 grant select on public.publish_asset_delivery_items,public.provider_publish_attempts to service_role;
+-- Service callers use the owner-executed RPCs for intent transitions.  They
+-- must not be able to forge legacy/frozen or published state with table DML.
+revoke all on public.publish_intents,public.publish_intent_destinations from service_role;
+grant select on public.publish_intents,public.publish_intent_destinations to service_role;
 
 do $v76_preflight$
 begin
@@ -1149,7 +1153,7 @@ create or replace function public.publish_asset_lease_materialization(
 -- vibepin:v76:publish-asset-lease-materialization
 declare v_i publish_intents%rowtype; v_d publish_intent_destinations%rowtype; v_asset publish_assets%rowtype; v_delivery publish_asset_deliveries%rowtype;
 begin
-  if p_lease_token is null or p_lease_seconds < 1 or p_lease_seconds > 3600 then raise exception 'invalid_materialization_lease' using errcode='22023'; end if;
+  if p_lease_token is null or p_lease_seconds is null or p_lease_seconds < 1 or p_lease_seconds > 3600 then raise exception 'invalid_materialization_lease' using errcode='22023'; end if;
   select i.* into v_i from publish_intents i where i.user_id=p_user_id and i.intent_id=p_intent_id for update;
   if not found then raise exception 'publish_intent_not_found' using errcode='P0002'; end if;
   select d.* into v_d from publish_intent_destinations d where d.publish_intent_id=v_i.id and d.destination_id=p_destination_id for update;
@@ -1875,6 +1879,8 @@ comment on function public.publish_provider_attempt_settle(uuid,uuid,uuid,text,i
 comment on function public.v76_bind_publish_owner() is 'vibepin:v76:v76-bind-publish-owner';
 comment on function public.v76_evidence_owner_guard() is 'vibepin:v76:v76-evidence-owner-guard';
 comment on function public.v76_legacy_transition_guard() is 'vibepin:v76:v76-legacy-transition-guard';
+-- Trigger-only guard: no caller (including service_role) may invoke it directly.
+revoke all on function public.v76_legacy_transition_guard() from public,anon,authenticated,service_role;
 
 revoke all on function public.publish_intent_confirm_prepare(uuid,jsonb) from public,anon,authenticated;
 revoke all on function public.publish_intent_prepare(uuid,text,text,text,jsonb,timestamptz,jsonb) from public,anon,authenticated;

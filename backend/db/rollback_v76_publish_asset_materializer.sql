@@ -6,6 +6,9 @@ begin;
 -- Retain inspection access, but never leave a direct ledger-write bypass.
 revoke all on public.publish_assets,public.publish_asset_deliveries from public,anon,authenticated,service_role;
 grant select on public.publish_assets,public.publish_asset_deliveries to service_role;
+revoke all on public.publish_intents,public.publish_intent_destinations from service_role;
+grant select on public.publish_intents,public.publish_intent_destinations to service_role;
+revoke all on function public.v76_legacy_transition_guard() from public,anon,authenticated,service_role;
 revoke execute on function public.publish_intent_prepare(uuid,text,text,text,jsonb,timestamptz,jsonb) from public,anon,authenticated,service_role;
 revoke execute on function public.publish_intent_confirm_prepare(uuid,jsonb) from public,anon,authenticated,service_role;
 revoke execute on function public.publish_asset_lease_materialization(uuid,text,text,uuid,integer) from public,anon,authenticated,service_role;
