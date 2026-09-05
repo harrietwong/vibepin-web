@@ -8,7 +8,8 @@
     "test:integrated-rollbacks": "node verify-integrated-rollbacks.mjs",
     "test:v71-generation-intent": "node verify-v71-generation-intent.mjs",
     "test:v74-security": "node verify-v74-security-invoker-rls.mjs",
-    "test:v75-media-provenance": "node verify-v75-media-provenance.mjs"
+    "test:v75-media-provenance": "node verify-v75-media-provenance.mjs",
+    "test:v76-publish-assets": "node verify-v76-publish-assets.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8"
