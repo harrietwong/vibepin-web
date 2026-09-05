@@ -2406,9 +2406,9 @@ for (let round = 1; round <= 2; round += 1) {
 
 const report = { verdict: failures.length ? "fail" : "pass", rounds: 2,
   assertions, passes, failed: failures.length,
-  newAssertions: 158, expectedNewRed: 0,
+  newAssertions: 4, expectedNewRed: 0,
   baseline: { commit: "41089316849352f677852f7944a5fbd465dd2eb7",
-    assertions: 122, passes: 122, failed: 0 },
+    assertions: 276, passes: 276, failed: 0 },
   failures };
 console.log(JSON.stringify(report, null, 2));
 if (failures.length) process.exitCode = 1;
