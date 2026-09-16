@@ -190,7 +190,7 @@ async function main(): Promise<void> {
   });
 
   await test("filters a malformed registration RID that echoes an otherwise-valid upload parameter", async () => {
-    const secret = "upload-secret-456";
+    const secret = "upload-secret-456"; // scan-secrets: allow — deliberate fake used to assert redaction
     const source = dependencies([
       response({ upload_url: "https://upload.example.test/form", upload_parameters: { policy: secret, invalid: 7 } }, 200, { "x-pinterest-rid": secret }),
     ]);
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
 
   await test("fails malformed input before dispatch and never leaks secret input or provider credentials", async () => {
     const invalid = dependencies([]);
-    const result = await publishPinterestVideo(input({ boardId: "", accessToken: "super-secret-token" }), invalid.deps);
+    const result = await publishPinterestVideo(input({ boardId: "", accessToken: "super-secret-token" }), invalid.deps); // scan-secrets: allow — deliberate fake used to assert redaction
     assert.deepEqual(result, { outcome: "failed", evidence: { stage: "validated", classification: "definite_validation" } });
     assert.equal(invalid.calls.length, 0, "pre-dispatch validation must not call the provider");
     const text = JSON.stringify(result);
@@ -365,7 +365,7 @@ async function main(): Promise<void> {
       response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
       new Response(null, { status: 204 }),
       response({ status: "succeeded" }),
-      response({ error: "provider response must remain private", access_token: "never-return" }, 503),
+      response({ error: "provider response must remain private", access_token: "never-return" }, 503), // scan-secrets: allow — deliberate fake used to assert redaction
     ]);
     const result = await publishPinterestVideo(input(), create5xx.deps);
     assert.deepEqual(result, {

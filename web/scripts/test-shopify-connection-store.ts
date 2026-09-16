@@ -313,7 +313,7 @@ async function main() {
   await test("upsertConnection is keyed on (user, shop_domain) — reconnect overwrites, no duplicate row", async () => {
     const row = await store.upsertConnection(USER, {
       shopDomain: "demo-store.myshopify.com",
-      accessToken: "shpat_rotated_token",
+      accessToken: "shpat_rotated_token", // scan-secrets: allow — deliberate fake test credential
       scopes: ["read_products"],
       shopName: "Demo Store 2",
     });

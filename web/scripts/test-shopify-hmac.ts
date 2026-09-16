@@ -10,7 +10,7 @@
 
 import { createHmac } from "node:crypto";
 
-const SECRET = "shpss_test_client_secret_value";
+const SECRET = "shpss_test_client_secret_value"; // scan-secrets: allow — deliberate fake test credential
 // Must be set BEFORE the hmac module loads (it reads SHOPIFY_CLIENT_SECRET).
 process.env.SHOPIFY_CLIENT_SECRET = SECRET;
 

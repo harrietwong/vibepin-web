@@ -19,7 +19,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 import assert from "node:assert";
 import Module from "node:module";
 
-const SECRET = "test-cron-secret";
+const SECRET = "test-cron-secret"; // scan-secrets: allow — deliberate fake test credential
 let passed = 0, failed = 0;
 
 type RpcCall = { fn: string; args: Record<string, unknown> };

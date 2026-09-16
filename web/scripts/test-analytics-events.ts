@@ -176,7 +176,7 @@ async function main() {
       }
       if (request === "@supabase/ssr") {
         return { createServerClient: () => ({ auth: { getSession: async () => ({ data: { session: {
-          access_token: "forged-access-token",
+          access_token: "forged-access-token", // scan-secrets: allow — deliberate fake test credential
           user: { id: "forged-user-id" },
         } } }) } }) };
       }

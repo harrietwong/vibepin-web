@@ -295,7 +295,7 @@ async function main() {
   async function seedConnection(overrides: Partial<Row> = {}): Promise<string> {
     const row = await connStore.upsertConnection(USER, {
       shopDomain: "demo-store.myshopify.com",
-      accessToken: "shpat_secret_token",
+      accessToken: "shpat_secret_token", // scan-secrets: allow — deliberate fake test credential
       scopes: ["read_products"],
       shopName: "Demo",
       primaryDomain: "shop.demo.com",

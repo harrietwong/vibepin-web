@@ -183,7 +183,7 @@ await test("verifyState rejects an expired sealed state", () => {
 
 // 10. Token encryption roundtrip + tamper detection (tokens never plaintext)
 await test("encryptSecret/decryptSecret roundtrips and detects tampering", () => {
-  const secret = "pina_v5_access_token_example";
+  const secret = "pina_v5_access_token_example"; // scan-secrets: allow — deliberate fake test credential
   const ct = crypto.encryptSecret(secret);
   assert(ct.startsWith("v1:"), "versioned ciphertext");
   assert(!ct.includes(secret), "ciphertext must not contain plaintext");

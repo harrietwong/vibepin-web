@@ -578,7 +578,7 @@ async function main() {
   await test("production browser client mirrors signed upload protocol with an abortable deadline", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fakeClient = {
-      auth: { getSession: async () => ({ data: { session: { access_token: "access-token" } } }) },
+      auth: { getSession: async () => ({ data: { session: { access_token: "access-token" } } }) }, // scan-secrets: allow — deliberate fake browser session token
     };
     const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
     (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = function(this: unknown, request: string, parent: unknown, isMain: boolean) {

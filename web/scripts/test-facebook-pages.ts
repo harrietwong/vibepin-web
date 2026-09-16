@@ -324,7 +324,7 @@ async function main() {
   // ── fetchPageById (manual Page connect fallback) ────────────────────────────
 
   await test("fetchPageById returns id/name/token on success", async () => {
-    const m = mockFetch([{ body: { id: "555", name: "My Biz Page", access_token: "PAGE-TOKEN-555" } }]);
+    const m = mockFetch([{ body: { id: "555", name: "My Biz Page", access_token: "PAGE-TOKEN-555" } }]); // scan-secrets: allow — deliberate fake test credential
     try {
       const page = await service.fetchPageById(USER_TOKEN, "555");
       assertEq(page.pageId, "555", "pageId");
@@ -439,7 +439,7 @@ async function main() {
   // ── restorePreviousPage (reconnect auto-restore) ────────────────────────────
 
   await test("restorePreviousPage returns the page when the saved id verifies", async () => {
-    const m = mockFetch([{ body: { id: "777", name: "Saved Page", access_token: "PAGE-TOKEN-777" } }]);
+    const m = mockFetch([{ body: { id: "777", name: "Saved Page", access_token: "PAGE-TOKEN-777" } }]); // scan-secrets: allow — deliberate fake test credential
     try {
       const page = await service.restorePreviousPage(USER_TOKEN, "777");
       assert(page !== null, "restore should succeed");
@@ -482,7 +482,7 @@ async function main() {
   });
 
   await test("restorePreviousPage request carries no tasks field and swallows token-free", async () => {
-    const m = mockFetch([{ body: { id: "777", name: "P", access_token: "SECRET-PAGE-TOKEN" } }]);
+    const m = mockFetch([{ body: { id: "777", name: "P", access_token: "SECRET-PAGE-TOKEN" } }]); // scan-secrets: allow — deliberate fake test credential
     try {
       await service.restorePreviousPage(USER_TOKEN, "777");
       assertEq(m.calls.length, 1, "one request");

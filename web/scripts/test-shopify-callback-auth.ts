@@ -154,7 +154,7 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => 
   const url = String(input);
   if (url.endsWith("/admin/oauth/access_token")) {
     tokenExchangeCalls++;
-    return new Response(JSON.stringify({ access_token: "shpat_test_token", scope: "read_products" }), {
+    return new Response(JSON.stringify({ access_token: "shpat_test_token", scope: "read_products" }), { // scan-secrets: allow — deliberate fake test credential
       status: 200,
       headers: { "content-type": "application/json" },
     });

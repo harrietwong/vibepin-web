@@ -55,7 +55,7 @@ test("sanitize: strips access_token / refresh_token / api_key key=value pairs", 
 });
 
 test("sanitize: strips a bare long token-ish run (no label)", () => {
-  const secret = "Ab12Cd34Ef56Gh78Ij90Kl12Mn34"; // 28 chars, letters+digits
+  const secret = "Ab12Cd34Ef56Gh78Ij90Kl12Mn34"; // scan-secrets: allow — fake 28-char redaction fixture
   const out = sanitizeErrorMessage(`Upstream rejected the credential ${secret} at the edge`);
   assert.ok(!out.includes(secret), `bare token must be redacted, got: ${out}`);
   assert.ok(out.includes("[REDACTED]"));

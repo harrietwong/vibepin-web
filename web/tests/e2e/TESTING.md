@@ -124,7 +124,7 @@ if (!url.includes("snulmwprsahzqvdbyenc") || url.includes("jaxteelkecvlozdrdoog"
   console.error("❌ 目标不是测试库，中止"); process.exit(1);
 }
 const email = "e2e-purchase-intent@vibepin.test";
-const password = "E2ePurchaseIntent!2026";
+const password = "E2ePurchaseIntent!2026"; // scan-secrets: allow — documented local E2E-only credential
 const admin = { apikey: key, Authorization: `Bearer ${key}` };
 const list = await fetch(`${url}/auth/v1/admin/users?per_page=200`, { headers: admin }).then(r => r.json());
 const existing = (list.users || []).find(u => u.email === email);
