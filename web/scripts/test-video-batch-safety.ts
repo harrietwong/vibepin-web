@@ -156,7 +156,7 @@ async function main() {
     assert.equal(nil.status, 400); assert.equal(enqueued, 0);
   });
   await check("R7 authenticated valid cleanup is queued, foreign/anonymous cleanup denied, successful poster retained", async () => {
-    reset(); const rows: unknown[] = []; const deps = { getUserId: async () => A.ownerUserId, configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), recordCleanup: async (row: unknown) => { rows.push(row); } };
+    reset(); const rows: unknown[] = []; const deps = { getUserId: async () => A.ownerUserId, configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), canCleanupPoster: async () => true, recordCleanup: async (row: unknown) => { rows.push(row); } };
     const request = (owner: string) => new Request("https://app.invalid/cleanup", { method: "POST", body: JSON.stringify({ path: `studio/uploads/${owner}/cover.jpg` }) });
     assert.equal((await handleStudioUploadCleanup(request(A.ownerUserId), deps)).status, 200);
     assert.equal((await handleStudioUploadCleanup(request(B.ownerUserId), deps)).status, 400);
