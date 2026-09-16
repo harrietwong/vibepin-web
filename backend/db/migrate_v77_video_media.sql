@@ -104,7 +104,7 @@ begin
       ('video_upload_items','video_upload_items_declared_dimensions_check','CHECK (((declared_width > 0) AND (declared_height > 0)))'),
       ('video_upload_items','video_upload_items_declared_duration_check','CHECK (((declared_duration_ms >= 4000) AND (declared_duration_ms <= 300000)))'),
       ('video_upload_items','video_upload_items_verified_content_type_check','CHECK (((verified_content_type IS NULL) OR (verified_content_type = ANY (ARRAY[''video/mp4''::text, ''video/x-m4v''::text, ''video/quicktime''::text]))))'),
-      ('video_upload_items','video_upload_items_status_check','CHECK ((status = ANY (ARRAY[''prepared''::text, ''uploading''::text, ''finalizing''::text, ''finalized''::text, ''failed''::text, ''expired''::text, ''canceled''::text])))'),
+      ('video_upload_items','video_upload_items_status_check','CHECK ((status = ANY (ARRAY[''prepared''::text, ''uploading''::text, ''finalizing''::text, ''finalized''::text, ''failed''::text, ''expired''::text, ''canceled''::text, ''cleaning''::text])))'),
       ('video_upload_items','video_upload_items_claim_shape_check','CHECK (((status = ''finalizing''::text) = ((finalize_claim_token IS NOT NULL) AND (finalize_claim_expires_at IS NOT NULL))))'),
       ('video_upload_items','video_upload_items_finalized_facts_check','CHECK ((((status <> ''finalized''::text) OR ((verified_content_type = ANY (ARRAY[''video/mp4''::text, ''video/x-m4v''::text, ''video/quicktime''::text])) AND ((verified_byte_size >= 1) AND (verified_byte_size <= 104857600)) AND ((verified_checksum_sha256 IS NULL) OR (verified_checksum_sha256 ~ ''^[0-9a-f]{64}$''::text)) AND (verified_width IS NULL) AND (verified_height IS NULL) AND (verified_duration_ms IS NULL) AND (finalize_claim_token IS NULL) AND (finalize_claim_expires_at IS NULL))) IS TRUE))')
     ) expected(table_name,constraint_name,constraint_definition) loop
@@ -117,7 +117,7 @@ begin
     select pg_get_constraintdef(oid) into v_default from pg_constraint where conrelid='public.media_asset_provenance'::regclass and conname='media_asset_provenance_media_kind_check';
     if not found or v_default is distinct from 'CHECK ((media_kind = ANY (ARRAY[''image''::text, ''video''::text])))' then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
     select pg_get_constraintdef(oid) into v_default from pg_constraint where conrelid='public.media_asset_provenance'::regclass and conname='media_asset_provenance_video_fact_sources_check';
-    if not found or v_default is distinct from 'CHECK (((media_kind <> ''video''::text) OR ((content_type_source = ''storage_head_verified''::text) AND (byte_size_source = ''storage_head_verified''::text) AND (checksum_source = ANY (ARRAY[''storage_digest_verified''::text, ''unavailable''::text])) AND (dimensions_source = ''browser_declared''::text) AND (duration_source = ''browser_declared''::text) AND (((checksum_source = ''unavailable''::text) AND (checksum_sha256 IS NULL)) OR ((checksum_source = ''storage_digest_verified''::text) AND (checksum_sha256 ~ ''^[0-9a-f]{64}$''::text))) AND (width > 0) AND (height > 0) AND ((duration_ms >= 4000) AND (duration_ms <= 300000)))))' then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    if not found or v_default is distinct from 'CHECK ((((media_kind <> ''video''::text) OR ((content_type_source = ''storage_head_verified''::text) AND (byte_size_source = ''storage_head_verified''::text) AND (checksum_source = ANY (ARRAY[''storage_digest_verified''::text, ''unavailable''::text])) AND (dimensions_source = ''browser_declared''::text) AND (duration_source = ''browser_declared''::text) AND (((checksum_source = ''unavailable''::text) AND (checksum_sha256 IS NULL)) OR ((checksum_source = ''storage_digest_verified''::text) AND (checksum_sha256 ~ ''^[0-9a-f]{64}$''::text))) AND (width > 0) AND (height > 0) AND ((duration_ms >= 4000) AND (duration_ms <= 300000)))) IS TRUE))' then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
     for v_name,v_expected_definition in select * from (values
       ('video_upload_batches_owner_status_idx','CREATE INDEX video_upload_batches_owner_status_idx ON public.video_upload_batches USING btree (owner_user_id, status, updated_at DESC)'),
       ('video_upload_items_owner_batch_idx','CREATE INDEX video_upload_items_owner_batch_idx ON public.video_upload_items USING btree (owner_user_id, batch_id, ordinal)')
@@ -155,8 +155,9 @@ begin
   end if;
   for v_signature,v_marker,v_hash in select * from (values
     ('public.video_upload_batch_prepare(uuid,text,timestamptz)','vibepin:v77:video-upload-batch-prepare','73821871844f2b858bfc441d80919bbc'),
-    ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-prepare','2ba41a1ad29086bdca6cfce6e25cafad'),
-    ('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)','vibepin:v77:video-upload-item-claim','1e7a9a9f8cda0fecf9b121e83caec3e1'),
+    ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-prepare','bd8226c8e828048103e9e1673a339000'),
+    ('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)','vibepin:v77:video-upload-capability-confirm','26772e478b44998f677ca9f740a2fc79'),
+    ('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)','vibepin:v77:video-upload-item-claim','84103643a001f04f0100afa60e2c8e75'),
     ('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)','vibepin:v77:video-upload-item-finalize','02f3e0537c0e882230e159243cb92bae'),
     ('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)','vibepin:v77:video-upload-item-fail','71955fb29596ec65c0b9b8f4f2894f84')
   ) expected(signature,marker,body_hash) loop
@@ -178,6 +179,7 @@ begin
     for v_signature in select signature from (values
       ('public.video_upload_batch_prepare(uuid,text,timestamptz)'),
       ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)'),
+      ('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)'),
       ('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)'),
       ('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)'),
       ('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)')
@@ -192,6 +194,7 @@ begin
       where p.oid in (
         to_regprocedure('public.video_upload_batch_prepare(uuid,text,timestamptz)'),
         to_regprocedure('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)'),
+        to_regprocedure('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)'),
         to_regprocedure('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)'),
         to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)'),
         to_regprocedure('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)')
@@ -199,6 +202,33 @@ begin
       v_active_privileges := false; v_rollback_privileges := false;
     end if;
     if not v_active_privileges and not v_rollback_privileges then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+  end if;
+
+  if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname='v77_video_cleanup_guard'
+      and p.oid is distinct from to_regprocedure('public.v77_video_cleanup_guard()')) then
+    raise exception using errcode='P0001',message='v77_schema_collision';
+  end if;
+  if to_regprocedure('public.v77_video_cleanup_guard()') is not null then
+    select * into v_proc from pg_proc where oid=to_regprocedure('public.v77_video_cleanup_guard()');
+    if obj_description(v_proc.oid,'pg_proc') is distinct from 'vibepin:v77:video-cleanup-guard'
+       or not v_proc.prosecdef or v_proc.prorettype<>to_regtype('trigger') or v_proc.prolang<>(select oid from pg_language where lanname='plpgsql')
+       or v_proc.proconfig is distinct from array['search_path=public, pg_temp']::text[]
+       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'a5c5b35925778b58bf7bdf3d89455d68' then
+      raise exception using errcode='P0001',message='v77_schema_collision';
+    end if;
+    foreach v_grantee in array array['anon','authenticated','service_role'] loop
+      if has_function_privilege(v_grantee,v_proc.oid,'execute') then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    end loop;
+  end if;
+  select count(*)=1 into v_actual from pg_trigger t where t.tgrelid=to_regclass('public.media_cleanup_outbox')
+    and t.tgname='v77_video_cleanup_guard' and not t.tgisinternal and t.tgfoid=to_regprocedure('public.v77_video_cleanup_guard()')
+    and t.tgenabled='O' and t.tgtype=19;
+  if v_installed and v_active_privileges and (to_regprocedure('public.v77_video_cleanup_guard()') is null or not v_actual) then
+    raise exception using errcode='P0001',message='v77_schema_collision';
+  end if;
+  if v_installed and v_rollback_privileges and (to_regprocedure('public.v77_video_cleanup_guard()') is not null or v_actual) then
+    raise exception using errcode='P0001',message='v77_schema_collision';
   end if;
 end $v77_preflight$;
 
@@ -247,7 +277,7 @@ create table if not exists public.video_upload_items (
   finalize_claim_expires_at timestamptz,
   capability_expires_at timestamptz not null,
   status text not null default 'prepared'
-    constraint video_upload_items_status_check check (status in ('prepared','uploading','finalizing','finalized','failed','expired','canceled')),
+    constraint video_upload_items_status_check check (status in ('prepared','uploading','finalizing','finalized','failed','expired','canceled','cleaning')),
   constraint video_upload_items_claim_shape_check check (
     (status = 'finalizing') = (finalize_claim_token is not null and finalize_claim_expires_at is not null)
   ),
@@ -302,10 +332,10 @@ declare v_definition text;
 begin
   select pg_get_constraintdef(oid) into v_definition from pg_constraint
     where conrelid='public.media_asset_provenance'::regclass and conname='media_asset_provenance_video_fact_sources_check';
-  if found and v_definition <> 'CHECK (((media_kind <> ''video''::text) OR ((content_type_source = ''storage_head_verified''::text) AND (byte_size_source = ''storage_head_verified''::text) AND (checksum_source = ANY (ARRAY[''storage_digest_verified''::text, ''unavailable''::text])) AND (dimensions_source = ''browser_declared''::text) AND (duration_source = ''browser_declared''::text) AND (((checksum_source = ''unavailable''::text) AND (checksum_sha256 IS NULL)) OR ((checksum_source = ''storage_digest_verified''::text) AND (checksum_sha256 ~ ''^[0-9a-f]{64}$''::text))) AND (width > 0) AND (height > 0) AND ((duration_ms >= 4000) AND (duration_ms <= 300000)))))' then
+  if found and v_definition <> 'CHECK ((((media_kind <> ''video''::text) OR ((content_type_source = ''storage_head_verified''::text) AND (byte_size_source = ''storage_head_verified''::text) AND (checksum_source = ANY (ARRAY[''storage_digest_verified''::text, ''unavailable''::text])) AND (dimensions_source = ''browser_declared''::text) AND (duration_source = ''browser_declared''::text) AND (((checksum_source = ''unavailable''::text) AND (checksum_sha256 IS NULL)) OR ((checksum_source = ''storage_digest_verified''::text) AND (checksum_sha256 ~ ''^[0-9a-f]{64}$''::text))) AND (width > 0) AND (height > 0) AND ((duration_ms >= 4000) AND (duration_ms <= 300000)))) IS TRUE))' then
     raise exception using errcode='P0001',message='v77_schema_collision';
   elsif not found then
-    alter table public.media_asset_provenance add constraint media_asset_provenance_video_fact_sources_check check (
+    alter table public.media_asset_provenance add constraint media_asset_provenance_video_fact_sources_check check ((
       media_kind <> 'video' or (
         content_type_source='storage_head_verified' and byte_size_source='storage_head_verified'
         and checksum_source in ('storage_digest_verified','unavailable')
@@ -314,7 +344,7 @@ begin
           or (checksum_source='storage_digest_verified' and checksum_sha256 ~ '^[0-9a-f]{64}$'))
         and width>0 and height>0 and duration_ms between 4000 and 300000
       )
-    );
+    ) is true);
   end if;
 end $v77_provenance_fact_sources$;
 
@@ -322,6 +352,38 @@ alter table public.video_upload_batches enable row level security;
 alter table public.video_upload_items enable row level security;
 revoke all on public.video_upload_batches,public.video_upload_items from public,anon,authenticated,service_role;
 grant select,insert,update,delete on public.video_upload_batches,public.video_upload_items to service_role;
+
+-- Generic v76 cleanup workers acquire external deletion authority by moving an
+-- outbox row to processing. For video-upload rows, atomically move the item to
+-- a non-finalizable state first. An active finalize claim rejects that lease;
+-- whichever transaction locks the item first wins, so both rights cannot exist.
+create or replace function public.v77_video_cleanup_guard()
+returns trigger language plpgsql security definer set search_path=public,pg_temp as $fn$
+-- vibepin:v77:video-cleanup-guard
+declare v_item public.video_upload_items%rowtype;
+begin
+  if new.status='processing' and new.dedupe_key like 'video-upload:%'
+     and (old.status is distinct from 'processing' or old.lease_token is distinct from new.lease_token) then
+    select * into v_item from public.video_upload_items i
+      where new.dedupe_key='video-upload:'||i.id::text for update;
+    if not found or v_item.status='finalized'
+       or (v_item.status='finalizing' and v_item.finalize_claim_expires_at>now()) then
+      raise exception using errcode='40001',message='cleanup_item_unavailable';
+    end if;
+    update public.video_upload_items set status='cleaning',error_code=coalesce(error_code,'cleanup_leased'),
+      finalize_claim_token=null,finalize_claim_expires_at=null,updated_at=now()
+      where id=v_item.id and (status in ('prepared','failed','expired','canceled','cleaning')
+        or (status='finalizing' and finalize_claim_expires_at<=now()));
+    if not found then raise exception using errcode='40001',message='cleanup_item_unavailable'; end if;
+  end if;
+  return new;
+end $fn$;
+comment on function public.v77_video_cleanup_guard() is 'vibepin:v77:video-cleanup-guard';
+revoke all on function public.v77_video_cleanup_guard() from public,anon,authenticated,service_role;
+drop trigger if exists v77_video_cleanup_guard on public.media_cleanup_outbox;
+create trigger v77_video_cleanup_guard before update on public.media_cleanup_outbox
+  for each row execute function public.v77_video_cleanup_guard();
+comment on trigger v77_video_cleanup_guard on public.media_cleanup_outbox is 'vibepin:v77:video-cleanup-guard';
 
 -- Only server callers receive these RPCs. Their owner argument is server-derived
 -- from the authenticated request or parent intent; no browser role can call them.
@@ -354,7 +416,9 @@ create or replace function public.video_upload_item_prepare(
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 -- vibepin:v77:video-upload-item-prepare
 declare v_batch public.video_upload_batches%rowtype; v_item public.video_upload_items%rowtype;
-  v_capability_expires_at timestamptz := now()+interval '2 hours';
+  -- Reserve cleanup before issuing a token; post-sign confirmation moves this
+  -- boundary from the actual provider issuance time and retains a settle grace.
+  v_capability_expires_at timestamptz := now()+interval '2 hours 5 minutes';
 begin
   if p_owner_user_id is null or p_batch_id is null or p_ordinal is null or p_ordinal<0 or p_ordinal>=20
      or nullif(btrim(p_idempotency_key),'') is null or nullif(btrim(p_private_path),'') is null
@@ -378,6 +442,7 @@ begin
   if v_batch.status not in ('prepared','uploading') then raise exception using errcode='55000',message='video_upload_batch_not_preparable'; end if;
   select * into v_item from public.video_upload_items where batch_id=v_batch.id and ordinal=p_ordinal for update;
   if found then
+    if v_item.status<>'prepared' then raise exception using errcode='55000',message='video_upload_item_not_preparable'; end if;
     if v_item.idempotency_key is distinct from btrim(p_idempotency_key)
        or v_item.private_path is distinct from btrim(p_private_path)
        or v_item.declared_content_type is distinct from p_declared_content_type
@@ -426,10 +491,48 @@ exception when others then
     when 'video_upload_batch_not_found' then 'video_upload_batch_not_found'
     when 'video_upload_batch_expired' then 'video_upload_batch_expired'
     when 'video_upload_batch_not_preparable' then 'video_upload_batch_not_preparable'
+    when 'video_upload_item_not_preparable' then 'video_upload_item_not_preparable'
     when 'video_upload_item_idempotency_conflict' then 'video_upload_item_idempotency_conflict'
     else 'v77_video_upload_error' end;
 end $fn$;
 comment on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) is 'vibepin:v77:video-upload-item-prepare';
+
+create or replace function public.video_upload_capability_confirm(
+  p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_capability_expires_at timestamptz
+) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
+-- vibepin:v77:video-upload-capability-confirm
+declare v_batch public.video_upload_batches%rowtype; v_item public.video_upload_items%rowtype; v_outbox public.media_cleanup_outbox%rowtype;
+begin
+  if p_owner_user_id is null or p_batch_id is null or p_ordinal is null or p_capability_expires_at is null
+     or p_capability_expires_at<now()+interval '2 hours'
+     or p_capability_expires_at>now()+interval '2 hours 10 minutes' then
+    raise exception using errcode='22023',message='invalid_video_capability_expiry';
+  end if;
+  select * into v_batch from public.video_upload_batches where id=p_batch_id and owner_user_id=p_owner_user_id for update;
+  if not found then raise exception using errcode='P0002',message='video_upload_batch_not_found'; end if;
+  select * into v_item from public.video_upload_items
+    where batch_id=v_batch.id and ordinal=p_ordinal and owner_user_id=p_owner_user_id for update;
+  if not found then raise exception using errcode='P0002',message='video_upload_item_not_found'; end if;
+  if v_batch.status<>'uploading' or v_batch.expires_at<=now() or v_item.status<>'prepared' then
+    raise exception using errcode='55000',message='video_upload_item_not_confirmable';
+  end if;
+  update public.video_upload_items set capability_expires_at=greatest(capability_expires_at,p_capability_expires_at),updated_at=now()
+    where id=v_item.id returning * into v_item;
+  update public.media_cleanup_outbox set status='pending',lease_token=null,lease_expires_at=null,
+    next_attempt_at=v_item.capability_expires_at,last_error_code=null,dead_lettered_at=null,completed_at=null,updated_at=now()
+    where dedupe_key='video-upload:'||v_item.id::text and status='pending' returning * into v_outbox;
+  if not found then raise exception using errcode='55000',message='video_cleanup_schedule_missing'; end if;
+  return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'capabilityExpiresAt',v_item.capability_expires_at,'cleanupScheduled',true);
+exception when others then
+  raise exception using errcode=sqlstate,message=case sqlerrm
+    when 'invalid_video_capability_expiry' then 'invalid_video_capability_expiry'
+    when 'video_upload_batch_not_found' then 'video_upload_batch_not_found'
+    when 'video_upload_item_not_found' then 'video_upload_item_not_found'
+    when 'video_upload_item_not_confirmable' then 'video_upload_item_not_confirmable'
+    when 'video_cleanup_schedule_missing' then 'video_cleanup_schedule_missing'
+    else 'v77_video_upload_error' end;
+end $fn$;
+comment on function public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz) is 'vibepin:v77:video-upload-capability-confirm';
 
 create or replace function public.video_upload_item_claim(
   p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_claim_token uuid,p_claim_expires_at timestamptz
@@ -449,7 +552,7 @@ begin
   if v_item.status='finalized' then
     select exists(select 1 from public.media_asset_provenance p
       where p.owner_user_id=p_owner_user_id and p.bucket_id='generated-private' and p.object_path=v_item.private_path
-        and p.source_type='upload' and p.lifecycle_state='draft' and p.media_kind='video'
+        and p.source_type='upload' and p.lifecycle_state in ('draft','publish_pending','published','retained') and p.media_kind='video'
         and p.content_type is not distinct from v_item.verified_content_type
         and p.byte_size is not distinct from v_item.verified_byte_size
         and p.checksum_sha256 is not distinct from v_item.verified_checksum_sha256
@@ -635,11 +738,13 @@ end $v77_v76_video_mime$;
 
 revoke all on function public.video_upload_batch_prepare(uuid,text,timestamptz) from public,anon,authenticated;
 revoke all on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) from public,anon,authenticated;
+revoke all on function public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz) from public,anon,authenticated;
 revoke all on function public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz) from public,anon,authenticated;
 revoke all on function public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text) from public,anon,authenticated;
 revoke all on function public.video_upload_item_fail(uuid,uuid,integer,uuid,text) from public,anon,authenticated;
 grant execute on function public.video_upload_batch_prepare(uuid,text,timestamptz) to service_role;
 grant execute on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) to service_role;
+grant execute on function public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz) to service_role;
 grant execute on function public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz) to service_role;
 grant execute on function public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text) to service_role;
 grant execute on function public.video_upload_item_fail(uuid,uuid,integer,uuid,text) to service_role;

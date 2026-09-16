@@ -5,6 +5,8 @@ import {
   MIN_VIDEO_DURATION_MS,
   VIDEO_FINALIZE_CLAIM_MS,
   VIDEO_SIGNED_UPLOAD_CAPABILITY_MS,
+  VIDEO_UPLOAD_LEDGER_MS,
+  VIDEO_UPLOAD_SETTLE_GRACE_MS,
 } from "@/lib/videoUploadLimits";
 
 export const VIDEO_UPLOAD_BUCKET = "generated-private";
@@ -20,6 +22,7 @@ type PreparedItem = {
 export type VideoUploadStore = {
   prepareBatch(input: { ownerUserId: string; idempotencyKey: string; expiresAt: string }): Promise<{ batchId: string }>;
   prepareItem(input: { ownerUserId: string; batchId: string; ordinal: number; idempotencyKey: string; privatePath: string; contentType: string; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number }): Promise<{ status: string }>;
+  confirmCapability(input: { ownerUserId: string; batchId: string; ordinal: number; capabilityExpiresAt: string }): Promise<{ status: string; cleanupScheduled: boolean }>;
   findItem(ownerUserId: string, batchId: string, ordinal: number): Promise<PreparedItem | null>;
   claimItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; claimExpiresAt: string }): Promise<{ status: string; claimToken?: string | null; provenanceReady?: boolean }>;
   finalizeItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; bucketId: string; contentType: string; byteSize: number; checksumSha256: string | null }): Promise<{ status: string; provenanceReady: boolean }>;
@@ -90,7 +93,7 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
   const bucket = deps.bucket ?? VIDEO_UPLOAD_BUCKET;
   const now = deps.now?.() ?? new Date();
   let batch: { batchId: string };
-  try { batch = await deps.store.prepareBatch({ ownerUserId: owner, idempotencyKey: body.idempotencyKey, expiresAt: new Date(now.getTime() + (deps.expiresInMs ?? VIDEO_SIGNED_UPLOAD_CAPABILITY_MS)).toISOString() }); }
+  try { batch = await deps.store.prepareBatch({ ownerUserId: owner, idempotencyKey: body.idempotencyKey, expiresAt: new Date(now.getTime() + (deps.expiresInMs ?? VIDEO_UPLOAD_LEDGER_MS)).toISOString() }); }
   catch (cause) {
     const code = storeErrorCode(cause);
     if (code === "video_upload_batch_expired") return error("video_upload_expired", id, 422);
@@ -113,12 +116,16 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
       await deps.store.prepareItem({ ownerUserId: owner, batchId: batch.batchId, ordinal: file.ordinal, idempotencyKey: file.idempotencyKey, privatePath: path, contentType: file.contentType, byteSize: file.byteSize, checksumSha256: file.checksumSha256, width: file.width, height: file.height, durationMs: file.durationMs });
       const signed = await deps.createSignedUpload({ bucket, path, contentType: file.contentType, upsert: false });
       if (!signed.token || !signed.signedUrl) throw new Error("capability unavailable");
+      const issuedAt = deps.now?.() ?? new Date();
+      const confirmation = await deps.store.confirmCapability({ ownerUserId: owner, batchId: batch.batchId, ordinal: file.ordinal,
+        capabilityExpiresAt: new Date(issuedAt.getTime() + VIDEO_SIGNED_UPLOAD_CAPABILITY_MS + VIDEO_UPLOAD_SETTLE_GRACE_MS).toISOString() });
+      if (confirmation.status !== "prepared" || !confirmation.cleanupScheduled) throw new Error("capability confirmation unavailable");
       uploads.push({ ordinal: file.ordinal, path, token: signed.token, signedUrl: signed.signedUrl, contentType: file.contentType, upsert: false });
     } catch (cause) {
       const code = storeErrorCode(cause);
       if (code === "video_upload_item_idempotency_conflict") return error("video_upload_conflict", id, 409);
       if (code === "video_upload_batch_expired") return error("video_upload_expired", id, 422);
-      if (code === "video_upload_batch_not_preparable") return error("video_upload_not_uploadable", id, 409);
+      if (code === "video_upload_batch_not_preparable" || code === "video_upload_item_not_preparable") return error("video_upload_not_uploadable", id, 409);
       return error("video_upload_capability_unavailable", id, 502);
     }
   }
@@ -166,6 +173,7 @@ function storeErrorCode(value: unknown) {
     "video_upload_batch_expired", "video_upload_item_not_finalizable", "video_upload_batch_not_finalizable",
     "video_upload_item_idempotency_conflict", "video_upload_batch_not_found", "video_upload_item_not_found",
     "video_upload_batch_not_preparable", "video_upload_batch_limit_exceeded", "video_upload_too_large",
+    "video_upload_item_not_preparable",
   ]).has(message) ? message : null;
 }
 

@@ -72,6 +72,10 @@ async function prepareItem(db, owner, batchId, ordinal, key, mime = "video/mp4",
     "a".repeat(64), 1080, 1920, 15_000,
   ])).rows[0].value;
 }
+async function confirmCapability(db, owner, batchId, ordinal, seconds = 7560) {
+  return (await db.query(`select public.video_upload_capability_confirm(
+    $1,$2,$3,now()+($4::text || ' seconds')::interval) as value`, [owner, batchId, ordinal, seconds])).rows[0].value;
+}
 async function claimItem(db, owner, batchId, ordinal, token, leaseSeconds = 60) {
   return (await db.query(`select public.video_upload_item_claim(
     $1,$2,$3,$4,now()+($5::text || ' seconds')::interval) as value`, [
@@ -185,6 +189,10 @@ async function run() {
     const legacy = await db.query("select media_kind,content_type,byte_size,duration_ms from public.media_asset_provenance where object_path=$1", [`${A}/legacy.png`]);
     assert(JSON.stringify(legacy.rows[0]) === JSON.stringify({ media_kind: "image", content_type: null, byte_size: null, duration_ms: null }),
       "old provenance rows remain valid images without historical data loss");
+    const nullSourceInsert = await rejected(() => db.query(`insert into public.media_asset_provenance(
+      owner_user_id,bucket_id,object_path,source_type,lifecycle_state,media_kind,content_type,byte_size)
+      values($1,'generated-private',$2,'upload','draft','video','video/mp4',20)`, [A, `${A}/null-sources.mp4`]));
+    assert(Boolean(nullSourceInsert), "a video provenance INSERT with NULL fact values/sources fails closed");
 
     const one = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
     const again = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
@@ -199,6 +207,14 @@ async function run() {
     assert(capabilityGuard?.status === "pending" && capabilityGuard.dedupe_key === `video-upload:${item.itemId}`
       && Date.parse(capabilityGuard.next_attempt_at) >= Date.parse(capabilityGuard.capability_expires_at),
       "prepare atomically persists delayed cleanup through the signed capability lifetime");
+    const confirmed = await asRole(db, "service_role", () => confirmCapability(db, A, one.batchId, 0));
+    const confirmedGuard = (await db.query(`select i.capability_expires_at,o.next_attempt_at
+      from public.video_upload_items i join public.media_cleanup_outbox o on o.dedupe_key='video-upload:'||i.id::text
+      where i.id=$1`, [item.itemId])).rows[0];
+    assert(confirmed.cleanupScheduled === true
+      && Date.parse(confirmedGuard.next_attempt_at) === Date.parse(confirmedGuard.capability_expires_at)
+      && Date.parse(confirmedGuard.capability_expires_at) > Date.parse(capabilityGuard.capability_expires_at),
+      "post-sign confirmation extends durable cleanup from the actual capability issuance boundary");
     const changedPrepare = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_prepare(
       $1,$2,0,'item-key',$3,'video/mp4',1024,$4,720,1280,10_000)`,
       [A, one.batchId, `${A}/uploads/${one.batchId}/0.mp4`, "d".repeat(64)])));
@@ -229,6 +245,16 @@ async function run() {
       checksum_sha256: null, width: 1080, height: 1920, duration_ms: 15_000, content_type_source: "storage_head_verified",
       byte_size_source: "storage_head_verified", checksum_source: "unavailable", dimensions_source: "browser_declared", duration_source: "browser_declared" }),
       "the same transaction registers provenance with explicit source/trust labels for observed facts");
+    for (const column of ["content_type_source","byte_size_source","checksum_source","dimensions_source","duration_source","width","height","duration_ms"]) {
+      const nullWrite = await rejected(() => db.query(`update public.media_asset_provenance set ${column}=null
+        where bucket_id='generated-private' and object_path=$1`, [`${A}/uploads/${one.batchId}/0.mp4`]));
+      assert(Boolean(nullWrite), `video provenance rejects NULL ${column}`);
+    }
+    const contradictoryChecksum = await rejected(() => db.query(`update public.media_asset_provenance
+      set checksum_source='storage_digest_verified',checksum_sha256=null where bucket_id='generated-private' and object_path=$1`, [`${A}/uploads/${one.batchId}/0.mp4`]));
+    const unknownSource = await rejected(() => db.query(`update public.media_asset_provenance
+      set content_type_source='unknown' where bucket_id='generated-private' and object_path=$1`, [`${A}/uploads/${one.batchId}/0.mp4`]));
+    assert(Boolean(contradictoryChecksum) && Boolean(unknownSource), "video provenance rejects contradictory or unknown trust sources");
     const finalizedCleanup = (await db.query("select status,completed_at from public.media_cleanup_outbox where dedupe_key=$1", [`video-upload:${item.itemId}`])).rows[0];
     assert(finalizedCleanup.status === "done" && finalizedCleanup.completed_at,
       "atomic finalization cancels the delayed capability cleanup responsibility");
@@ -263,6 +289,30 @@ async function run() {
       && failedState.status === "failed" && failedState.finalize_claim_token === null
       && failedCleanup.status === "pending" && Date.parse(failedCleanup.next_attempt_at) >= Date.parse(failedCleanup.capability_expires_at),
       "only the current claim owner receives cleanup authority after atomically preserving delayed cleanup");
+
+    const barrierBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "cleanup-barrier-batch"));
+    const barrierItem = await asRole(db, "service_role", () => prepareItem(db, A, barrierBatch.batchId, 0, "cleanup-barrier-item"));
+    await asRole(db, "service_role", () => claimItem(db, A, barrierBatch.batchId, 0, claimToken, 120));
+    const barrierOutbox = (await db.query("update public.media_cleanup_outbox set next_attempt_at=now()-interval '1 second' where dedupe_key=$1 returning id", [`video-upload:${barrierItem.itemId}`])).rows[0];
+    const blockedCleanup = await asRole(db, "service_role", () => rejected(() => db.query(
+      "select public.publish_cleanup_lease($1,$2,60)", [barrierOutbox.id, competingToken],
+    )));
+    const barrierFinalize = await asRole(db, "service_role", () => finalizeItem(db, A, barrierBatch.batchId, 0, claimToken));
+    assert(Boolean(blockedCleanup) && barrierFinalize.status === "finalized",
+      "an active finalize claim excludes cleanup deletion authority until atomic finalization settles it");
+
+    const cleanupFirstBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "cleanup-first-batch"));
+    const cleanupFirstItem = await asRole(db, "service_role", () => prepareItem(db, A, cleanupFirstBatch.batchId, 0, "cleanup-first-item"));
+    const cleanupFirstOutbox = (await db.query("update public.media_cleanup_outbox set next_attempt_at=now()-interval '1 second' where dedupe_key=$1 returning id", [`video-upload:${cleanupFirstItem.itemId}`])).rows[0];
+    const cleanupLease = await asRole(db, "service_role", () => db.query(
+      "select public.publish_cleanup_lease($1,$2,60) as value", [cleanupFirstOutbox.id, competingToken],
+    ));
+    const cleanupFirstClaim = await asRole(db, "service_role", () => rejected(() => claimItem(db, A, cleanupFirstBatch.batchId, 0, claimToken)));
+    const cleanupFirstPrepare = await asRole(db, "service_role", () => rejected(() => prepareItem(db, A, cleanupFirstBatch.batchId, 0, "cleanup-first-item")));
+    const cleanupFirstState = (await db.query("select status,finalize_claim_token from public.video_upload_items where id=$1", [cleanupFirstItem.itemId])).rows[0];
+    assert(cleanupLease.rows[0].value.leased === true && cleanupFirstState.status === "cleaning"
+      && cleanupFirstState.finalize_claim_token === null && Boolean(cleanupFirstClaim) && Boolean(cleanupFirstPrepare),
+      "a cleanup lease atomically acquires deletion authority and permanently excludes reissue/claim/finalize success");
 
     const partialBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "partial-batch"));
     const partialFailed = await asRole(db, "service_role", () => prepareItem(db, A, partialBatch.batchId, 0, "partial-failed"));
@@ -320,12 +370,13 @@ async function run() {
     const directBatchWrite = await rejected(() => db.query("insert into public.video_upload_batches(owner_user_id,idempotency_key,expires_at) values($1,'client-write',now())", [A]));
     const directItemWrite = await rejected(() => db.query("insert into public.video_upload_items(batch_id,owner_user_id,ordinal,idempotency_key,private_path,declared_content_type,declared_byte_size) values($1,$2,1,'client-item','x','video/mp4',1)", [one.batchId, A]));
     const clientRpc = await rejected(() => db.query("select public.video_upload_batch_prepare($1,'client-rpc',now())", [A]));
+    const clientConfirmRpc = await rejected(() => db.query("select public.video_upload_capability_confirm($1,$2,0,now()+interval '2 hours 5 minutes')", [A, one.batchId]));
     const clientClaimRpc = await rejected(() => db.query("select public.video_upload_item_claim($1,$2,0,$3,now()+interval '1 minute')", [A, one.batchId, claimToken]));
     const clientFinalizeRpc = await rejected(() => db.query("select public.video_upload_item_finalize($1,$2,0,$3,'generated-private','video/mp4',1024,null)", [A, one.batchId, claimToken]));
     const clientFailRpc = await rejected(() => db.query("select public.video_upload_item_fail($1,$2,0,$3,'x')", [A, one.batchId, claimToken]));
     await db.exec("reset role; reset \"request.jwt.claim.sub\";");
-    assert(directBatchWrite && directItemWrite && clientRpc && clientClaimRpc && clientFinalizeRpc && clientFailRpc,
-      "clients have neither direct writes nor any claim/finalize/fail RPC write access");
+    assert(directBatchWrite && directItemWrite && clientRpc && clientConfirmRpc && clientClaimRpc && clientFinalizeRpc && clientFailRpc,
+      "clients have neither direct writes nor any capability/claim/finalize/fail RPC write access");
 
     for (const mime of ["video/mp4", "video/x-m4v", "video/quicktime"]) {
       const result = await asRole(db, "service_role", () => rejected(() => db.query(
@@ -364,11 +415,15 @@ async function run() {
       "select public.video_upload_batch_prepare($1,'rollback-rpc',now()+interval '1 hour')", [A],
     )));
     const rollbackPrivileges = (await db.query(`select
+      has_function_privilege('service_role',to_regprocedure('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)'),'execute') as confirm_execute,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)'),'execute') as claim_execute,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)'),'execute') as finalize_execute,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)'),'execute') as fail_execute`)).rows[0];
-    assert(rollbackTableWrite && rollbackRpc && !rollbackPrivileges.claim_execute && !rollbackPrivileges.finalize_execute && !rollbackPrivileges.fail_execute,
-      "rollback leaves service_role read-only and removes every v77 claim/finalize/fail execute grant");
+    const rollbackGuard = (await db.query(`select to_regprocedure('public.v77_video_cleanup_guard()') is null as function_removed,
+      not exists(select 1 from pg_trigger where tgrelid='public.media_cleanup_outbox'::regclass and tgname='v77_video_cleanup_guard') as trigger_removed`)).rows[0];
+    assert(rollbackTableWrite && rollbackRpc && !rollbackPrivileges.confirm_execute && !rollbackPrivileges.claim_execute
+      && !rollbackPrivileges.finalize_execute && !rollbackPrivileges.fail_execute && rollbackGuard.function_removed && rollbackGuard.trigger_removed,
+      "rollback leaves service_role read-only, removes the cleanup guard, and revokes every v77 execute grant");
     const v76Restored = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
       "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",
     ])).rows[0].definition;
@@ -378,17 +433,25 @@ async function run() {
       has_table_privilege('service_role','public.video_upload_items','insert') as service_insert,
       has_table_privilege('service_role','public.video_upload_items','truncate') as service_truncate,
       has_table_privilege('authenticated','public.video_upload_items','select') as authenticated_select,
+      has_function_privilege('service_role',to_regprocedure('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)'),'execute') as service_confirm,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)'),'execute') as service_claim,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)'),'execute') as service_finalize,
       has_function_privilege('service_role',to_regprocedure('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)'),'execute') as service_fail,
+      has_function_privilege('authenticated',to_regprocedure('public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz)'),'execute') as authenticated_confirm,
       has_function_privilege('authenticated',to_regprocedure('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)'),'execute') as authenticated_claim,
       has_function_privilege('authenticated',to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)'),'execute') as authenticated_finalize,
       has_function_privilege('authenticated',to_regprocedure('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)'),'execute') as authenticated_fail`);
+    const activeGuard = (await db.query(`select
+      not has_function_privilege('service_role',to_regprocedure('public.v77_video_cleanup_guard()'),'execute') as direct_execute_denied,
+      exists(select 1 from pg_trigger where tgrelid='public.media_cleanup_outbox'::regclass and tgname='v77_video_cleanup_guard'
+        and not tgisinternal and tgenabled='O') as trigger_active`)).rows[0];
     assert(activePrivileges.rows[0].service_select && activePrivileges.rows[0].service_insert
       && !activePrivileges.rows[0].service_truncate && !activePrivileges.rows[0].authenticated_select
-      && activePrivileges.rows[0].service_claim && activePrivileges.rows[0].service_finalize && activePrivileges.rows[0].service_fail
-      && !activePrivileges.rows[0].authenticated_claim && !activePrivileges.rows[0].authenticated_finalize && !activePrivileges.rows[0].authenticated_fail,
+      && activePrivileges.rows[0].service_confirm && activePrivileges.rows[0].service_claim && activePrivileges.rows[0].service_finalize && activePrivileges.rows[0].service_fail
+      && !activePrivileges.rows[0].authenticated_confirm && !activePrivileges.rows[0].authenticated_claim && !activePrivileges.rows[0].authenticated_finalize && !activePrivileges.rows[0].authenticated_fail,
     "ordered rollback/reapply restores exactly the active service-only privilege manifest");
+    assert(activeGuard.direct_execute_denied && activeGuard.trigger_active,
+      "cleanup guard is trigger-only and active after ordered reapply");
     const afterReapply = await db.query(`select jsonb_build_object(
       'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
       'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
@@ -504,6 +567,18 @@ async function collisionRejections() {
       alter: db => db.exec("grant execute on function public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text) to authenticated"),
     },
     {
+      name: "authenticated capability confirm execute drift",
+      alter: db => db.exec("grant execute on function public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz) to authenticated"),
+    },
+    {
+      name: "dropped video cleanup guard trigger",
+      alter: db => db.exec("drop trigger v77_video_cleanup_guard on public.media_cleanup_outbox"),
+    },
+    {
+      name: "unmarked video cleanup guard function",
+      alter: db => db.exec("comment on function public.v77_video_cleanup_guard() is null"),
+    },
+    {
       name: "service grant option drift",
       alter: db => db.exec("grant select on public.video_upload_items to service_role with grant option"),
     },
@@ -544,6 +619,20 @@ async function collisionRejections() {
       const after = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
       assert(rollbackError?.message === "v77_rollback_collision" && before.service_insert && after.service_insert,
         "rollback rejects capability-expiry shape drift before revoking service writes");
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
+      await db.exec(`alter table public.media_asset_provenance drop constraint media_asset_provenance_video_fact_sources_check;
+        alter table public.media_asset_provenance add constraint media_asset_provenance_video_fact_sources_check check (true)`);
+      const before = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      const rollbackError = await rejected(() => db.exec(rollback));
+      await db.exec("rollback");
+      const after = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      assert(rollbackError?.message === "v77_rollback_collision" && before.service_insert && after.service_insert,
+        "rollback rejects fail-open provenance-source drift before revoking service writes");
     } finally { await db.close(); }
   }
   {

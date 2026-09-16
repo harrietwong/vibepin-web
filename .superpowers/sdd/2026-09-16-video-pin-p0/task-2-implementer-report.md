@@ -5,6 +5,7 @@
 - Review baseline: `5f5fe502968f96effb7fc9be9b9fd372d6520512`.
 - Atomic-state/fact-contract implementation commit: `d47f6bcddd9164b680fbdffae286adec387fda04`.
 - Round-1 continuation base: `1c9f4615aa30e9b70b270b1d72b53b52e0e07a35`.
+- Round-2 remediation base: `c65e0f802fb95bb972d8515229c391a43af29f7d`.
 - Branch/worktree: `codex/video-pin-p0-0916-final` / `D:/vp-tmp/wt-video-pin-p0-0916-final`.
 - This continuation closes the remaining review findings I3, I4, I5, I6, and I7, plus the stable-error and 100 MiB browser-digest minors. It preserves the earlier C1/I1/I2 atomic state/fact work.
 
@@ -23,6 +24,10 @@
 - Playback validates the Storage response status, normalized MIME, exact `Content-Range` start/end/total, declared byte total, and body length. A no-Range client request may accept a full 200 only with no `Content-Range` and an exact `Content-Length`; short or oversized streams error closed.
 - Finalize requires a real 206 initial range whose status, MIME, `Content-Range`, total, and actual bytes match the request. ISO-BMFF validation now parses a complete `ftyp` box, including a present minor-version field and an allowed major/compatible brand; offset-four magic alone is rejected.
 - Supabase's fixed two-hour upload capability is reflected in the shared server ledger TTL. Before every capability issue/reissue, `video_upload_item_prepare` atomically extends `capability_expires_at` and upserts a delayed, deduplicated `media_cleanup_outbox` responsibility. Failure preserves that pending responsibility in the same transaction before granting cleanup authority; finalize atomically settles it `done`. Immediate deletion is best-effort and cannot erase delayed recheck responsibility.
+- Round 2 makes cleanup authority and finalization mutually exclusive. The generic v76 cleanup lease now passes through a v77 database trigger that locks the matching upload item before granting a lease. A live finalize claim or finalized item rejects cleanup; a successful cleanup lease atomically moves the item to the terminal, non-finalizable `cleaning` state before external deletion authority can escape. Claim, prepare/reissue, capability settlement, and finalize cannot revive that state.
+- The post-sign capability confirmation RPC is owner/batch/ordinal scoped and service-only. It moves the cleanup boundary from the actual provider issuance time, retains a five-minute settle grace beyond the two-hour capability, and refuses to reveal a signed token unless the pending cleanup responsibility was durably confirmed.
+- The provenance source constraint now wraps the complete video predicate in `IS TRUE`, so every required value/source `NULL` fails closed rather than passing through SQL `UNKNOWN`. Migration collision detection, rollback preflight, and function/trigger manifests enforce the exact contract. Playback independently rejects missing, unknown, or contradictory source labels.
+- The production store contract now observes the real Supabase query builder and requires the exact `owner_user_id`, `batch_id`, and `ordinal` predicates; database query errors propagate as the stable `video_upload_store_error`.
 - Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
 - Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
 - Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
@@ -40,17 +45,20 @@
 - RED: bearer-only production route wiring, incorrect `Vary`, malformed/truncated/fake-brand `ftyp`, upstream 500/wrong range, playback MIME/range/total lies, and short streams were accepted by the prior focused contract.
 - RED: browser SHA-256 invoked the test Blob's forbidden whole-file `arrayBuffer()`.
 - RED: rollback accepted `capability_expires_at` nullability drift and revoked service writes instead of stopping before mutation.
-- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 116 assertions, no failures.
-- GREEN: `test-video-upload-private.ts` reports 27 passed, 0 failed after the final production/client/cleanup tests.
+- RED (Round 2): focused tests failed with `store.confirmCapability is not a function` before post-sign settlement existed.
+- RED (Round 2): v77 stopped at assertion 65 because a video provenance insert with `NULL` fact values/sources still passed the database constraint.
+- RED (Round 2): production store query-shape tests exposed the absence of observable owner/batch/ordinal filtering and stable query-error propagation.
+- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 134 assertions, no failures.
+- GREEN: `test-video-upload-private.ts` reports 30 passed, 0 failed after the final production/store/cleanup tests.
 
 ## Verification
 
-- v77 PGlite: 116/116, pass; additionally covers durable capability cleanup creation, delayed scheduling, atomic successful settlement, failure preservation, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry shape drift before privilege mutation.
+- v77 PGlite: 134/134, pass; additionally covers durable capability cleanup creation, post-sign delayed scheduling, active-claim-versus-cleanup barriers in both acquisition orders, the terminal `cleaning` state, atomic successful settlement, failure preservation, fail-closed provenance `NULL`/source collisions, trigger/function privilege manifests, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry or provenance shape drift before mutation.
 - v76 PGlite: 280/280 across two rounds, pass.
 - v75 PGlite: 65 assertions with no failures; expected pre-existing `deployment_blocked` result remains for the legacy broad Storage policy.
 - Media privacy architecture: 16/16, pass.
 - Pinterest video adapter: 16/16, pass.
-- Focused private video upload: 27/27, pass after final production changes.
+- Focused private video upload: 30/30, pass after final production changes, including production store query shape/error behavior and playback source-label rejection.
 - Test registry: 239 tracked, 231 run by `npm test`, 8 documented exclusions.
 - `npm run typecheck`: exit 0.
 - `git diff --check`: exit 0 before the implementation commit; the follow-up report-only diff is also clean.

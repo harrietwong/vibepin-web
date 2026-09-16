@@ -2,7 +2,7 @@
 -- and restore v76's original image-only MIME guard for a clean v76 reapply.
 begin;
 do $v77_rollback_preflight$
-declare v_name text; v_type text; v_not_null boolean;
+declare v_name text; v_type text; v_not_null boolean; v_actual boolean; v_definition text; v_proc pg_proc%rowtype;
 begin
   foreach v_name in array array['video_upload_batches','video_upload_items'] loop
     if to_regclass('public.' || v_name) is not null
@@ -17,6 +17,25 @@ begin
     if not found or v_type is distinct from 'timestamp with time zone' or not v_not_null then
       raise exception using errcode='P0001',message='v77_rollback_collision';
     end if;
+  end if;
+  select pg_get_constraintdef(oid) into v_definition from pg_constraint
+    where conrelid=to_regclass('public.media_asset_provenance') and conname='media_asset_provenance_video_fact_sources_check';
+  if not found or v_definition is distinct from 'CHECK ((((media_kind <> ''video''::text) OR ((content_type_source = ''storage_head_verified''::text) AND (byte_size_source = ''storage_head_verified''::text) AND (checksum_source = ANY (ARRAY[''storage_digest_verified''::text, ''unavailable''::text])) AND (dimensions_source = ''browser_declared''::text) AND (duration_source = ''browser_declared''::text) AND (((checksum_source = ''unavailable''::text) AND (checksum_sha256 IS NULL)) OR ((checksum_source = ''storage_digest_verified''::text) AND (checksum_sha256 ~ ''^[0-9a-f]{64}$''::text))) AND (width > 0) AND (height > 0) AND ((duration_ms >= 4000) AND (duration_ms <= 300000)))) IS TRUE))' then
+    raise exception using errcode='P0001',message='v77_rollback_collision';
+  end if;
+  if to_regprocedure('public.v77_video_cleanup_guard()') is not null then
+    select * into v_proc from pg_proc where oid=to_regprocedure('public.v77_video_cleanup_guard()');
+    if obj_description(v_proc.oid,'pg_proc') is distinct from 'vibepin:v77:video-cleanup-guard'
+       or not v_proc.prosecdef or v_proc.prorettype<>to_regtype('trigger')
+       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'a5c5b35925778b58bf7bdf3d89455d68' then
+      raise exception using errcode='P0001',message='v77_rollback_collision';
+    end if;
+  end if;
+  select count(*)=1 into v_actual from pg_trigger t where t.tgrelid=to_regclass('public.media_cleanup_outbox')
+    and t.tgname='v77_video_cleanup_guard' and not t.tgisinternal
+    and t.tgfoid=to_regprocedure('public.v77_video_cleanup_guard()') and t.tgenabled='O' and t.tgtype=19;
+  if (to_regprocedure('public.v77_video_cleanup_guard()') is null) is distinct from (not v_actual) then
+    raise exception using errcode='P0001',message='v77_rollback_collision';
   end if;
 end $v77_rollback_preflight$;
 do $v77_restore_v76_mime$
@@ -42,10 +61,13 @@ begin
     elsif position(v_new in v_definition)=0 then raise exception using errcode='P0001',message='v77_rollback_collision'; end if;
   end loop;
 end $v77_restore_v76_mime$;
+drop trigger if exists v77_video_cleanup_guard on public.media_cleanup_outbox;
+drop function if exists public.v77_video_cleanup_guard();
 revoke all on public.video_upload_batches,public.video_upload_items from public,anon,authenticated,service_role;
 grant select on public.video_upload_batches,public.video_upload_items to service_role;
 revoke all on function public.video_upload_batch_prepare(uuid,text,timestamptz) from public,anon,authenticated,service_role;
 revoke all on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) from public,anon,authenticated,service_role;
+revoke all on function public.video_upload_capability_confirm(uuid,uuid,integer,timestamptz) from public,anon,authenticated,service_role;
 revoke all on function public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz) from public,anon,authenticated,service_role;
 revoke all on function public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text) from public,anon,authenticated,service_role;
 revoke all on function public.video_upload_item_fail(uuid,uuid,integer,uuid,text) from public,anon,authenticated,service_role;

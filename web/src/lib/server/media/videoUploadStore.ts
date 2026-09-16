@@ -13,6 +13,7 @@ const STABLE_STORE_CODES = new Set([
   "video_upload_batch_expired", "video_upload_item_not_finalizable", "video_upload_batch_not_finalizable",
   "video_upload_item_idempotency_conflict", "video_upload_batch_not_found", "video_upload_item_not_found",
   "video_upload_batch_not_preparable", "video_upload_batch_limit_exceeded", "video_upload_too_large",
+  "video_upload_item_not_preparable",
 ]);
 function storeFailure(value: unknown) {
   const message = value && typeof value === "object" && "message" in value ? String((value as { message: unknown }).message) : "";
@@ -49,6 +50,13 @@ export function createVideoUploadStore(db: Db): VideoUploadStore {
         declaredContentType: data.declared_content_type, declaredByteSize: Number(data.declared_byte_size), declaredChecksumSha256: data.declared_checksum_sha256,
         declaredWidth: Number(data.declared_width), declaredHeight: Number(data.declared_height), declaredDurationMs: Number(data.declared_duration_ms), expiresAt: data.expires_at,
       };
+    },
+    async confirmCapability(input) {
+      const result = await db.rpc("video_upload_capability_confirm", {
+        p_owner_user_id: input.ownerUserId, p_batch_id: input.batchId, p_ordinal: input.ordinal,
+        p_capability_expires_at: input.capabilityExpiresAt,
+      });
+      return must(result, data => ({ status: String(data.status ?? ""), cleanupScheduled: data.cleanupScheduled === true }));
     },
     async finalizeItem(input) {
       const result = await db.rpc("video_upload_item_finalize", {

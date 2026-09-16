@@ -29,11 +29,19 @@ function preparedItem(overrides: Record<string, unknown> = {}) {
   return { batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, status: "prepared", privatePath: `${OWNER}/video/a.mp4`, declaredContentType: "video/mp4", declaredByteSize: MP4_FTYP.byteLength, declaredChecksumSha256: SHA, declaredWidth: 1080, declaredHeight: 1920, declaredDurationMs: 5_000, expiresAt: "2099-01-01T00:00:00.000Z", ...overrides };
 }
 
+function readyProvenance(path: string, overrides: Record<string, unknown> = {}) {
+  return { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null,
+    lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12, checksum_sha256: null,
+    width: 1080, height: 1920, duration_ms: 5_000, content_type_source: "storage_head_verified", byte_size_source: "storage_head_verified",
+    checksum_source: "unavailable", dimensions_source: "browser_declared", duration_source: "browser_declared", ...overrides };
+}
+
 function storeStub(overrides: Record<string, unknown> = {}) {
   const item = preparedItem();
   return {
     prepareBatch: async () => ({ batchId: item.batchId }),
     prepareItem: async () => ({ status: "prepared" }),
+    confirmCapability: async () => ({ status: "prepared", cleanupScheduled: true }),
     findItem: async () => item,
     claimItem: async (input: { claimToken: string }) => ({ status: "finalizing", claimToken: input.claimToken }),
     finalizeItem: async () => ({ status: "finalized", provenanceReady: true }),
@@ -61,6 +69,7 @@ async function main() {
     const db = {
       rpc: async (name: string, args: Record<string, unknown>) => {
         calls.push({ name, args });
+        if (name === "video_upload_capability_confirm") return { data: { status: "prepared", cleanupScheduled: true }, error: null };
         if (name === "video_upload_item_claim") return { data: { status: "finalizing", claimToken: args.p_claim_token }, error: null };
         if (name === "video_upload_item_finalize") return { data: { status: "finalized", provenanceReady: true }, error: null };
         if (name === "video_upload_item_fail") return { data: { status: "failed", cleanupAllowed: true, cleanupScheduled: true }, error: null };
@@ -70,15 +79,16 @@ async function main() {
     };
     const store = createVideoUploadStore(db);
     const claimToken = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await store.confirmCapability({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, capabilityExpiresAt: "2099-01-01T00:00:00.000Z" });
     await store.claimItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken, claimExpiresAt: "2099-01-01T00:00:00.000Z" });
     await store.finalizeItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken,
       bucketId: "generated-private", contentType: "video/mp4", byteSize: 12, checksumSha256: null });
     const failed = await store.failItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken, code: "invalid_video_container" });
-    assert.deepEqual(calls.map(call => call.name), ["video_upload_item_claim", "video_upload_item_finalize", "video_upload_item_fail"]);
-    assert.equal(calls[1].args.p_verified_checksum_sha256, null);
-    assert.equal("p_verified_width" in calls[1].args, false);
-    assert.equal("p_verified_duration_ms" in calls[1].args, false);
-    assert.equal(calls[2].args.p_claim_token, claimToken);
+    assert.deepEqual(calls.map(call => call.name), ["video_upload_capability_confirm", "video_upload_item_claim", "video_upload_item_finalize", "video_upload_item_fail"]);
+    assert.equal(calls[2].args.p_verified_checksum_sha256, null);
+    assert.equal("p_verified_width" in calls[2].args, false);
+    assert.equal("p_verified_duration_ms" in calls[2].args, false);
+    assert.equal(calls[3].args.p_claim_token, claimToken);
     assert(calls.every(call => call.args.p_owner_user_id === OWNER), "every lifecycle RPC must carry the verified owner");
     assert.equal(failed.cleanupScheduled, true);
   });
@@ -104,7 +114,17 @@ async function main() {
       createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/signed" }),
     });
     assert.equal(response.status, 200);
-    assert.equal(expiresAt, "2030-01-01T02:00:00.000Z");
+    assert.equal(expiresAt, "2030-01-01T02:05:00.000Z");
+  });
+
+  await test("prepare never reveals a signed token unless durable issuance confirmation succeeds", async () => {
+    const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_confirm", files: [descriptor()] }), {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: storeStub({ findItem: async () => null, confirmCapability: async () => { throw new Error("video_upload_store_error"); } }),
+      createSignedUpload: async () => ({ token: "must-not-leak", signedUrl: "https://storage.test/must-not-leak" }),
+    });
+    assert.equal(response.status, 502);
+    assert.doesNotMatch(await response.text(), /must-not-leak/);
   });
 
   await test("a losing finalize race cannot delete an object finalized by the winner", async () => {
@@ -247,7 +267,8 @@ async function main() {
     const deps = {
       getUserId: async () => OWNER, enabled: true, configured: true,
       store: {
-        prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => item,
+        prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }),
+        confirmCapability: async () => ({ status: "prepared", cleanupScheduled: true }), findItem: async () => item,
         claimItem: async (input: { claimToken: string }) => { claims++; return { status: "finalizing", claimToken: input.claimToken }; },
         finalizeItem: async () => ({ status: "finalized", provenanceReady: true }), failItem: async () => ({ status: "failed", cleanupAllowed: true, cleanupScheduled: true }),
       },
@@ -399,7 +420,7 @@ async function main() {
     const path = `${OWNER}/videos/a.mp4`;
     const response = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`, { headers: { range: "bytes=4-7" } }), {
       getUserId: async () => OWNER, configured: true,
-      findProvenance: async () => ({ owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 }),
+      findProvenance: async () => readyProvenance(path),
       readRange: async input => { fetches++; assert.deepEqual(input, { bucket: "generated-private", path, start: 4, end: 7 }); return new Response(new Uint8Array([0x66, 0x74, 0x79, 0x70]), { status: 206, headers: { "content-range": "bytes 4-7/12", "content-type": "video/mp4" } }); },
     });
     assert.equal(response.status, 206);
@@ -419,7 +440,7 @@ async function main() {
 
   await test("video proxy rejects multi and unsatisfiable ranges and redacts upstream failures", async () => {
     const path = `${OWNER}/videos/a.mp4`;
-    const deps = { getUserId: async () => OWNER, configured: true, findProvenance: async () => ({ owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 }), readRange: async () => { throw new Error("https://storage.test/raw?token=secret"); } };
+    const deps = { getUserId: async () => OWNER, configured: true, findProvenance: async () => readyProvenance(path), readRange: async () => { throw new Error("https://storage.test/raw?token=secret"); } };
     const multi = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`, { headers: { range: "bytes=0-1,3-4" } }), deps);
     assert.equal(multi.status, 416);
     const failed = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), deps);
@@ -429,7 +450,7 @@ async function main() {
 
   await test("video proxy supports full, open, and suffix ranges, blocks unsafe lifecycle, and bounds an oversized upstream body", async () => {
     const path = `${OWNER}/videos/a.mp4`;
-    const provenance = { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 };
+    const provenance = readyProvenance(path);
     const calls: Array<{ start: number; end: number }> = [];
     const deps = { getUserId: async () => OWNER, configured: true, findProvenance: async () => provenance, readRange: async ({ start, end }: { start: number; end: number }) => { calls.push({ start, end }); return new Response(new Uint8Array(end - start + 1), { status: 206, headers: { "content-range": `bytes ${start}-${end}/12`, "content-type": "video/mp4" } }); } };
     const full = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), deps);
@@ -449,7 +470,7 @@ async function main() {
 
   await test("video proxy rejects upstream status, MIME, range, total, and short-body lies", async () => {
     const path = `${OWNER}/videos/a.mp4`;
-    const provenance = { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 };
+    const provenance = readyProvenance(path);
     const base = { getUserId: async () => OWNER, configured: true, findProvenance: async () => provenance };
     for (const [name, upstream] of [
       ["status", new Response(new Uint8Array(4), { status: 200, headers: { "content-type": "video/mp4" } })],
@@ -468,6 +489,45 @@ async function main() {
     const full200 = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), { ...base,
       readRange: async () => new Response(new Uint8Array(12), { status: 200, headers: { "content-length": "12", "content-type": "video/mp4" } }) });
     assert.equal(full200.status, 200, "an exact full-object 200 is allowed only for a no-Range request");
+    const malformedFull200 = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), { ...base,
+      readRange: async () => new Response(new Uint8Array(12), { status: 200, headers: { "content-length": "12", "content-type": "video/mp4", "content-range": "malformed" } }) });
+    assert.equal(malformedFull200.status, 502, "full 200 requires Content-Range to be absent, not merely unparsable");
+  });
+
+  await test("video proxy rejects missing or contradictory provenance trust labels", async () => {
+    const path = `${OWNER}/videos/a.mp4`;
+    const ready = { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null,
+      lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12, checksum_sha256: null,
+      width: 1080, height: 1920, duration_ms: 5_000, content_type_source: "storage_head_verified", byte_size_source: "storage_head_verified",
+      checksum_source: "unavailable", dimensions_source: "browser_declared", duration_source: "browser_declared" };
+    for (const provenance of [
+      { ...ready, content_type_source: null }, { ...ready, byte_size_source: "browser_declared" },
+      { ...ready, checksum_source: "storage_digest_verified" }, { ...ready, dimensions_source: null },
+      { ...ready, duration_source: "unknown" }, { ...ready, width: null }, { ...ready, duration_ms: null },
+    ]) {
+      let reads = 0;
+      const response = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), {
+        getUserId: async () => OWNER, configured: true, findProvenance: async () => provenance,
+        readRange: async () => { reads++; return new Response(); },
+      });
+      assert.equal(response.status, 403);
+      assert.equal(reads, 0);
+    }
+  });
+
+  await test("production store findItem emits exact owner, batch, and ordinal predicates and surfaces query errors", async () => {
+    const predicates: Array<[string, unknown]> = [];
+    const row = { batch_id: preparedItem().batchId, ordinal: 0, status: "prepared", private_path: `${OWNER}/video/a.mp4`,
+      declared_content_type: "video/mp4", declared_byte_size: 20, declared_checksum_sha256: SHA,
+      declared_width: 1080, declared_height: 1920, declared_duration_ms: 5_000, expires_at: "2099-01-01T00:00:00.000Z" };
+    const builder = { select: (_shape: string) => builder, eq: (column: string, value: unknown) => { predicates.push([column, value]); return builder; }, maybeSingle: async () => ({ data: row, error: null }) };
+    const store = createVideoUploadStore({ rpc: async () => ({ data: {}, error: null }), from: (table: string) => { assert.equal(table, "video_upload_items"); return builder; } });
+    assert.equal((await store.findItem(OWNER, row.batch_id, 0))?.privatePath, row.private_path);
+    assert.deepEqual(predicates, [["owner_user_id", OWNER], ["batch_id", row.batch_id], ["ordinal", 0]]);
+    const failingBuilder = { select: (_shape: string) => failingBuilder, eq: (_column: string, _value: unknown) => failingBuilder,
+      maybeSingle: async () => ({ data: null, error: { message: "database unavailable" } }) };
+    const failing = createVideoUploadStore({ rpc: async () => ({ data: {}, error: null }), from: () => failingBuilder });
+    await assert.rejects(() => failing.findItem(OWNER, row.batch_id, 0), /video_upload_store_error/);
   });
 
   await test("production storage-media route wires verified bearer-or-cookie auth", async () => {
