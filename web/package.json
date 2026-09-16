@@ -20,6 +20,7 @@
     "test:media-privacy-architecture": "npx tsx scripts/test-media-privacy-architecture.ts",
     "test:user-store-route": "npx tsx scripts/test-user-store-route.ts",
     "test:facebook-pages": "npx tsx scripts/test-facebook-pages.ts",
+    "test:pinterest-video-adapter": "npx tsx scripts/test-pinterest-video-adapter.ts",
     "test:shopify-entitlements": "npx tsx scripts/test-shopify-entitlements.ts",
     "test:plan-entitlements": "npx tsx scripts/test-plan-entitlements.ts",
     "test:usage-metering": "npx tsx scripts/test-usage-metering.ts",

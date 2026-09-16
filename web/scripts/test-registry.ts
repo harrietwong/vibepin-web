@@ -46,6 +46,7 @@ export const CORE: string[] = [
   "test-pinterest-route-helpers",
   "test-pinterest-connection-consistency",
   "test-pinterest-client-dedupe",
+  "test-pinterest-video-adapter",
   "test-published-pin-summary",
   "test-social-provider-status",
   // Admin operator console (derivation layer + UI i18n)
