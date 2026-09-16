@@ -137,6 +137,24 @@ test("copyMedia into slot 0 is clamped to slot 1 — a drag never changes the co
   assert.equal(list[1].height, 100);
 });
 
+test("video media remains a single-item Content when images are appended", () => {
+  resetStore();
+  const video = makeDraft([{ kind: "video", url: "/api/storage-media?path=owner%2Fclip.mp4", posterUrl: "/api/storage-image?path=poster" }]);
+  const updated = store.addMedia(video.id, [{ kind: "image", url: "new.jpg", source: "upload" }])!;
+  assert.equal(contentMedia(updated).length, 1);
+  assert.equal(contentMedia(updated)[0].kind, "video");
+});
+
+test("cross-Content copy never creates image+video or multi-video media", () => {
+  resetStore();
+  const image = makeDraft([{ url: "image.jpg" }]);
+  const video = makeDraft([{ kind: "video", url: "/api/storage-media?path=owner%2Fclip.mp4", posterUrl: "/api/storage-image?path=poster" }]);
+  assert.equal(store.copyMedia(image.id, contentMedia(image)[0].id, video.id), video);
+  assert.equal(store.copyMedia(video.id, contentMedia(video)[0].id, image.id), image);
+  assert.equal(contentMedia(store.getDraft(video.id)!).length, 1);
+  assert.equal(contentMedia(store.getDraft(image.id)!).length, 1);
+});
+
 // ── 2. Load-time normalization ────────────────────────────────────────────────
 
 test("normalization moves a stale off-index cover to the front on load", () => {

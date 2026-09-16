@@ -616,7 +616,7 @@ async function main() {
     }
   });
 
-  await test("browser upload deadline and caller abort have distinct stable codes and notify finalize cleanup", async () => {
+  await test("browser upload deadline and caller abort have distinct stable codes and never call normal finalize", async () => {
     const { uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
     const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
     const upload = { ordinal: 3, path: `${OWNER}/videos/late.mp4`, token: "secret-token",
@@ -643,11 +643,11 @@ async function main() {
     };
     const timed = await run(); timed.fireDeadline();
     await assert.rejects(timed.promise, (error: unknown) => (error as { code?: string }).code === "video_upload_timeout");
-    assert.deepEqual(timed.finalized, [{ batchId: preparedItem().batchId, ordinal: 3 }]);
+    assert.deepEqual(timed.finalized, [], "an aborted transfer must not turn a late object into finalized media");
 
     const caller = new AbortController(); const aborted = await run(caller.signal); caller.abort();
     await assert.rejects(aborted.promise, (error: unknown) => (error as { code?: string }).code === "video_upload_aborted");
-    assert.deepEqual(aborted.finalized, [{ batchId: preparedItem().batchId, ordinal: 3 }]);
+    assert.deepEqual(aborted.finalized, [], "cancel relies on the prepared operation's durable late-object cleanup");
   });
 
   await test("browser SHA-256 is incremental and does not allocate the entire video", async () => {

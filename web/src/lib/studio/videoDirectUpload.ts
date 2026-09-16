@@ -74,10 +74,10 @@ export async function uploadVideoToSignedStorage(upload: SignedVideoUpload, file
   } catch (cause) {
     if (!controller.signal.aborted) throw cause;
     const code = timedOut ? "video_upload_timeout" : "video_upload_aborted";
-    // The prepare transaction already owns the durable late-object recheck. This
-    // notification accelerates the item into failed/cleanup state but is not the
-    // sole cleanup guarantee, so a failed notification cannot lose responsibility.
-    await api("/api/studio/video-upload/finalize", { batchId: options.batchId, ordinal: upload.ordinal }, requestId(), fetchImpl).catch(() => undefined);
+    // Never use the success/finalize endpoint as an abort notification. The PUT may
+    // have committed just before cancellation; finalizing here would make the object
+    // permanent while the batch state discards the response and creates no draft.
+    // The prepare transaction already owns the durable late-object cleanup/recheck.
     throw Object.assign(new Error(code), { code });
   } finally {
     clearTimeoutImpl(timer);

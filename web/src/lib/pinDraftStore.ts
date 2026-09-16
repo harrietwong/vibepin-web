@@ -967,6 +967,9 @@ export function addMedia(id: string, items: Omit<ContentMedia, "id">[]): PinDraf
   const existing = contentMedia(draft);
   const additions = items.filter(item => item.url).map((item, index) => ({ ...item, id: mediaId(draft.contentId || draft.id, existing.length + index) }));
   if (!additions.length) return draft;
+  // Pinterest video Pins are a single-video shape. Do not let an editor action
+  // turn one into an image+video or multi-video Content that can only fail later.
+  if (existing.some(item => item.kind === "video") || additions.some(item => item.kind === "video")) return draft;
   // Appended at the end, so media[0] — and therefore the cover — is untouched.
   return writeMedia(id, draft, [...existing, ...additions]);
 }
@@ -990,6 +993,7 @@ export function copyMedia(sourceId: string, mediaItemId: string, targetId: strin
   const item = contentMedia(source).find(candidate => candidate.id === mediaItemId);
   if (!item) return target;
   const next = contentMedia(target);
+  if (item.kind === "video" || next.some(candidate => candidate.kind === "video")) return target;
   const copy = { ...item, id: mediaId(target.contentId || target.id, next.length) };
   const floor = next.length ? 1 : 0;
   const index = targetIndex === undefined ? next.length : Math.max(floor, Math.min(targetIndex, next.length));

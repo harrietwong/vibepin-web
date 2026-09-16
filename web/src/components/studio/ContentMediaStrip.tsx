@@ -74,6 +74,7 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const media = contentMedia(draft);
   const cover = coverMedia(draft);
+  const containsVideo = media.some(item => item.kind === "video");
 
   const dropBefore = (event: React.DragEvent, targetId: string) => {
     event.preventDefault();
@@ -161,13 +162,13 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
             </div>
           );
         })}
-        <button type="button" data-testid="content-add-media" disabled={disabled || uploading} onClick={() => inputRef.current?.click()}
+        {!containsVideo && <button type="button" data-testid="content-add-media" disabled={disabled || uploading} onClick={() => inputRef.current?.click()}
           style={{ flex: "0 0 54px", height: 66, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, borderRadius: 9,
             border: `1px dashed ${BUI.borderHi}`, background: BUI.surface, color: BUI.textSec, fontSize: 9.5, fontWeight: 700, cursor: "pointer" }}>
           {uploading ? <Loader2 className="animate-spin" style={{ width: 15, height: 15 }} /> : <ImagePlus style={{ width: 16, height: 16 }} />}
           Add
-        </button>
-        <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={event => void addFiles(event.target.files)} />
+        </button>}
+        {!containsVideo && <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={event => void addFiles(event.target.files)} />}
       </div>
     </div>
   );
