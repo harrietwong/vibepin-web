@@ -98,7 +98,10 @@ export function validateVideoBatchSelection(files: File[], enabled: boolean): Vi
   if (!videoFiles.length) return { kind: "image", draftMode: "image-choice", files };
   if (!enabled) return { kind: "rejected", error: { code: "video_upload_disabled" } };
   if (files.length > MAX_VIDEO_UPLOAD_ITEMS) return { kind: "rejected", error: { code: "batch_limit_exceeded" } };
-  for (const file of videoFiles) {
+  // Per-file MIME/size errors are kept for preflight so a bad sibling never
+  // rejects a valid file before it has its own item/error row.
+  if (files.length === 1) {
+    const file = videoFiles[0];
     if (!normalizedVideoContentType(file)) return { kind: "rejected", error: { code: "invalid_video_type" } };
     if (file.size < 1 || file.size > MAX_VIDEO_UPLOAD_BYTES) return { kind: "rejected", error: { code: "video_too_large" } };
   }

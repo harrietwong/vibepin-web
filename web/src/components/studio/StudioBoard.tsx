@@ -823,6 +823,11 @@ export function StudioBoard() {
         items.push({ id: `${ordinal}`, ordinal, file, state: "cancelled" });
         continue;
       }
+      const singleSelection = validateVideoBatchSelection([file], true);
+      if (singleSelection.kind === "rejected") {
+        items.push({ id: `${ordinal}`, ordinal, file, state: "failed", error: singleSelection.error ?? { code: "invalid_video_upload" } });
+        continue;
+      }
       try {
         const probe = await probeVideoFile(file);
         const { posterFile, ...observed } = probe;
