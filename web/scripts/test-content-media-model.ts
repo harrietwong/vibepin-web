@@ -354,5 +354,31 @@ test("video media preserves its poster-only legacy image alias through store wri
   assert.equal(replaced.imageUrl, "private://new-poster.jpg", "media mutation keeps imageUrl on the video poster");
 });
 
+test("splitContentMedia and non-cover generation retain a video cover's poster alias", () => {
+  resetStore();
+  const created = store.createBoardDraft({
+    imageUrl: "poster.jpg",
+    media: [
+      { id: "video", kind: "video", url: "binary.mp4", posterUrl: "poster.jpg" },
+      { id: "image", kind: "image", url: "other.jpg" },
+    ],
+    source: "uploaded_image",
+  });
+  const split = store.splitContentMedia(created.id, ["video"]);
+  assert.equal(split.length, 1);
+  assert.equal(split[0].imageUrl, "poster.jpg", "a split video child aliases its poster, never its binary");
+
+  const coverVideo = store.createBoardDraft({
+    imageUrl: "poster.jpg",
+    media: [
+      { id: "cover-video", kind: "video", url: "binary2.mp4", posterUrl: "poster.jpg" },
+      { id: "non-cover-image", kind: "image", url: "other2.jpg" },
+    ],
+    source: "uploaded_image",
+  });
+  const generated = store.completeGeneratedDraft(coverVideo.id, "regenerated.jpg", { replaceMediaId: "non-cover-image" })!;
+  assert.equal(generated.imageUrl, "poster.jpg", "regenerating a non-cover image must leave the video cover poster alias intact");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

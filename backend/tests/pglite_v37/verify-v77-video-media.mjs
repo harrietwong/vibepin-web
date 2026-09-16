@@ -119,7 +119,14 @@ async function run() {
       $1,$2,$3,$4,$5,$6,$7,$8,$9)`, [A, otherOwner.batchId, 0, null, 1, "b".repeat(64), 1, 1, 1])));
     assert(nullVerified?.message === "invalid_video_content_type", "finalization explicitly rejects missing verified MIME");
     const terminalBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "terminal-batch"));
-    await asRole(db, "service_role", () => prepareItem(db, A, terminalBatch.batchId, 0, "terminal-item"));
+    const terminalItem = await asRole(db, "service_role", () => prepareItem(db, A, terminalBatch.batchId, 0, "terminal-item"));
+    const directFinalizedUpdate = await asRole(db, "service_role", () => rejected(() => db.query(
+      "update public.video_upload_items set status='finalized',verified_checksum_sha256='direct' where id=$1", [terminalItem.itemId],
+    )));
+    const directFinalizedInsert = await asRole(db, "service_role", () => rejected(() => db.query(`insert into public.video_upload_items(
+      batch_id,owner_user_id,ordinal,idempotency_key,private_path,declared_content_type,declared_byte_size,status,expires_at
+    ) values($1,$2,1,'direct-final','${A}/direct.mp4','video/mp4',1,'finalized',now()+interval '1 hour')`, [terminalBatch.batchId, A])));
+    assert(directFinalizedUpdate && directFinalizedInsert, "service-role direct INSERT/UPDATE cannot create a finalized item with NULL verified facts");
     await db.query("update public.video_upload_batches set status='canceled' where id=$1", [terminalBatch.batchId]);
     const canceledFinalize = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_finalize(
       $1,$2,$3,$4,$5,$6,$7,$8,$9)`, [A, terminalBatch.batchId, 0, "video/mp4", 1, "c".repeat(64), 1, 1, 1])));
@@ -227,6 +234,40 @@ async function collisionRejections() {
       await db.exec("rollback");
       const after = (await db.query("select count(*)::int as rows from public.video_upload_items")).rows[0];
       assert(error?.message === "v77_schema_collision" && JSON.stringify(before) === JSON.stringify(after), "dropped owned ordinal constraint rejects reapply without row mutation");
+    } finally { await db.close(); }
+  }
+  for (const scenario of [
+    {
+      name: "same-name altered ordinal constraint",
+      alter: db => db.exec("alter table public.video_upload_items drop constraint video_upload_items_ordinal_check; alter table public.video_upload_items add constraint video_upload_items_ordinal_check check (true)"),
+    },
+    {
+      name: "media kind default drift",
+      alter: db => db.exec("alter table public.media_asset_provenance alter column media_kind set default 'video'"),
+    },
+    {
+      name: "item owner nullability drift",
+      alter: db => db.exec("alter table public.video_upload_items alter column owner_user_id drop not null"),
+    },
+    {
+      name: "marked modified v77 RPC",
+      alter: async db => {
+        const definition = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
+          "public.video_upload_batch_prepare(uuid,text,timestamptz)",
+        ])).rows[0].definition;
+        await db.exec(definition.replace("if p_owner_user_id is null", "if false and p_owner_user_id is null"));
+      },
+    },
+  ]) {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
+      await scenario.alter(db);
+      const before = (await db.query("select count(*)::int as rows from public.video_upload_items")).rows[0];
+      const error = await rejected(() => db.exec(migration));
+      await db.exec("rollback");
+      const after = (await db.query("select count(*)::int as rows from public.video_upload_items")).rows[0];
+      assert(error?.message === "v77_schema_collision" && JSON.stringify(before) === JSON.stringify(after), `${scenario.name} rejects a marked/same-name collision without row mutation`);
     } finally { await db.close(); }
   }
   {

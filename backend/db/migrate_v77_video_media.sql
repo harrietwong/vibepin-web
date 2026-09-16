@@ -10,6 +10,11 @@ declare
   v_installed boolean := to_regclass('public.video_upload_batches') is not null or to_regclass('public.video_upload_items') is not null;
   v_type text;
   v_not_null boolean;
+  v_default text;
+  v_signature text;
+  v_marker text;
+  v_hash text;
+  v_proc pg_proc%rowtype;
 begin
   if (to_regclass('public.video_upload_batches') is null) is distinct from (to_regclass('public.video_upload_items') is null) then
     raise exception using errcode='P0001',message='v77_schema_collision';
@@ -40,13 +45,14 @@ begin
   -- v77's provenance extension is not an adoption point: before v77 none of
   -- these columns exist; after v77 every one must retain its exact type/shape.
   foreach v_name in array array['media_kind','content_type','byte_size','checksum_sha256','width','height','duration_ms'] loop
-    select a.atttypid::regtype::text,a.attnotnull into v_type,v_not_null from pg_attribute a
+    select a.atttypid::regtype::text,a.attnotnull,pg_get_expr(d.adbin,d.adrelid) into v_type,v_not_null,v_default
+      from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
       where a.attrelid='public.media_asset_provenance'::regclass and a.attname=v_name and not a.attisdropped;
     if found then
       if (v_name in ('media_kind','content_type','checksum_sha256') and v_type<>'text')
          or (v_name in ('byte_size','duration_ms') and v_type<>'bigint')
          or (v_name in ('width','height') and v_type<>'integer')
-         or (v_name='media_kind' and not v_not_null) then
+         or (v_name='media_kind' and (not v_not_null or v_default is distinct from '''image''::text')) then
         raise exception using errcode='P0001',message='v77_schema_collision';
       end if;
     elsif v_installed then
@@ -68,12 +74,42 @@ begin
     or not (select relrowsecurity from pg_class where oid='public.video_upload_batches'::regclass)
     or not (select relrowsecurity from pg_class where oid='public.video_upload_items'::regclass)
     ) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
-  end if;
-  foreach v_name in array array['video_upload_batch_prepare','video_upload_item_prepare','video_upload_item_finalize'] loop
-    if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=v_name)
-       and (not v_installed or (select obj_description(p.oid,'pg_proc') from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=v_name limit 1) is distinct from 'vibepin:v77:' || replace(v_name,'_','-')) then
+    if exists(select 1 from pg_constraint where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_ordinal_check'
+      and pg_get_constraintdef(oid) is distinct from 'CHECK (((ordinal >= 0) AND (ordinal <= 19)))') then
       raise exception using errcode='P0001',message='v77_schema_collision';
     end if;
+    select pg_get_indexdef(indexrelid) into v_default from pg_index
+      where indexrelid='public.video_upload_batches_owner_status_idx'::regclass;
+    if v_default is distinct from 'CREATE INDEX video_upload_batches_owner_status_idx ON public.video_upload_batches USING btree (owner_user_id, status, updated_at DESC)' then
+      raise exception using errcode='P0001',message='v77_schema_collision';
+    end if;
+    select pg_get_indexdef(indexrelid) into v_default from pg_index
+      where indexrelid='public.video_upload_items_owner_batch_idx'::regclass;
+    if v_default is distinct from 'CREATE INDEX video_upload_items_owner_batch_idx ON public.video_upload_items USING btree (owner_user_id, batch_id, ordinal)' then
+      raise exception using errcode='P0001',message='v77_schema_collision';
+    end if;
+    if exists(select 1 from pg_attribute where attrelid='public.video_upload_items'::regclass and attname='owner_user_id' and not attnotnull) then
+      raise exception using errcode='P0001',message='v77_schema_collision';
+    end if;
+  end if;
+  for v_signature,v_marker,v_hash in select * from (values
+    ('public.video_upload_batch_prepare(uuid,text,timestamptz)','vibepin:v77:video-upload-batch-prepare','73821871844f2b858bfc441d80919bbc'),
+    ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-prepare','56f6733502f5b8c6570581cfb981d558'),
+    ('public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-finalize','c72ba5b25af6037114491ad89da675ce')
+  ) expected(signature,marker,body_hash) loop
+    if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname=split_part(replace(v_signature,'public.',''),'(',1)
+        and p.oid is distinct from to_regprocedure(v_signature)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    if to_regprocedure(v_signature) is not null then
+      select * into v_proc from pg_proc where oid=to_regprocedure(v_signature);
+      if not v_installed or obj_description(v_proc.oid,'pg_proc') is distinct from v_marker
+         or not v_proc.prosecdef or v_proc.prokind<>'f' or v_proc.prorettype<>to_regtype('jsonb')
+         or v_proc.proretset or v_proc.provariadic<>0 or v_proc.prolang<>(select oid from pg_language where lanname='plpgsql')
+         or v_proc.proconfig is distinct from array['search_path=public, pg_temp']::text[]
+         or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>v_hash then
+        raise exception using errcode='P0001',message='v77_schema_collision';
+      end if;
+    elsif v_installed then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
   end loop;
 end $v77_preflight$;
 
@@ -117,14 +153,14 @@ create table if not exists public.video_upload_items (
   verified_duration_ms bigint,
   status text not null default 'prepared'
     constraint video_upload_items_status_check check (status in ('prepared','uploading','finalizing','finalized','failed','expired','canceled')),
-  constraint video_upload_items_finalized_facts_check check (
+  constraint video_upload_items_finalized_facts_check check ((
     status <> 'finalized' or (
       verified_content_type in ('video/mp4','video/x-m4v','video/quicktime')
       and verified_byte_size between 0 and 104857600
       and nullif(btrim(verified_checksum_sha256),'') is not null
       and verified_width > 0 and verified_height > 0 and verified_duration_ms > 0
     )
-  ),
+  ) is true),
   error_code text,
   prepared_at timestamptz not null default now(),
   finalized_at timestamptz,

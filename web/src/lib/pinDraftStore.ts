@@ -916,7 +916,7 @@ export function completeGeneratedDraft(
   const cover = nextMedia[0];
   const updated: PinDraft = {
     ...draft,
-    imageUrl: cover?.url ?? imageUrl,
+    imageUrl: cover ? legacyImageAlias(cover, draft.imageUrl) : imageUrl,
     media: nextMedia,
     coverMediaId: cover?.id ?? generatedMediaId,
     generationStatus: "completed",
@@ -1312,7 +1312,10 @@ export function updateDraft(
   const draft = data.drafts[id];
   if (!draft) return null;
 
-  const updated: PinDraft = { ...draft, ...patch, updatedAt: new Date().toISOString() };
+  let updated: PinDraft = { ...draft, ...patch, updatedAt: new Date().toISOString() };
+  // Callers such as splitContentMedia write a complete media[] patch. Preserve
+  // the same poster-only alias invariant used by create/load/writeMedia.
+  if ("media" in patch && updated.media?.length) updated = normalizeDraftMedia(updated) ?? updated;
   if ("scheduledDate" in patch || "scheduledTime" in patch) {
     if (!updated.scheduledDate) updated.scheduledTime = "";
     updated.plannedAt = combineLocalPlannedAt(updated.scheduledDate, updated.scheduledTime);
