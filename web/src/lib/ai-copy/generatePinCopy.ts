@@ -192,7 +192,6 @@ export function resolveDirectionContext(
 
 export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyInput): Promise<GeneratePinterestPinCopyResult> {
   const started = performance.now();
-  const country = input.country ?? readPinterestRegionFromStorage();
   const storeDraft = findStoreDraft(input.draftId, input.imageUrl);
   const previousMeta = storeDraft?.metadataDraft?.copyGenerationMeta;
   // Mode: caller override wins; else derive from whether copy was generated before.
@@ -222,6 +221,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   };
 
   if (isAICopyV2ClientEnabled()) {
+    const country = input.country ?? readPinterestRegionFromStorage();
     const v2 = await generatePinterestPinCopyV2({
       draftId: input.draftId,
       locale: input.language,
@@ -330,7 +330,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       category: input.category,
       keyword: input.keyword,
       language: input.language,
-      country,
+      country: input.country,
       length: input.length,
       mode,
       attempt,
@@ -475,7 +475,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       keywordTermsUsed: body.context?.keywordContext ?? [],
       boardId: input.boardId || undefined,
       language: input.language,
-      country,
+      country: input.country,
       contextSummary: body.contextSummary || "Based on generated context",
       contextDetails: body.contextDetails ?? [],
       timingsMs,

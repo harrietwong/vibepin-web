@@ -6,7 +6,9 @@ import {
   generatePinterestPinCopyV2,
   isAICopyV2ClientEnabled,
   keywordProvenanceLabel,
+  shouldConfirmAICopyV2Overwrite,
 } from "../src/lib/ai-copy/generatePinCopyV2";
+import { generatePinterestPinCopy } from "../src/lib/ai-copy/generatePinCopy";
 
 async function main() {
   assert.equal(isAICopyV2ClientEnabled("true"), true);
@@ -15,6 +17,33 @@ async function main() {
   assert.equal(keywordProvenanceLabel("official"), "Official");
   assert.equal(keywordProvenanceLabel("estimated"), "Estimated");
   assert.equal(keywordProvenanceLabel("unknown"), "Data unknown");
+  assert.equal(shouldConfirmAICopyV2Overwrite(["Existing title"], true), true);
+  assert.equal(shouldConfirmAICopyV2Overwrite(["Existing title"], false), false, "flag-off Batch keeps the legacy no-confirm behavior");
+  assert.equal(shouldConfirmAICopyV2Overwrite(["", "  ", undefined], true), false);
+
+  const originalClientFlag = process.env.NEXT_PUBLIC_AI_COPY_V2;
+  const originalFetch = globalThis.fetch;
+  let legacyBody: Record<string, unknown> = {};
+  process.env.NEXT_PUBLIC_AI_COPY_V2 = "false";
+  globalThis.fetch = (async (_input, init) => {
+    legacyBody = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(JSON.stringify({
+      ok: true,
+      output: { title: "Legacy title", description: "Legacy description", altText: "Legacy alt", tags: [] },
+      context: { keywordContext: [] },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await generatePinterestPinCopy({
+      draftId: "legacy-flag-off", imageUrl: "https://example.test/legacy.png", language: "en",
+      imageAnalysis: { imageSummary: "A lamp", visibleObjects: ["lamp"], colors: ["white"], style: "minimal", ocrText: "", category: "decor" },
+    });
+    assert.equal("country" in legacyBody, false, "flag-off legacy request does not gain a default country");
+  } finally {
+    if (originalClientFlag == null) delete process.env.NEXT_PUBLIC_AI_COPY_V2;
+    else process.env.NEXT_PUBLIC_AI_COPY_V2 = originalClientFlag;
+    globalThis.fetch = originalFetch;
+  }
 
   const payload = buildAICopyV2AnalyzePayload({
     draftId: "draft-1", locale: "en", country: "us", idempotencyKey: "analyze-1",
@@ -108,11 +137,13 @@ async function main() {
   const sharedHelper = readFileSync(resolve(process.cwd(), "src/lib/ai-copy/generatePinCopy.ts"), "utf8");
   assert.match(sharedHelper, /if \(isAICopyV2ClientEnabled\(\)\)/, "v2 branches in the Studio\/Plan\/Batch shared helper");
   assert.match(sharedHelper, /fetch\("\/api\/ai-copy"/, "legacy endpoint remains available when the flag is off");
-  assert.match(sharedHelper, /input\.country \?\? readPinterestRegionFromStorage\(\)/, "shared callers use the user's Pinterest region instead of silently defaulting to US");
+  assert.match(sharedHelper, /if \(isAICopyV2ClientEnabled\(\)\) \{\s+const country = input\.country \?\? readPinterestRegionFromStorage\(\)/, "v2 uses the user's Pinterest region instead of silently defaulting to US");
+  assert.match(sharedHelper, /fetch\("\/api\/ai-copy"[\s\S]*?country: input\.country,/, "flag-off legacy request keeps its original optional country semantics");
   const batch = readFileSync(resolve(process.cwd(), "src/components/studio/BatchEditDrawer.tsx"), "utf8");
   assert.match(batch, /generatePinterestPinCopy\(/, "Batch keeps using the shared helper");
   assert.match(batch, /pinsWithExistingCopy/, "Batch detects generated copy that would overwrite existing user copy");
   assert.match(batch, /pinForm\.replaceExistingTitle/, "Batch reuses the explicit overwrite confirmation before generation");
+  assert.match(batch, /if \(!isAICopyV2ClientEnabled\(\)\) \{\s+void runGenerateCopyBatch\(\)/, "flag-off Batch preserves the legacy immediate generation path");
 
   console.log("AI Copy v2 UI/client tests passed");
 }

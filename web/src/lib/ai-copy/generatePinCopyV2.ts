@@ -32,6 +32,10 @@ export function isAICopyV2ClientEnabled(value = process.env.NEXT_PUBLIC_AI_COPY_
   return value === "true";
 }
 
+export function shouldConfirmAICopyV2Overwrite(values: Array<string | null | undefined>, enabled = isAICopyV2ClientEnabled()): boolean {
+  return enabled && values.some(value => Boolean(value?.trim()));
+}
+
 export function keywordProvenanceLabel(provenance: KeywordProvenance): string {
   if (provenance === "official") return "Official";
   if (provenance === "estimated") return "Estimated";

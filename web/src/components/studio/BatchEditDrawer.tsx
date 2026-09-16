@@ -29,6 +29,8 @@ import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
 import { buildPublishConfirmation, confirmPublishSnapshot, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
+import type { PinterestClientError } from "@/lib/pinterestClient";
+import { isAICopyV2ClientEnabled, shouldConfirmAICopyV2Overwrite } from "@/lib/ai-copy/generatePinCopyV2";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput } from "@/lib/pinReadiness";
 import { combineLocalPlannedAt } from "@/lib/weeklyPlanHandoff";
@@ -1125,13 +1127,19 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
 
   const handleGenerateCopyBatch = useCallback(() => {
     if (genProgress) return;
+    // Preserve the legacy flag-off behavior exactly. The explicit overwrite gate
+    // is part of the v2 rollout only.
+    if (!isAICopyV2ClientEnabled()) {
+      void runGenerateCopyBatch();
+      return;
+    }
     const targets = pins.filter(pin => checkedRows.has(pin.pinId));
     if (!targets.length) return;
-    const pinsWithExistingCopy = targets.filter(pin =>
-      ["title", "description", "altText"].some(field =>
-        getVal(pin, rowEdits, field as "title" | "description" | "altText").trim(),
-      ),
-    );
+    const pinsWithExistingCopy = targets.filter(pin => shouldConfirmAICopyV2Overwrite([
+      getVal(pin, rowEdits, "title"),
+      getVal(pin, rowEdits, "description"),
+      getVal(pin, rowEdits, "altText"),
+    ]));
     if (pinsWithExistingCopy.length) {
       setConfirm({
         title: tr("pinForm.replaceExistingTitle"),
