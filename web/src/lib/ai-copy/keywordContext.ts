@@ -22,6 +22,12 @@ export type KeywordRow = {
   volume_score?: number | null;
   priority_score?: number | null;
   region?: string | null;
+  data_quality?: string | null;
+  language?: string | null;
+  locale?: string | null;
+  source?: string | null;
+  source_layer?: string | null;
+  country?: string | null;
 };
 
 export type ScoredKeyword = {
