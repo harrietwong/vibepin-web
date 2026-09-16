@@ -39,12 +39,13 @@
 - RED: a stable item-idempotency conflict returned 502 instead of 409.
 - RED: bearer-only production route wiring, incorrect `Vary`, malformed/truncated/fake-brand `ftyp`, upstream 500/wrong range, playback MIME/range/total lies, and short streams were accepted by the prior focused contract.
 - RED: browser SHA-256 invoked the test Blob's forbidden whole-file `arrayBuffer()`.
-- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 115 assertions, no failures.
+- RED: rollback accepted `capability_expires_at` nullability drift and revoked service writes instead of stopping before mutation.
+- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 116 assertions, no failures.
 - GREEN: `test-video-upload-private.ts` reports 27 passed, 0 failed after the final production/client/cleanup tests.
 
 ## Verification
 
-- v77 PGlite: 115/115, pass; additionally covers durable capability cleanup creation, delayed scheduling, atomic successful settlement, failure preservation, and cleanup evidence across rollback/reapply.
+- v77 PGlite: 116/116, pass; additionally covers durable capability cleanup creation, delayed scheduling, atomic successful settlement, failure preservation, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry shape drift before privilege mutation.
 - v76 PGlite: 280/280 across two rounds, pass.
 - v75 PGlite: 65 assertions with no failures; expected pre-existing `deployment_blocked` result remains for the legacy broad Storage policy.
 - Media privacy architecture: 16/16, pass.

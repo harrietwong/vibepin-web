@@ -2,7 +2,7 @@
 -- and restore v76's original image-only MIME guard for a clean v76 reapply.
 begin;
 do $v77_rollback_preflight$
-declare v_name text;
+declare v_name text; v_type text; v_not_null boolean;
 begin
   foreach v_name in array array['video_upload_batches','video_upload_items'] loop
     if to_regclass('public.' || v_name) is not null
@@ -10,6 +10,14 @@ begin
       raise exception using errcode='P0001',message='v77_rollback_collision';
     end if;
   end loop;
+  if to_regclass('public.video_upload_items') is not null then
+    select format_type(a.atttypid,a.atttypmod),a.attnotnull into v_type,v_not_null
+      from pg_attribute a where a.attrelid='public.video_upload_items'::regclass
+        and a.attname='capability_expires_at' and a.attnum>0 and not a.attisdropped;
+    if not found or v_type is distinct from 'timestamp with time zone' or not v_not_null then
+      raise exception using errcode='P0001',message='v77_rollback_collision';
+    end if;
+  end if;
 end $v77_rollback_preflight$;
 do $v77_restore_v76_mime$
 declare v_signature text; v_definition text; v_marker text; v_hash text; v_proc pg_proc%rowtype; v_old text := '(''image/png'',''image/jpeg'',''image/webp'',''video/mp4'',''video/x-m4v'',''video/quicktime'')'; v_new text := '(''image/png'',''image/jpeg'',''image/webp'')';

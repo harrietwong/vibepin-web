@@ -537,6 +537,19 @@ async function collisionRejections() {
     const db = await dbWithV76();
     try {
       await db.exec(migration);
+      await db.exec("alter table public.video_upload_items alter column capability_expires_at drop not null");
+      const before = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      const rollbackError = await rejected(() => db.exec(rollback));
+      await db.exec("rollback");
+      const after = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      assert(rollbackError?.message === "v77_rollback_collision" && before.service_insert && after.service_insert,
+        "rollback rejects capability-expiry shape drift before revoking service writes");
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
       const signature = "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)";
       const before = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
       await db.exec(`comment on function ${signature} is null`);
