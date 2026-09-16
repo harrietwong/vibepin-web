@@ -54,10 +54,26 @@ export function isPublishableImage(url: string | null | undefined): boolean {
   return true;
 }
 
+/** A finalized private video is intentionally a relative app proxy URL. */
+function isPublishableVideo(url: string | null | undefined): boolean {
+  const value = clean(url);
+  if (isPublishableImage(value)) return true;
+  if (!value.startsWith("/api/storage-media?")) return false;
+  try {
+    const parsed = new URL(value, "https://vibepin.invalid");
+    return parsed.pathname === "/api/storage-media" && Boolean(parsed.searchParams.get("path")?.trim());
+  } catch {
+    return false;
+  }
+}
+
 /** Video readiness relies on the discriminated protected-media URL, not imageUrl. */
 export function isPublishableContentMedia(draft: ReadinessInput): boolean {
   const media = contentMedia({ id: draft.id ?? "readiness", imageUrl: draft.imageUrl ?? "", media: draft.media });
-  return isPublishableImage(media[0]?.url ?? draft.imageUrl);
+  const cover = media[0];
+  return cover?.kind === "video"
+    ? isPublishableVideo(cover.url)
+    : isPublishableImage(cover?.url ?? draft.imageUrl);
 }
 
 // Hosts Pinterest's servers can never reach — kept in sync with the server gate in

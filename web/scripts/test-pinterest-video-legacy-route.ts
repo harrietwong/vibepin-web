@@ -55,6 +55,34 @@ async function main() {
   assert.equal((await response.json()).code, "materialization_required");
   assert.equal(legacyProviderCalls, 0);
   console.log("OK actual POST route rejects video/mixed legacy bypass before provider");
+
+  // The same frozen receipt must be rejected by the feature kill switch before any
+  // durable DB/storage/provider work, even if an older client reaches this route.
+  process.env.VIDEO_PIN_UPLOAD_ENABLED = "false";
+  const disabledSnapshot = buildPublishConfirmation({
+    id: "video-disabled",
+    contentId: "video-disabled",
+    updatedAt: new Date().toISOString(),
+    title: "Video Pin",
+    description: "",
+    altText: "",
+    destinationUrl: "",
+    media: [media[0]],
+    imageUrl: media[0].url,
+    scheduledDestinations: [{ provider: "pinterest", socialConnectionId: connectionId, boardId: "board-1" }],
+  } as never, { mode: { kind: "now" }, actionId: "videodisabled01" });
+  const disabled = await POST(new Request("https://vibepin.invalid/api/pinterest/pins", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      draftId: "video-disabled", boardId: "board-1", connectionId, destinationId,
+      title: "Video Pin", imageUrls: [media[0].url], confirmation: confirmPublishSnapshot(disabledSnapshot),
+    }),
+  }));
+  assert.equal(disabled.status, 404);
+  assert.equal((await disabled.json()).code, "video_upload_disabled");
+  assert.equal(legacyProviderCalls, 0);
+  console.log("OK immediate video publishing kill switch blocks before durable work");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {

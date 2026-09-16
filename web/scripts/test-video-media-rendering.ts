@@ -94,6 +94,33 @@ test("video-only draft readiness survives the Weekly Plan projection", () => {
   assert(isPinReady(draftReadiness(videoDraft)), "Weekly Plan projection wrongly blocks a video-only draft");
 });
 
+test("a finalized private video locator is publish-ready without passing through image URL validation", () => {
+  const finalizedVideo = {
+    id: "finalized-video-draft",
+    imageUrl: "",
+    boardId: "board-1",
+    media: [{
+      id: "video-1",
+      kind: "video",
+      url: "/api/storage-media?path=user-1%2Fclip.mp4",
+      source: "upload",
+    }],
+  } as PinDraft;
+  assert(isPinReady(finalizedVideo), "real finalized /api/storage-media video must pass readiness");
+});
+
+test("the cron release lock is bound to this worker's claim identity", () => {
+  const cron = source("src/app/api/cron/publish-due/route.ts");
+  assert(cron.includes('.eq("publish_claimed_at", row.publish_claimed_at)'), "cron release must compare the claim identity");
+  assert(cron.includes('.eq("scheduled_at", row.scheduled_at)'), "cron release must compare the scheduled revision");
+});
+
+test("a video media strip never offers the image Add input", () => {
+  const strip = source("src/components/studio/ContentMediaStrip.tsx");
+  assert(strip.includes("const containsVideo = media.some(item => item.kind === \"video\")"), "video detection missing");
+  assert(strip.includes("!containsVideo && <input"), "video strip must not render the image Add input");
+});
+
 test("Plan preserves the established image thumbnail contract while sharing video rendering", () => {
   const plan = source("src/components/plan/WeeklyPlanWorkspace.tsx");
   const hover = source("src/components/plan/PinHoverPreview.tsx");

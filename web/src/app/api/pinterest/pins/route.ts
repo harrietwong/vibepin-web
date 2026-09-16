@@ -130,6 +130,12 @@ export async function POST(req: Request) {
       code: "materialization_required",
     }, { status: 409 });
   }
+  // Video publishing has a single kill switch shared with prepare/finalize. Keep this
+  // ahead of the durable preflight so a disabled feature cannot claim, meter, or touch
+  // private storage while an old client still has a frozen video receipt.
+  if (confirmedKind === "video" && process.env.VIDEO_PIN_UPLOAD_ENABLED !== "true") {
+    return Response.json({ error: "Video Pin upload is disabled.", code: "video_upload_disabled" }, { status: 404 });
+  }
   if (confirmedKind === "image" && imageUrls.some(url => requiresPublishAsset(url, new URL(req.url).origin))) {
     return Response.json({
       error: "Publish media asset is not materialized for provider delivery.",

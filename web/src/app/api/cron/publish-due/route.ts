@@ -106,6 +106,8 @@ type DueRow = {
   scheduled_at: string | null;
   /** Exact database revision frozen into the due-time v76 confirmation. */
   updated_at: string;
+  /** Exact claim timestamp returned by the conditional UPDATE. */
+  publish_claimed_at?: string | null;
 };
 
 function payloadMedia(payload: Record<string, unknown>): Array<Record<string, unknown>> {
@@ -260,9 +262,14 @@ export async function GET(req: Request): Promise<Response> {
   // Private video is resolved by the owner-scoped v76 materializer after claim.
   // Protected legacy images and mixed/multi-video shapes still defer before claim.
   const requestOrigin = new URL(req.url).origin;
+  const videoUploadEnabled = process.env.VIDEO_PIN_UPLOAD_ENABLED === "true";
   const safeCandidates = candidates.filter(row => {
     const mediaRows = payloadMedia(row.payload);
-    if (mediaRows.some(item => item.kind === "video")) return isSingleVideoPayload(row.payload);
+    if (mediaRows.some(item => item.kind === "video")) {
+      // Complete video kill switch: leave the schedule untouched and defer until the
+      // feature is enabled again. Images retain the existing path unchanged.
+      return videoUploadEnabled && isSingleVideoPayload(row.payload);
+    }
     const media = publishMediaUrls(row.payload);
     return !media.some(url => requiresPublishAsset(url, requestOrigin));
   });
@@ -314,7 +321,7 @@ export async function GET(req: Request): Promise<Response> {
       .is("deleted_at", null)
       .is("archived_at", null)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
-      .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at");
+      .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at, publish_claimed_at");
 
     if (claimError) {
       // A schema hiccup mid-run: treat as un-claimable, don't crash the batch.
@@ -326,7 +333,13 @@ export async function GET(req: Request): Promise<Response> {
       skipped++; // lost the race to another worker / already-claimed
       continue;
     }
-    const row = won[0] as DueRow;
+    const claimedRow = won[0] as DueRow;
+    const row = {
+      ...claimedRow,
+      // Prefer Postgres's returned value (it may include microseconds); the local
+      // value is only a hermetic-test fallback when a fake omits the selected field.
+      publish_claimed_at: claimedRow.publish_claimed_at ?? claimIso,
+    } as DueRow;
     claimedCount++;
     // No clock is captured here on purpose. Every persist below re-reads the row and
     // stamps itself at WRITE time (persistRow.ts): a timestamp taken now would already
@@ -356,6 +369,7 @@ export async function GET(req: Request): Promise<Response> {
     let meterFresh = false;
     const meterReference = typeof row.draft_id === "string" ? row.draft_id : null;
     const deliveries: DeliveryOutcome[] = [];
+    const isVideoRow = isSingleVideoPayload(row.payload);
     const settleMetering = async (): Promise<void> => {
       if (!meterKey) return;
       // ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ──
@@ -439,7 +453,7 @@ export async function GET(req: Request): Promise<Response> {
         failed++;
         continue;
       }
-      const videoReceipt = isSingleVideoPayload(row.payload) && row.scheduled_at
+      const videoReceipt = isVideoRow && row.scheduled_at
         ? buildDueVideoReceipt({
           draftId: row.draft_id,
           updatedAt: row.updated_at,
@@ -669,7 +683,7 @@ export async function GET(req: Request): Promise<Response> {
           // (409/401) that no provider sent, so reading it as a provider rejection
           // would be exactly the mistake the two-field rule forbids.
           deliveries.push(
-            err instanceof NotConnectedError || err instanceof NeedsReconnectError
+            videoReceipt || err instanceof NotConnectedError || err instanceof NeedsReconnectError
               ? classifyDelivery({ preNetwork: true })
               : classifyDelivery(readProviderSignal(err)),
           );
@@ -863,7 +877,7 @@ export async function GET(req: Request): Promise<Response> {
       // settle: if nothing was charged (`meterKey` still null, e.g. an unpublishable
       // payload) this is a no-op. The trial-access branch above already returned.
       deliveries.push(
-        err instanceof NotConnectedError || err instanceof NeedsReconnectError
+        err instanceof NotConnectedError || err instanceof NeedsReconnectError || isVideoRow
           ? classifyDelivery({ preNetwork: true })
           : classifyDelivery(readProviderSignal(err)),
       );
@@ -971,10 +985,15 @@ async function persistFailure(
 /** Release only the claim lock, leaving payload/scheduled_at untouched — used for the
  *  trial-access exemption (not a failure, just "not yet"; the row must remain due). */
 async function releaseClaim(db: ReturnType<typeof createServerClient>, row: DueRow): Promise<void> {
-  const { error } = await db
+  let query = db
     .from(TABLE)
     .update({ publish_claimed_at: null })
     .eq("vibepin_user_id", row.vibepin_user_id)
-    .eq("draft_id", row.draft_id);
+    .eq("draft_id", row.draft_id)
+    .eq("scheduled_at", row.scheduled_at);
+  // Never let an old worker clear a newer worker's claim. The claim timestamp is
+  // returned by the conditional UPDATE and is the identity of this run's lock.
+  if (row.publish_claimed_at) query = query.eq("publish_claimed_at", row.publish_claimed_at);
+  const { error } = await query;
   if (error) console.error("[cron/publish-due] release claim error:", error.message);
 }

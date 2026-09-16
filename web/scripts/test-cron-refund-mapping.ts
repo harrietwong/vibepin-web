@@ -74,6 +74,7 @@ let publishPinBehaviour: () => Promise<unknown> = async () => ({
   connectionId: "conn-pin-1",
 });
 let publishPinCalls = 0;
+let videoDispatchBehaviour: () => Promise<unknown> = async () => ({ outcome: "published", remoteId: "video-1", retryAllowed: false });
 
 /** What fanOutDestinations resolves to. Empty unless a test wants a social target. */
 let fanOutBehaviour: () => Promise<unknown[]> = async () => [];
@@ -157,6 +158,9 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
       },
     };
   }
+  if (request === "@/lib/server/publish/v76PinterestVideoServer" || request.endsWith("/lib/server/publish/v76PinterestVideoServer")) {
+    return { dispatchSupabaseV76PinterestVideo: async () => videoDispatchBehaviour() };
+  }
   if (request === "./ensureAccount" || request.endsWith("/usage/ensureAccount")) {
     return { ensureUsageAccount: async () => ({ ok: true, action: "noop" }) };
   }
@@ -190,6 +194,7 @@ async function test(name: string, fn: () => Promise<void>) {
     environment: "production", connectionId: "conn-pin-1",
   });
   fanOutBehaviour = async () => [];
+  videoDispatchBehaviour = async () => ({ outcome: "published", remoteId: "video-1", retryAllowed: false });
   process.env.USAGE_METERING_MODE = "shadow";
   delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
   try { await fn(); console.log(`  PASS  ${name}`); passed++; }
@@ -238,6 +243,41 @@ function assertNotReleased(): void {
     assert.equal(consumeCalls().length, 1, "one charge for the row");
     assert.equal(consumeCalls()[0].args.p_idempotency_key, KEY, "keyed on (draft, scheduled_at)");
     assertNotReleased();
+  });
+
+  await test("video pre-provider materialization failure is not_sent and REFUNDS", async () => {
+    process.env.VIDEO_PIN_UPLOAD_ENABLED = "true";
+    duePayload = {
+      boardId: "b1", imageUrl: "",
+      media: [{ id: "video-1", kind: "video", source: "upload", url: `/api/storage-media?path=${OWNER}%2Fclip.mp4` }],
+      targetConnectionId: "conn-pin-1",
+      scheduledDestinations: [
+        { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+      ],
+    };
+    videoDispatchBehaviour = async () => { throw new Error("private storage read failed"); };
+    await GET(cronReq());
+    assertReleased("not_sent", KEY);
+    delete process.env.VIDEO_PIN_UPLOAD_ENABLED;
+  });
+
+  await test("scheduled video kill switch defers without claiming or charging", async () => {
+    process.env.VIDEO_PIN_UPLOAD_ENABLED = "false";
+    duePayload = {
+      boardId: "b1", imageUrl: "",
+      media: [{ id: "video-1", kind: "video", source: "upload", url: `/api/storage-media?path=${OWNER}%2Fclip.mp4` }],
+      targetConnectionId: "conn-pin-1",
+      scheduledDestinations: [
+        { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+      ],
+    };
+    const response = await GET(cronReq());
+    const body = await response.json() as { claimed: number; deferred: number };
+    assert.equal(body.claimed, 0);
+    assert.equal(body.deferred, 1);
+    assert.equal(consumeCalls().length, 0, "disabled scheduled video must not be metered");
+    assert.equal(updates.length, 0, "disabled scheduled video must not claim or mutate the row");
+    delete process.env.VIDEO_PIN_UPLOAD_ENABLED;
   });
 
   await test("not_sent: a typed publishPinForUser failure REFUNDS the exact key charged", async () => {
