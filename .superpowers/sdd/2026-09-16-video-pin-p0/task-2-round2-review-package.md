@@ -32,9 +32,9 @@ index cdbf5818..6f6f7f0d 100644
 @@ -1,38 +1,63 @@
 -# Task 2 Implementer Report — Private Direct Video Upload And Finalization
 +# Task 2 Implementer Report — Atomic Finalization And Review Remediation
- 
+
  ## Scope And Base
- 
+
 -- Base: `d7635c02` (`04b0ebe0b7b292d6fa2432f6a064740b30314447` integration lineage).
 +- Review baseline: `5f5fe502968f96effb7fc9be9b9fd372d6520512`.
 +- Atomic-state/fact-contract implementation commit: `d47f6bcddd9164b680fbdffae286adec387fda04`.
@@ -69,9 +69,9 @@ index cdbf5818..6f6f7f0d 100644
 +- Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
 +- Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
 +- Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
- 
+
  ## TDD Evidence
- 
+
 -- RED 1: missing pure handlers produced `ERR_MODULE_NOT_FOUND` before implementation.
 -- RED 2: an injected upstream response longer than the requested range was exposed by the proxy; the new bounded range stream makes the focused test reject it.
 -- RED 3: an unrecognised provenance lifecycle was served; the proxy now admits only explicit allowed lifecycle states.
@@ -111,9 +111,9 @@ index cdbf5818..6f6f7f0d 100644
 +## Remaining Review Items
 +
 +- None from the supplied C1/I1-I7 and Minor review list. The known v75 deployment blocker remains external to Task 2: a pre-existing broad permissive `storage.objects` policy must be audited before deployment.
- 
+
  ## External-Call Attestation
- 
+
 -All tests use injected local adapters and mocked `Response` objects. No real Supabase database, Storage, Pinterest, token refresh, migration, deployment, push, merge, or Production action was performed.
 -
 -## Risks / Follow-up Boundaries
@@ -277,7 +277,7 @@ index 4032f445..136f5320 100644
      if not v_active_privileges and not v_rollback_privileges then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
    end if;
  end $v77_preflight$;
- 
+
  create table if not exists public.video_upload_batches (
    id uuid primary key default gen_random_uuid(),
    owner_user_id uuid not null,
@@ -340,7 +340,7 @@ index 4032f445..136f5320 100644
 @@ -247,32 +273,57 @@ comment on table public.video_upload_items is 'vibepin:v77:video-upload-items';
  create index if not exists video_upload_batches_owner_status_idx on public.video_upload_batches(owner_user_id,status,updated_at desc);
  create index if not exists video_upload_items_owner_batch_idx on public.video_upload_items(owner_user_id,batch_id,ordinal);
- 
+
  alter table public.media_asset_provenance add column if not exists media_kind text not null default 'image';
  alter table public.media_asset_provenance add column if not exists content_type text;
  alter table public.media_asset_provenance add column if not exists byte_size bigint;
@@ -385,12 +385,12 @@ index 4032f445..136f5320 100644
 +    );
 +  end if;
 +end $v77_provenance_fact_sources$;
- 
+
  alter table public.video_upload_batches enable row level security;
  alter table public.video_upload_items enable row level security;
  revoke all on public.video_upload_batches,public.video_upload_items from public,anon,authenticated,service_role;
  grant select,insert,update,delete on public.video_upload_batches,public.video_upload_items to service_role;
- 
+
  -- Only server callers receive these RPCs. Their owner argument is server-derived
  -- from the authenticated request or parent intent; no browser role can call them.
  create or replace function public.video_upload_batch_prepare(
@@ -398,7 +398,7 @@ index 4032f445..136f5320 100644
 @@ -296,128 +347,269 @@ exception when others then
  end $fn$;
  comment on function public.video_upload_batch_prepare(uuid,text,timestamptz) is 'vibepin:v77:video-upload-batch-prepare';
- 
+
  create or replace function public.video_upload_item_prepare(
    p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_idempotency_key text,p_private_path text,
    p_declared_content_type text,p_declared_byte_size bigint,p_declared_checksum_sha256 text,
@@ -489,7 +489,7 @@ index 4032f445..136f5320 100644
      else 'v77_video_upload_error' end;
  end $fn$;
  comment on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) is 'vibepin:v77:video-upload-item-prepare';
- 
+
 +create or replace function public.video_upload_item_claim(
 +  p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_claim_token uuid,p_claim_expires_at timestamptz
 +) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
@@ -697,7 +697,7 @@ index 4032f445..136f5320 100644
  end $fn$;
 -comment on function public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint) is 'vibepin:v77:video-upload-item-finalize';
 +comment on function public.video_upload_item_fail(uuid,uuid,integer,uuid,text) is 'vibepin:v77:video-upload-item-fail';
- 
+
  -- v76 remains the provider settlement boundary. Replace only its MIME literals;
  -- all private-bucket, owner, checksum, revision, lease, claim and settlement code stays byte-for-byte intact.
  do $v77_v76_video_mime$
@@ -715,7 +715,7 @@ index 4032f445..136f5320 100644
      execute v_definition;
    end loop;
  end $v77_v76_video_mime$;
- 
+
  revoke all on function public.video_upload_batch_prepare(uuid,text,timestamptz) from public,anon,authenticated;
  revoke all on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) from public,anon,authenticated;
 -revoke all on function public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint) from public,anon,authenticated;
@@ -840,7 +840,7 @@ index 21444846..0a531e2b 100644
          && row.type === type && row.attnotnull === required && row.default_value === defaultValue),
        `schema inventory owns ${table}.${column} type/nullability/default`);
      }
- 
+
      const provenanceColumns = (await db.query(`select attname from pg_attribute
        where attrelid='public.media_asset_provenance'::regclass and not attisdropped`)).rows.map(row => row.attname);
 -    for (const column of ["media_kind", "content_type", "byte_size", "checksum_sha256", "width", "height", "duration_ms"]) {
@@ -851,7 +851,7 @@ index 21444846..0a531e2b 100644
      const legacy = await db.query("select media_kind,content_type,byte_size,duration_ms from public.media_asset_provenance where object_path=$1", [`${A}/legacy.png`]);
      assert(JSON.stringify(legacy.rows[0]) === JSON.stringify({ media_kind: "image", content_type: null, byte_size: null, duration_ms: null }),
        "old provenance rows remain valid images without historical data loss");
- 
+
      const one = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
      const again = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
      const otherOwner = await asRole(db, "service_role", () => prepareBatch(db, B, "batch-key"));
@@ -985,7 +985,7 @@ index 21444846..0a531e2b 100644
 -    assert(changedPrepare?.message === "video_upload_item_idempotency_conflict", "replay conflicts whenever immutable declared facts differ");
 +    const canceledClaim = await asRole(db, "service_role", () => rejected(() => claimItem(db, A, terminalBatch.batchId, 0, claimToken)));
 +    assert(canceledClaim?.message === "video_upload_batch_not_finalizable", "claim cannot revive a canceled batch");
- 
+
      const crossOwner = await asRole(db, "service_role", () => rejected(() => prepareItem(db, B, one.batchId, 1, "foreign-item")));
      assert(crossOwner?.message === "video_upload_batch_not_found", "a service parent cannot write another owner's batch");
      const tooMany = await asRole(db, "service_role", () => rejected(() => prepareItem(db, A, one.batchId, 20, "ordinal-20")));
@@ -1001,7 +1001,7 @@ index 21444846..0a531e2b 100644
 +      $1,$2,1,'too-long',$3,'video/mp4',1024,$4,1080,1920,300001)`, [A, durationBatch.batchId, `${A}/long.mp4`, "a".repeat(64)])));
 +    assert(shortDuration?.message === "invalid_declared_video_facts" && longDuration?.message === "invalid_declared_video_facts",
 +      "the database shares the 4-second through 5-minute declared duration boundary");
- 
+
      await db.exec(`set role authenticated; set "request.jwt.claim.sub"='${A}';`);
      const directBatchWrite = await rejected(() => db.query("insert into public.video_upload_batches(owner_user_id,idempotency_key,expires_at) values($1,'client-write',now())", [A]));
      const directItemWrite = await rejected(() => db.query("insert into public.video_upload_items(batch_id,owner_user_id,ordinal,idempotency_key,private_path,declared_content_type,declared_byte_size) values($1,$2,1,'client-item','x','video/mp4',1)", [one.batchId, A]));
@@ -1013,7 +1013,7 @@ index 21444846..0a531e2b 100644
 -    assert(directBatchWrite && directItemWrite && clientRpc, "clients have neither direct writes nor RPC write access");
 +    assert(directBatchWrite && directItemWrite && clientRpc && clientClaimRpc && clientFinalizeRpc && clientFailRpc,
 +      "clients have neither direct writes nor any claim/finalize/fail RPC write access");
- 
+
      for (const mime of ["video/mp4", "video/x-m4v", "video/quicktime"]) {
        const result = await asRole(db, "service_role", () => rejected(() => db.query(
          "select public.publish_asset_settle_item($1,'missing-intent','missing-destination',$2,'media-0',0,'generated-private',$3,$4,1,$5)",
@@ -1030,7 +1030,7 @@ index 21444846..0a531e2b 100644
        [A, "33333333-3333-4333-8333-333333333331", `${A}/missing.webm`, "b".repeat(64)],
      )));
      assert(materializationRejected?.message === "invalid_content_type", "the legacy single-item settlement rejects unapproved video MIME before the lease check");
- 
+
      const beforeRollback = await db.query(`select jsonb_build_object(
        'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
        'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
@@ -1121,7 +1121,7 @@ index ed2735c1..90b355e7 100644
 @@ -1,208 +1,418 @@
  import assert from "node:assert/strict";
 +import Module from "node:module";
- 
+
  const OWNER = "00000000-0000-4000-8000-000000000001";
  const OTHER_OWNER = "00000000-0000-4000-8000-000000000002";
  const SHA = "a".repeat(64);
@@ -1131,23 +1131,23 @@ index ed2735c1..90b355e7 100644
 +  0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0,
 +  0x69, 0x73, 0x6f, 0x32,
 +]);
- 
+
  let passed = 0;
  async function test(name: string, fn: () => Promise<void> | void) {
    await fn();
    passed += 1;
    console.log(`  OK ${name}`);
  }
- 
+
  function request(url: string, body?: unknown, headers: HeadersInit = {}) {
    return new Request(url, { method: "POST", headers: { "content-type": "application/json", "x-request-id": "req_1", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
  }
- 
+
  function descriptor(ordinal = 0, overrides: Record<string, unknown> = {}) {
 -  return { ordinal, idempotencyKey: `item_${ordinal}`, filename: "clip.mp4", contentType: "video/mp4", byteSize: 12, checksumSha256: SHA, width: 1080, height: 1920, durationMs: 5_000, ...overrides };
 +  return { ordinal, idempotencyKey: `item_${ordinal}`, filename: "clip.mp4", contentType: "video/mp4", byteSize: MP4_FTYP.byteLength, checksumSha256: SHA, width: 1080, height: 1920, durationMs: 5_000, ...overrides };
  }
- 
+
  function preparedItem(overrides: Record<string, unknown> = {}) {
 -  return { batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, status: "prepared", privatePath: `${OWNER}/video/a.mp4`, declaredContentType: "video/mp4", declaredByteSize: 12, declaredChecksumSha256: SHA, declaredWidth: 1080, declaredHeight: 1920, declaredDurationMs: 5_000, expiresAt: "2099-01-01T00:00:00.000Z", ...overrides };
 +  return { batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, status: "prepared", privatePath: `${OWNER}/video/a.mp4`, declaredContentType: "video/mp4", declaredByteSize: MP4_FTYP.byteLength, declaredChecksumSha256: SHA, declaredWidth: 1080, declaredHeight: 1920, declaredDurationMs: 5_000, expiresAt: "2099-01-01T00:00:00.000Z", ...overrides };
@@ -1165,13 +1165,13 @@ index ed2735c1..90b355e7 100644
 +    ...overrides,
 +  };
  }
- 
+
  async function main() {
    const { handleVideoUploadPrepare, handleVideoUploadFinalize } = await import("../src/lib/server/media/videoUploadHandler");
 +  const { createVideoUploadStore } = await import("../src/lib/server/media/videoUploadStore");
 +  const { createSupabaseVideoStorage } = await import("../src/lib/server/media/supabaseVideoStorage");
    const { handleStorageMediaGet } = await import("../src/lib/server/media/storageMediaHandler");
- 
+
 +  await test("production Storage adapter never promotes uploader-controlled SHA metadata", async () => {
 +    const storage = createSupabaseVideoStorage({ supabaseUrl: "https://storage.invalid", serviceRoleKey: "test-key",
 +      fetchImpl: async () => new Response(null, { status: 200, headers: { "content-length": "12", "content-type": "video/mp4", "x-amz-meta-sha256": SHA } }) });
@@ -1280,7 +1280,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(effects, 0);
      assert.deepEqual(await response.json(), { code: "unauthorized", requestId: "" });
    });
- 
+
    await test("feature and configuration gates deny prepare before database or Storage work", async () => {
      let effects = 0;
 -    const base = { getUserId: async () => OWNER, store: { prepareBatch: async () => { effects++; return { batchId: "unexpected" }; }, prepareItem: async () => ({ status: "prepared" }), findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} }, createSignedUpload: async () => { effects++; return { token: "unexpected", signedUrl: "https://storage.test/unexpected" }; } };
@@ -1291,7 +1291,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(unconfigured.status, 503);
      assert.equal(effects, 0);
    });
- 
+
    await test("prepare bounds the batch and rejects unsafe facts before issuing capabilities", async () => {
      let signed = 0;
      const deps = {
@@ -1309,7 +1309,7 @@ index ed2735c1..90b355e7 100644
      }
      assert.equal(signed, 0);
    });
- 
+
    await test("prepare creates owner-scoped paths, uses upsert false, and never puts a token in an error", async () => {
      const calls: unknown[] = [];
      const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_1", files: [descriptor()] }), {
@@ -1331,7 +1331,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(body.uploads[0].path, `${OWNER}/videos/11111111-1111-4111-8111-111111111111/0.mp4`);
      assert.deepEqual(calls.at(-1), { bucket: "generated-private", path: body.uploads[0].path, contentType: "video/mp4", upsert: false });
    });
- 
+
    await test("prepare accepts exactly twenty ordered items but refuses unsafe paths and replay conflicts without leaking capabilities", async () => {
      let signed = 0;
      const base = {
@@ -1349,7 +1349,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(conflict.status, 502);
      assert.doesNotMatch(await conflict.text(), /capability-token|provider/i);
    });
- 
+
    await test("matching prepare replay reuses the server-owned path while conflicting declared facts stay closed", async () => {
      const existing = preparedItem();
      let preparedPath = "";
@@ -1364,7 +1364,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(preparedPath, existing.privatePath);
      assert.equal((await response.json() as { uploads: Array<{ path: string }> }).uploads[0].path, existing.privatePath);
    });
- 
+
 -  await test("finalize checks only server-loaded facts, validates ftyp, registers exact video provenance, and is idempotent", async () => {
 +  await test("prepare maps stable idempotency conflicts without provider leakage", async () => {
 +    const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_conflict", files: [descriptor()] }), {
@@ -1433,7 +1433,7 @@ index ed2735c1..90b355e7 100644
 +    assert.equal("width" in (finalizedInput ?? {}), false);
 +    assert.equal("height" in (finalizedInput ?? {}), false);
 +    assert.equal("durationMs" in (finalizedInput ?? {}), false);
- 
+
 -    const replay = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), { ...deps, store: { ...deps.store, findItem: async () => ({ ...item, status: "finalized" }) } });
 -    assert.equal(replay.status, 200);
 +    replay = true;
@@ -1441,7 +1441,7 @@ index ed2735c1..90b355e7 100644
 +    assert.equal(replayResponse.status, 200);
      assert.equal(reads, 1, "successful replay must not re-read Storage");
    });
- 
+
    await test("finalize fails closed and compensates an invalid object through durable cleanup", async () => {
      let removed = 0;
      let cleanup: unknown;
@@ -1490,7 +1490,7 @@ index ed2735c1..90b355e7 100644
 +    assert.equal((await response.json() as { code: string }).code, "video_upload_unavailable");
 +    assert.equal(removed, 0, "an unscheduled cleanup must never become a destructive best-effort delete");
    });
- 
+
    await test("finalize rejects missing, empty, mismatched, expired, and cross-owner objects before ready provenance", async () => {
      const item = preparedItem();
      for (const [name, stat, itemOverride, expected] of [
@@ -1528,7 +1528,7 @@ index ed2735c1..90b355e7 100644
      });
      assert.equal(crossOwner.status, 404);
    });
- 
+
 +  await test("finalize validates the real initial range and a complete allowed ftyp box", async () => {
 +    const item = preparedItem();
 +    const cases: Array<[string, () => Response]> = [
@@ -1567,7 +1567,7 @@ index ed2735c1..90b355e7 100644
 +    assert.equal(response.headers.get("vary"), "Cookie, Authorization, Range");
      assert.equal(await response.text(), "ftyp");
      assert.equal(fetches, 1);
- 
+
      const denied = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`), {
        getUserId: async () => OTHER_OWNER, configured: true,
        findProvenance: async () => null,
@@ -1581,7 +1581,7 @@ index ed2735c1..90b355e7 100644
      assert.equal(failed.status, 502);
      assert.doesNotMatch(await failed.text(), /storage|secret|token/i);
    });
- 
+
    await test("video proxy supports full, open, and suffix ranges, blocks unsafe lifecycle, and bounds an oversized upstream body", async () => {
      const path = `${OWNER}/videos/a.mp4`;
      const provenance = { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 };
@@ -1603,7 +1603,7 @@ index ed2735c1..90b355e7 100644
 +    const bounded = await handleStorageMediaGet(new Request(`https://app.test/api/storage-media?path=${encodeURIComponent(path)}`, { headers: { range: "bytes=0-3" } }), { ...deps, readRange: async () => new Response(new Uint8Array(9), { status: 206, headers: { "content-range": "bytes 0-3/12", "content-type": "video/mp4" } }) });
      await assert.rejects(() => bounded.arrayBuffer(), /range body exceeded/i, "the proxy must not expose bytes beyond the selected range");
    });
- 
+
 +  await test("video proxy rejects upstream status, MIME, range, total, and short-body lies", async () => {
 +    const path = `${OWNER}/videos/a.mp4`;
 +    const provenance = { owner_user_id: OWNER, bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12 };
@@ -1681,7 +1681,7 @@ index ed2735c1..90b355e7 100644
 +
    console.log(`\nPrivate video upload: ${passed} passed, 0 failed`);
  }
- 
+
  main().catch(error => { console.error(error); process.exitCode = 1; });
 diff --git a/web/src/app/api/storage-media/route.ts b/web/src/app/api/storage-media/route.ts
 index db767778..5c1ebcc5 100644
@@ -1694,10 +1694,10 @@ index db767778..5c1ebcc5 100644
  import { createSupabaseVideoStorage } from "@/lib/server/media/supabaseVideoStorage";
  import { handleStorageMediaGet } from "@/lib/server/media/storageMediaHandler";
  import { VIDEO_UPLOAD_BUCKET } from "@/lib/server/media/videoUploadHandler";
- 
+
  export const runtime = "nodejs";
  export const dynamic = "force-dynamic";
- 
+
  export async function GET(req: Request) {
    const bucket = process.env.VIBEPIN_DRAFT_BUCKET ?? VIDEO_UPLOAD_BUCKET;
    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -1739,10 +1739,10 @@ index 08ea2e5f..588e3aae 100644
  import { handleVideoUploadPrepare, VIDEO_UPLOAD_BUCKET } from "@/lib/server/media/videoUploadHandler";
  import { createVideoUploadStore } from "@/lib/server/media/videoUploadStore";
  import { createServerClient } from "@/lib/supabase";
- 
+
  export const runtime = "nodejs";
  export const dynamic = "force-dynamic";
- 
+
  export async function POST(req: Request) {
    let db: ReturnType<typeof createServerClient> | null = null;
    const client = () => (db ??= createServerClient());
@@ -1772,7 +1772,7 @@ index 5f101fee..d621802a 100644
    readRange(input: { bucket: string; path: string; start: number; end: number }): Promise<Response>;
  };
  const ALLOWED_VIDEO_LIFECYCLES = new Set(["draft", "publish_pending", "published", "retained"]);
- 
+
  function pathStatus(owner: string, path: string | null): 0 | 400 | 403 {
    if (!path || path.startsWith("/") || path.includes("\\") || path.includes("..") || path.includes("//")) return 400;
    return path.split("/")[0] === owner ? 0 : 403;
@@ -1789,7 +1789,7 @@ index 5f101fee..d621802a 100644
    else { start = Number(match[1]); end = match[2] ? Number(match[2]) : size - 1; if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= size) return null; end = Math.min(end, size - 1); }
    return { start, end, partial: true };
  }
- 
+
  /** Reject a misbehaving upstream rather than streaming bytes past the authorized range. */
 -function boundedRangeBody(body: ReadableStream<Uint8Array>, maximum: number): ReadableStream<Uint8Array> {
 +function boundedRangeBody(body: ReadableStream<Uint8Array>, expected: number): ReadableStream<Uint8Array> {
@@ -1809,7 +1809,7 @@ index 5f101fee..d621802a 100644
 +    },
    }));
  }
- 
+
 +function normalizedType(value: string | null) { return value?.split(";", 1)[0]?.trim().toLowerCase() ?? ""; }
 +function contentRange(value: string | null) {
 +  const match = value && /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value);
@@ -1896,19 +1896,19 @@ index 9b35a5b9..e7d4ee81 100644
 +  VIDEO_FINALIZE_CLAIM_MS,
 +  VIDEO_SIGNED_UPLOAD_CAPABILITY_MS,
 +} from "@/lib/videoUploadLimits";
- 
+
  export const VIDEO_UPLOAD_BUCKET = "generated-private";
 -export const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 -export const MAX_VIDEO_UPLOAD_ITEMS = 20;
 +export { MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_ITEMS, MIN_VIDEO_DURATION_MS, MAX_VIDEO_DURATION_MS };
  export const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/x-m4v", "video/quicktime"]);
- 
+
  type PreparedItem = {
    batchId: string; ordinal: number; status: string; privatePath: string;
    declaredContentType: string; declaredByteSize: number; declaredChecksumSha256: string;
    declaredWidth: number; declaredHeight: number; declaredDurationMs: number; expiresAt: string;
  };
- 
+
  export type VideoUploadStore = {
    prepareBatch(input: { ownerUserId: string; idempotencyKey: string; expiresAt: string }): Promise<{ batchId: string }>;
    prepareItem(input: { ownerUserId: string; batchId: string; ordinal: number; idempotencyKey: string; privatePath: string; contentType: string; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number }): Promise<{ status: string }>;
@@ -1919,14 +1919,14 @@ index 9b35a5b9..e7d4ee81 100644
 +  finalizeItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; bucketId: string; contentType: string; byteSize: number; checksumSha256: string | null }): Promise<{ status: string; provenanceReady: boolean }>;
 +  failItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; code: string }): Promise<{ status: string; cleanupAllowed: boolean; cleanupScheduled: boolean }>;
  };
- 
+
  export type VideoObjectStorage = {
 -  stat(input: { bucket: string; path: string }): Promise<{ exists: boolean; contentType?: string; byteSize?: number; checksumSha256?: string }>;
 +  stat(input: { bucket: string; path: string }): Promise<{ exists: boolean; contentType?: string; byteSize?: number; verifiedChecksumSha256?: string }>;
    readRange(input: { bucket: string; path: string; start: number; end: number }): Promise<Response>;
    remove(input: { bucket: string; path: string }): Promise<void>;
  };
- 
+
  export type VideoUploadHandlerDeps = {
    getUserId(req: Request): Promise<string | null>;
    enabled: boolean; configured: boolean; bucket?: string; expiresInMs?: number; now?: () => Date;
@@ -1937,11 +1937,11 @@ index 9b35a5b9..e7d4ee81 100644
 -  registerProvenance?: (input: Omit<MediaProvenance, "bucket_id"> & { bucket_id: string }) => Promise<boolean>;
    recordCleanup?: (input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }) => Promise<void>;
  };
- 
+
  type Descriptor = { ordinal: number; idempotencyKey: string; filename: string; contentType: string; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number };
  const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
  const SAFE_NAME = /^[^/\\\0-\x1f]{1,255}$/;
- 
+
  function requestId(req: Request) { return (req.headers.get("x-request-id") ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 128); }
  function error(code: string, requestId: string, status: number) { return Response.json({ code, requestId }, { status }); }
  function ownerPath(owner: string, path: string) {
@@ -1961,11 +1961,11 @@ index 9b35a5b9..e7d4ee81 100644
 +    || durationMs < MIN_VIDEO_DURATION_MS || durationMs > MAX_VIDEO_DURATION_MS) return null;
    return { ordinal, idempotencyKey: item.idempotencyKey, filename: item.filename, contentType: item.contentType, byteSize, checksumSha256: item.checksumSha256.toLowerCase(), width, height, durationMs };
  }
- 
+
  async function json(req: Request): Promise<Record<string, unknown> | null> {
    try { const value = await req.json(); return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
  }
- 
+
  export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHandlerDeps): Promise<Response> {
    const id = requestId(req);
    const owner = await deps.getUserId(req).catch(() => null);
@@ -2017,7 +2017,7 @@ index 9b35a5b9..e7d4ee81 100644
    }
    return Response.json({ ok: true, batchId: batch.batchId, uploads, requestId: id });
  }
- 
+
  async function readBounded(response: Response, maximum = 64 * 1024): Promise<Uint8Array | null> {
    const reader = response.body?.getReader(); if (!reader) return null;
    const chunks: Uint8Array[] = []; let length = 0;
@@ -2062,7 +2062,7 @@ index 9b35a5b9..e7d4ee81 100644
 +    "video_upload_batch_not_preparable", "video_upload_batch_limit_exceeded", "video_upload_too_large",
 +  ]).has(message) ? message : null;
 +}
- 
+
  export async function handleVideoUploadFinalize(req: Request, deps: VideoUploadHandlerDeps): Promise<Response> {
    const id = requestId(req);
    const owner = await deps.getUserId(req).catch(() => null);
@@ -2144,12 +2144,12 @@ index b4fc814d..6075fe09 100644
 +++ b/web/src/lib/server/media/videoUploadStore.ts
 @@ -1,22 +1,33 @@
  import type { VideoUploadStore } from "./videoUploadHandler";
- 
+
  type Db = {
    rpc(name: string, args: Record<string, unknown>): any;
    from(table: string): any;
  };
- 
+
  function rpcData(value: unknown): Record<string, unknown> | null {
    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
  }
@@ -2168,7 +2168,7 @@ index b4fc814d..6075fe09 100644
 -  const value = rpcData(result.data); if (result.error || !value) throw new Error("video_upload_store_error"); return map(value);
 +  const value = rpcData(result.data); if (result.error || !value) throw storeFailure(result.error); return map(value);
  }
- 
+
  /** Service-only v77 boundary. Every direct query includes the verified owner. */
  export function createVideoUploadStore(db: Db): VideoUploadStore {
    return {
@@ -2251,14 +2251,14 @@ index 8f24418c..da4397db 100644
 +  dimensions_source?: string | null;
 +  duration_source?: string | null;
  };
- 
+
  export type MediaProvenanceStore = {
    findExact(ownerUserId: string, bucketId: string, objectPath: string): Promise<MediaProvenance | null>;
    findExactMany(ownerUserId: string, bucketId: string, objectPaths: string[]): Promise<MediaProvenance[]>;
    register(input: Omit<MediaProvenance, "lifecycle_state" | "bucket_id"> & { bucket_id: string; lifecycle_state?: string }): Promise<boolean>;
    recordCleanup(input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }): Promise<void>;
  };
- 
+
  export function createMediaProvenanceStore(db = createServerClient()): MediaProvenanceStore {
    return {
      async findExact(ownerUserId, bucketId, objectPath) {
@@ -2386,19 +2386,19 @@ index aceb3fa4..95274c34 100644
 +++ b/web/src/lib/studio/videoDirectUpload.ts
 @@ -1,26 +1,26 @@
  "use client";
- 
+
  import { createBrowserClient } from "@supabase/ssr";
 +import { sha256Blob } from "./incrementalSha256";
- 
+
  export type VideoUploadDescriptor = { ordinal: number; idempotencyKey: string; filename: string; contentType: "video/mp4" | "video/x-m4v" | "video/quicktime"; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number };
  export type SignedVideoUpload = { ordinal: number; path: string; token: string; signedUrl: string; contentType: string; upsert: false };
  type PrepareResponse = { batchId: string; uploads: SignedVideoUpload[]; requestId: string };
- 
+
  let client: ReturnType<typeof createBrowserClient> | null = null;
  function browser() { return client ??= createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!); }
  async function authHeaders(): Promise<Record<string, string>> { const { data: { session } } = await browser().auth.getSession(); return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}; }
  function requestId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
- 
+
  export async function sha256(file: Blob): Promise<string> {
 -  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
 -  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -2410,7 +2410,7 @@ index aceb3fa4..95274c34 100644
    if (!response.ok) throw Object.assign(new Error(payload.code ?? "video_upload_failed"), { code: payload.code, requestId: id });
    return payload;
  }
- 
+
  /** Browser-to-private-Storage transfer; no video bytes enter a Next multipart route. */
  export async function prepareVideoDirectUpload(idempotencyKey: string, files: VideoUploadDescriptor[]): Promise<PrepareResponse> {
 diff --git a/web/src/lib/videoUploadLimits.ts b/web/src/lib/videoUploadLimits.ts

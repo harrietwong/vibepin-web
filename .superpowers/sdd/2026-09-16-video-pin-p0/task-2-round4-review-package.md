@@ -21,9 +21,9 @@ index d0d51912..58faa4e7 100644
 +++ b/.superpowers/sdd/2026-09-16-video-pin-p0/task-2-implementer-report.md
 @@ -1,18 +1,19 @@
  # Task 2 Implementer Report — Atomic Finalization And Review Remediation
- 
+
  ## Scope And Base
- 
+
  - Review baseline: `5f5fe502968f96effb7fc9be9b9fd372d6520512`.
  - Atomic-state/fact-contract implementation commit: `d47f6bcddd9164b680fbdffae286adec387fda04`.
  - Round-1 continuation base: `1c9f4615aa30e9b70b270b1d72b53b52e0e07a35`.
@@ -31,9 +31,9 @@ index d0d51912..58faa4e7 100644
 +- Round-3 late-upload remediation base: `3b6b11239562189cae00cf7e882bad9c89ca7d4a`.
  - Branch/worktree: `codex/video-pin-p0-0916-final` / `D:/vp-tmp/wt-video-pin-p0-0916-final`.
  - This continuation closes the remaining review findings I3, I4, I5, I6, and I7, plus the stable-error and 100 MiB browser-digest minors. It preserves the earlier C1/I1/I2 atomic state/fact work.
- 
+
  ## Implemented Contract
- 
+
  - v77 now owns `finalize_claim_token` and `finalize_claim_expires_at`, plus service-only claim/finalize/fail RPCs with catalog hashes and explicit active/rollback privilege manifests.
  - Claim is owner/batch/ordinal scoped. One active claimant may inspect Storage; an expired lease can be taken over, and the stale claimant can no longer finalize, mark failure, or receive object-cleanup authority.
  - Failure and object deletion are coupled: the handler deletes only after the atomic fail RPC returns `cleanupAllowed=true` for the same live claim. A concurrent winner or lost claim therefore cannot have its object removed by a loser.
@@ -57,9 +57,9 @@ index d0d51912..58faa4e7 100644
  - Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
  - Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
  - Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
- 
+
  ## TDD Evidence
- 
+
  - RED: v77 verifier failed because `video_upload_item_claim` did not exist (53 assertions reached).
  - RED: finalized rows without provenance were still accepted (71 assertions reached).
  - RED: an item failure immediately blocked a sibling claim with `video_upload_batch_not_finalizable` (73 assertions reached).
@@ -81,9 +81,9 @@ index d0d51912..58faa4e7 100644
  - GREEN: `test-video-upload-private.ts` reports 30 passed, 0 failed after the final production/store/cleanup tests.
 +- GREEN (Round 3): `verify-v77-video-media.mjs` reports `verdict: pass`, 140 assertions, no failures.
 +- GREEN (Round 3): `test-video-upload-private.ts` reports 31 passed, 0 failed.
- 
+
  ## Verification
- 
+
 -- v77 PGlite: 134/134, pass; additionally covers durable capability cleanup creation, post-sign delayed scheduling, active-claim-versus-cleanup barriers in both acquisition orders, the terminal `cleaning` state, atomic successful settlement, failure preservation, fail-closed provenance `NULL`/source collisions, trigger/function privilege manifests, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry or provenance shape drift before mutation.
 +- v77 PGlite: 140/140, pass; additionally covers durable capability cleanup creation, post-sign delayed scheduling, active-claim-versus-cleanup barriers in both acquisition orders, early absence rescheduling, a simulated late Storage object and mandatory post-tail deletion, the terminal `cleaning` state, atomic successful settlement, failure preservation, fail-closed provenance `NULL`/source collisions, trigger/function privilege manifests, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry, late-recheck, or provenance shape drift before mutation.
  - v76 PGlite: 280/280 across two rounds, pass.
@@ -95,13 +95,13 @@ index d0d51912..58faa4e7 100644
  - Test registry: 239 tracked, 231 run by `npm test`, 8 documented exclusions.
  - `npm run typecheck`: exit 0.
  - `git diff --check`: exit 0 before the implementation commit; the follow-up report-only diff is also clean.
- 
+
  ## Remaining Review Items
- 
+
  - None from the supplied C1/I1-I7 and Minor review list. The known v75 deployment blocker remains external to Task 2: a pre-existing broad permissive `storage.objects` policy must be audited before deployment.
- 
+
  ## External-Call Attestation
- 
+
 diff --git a/backend/db/migrate_v77_video_media.sql b/backend/db/migrate_v77_video_media.sql
 index 178a2239..4c37ea3d 100644
 --- a/backend/db/migrate_v77_video_media.sql
@@ -250,7 +250,7 @@ index 178a2239..4c37ea3d 100644
        and verified_byte_size between 1 and 104857600
        and (verified_checksum_sha256 is null or verified_checksum_sha256 ~ '^[0-9a-f]{64}$')
 @@ -355,33 +359,47 @@ grant select,insert,update,delete on public.video_upload_batches,public.video_up
- 
+
  -- Generic v76 cleanup workers acquire external deletion authority by moving an
  -- outbox row to processing. For video-upload rows, atomically move the item to
  -- a non-finalizable state first. An active finalize claim rejects that lease;
@@ -306,9 +306,9 @@ index 178a2239..4c37ea3d 100644
  create trigger v77_video_cleanup_guard before update on public.media_cleanup_outbox
    for each row execute function public.v77_video_cleanup_guard();
  comment on trigger v77_video_cleanup_guard on public.media_cleanup_outbox is 'vibepin:v77:video-cleanup-guard';
- 
+
 @@ -411,21 +429,22 @@ comment on function public.video_upload_batch_prepare(uuid,text,timestamptz) is
- 
+
  create or replace function public.video_upload_item_prepare(
    p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_idempotency_key text,p_private_path text,
    p_declared_content_type text,p_declared_byte_size bigint,p_declared_checksum_sha256 text,
@@ -384,7 +384,7 @@ index 178a2239..4c37ea3d 100644
 @@ -497,39 +518,41 @@ exception when others then
  end $fn$;
  comment on function public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint) is 'vibepin:v77:video-upload-item-prepare';
- 
+
  create or replace function public.video_upload_capability_confirm(
    p_owner_user_id uuid,p_batch_id uuid,p_ordinal integer,p_capability_expires_at timestamptz
  ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
@@ -510,7 +510,7 @@ index 4a13c440..53d01523 100644
 @@ -194,32 +195,33 @@ async function run() {
        values($1,'generated-private',$2,'upload','draft','video','video/mp4',20)`, [A, `${A}/null-sources.mp4`]));
      assert(Boolean(nullSourceInsert), "a video provenance INSERT with NULL fact values/sources fails closed");
- 
+
      const one = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
      const again = await asRole(db, "service_role", () => prepareBatch(db, A, "batch-key"));
      const otherOwner = await asRole(db, "service_role", () => prepareBatch(db, B, "batch-key"));
@@ -540,7 +540,7 @@ index 4a13c440..53d01523 100644
        $1,$2,0,'item-key',$3,'video/mp4',1024,$4,720,1280,10_000)`,
        [A, one.batchId, `${A}/uploads/${one.batchId}/0.mp4`, "d".repeat(64)])));
      assert(changedPrepare?.message === "video_upload_item_idempotency_conflict", "replay conflicts whenever immutable declared facts differ");
- 
+
      const claimToken = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
      const competingToken = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
      const claimed = await asRole(db, "service_role", () => claimItem(db, A, one.batchId, 0, claimToken));
@@ -582,7 +582,7 @@ index 4a13c440..53d01523 100644
 +      from public.media_cleanup_outbox o where o.id=$1`, [cleanupFirstOutbox.id])).rows[0];
 +    assert(finalRecheck.status === "done" && Boolean(finalRecheck.completed_at) && !finalRecheck.object_exists,
 +      "a late object is removed by the mandatory post-tail recheck before cleanup can terminate");
- 
+
      const partialBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "partial-batch"));
      const partialFailed = await asRole(db, "service_role", () => prepareItem(db, A, partialBatch.batchId, 0, "partial-failed"));
      const partialWinner = await asRole(db, "service_role", () => prepareItem(db, A, partialBatch.batchId, 1, "partial-winner"));
@@ -689,7 +689,7 @@ index 851f620b..c368ffe2 100644
      assert.equal(response.status, 409);
      assert.equal(signed, 0);
    });
- 
+
    await test("prepare ledger covers the fixed two-hour signed-upload capability", async () => {
 -    let expiresAt = "";
 +    let expiresAt = ""; let capabilityExpiresAt = "";
@@ -709,7 +709,7 @@ index 851f620b..c368ffe2 100644
 +    assert.equal(expiresAt, "2030-01-01T02:20:00.000Z");
 +    assert.equal(capabilityExpiresAt, "2030-01-01T02:00:00.000Z");
    });
- 
+
    await test("prepare never reveals a signed token unless durable issuance confirmation succeeds", async () => {
      const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_confirm", files: [descriptor()] }), {
        getUserId: async () => OWNER, enabled: true, configured: true,
@@ -728,7 +728,7 @@ index 851f620b..c368ffe2 100644
        (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
      }
    });
- 
+
 -  await test("production browser client preserves private bucket, token, path, and upsert=false", async () => {
 -    const calls: unknown[] = [];
 +  await test("production browser client mirrors signed upload protocol with an abortable deadline", async () => {
@@ -777,7 +777,7 @@ index 851f620b..c368ffe2 100644
        (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
      }
    });
- 
+
 +  await test("browser upload deadline and caller abort have distinct stable codes and notify finalize cleanup", async () => {
 +    const { uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
 +    const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
@@ -818,10 +818,10 @@ index 851f620b..c368ffe2 100644
      Object.defineProperty(source, "arrayBuffer", { value: () => { throw new Error("whole-file allocation forbidden"); } });
      assert.equal(await sha256(source), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
    });
- 
+
    console.log(`\nPrivate video upload: ${passed} passed, 0 failed`);
  }
- 
+
 diff --git a/web/src/lib/server/media/videoUploadHandler.ts b/web/src/lib/server/media/videoUploadHandler.ts
 index 5d173d6e..f6e30dd2 100644
 --- a/web/src/lib/server/media/videoUploadHandler.ts
@@ -837,11 +837,11 @@ index 5d173d6e..f6e30dd2 100644
    VIDEO_UPLOAD_LEDGER_MS,
 -  VIDEO_UPLOAD_SETTLE_GRACE_MS,
  } from "@/lib/videoUploadLimits";
- 
+
  export const VIDEO_UPLOAD_BUCKET = "generated-private";
  export { MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_ITEMS, MIN_VIDEO_DURATION_MS, MAX_VIDEO_DURATION_MS };
  export const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/x-m4v", "video/quicktime"]);
- 
+
  type PreparedItem = {
    batchId: string; ordinal: number; status: string; privatePath: string;
    declaredContentType: string; declaredByteSize: number; declaredChecksumSha256: string;
@@ -875,22 +875,22 @@ index 95274c34..430d187a 100644
 +++ b/web/src/lib/studio/videoDirectUpload.ts
 @@ -1,36 +1,89 @@
  "use client";
- 
+
  import { createBrowserClient } from "@supabase/ssr";
  import { sha256Blob } from "./incrementalSha256";
 +import { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
 +
 +export { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
- 
+
  export type VideoUploadDescriptor = { ordinal: number; idempotencyKey: string; filename: string; contentType: "video/mp4" | "video/x-m4v" | "video/quicktime"; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number };
  export type SignedVideoUpload = { ordinal: number; path: string; token: string; signedUrl: string; contentType: string; upsert: false };
  type PrepareResponse = { batchId: string; uploads: SignedVideoUpload[]; requestId: string };
- 
+
  let client: ReturnType<typeof createBrowserClient> | null = null;
  function browser() { return client ??= createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!); }
  async function authHeaders(): Promise<Record<string, string>> { const { data: { session } } = await browser().auth.getSession(); return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}; }
  function requestId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
- 
+
  export async function sha256(file: Blob): Promise<string> {
    return sha256Blob(file);
  }
@@ -902,7 +902,7 @@ index 95274c34..430d187a 100644
    if (!response.ok) throw Object.assign(new Error(payload.code ?? "video_upload_failed"), { code: payload.code, requestId: id });
    return payload;
  }
- 
+
  /** Browser-to-private-Storage transfer; no video bytes enter a Next multipart route. */
  export async function prepareVideoDirectUpload(idempotencyKey: string, files: VideoUploadDescriptor[]): Promise<PrepareResponse> {
    if (process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD !== "true") throw Object.assign(new Error("video_upload_disabled"), { code: "video_upload_disabled" });

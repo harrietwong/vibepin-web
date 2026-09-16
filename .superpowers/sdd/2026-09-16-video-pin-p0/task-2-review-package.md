@@ -31,9 +31,9 @@ index a86a06be..730bdef0 100644
  - `npm run typecheck`: exit 0.
  - First `npm run build`: environment-only failure because the worktree has no secrets and C-drive npm cache was full (`supabaseUrl is required` after the ENOSPC was bypassed).
  - Safe-dummy build with `NEXT_PUBLIC_SUPABASE_URL=https://example.invalid`, non-secret dummy keys, and task-scoped D-drive cache/temp: compile, TypeScript, 73 static pages, and final optimization passed; exit 0.
- 
+
  ## Task Status
- 
+
  - Task 0: complete (base `3f74653c`; plan commits `1bb3780d..654cf4f5`; baseline evidence above).
  - Task 1: complete — `873a98db`, review fixes `644e4af1`, `b66746b5`, round-three hardening `f6a4f1f7`, and round-four privilege manifests `82584627`, implemented on `654cf4f5`. v77 now rejects drift in every owned ledger column/default/nullability/constraint, additive provenance column, standalone index, RLS/policy, table/column/function privilege, and client/server privilege boundary while accepting only the intentional active or rolled-back server manifests. PGlite (94 assertions), focused media-store coverage (23/23), and `tsc --noEmit` passed. Final integration must rebase/cherry-pick this reviewed Task 1 sequence onto official base `04b0ebe0`; this worktree has not been rebased. The v75 verifier still reports its pre-existing `deployment_blocked` broad Storage-policy evidence (65 assertions, no failures); Task 1 did not remove or mask it.
 -- Task 2: not started.
@@ -837,7 +837,7 @@ index 44b3f856..8f24418c 100644
 +++ b/web/src/lib/server/mediaProvenance.ts
 @@ -1,46 +1,54 @@
  import { createServerClient } from "@/lib/supabase";
- 
+
  export type MediaProvenance = {
    owner_user_id: string;
    bucket_id?: string;
@@ -854,14 +854,14 @@ index 44b3f856..8f24418c 100644
 +  height?: number | null;
 +  duration_ms?: number | null;
  };
- 
+
  export type MediaProvenanceStore = {
    findExact(ownerUserId: string, bucketId: string, objectPath: string): Promise<MediaProvenance | null>;
    findExactMany(ownerUserId: string, bucketId: string, objectPaths: string[]): Promise<MediaProvenance[]>;
    register(input: Omit<MediaProvenance, "lifecycle_state" | "bucket_id"> & { bucket_id: string; lifecycle_state?: string }): Promise<boolean>;
    recordCleanup(input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }): Promise<void>;
  };
- 
+
  export function createMediaProvenanceStore(db = createServerClient()): MediaProvenanceStore {
    return {
      async findExact(ownerUserId, bucketId, objectPath) {
