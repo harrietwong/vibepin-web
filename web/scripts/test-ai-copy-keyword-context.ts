@@ -182,6 +182,26 @@ test("rankKeywords: Korean demand modifiers do not dilute distinctive-word cover
   assert.ok(!rejected.some(r => r.keyword === "모던 거실 인테리어 아이디어"));
 });
 
+test("rankKeywords: explicit Japanese locale wins over Han-script fallback", () => {
+  const japaneseContext: KeywordContextInput = {
+    imageSummary: "モダンなリビングルームにソファとテーブルがある空間",
+    visibleObjects: ["リビングルーム", "ソファ", "テーブル"],
+    style: "モダン",
+    boardName: "リビングルーム アイデア",
+    category: "home-decor",
+    language: "ja-JP",
+  };
+  const rows = [row("リビングルーム 家の装飾 アイデア", {
+    data_quality: "official",
+    search_volume_level: "high",
+    language: "ja",
+    locale: "ja-JP",
+  })];
+  const { recommended, rejected } = rankKeywords(rows, japaneseContext);
+  assert.ok(recommended.includes("リビングルーム 家の装飾 アイデア"));
+  assert.ok(!rejected.some(r => r.keyword === "リビングルーム 家の装飾 アイデア"));
+});
+
 test("rankKeywords: 现代客厅装饰灵感 is recommended with matching Chinese context", () => {
   const chineseContext: KeywordContextInput = {
     imageSummary: "现代风格的客厅空间，配有灰色布艺沙发、茶几和落地窗。",

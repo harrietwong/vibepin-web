@@ -116,30 +116,36 @@ const KO_STOP_WORDS = new Set([
 function isGenericWord(word: string, locale?: string): boolean {
   if (GENERIC_WORDS.has(word)) return true;
   const loc = (locale ?? "").toLowerCase();
-  if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
+  if (loc.startsWith("zh")) {
     return ZH_GENERIC_WORDS.has(word);
   }
-  if (loc.startsWith("ja") || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) {
+  if (loc.startsWith("ja")) {
     return JA_GENERIC_WORDS.has(word);
   }
-  if (loc.startsWith("ko") || /[\p{Script=Hangul}]/u.test(word)) {
+  if (loc.startsWith("ko")) {
     return KO_GENERIC_WORDS.has(word);
   }
+  if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) return JA_GENERIC_WORDS.has(word);
+  if (/[\p{Script=Hangul}]/u.test(word)) return KO_GENERIC_WORDS.has(word);
+  if (/[\p{Script=Han}]/u.test(word)) return ZH_GENERIC_WORDS.has(word);
   return false;
 }
 
 function isStopWord(word: string, locale?: string): boolean {
   if (STOP_WORDS.has(word)) return true;
   const loc = (locale ?? "").toLowerCase();
-  if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
+  if (loc.startsWith("zh")) {
     return ZH_STOP_WORDS.has(word);
   }
-  if (loc.startsWith("ja") || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) {
+  if (loc.startsWith("ja")) {
     return JA_STOP_WORDS.has(word);
   }
-  if (loc.startsWith("ko") || /[\p{Script=Hangul}]/u.test(word)) {
+  if (loc.startsWith("ko")) {
     return KO_STOP_WORDS.has(word);
   }
+  if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) return JA_STOP_WORDS.has(word);
+  if (/[\p{Script=Hangul}]/u.test(word)) return KO_STOP_WORDS.has(word);
+  if (/[\p{Script=Han}]/u.test(word)) return ZH_STOP_WORDS.has(word);
   return false;
 }
 

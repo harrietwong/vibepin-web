@@ -723,4 +723,25 @@ test("regression: official ko-KR phrase keeps only distinctive words for coverag
   assert.equal(evidence.degradedMode, "none");
 });
 
+test("regression: ja-JP locale classifies Han generic words as Japanese", () => {
+  const context: KeywordContextInput = {
+    imageSummary: "モダンなリビングルームにソファとテーブルがある空間",
+    visibleObjects: ["リビングルーム", "ソファ", "テーブル"],
+    style: "モダン",
+    boardName: "リビングルーム アイデア",
+    category: "home-decor",
+    language: "ja-JP",
+  };
+  const rows = [makeRow("リビングルーム 家の装飾 アイデア", {
+    id: "ja_living_room_decor",
+    data_quality: "official",
+    search_volume_level: "high",
+    language: "ja",
+    locale: "ja-JP",
+  })];
+  const evidence = buildKeywordEvidence({ rows, context, targetLocale: "ja-JP" });
+  assert.deepEqual(evidence.selectedKeywordIds, ["ja_living_room_decor"]);
+  assert.equal(evidence.degradedMode, "none");
+});
+
 console.log(`\nAll ${passed} keyword evidence tests passed.`);
