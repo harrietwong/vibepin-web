@@ -109,6 +109,10 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
   if (primaryMedia?.kind === "video") {
     return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} style={{ opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
   }
+  return <ImagePinCardMedia draft={draft} alt={alt} className={className} style={style} placeholderVariant={placeholderVariant} generating={generating} hiddenByQuality={hiddenByQuality} tr={tr} />;
+}
+
+function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, tr }: PinCardMediaProps & { tr: (key: string) => string }) {
   const chain = useMemo(() => candidateChain(draft), [draft]);
   // A different draft (or an edit that changes the candidate chain) resets the walk.
   // Derived DURING RENDER instead of by setting state from an effect: the effect

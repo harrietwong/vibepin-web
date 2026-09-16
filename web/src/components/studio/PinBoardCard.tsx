@@ -961,7 +961,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             // may be empty (scratch mode) or a dead snapshot. Never blank/broken.
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="generationFailed" generating={generating} hiddenByQuality={hiddenByQuality} />
-          ) : resolveInitialFailureMediaUrl(draft) ? (
+          ) : (coverMedia(draft)?.kind === "video" || resolveInitialFailureMediaUrl(draft)) ? (
             // Publish-failed / healthy cards: same chain, starting at draft.imageUrl
             // (so a genuinely valid final image is always preferred) but falling
             // through source/product/reference/parent — and ultimately the neutral
@@ -1316,7 +1316,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           {failed && !isPublishFailure ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="generationFailed" />
-          ) : resolveInitialFailureMediaUrl(draft) ? (
+          ) : (coverMedia(draft)?.kind === "video" || resolveInitialFailureMediaUrl(draft)) ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="noImage" />
           ) : (

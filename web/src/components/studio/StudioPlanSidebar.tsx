@@ -7,6 +7,7 @@ import type { PinDraft } from "@/lib/pinDraftStore";
 import type { PublishProvider } from "@/lib/contentDraftModel";
 import { BUI, STUDIO_UI } from "@/components/studio/boardUI";
 import { toProxyUrl } from "@/lib/imageProxy";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { useViewportBucket } from "@/hooks/useViewportBucket";
@@ -471,8 +472,7 @@ function PlanItem({ item, highlighted, tr }: {
         border: `1px solid ${item.state === "failed" ? "rgba(217,119,6,0.45)" : BUI.border}`,
         filter: muted ? "grayscale(0.35)" : "none",
       }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        {item.cover ? <img src={toProxyUrl(item.cover)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+        <ContentMediaRenderer media={item.cover} alt="" />
         {item.providers.length > 0 && (
           <span style={{
             position: "absolute", left: 1, bottom: 1, display: "flex", gap: 1,

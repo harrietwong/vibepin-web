@@ -24,7 +24,7 @@
 
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
-import { contentDestinations, contentMedia, type PublishProvider } from "@/lib/contentDraftModel";
+import { contentDestinations, contentMedia, type ContentMedia, type PublishProvider } from "@/lib/contentDraftModel";
 import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
 
 /** The three visual states the sidebar distinguishes (PRD §23). */
@@ -35,7 +35,7 @@ export interface PlanSidebarItem {
   /** Local wall-clock "HH:MM" used both for the label and for intra-day ordering. */
   time: string;
   /** Cover image URL, or "" when the draft has no usable media yet. */
-  cover: string;
+  cover: ContentMedia | null;
   /** Unique destination providers, in a stable order, for the small platform icons. */
   providers: PublishProvider[];
   state: PlanItemState;
@@ -116,8 +116,8 @@ export function itemProviders(draft: PinDraft): PublishProvider[] {
 }
 
 /** Cover = the Content's first media, falling back to the legacy single image. */
-export function itemCover(draft: PinDraft): string {
-  return contentMedia(draft)[0]?.url ?? draft.imageUrl ?? "";
+export function itemCover(draft: PinDraft): ContentMedia | null {
+  return contentMedia(draft)[0] ?? null;
 }
 
 export function toItem(draft: PinDraft): PlanSidebarItem {
