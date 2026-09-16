@@ -53,12 +53,14 @@ let rpcBehaviour: (fn: string, args: Record<string, unknown>) => RpcResult = () 
 });
 
 /** The row the fake scan/claim hands the route. Mutated per test. */
-// `targetConnectionId` is required: resolveScheduledDestinations derives a
-// Pinterest-only intent for a legacy Pin ONLY when the draft names a pinned target.
-// Without it the row resolves to ZERO destinations and every test would pass
-// vacuously through the "nothing owed" branch.
+// Explicit frozen intent is required. Historical `targetConnectionId` is display
+// context only and must not silently become publish authority; without a stored
+// destination these tests would pass vacuously through the "nothing owed" branch.
 let duePayload: Record<string, unknown> = {
   boardId: "b1", imageUrl: "https://example.com/a.png", targetConnectionId: "conn-pin-1",
+  scheduledDestinations: [
+    { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+  ],
 };
 
 /** Every UPDATE the route wrote, so the blocking test can assert scheduled_at was cleared. */
@@ -118,6 +120,7 @@ function fakeSupabaseClient() {
           draft_id: DRAFT,
           payload: duePayload,
           scheduled_at: DUE_AT,
+          updated_at: "2026-08-30T00:00:00.000Z",
         };
         if (isUpdate) {
           if (payload) updates.push(payload);
@@ -178,6 +181,9 @@ async function test(name: string, fn: () => Promise<void>) {
   rpcBehaviour = () => ({ data: { ok: true, replayed: false }, error: null });
   duePayload = {
     boardId: "b1", imageUrl: "https://example.com/a.png", targetConnectionId: "conn-pin-1",
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+    ],
   };
   publishPinBehaviour = async () => ({
     ok: true, pin: { id: "p1", url: "https://pin/1" }, board: { id: "b1", name: "Board" },
@@ -192,6 +198,7 @@ async function test(name: string, fn: () => Promise<void>) {
 
 function cronReq(): Request {
   return {
+    url: "https://app.example.com/api/cron/publish-due",
     headers: { get: (k: string) => (k.toLowerCase() === "authorization" ? "Bearer test-cron-secret" : null) },
   } as unknown as Request;
 }

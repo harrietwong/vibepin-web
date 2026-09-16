@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 
 // ── Minimal window/localStorage shim (pinDraftStore is localStorage-backed) ─────
 const mem = new Map<string, string>();
-const listeners = new Set<() => void>();
+const listeners = new Map<string, Set<() => void>>();
 (globalThis as unknown as { localStorage: unknown }).localStorage = {
   getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
   setItem: (k: string, v: string) => { mem.set(k, String(v)); },
@@ -34,9 +34,13 @@ const listeners = new Set<() => void>();
   clear: () => mem.clear(),
 };
 (globalThis as unknown as { window: unknown }).window = {
-  addEventListener: (_t: string, cb: () => void) => { listeners.add(cb); },
-  removeEventListener: (_t: string, cb: () => void) => { listeners.delete(cb); },
-  dispatchEvent: () => { listeners.forEach(fn => fn()); return true; },
+  addEventListener: (type: string, cb: () => void) => {
+    const callbacks = listeners.get(type) ?? new Set<() => void>();
+    callbacks.add(cb);
+    listeners.set(type, callbacks);
+  },
+  removeEventListener: (type: string, cb: () => void) => { listeners.get(type)?.delete(cb); },
+  dispatchEvent: (event: Event) => { listeners.get(event.type)?.forEach(fn => fn()); return true; },
 };
 
 export {};
@@ -44,7 +48,7 @@ export {};
 let passed = 0, failed = 0;
 async function test(name: string, fn: () => void | Promise<void>): Promise<void> {
   try { await fn(); passed++; console.log(`  OK ${name}`); }
-  catch (e) { failed++; console.log(`  FAIL ${name}\n     ${(e as Error).message}`); }
+  catch (e) { failed++; console.log(`  FAIL ${name}\n     ${(e as Error).stack ?? (e as Error).message}`); }
 }
 
 async function main() {
