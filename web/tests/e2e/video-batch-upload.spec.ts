@@ -229,7 +229,7 @@ test.describe("video batch upload (fully mocked)", () => {
   });
 
   test("cancel stops an in-flight batch and does not create drafts", async ({ page }) => {
-    await installVideoMocks(page, { hangUpload: true });
+    const state = await installVideoMocks(page, { hangUpload: true });
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([video("cancel-me.mp4")]);
@@ -237,6 +237,7 @@ test.describe("video batch upload (fully mocked)", () => {
     await page.getByTestId("video-upload-cancel").click();
     await expect(page.getByTestId("video-upload-batch")).toContainText("cancelled", { timeout: 15_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
+    expect(state.finalizeCalls).toEqual([]);
   });
 
   test("reload recovers a finalized receipt into its original owner draft", async ({ page }) => {
