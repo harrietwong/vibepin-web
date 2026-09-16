@@ -75,6 +75,13 @@ async function main() {
     quotaDraft = false; store.__resetMemoryCacheForTests(); store.setPinDraftOwnerScope(A.ownerUserId);
     await ui.recover(); await ui.recover(); assert.equal(store.getAllDrafts().length, 1);
   });
+  await check("retained finalized retry calls durable retryPersist without a second transfer", async () => {
+    reset(); let transfers = 0; quotaDraft = true; const ui = callbacks({ uploadVideoToSignedStorage: async () => { transfers++; } });
+    await ui.executeVideoBatch(batch.createVideoBatchState("same-page-quota", [item()]));
+    assert.equal(ui.state()?.status, "failed"); quotaDraft = false;
+    await ui.executeVideoBatch(batch.queueFailedVideoItems(ui.state()!));
+    assert.equal(transfers, 1); assert.equal(store.hasPersistFailure(), false); assert.equal(store.getAllDrafts().length, 1);
+  });
   await check("R2 lost finalize survives reload and is reconciled before deleting poster receipt", async () => {
     reset(); let finalizes = 0; let cleaned = 0;
     const ui = callbacks({ finalizeVideoDirectUpload: async (id: string, n: number) => { if (++finalizes === 1) throw err("network_error"); return finalize(id, n); }, requestPinImageCleanup: async () => { cleaned++; } });

@@ -750,7 +750,10 @@ export function StudioBoard() {
           source: "uploaded_image", idempotencyKey: item.draftIdempotencyKey,
           title, defaultDestinations: defaultDestinationsForNewContent(),
         });
-        if (pinDraftStore.hasPersistFailure()) return { persisted: false };
+        // An idempotent duplicate can return the in-memory draft while a prior
+        // quota/localStorage failure remains latched. Explicitly retry the real
+        // durable write before calling this finalized receipt succeeded.
+        if (pinDraftStore.hasPersistFailure() && !pinDraftStore.retryPersist()) return { persisted: false };
         const record = recoveryRecord(item, { finalized, inspection: { width: inspection.width, height: inspection.height, durationMs: inspection.durationMs, ...(inspection.posterUrl ? { posterUrl: inspection.posterUrl } : {}) } });
         if (!record || !removeVideoRecovery(operation.scope, record.logicalId)) return { persisted: false };
         return { persisted: true, draftId: created.id };
@@ -829,6 +832,7 @@ export function StudioBoard() {
           title: record.title, defaultDestinations: defaultDestinationsForNewContent(),
         });
         if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+        if (pinDraftStore.hasPersistFailure() && !pinDraftStore.retryPersist()) continue;
         if (!pinDraftStore.hasPersistFailure()) {
           removeVideoRecovery(scope, record.logicalId);
           void startImageAnalysis(created.id);
