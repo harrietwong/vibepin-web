@@ -95,6 +95,7 @@ function harness(state: DurableVideoPublishState = { kind: "missing" }) {
       return { leaseToken: "lease-1", deliveryId: "delivery-1" };
     },
     materializeSources: async () => { calls.push("materialize"); return [source]; },
+    loadReadySources: async () => { calls.push("load-ready"); return [source]; },
     settleItem: async () => { calls.push("settle-item"); return { deliveryReady: true }; },
     claimReady: async () => { calls.push("claim"); return { claimToken: "claim-1", attempt: 1 }; },
     startAttempt: async () => {
@@ -247,11 +248,12 @@ await test("orders confirm, materialization, ready claim, durable attempt, provi
   ]);
 });
 
-await test("the production RPC adapter uses only the existing v76 prepare, lease, item, claim, attempt and settlement entry points", async () => {
+await test("the production RPC adapter uses additive v78 recovery RPCs over the v76 ledger", async () => {
   const rpcNames: string[] = [];
   const deps = createV76RpcVideoPublishDependencies({
     inspect: async () => ({ kind: "missing" }),
     materializeSources: async () => [source],
+    loadReadySources: async () => [source],
     publishVideo: async () => ({
       outcome: "succeeded",
       evidence: { stage: "created", classification: "succeeded", pinId: "12345", pinUrl: "https://www.pinterest.com/pin/12345/" },
@@ -259,24 +261,24 @@ await test("the production RPC adapter uses only the existing v76 prepare, lease
     rpc: async (name) => {
       rpcNames.push(name);
       const values: Record<string, unknown> = {
-        publish_intent_confirm_prepare: { prepared: true },
+        publish_intent_confirm_prepare_v78: { prepared: true },
         publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
         publish_asset_settle_item: { deliveryReady: true },
-        publish_asset_claim_ready: { claimToken: "claim-1" },
+        publish_asset_claim_ready_v78: { claimToken: "claim-1" },
         publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
-        publish_provider_attempt_settle: { settled: true },
+        publish_provider_attempt_settle_v78: { settled: true },
       };
       return values[name];
     },
   });
   assert.equal((await dispatchV76PinterestVideo(input(), deps)).outcome, "published");
   assert.deepEqual(rpcNames, [
-    "publish_intent_confirm_prepare",
+    "publish_intent_confirm_prepare_v78",
     "publish_asset_lease_materialization",
     "publish_asset_settle_item",
-    "publish_asset_claim_ready",
+    "publish_asset_claim_ready_v78",
     "publish_provider_attempt_start",
-    "publish_provider_attempt_settle",
+    "publish_provider_attempt_settle_v78",
   ]);
 });
 

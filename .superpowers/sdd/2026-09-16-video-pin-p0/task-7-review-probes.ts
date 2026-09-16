@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PGlite } from '../../../backend/tests/pglite_v37/node_modules/@electric-sql/pglite';
 import { createV76RpcVideoPublishDependencies, dispatchV76PinterestVideo } from '../../../web/src/lib/server/publish/v76PinterestVideoPublish';
-import { inspectV76VideoPublishState, materializePrivateVideoSources } from '../../../web/src/lib/server/publish/v76PinterestVideoRuntime';
+import { inspectV76VideoPublishState, loadReadyPrivateVideoSources, materializePrivateVideoSources } from '../../../web/src/lib/server/publish/v76PinterestVideoRuntime';
 import { buildDueVideoReceipt } from '../../../web/src/lib/server/publish/v76PinterestVideoBindings';
 import { publishConfirmationFingerprint, stablePublishString, sha256Hex } from '../../../web/src/lib/studio/publishConfirmation';
 import { validateImmediatePublishReceipt } from '../../../web/src/lib/server/publish/confirmationReceipt';
@@ -33,7 +33,8 @@ async function main() {
  for (const path of ['api/migrations/001_pinterest_connections.sql','backend/db/migrate_v49_pinterest_token_version.sql',
  'backend/db/migrate_v32_social_connections.sql','backend/db/migrate_v59_social_pinterest_unify.sql',
  'backend/db/migrate_v72_publish_intent_idempotency.sql','backend/db/migrate_v73_publish_intent_retry_lineage.sql',
- 'backend/db/migrate_v75_media_provenance.sql','backend/db/migrate_v76_publish_asset_materializer.sql','backend/db/migrate_v77_video_media.sql']) {
+ 'backend/db/migrate_v75_media_provenance.sql','backend/db/migrate_v76_publish_asset_materializer.sql','backend/db/migrate_v77_video_media.sql',
+ 'backend/db/migrate_v78_video_publish_recovery.sql']) {
   await db.exec(load(path).replace(/create extension if not exists "uuid-ossp";?/gi,''));
  }
  await db.query(`insert into social_connections(id,user_id,provider,provider_account_id,connection_status,auth_provider) values ($1,$3,'pinterest','a1','connected','official'),($2,$3,'pinterest','a2','connected','official')`,[C1,C2,A]);
@@ -52,14 +53,16 @@ async function main() {
   loadDraft:async()=>({updatedAt:currentRevision,payload:{title:currentTitle,description:'',altText:'',destinationUrl:'',media:currentMedia}}),
   findProvenance:async(_uid:any,bucket:any,path:any)=>({ownerUserId:A,bucketId:bucket,objectPath:path,mediaKind:'video',contentType:'video/mp4',byteSize:10,checksumSha256:sha256Hex('video-data'),width:null,height:null,durationMs:8000,lifecycleState:'draft'}),
   download:async()=>file,
-  storePublishCopy:async(c:any)=>{await db.query(`insert into media_asset_provenance(owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256) values($1,'generated-private',$2,'publish_copy',$3,'publish_pending','video','video/mp4',10,$4) on conflict(bucket_id,object_path) do nothing`,[A,c.targetPath,c.intentId,c.checksumSha256]);}
+ storePublishCopy:async(c:any)=>{await db.query(`insert into media_asset_provenance(owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256) values($1,'generated-private',$2,'publish_copy',$3,'publish_pending','video','video/mp4',10,$4) on conflict(bucket_id,object_path) do nothing`,[A,c.targetPath,c.intentId,c.checksumSha256]);}
  };
+ const recoveryDb:any={rpc:async(name:string,args:any)=>{try{const entries=Object.entries(args);const r=await db.query(`select public.${name}(${entries.map(([key],i)=>`${key} => $${i+1}`).join(',')}) as value`,entries.map(([,v])=>v));return {data:(r.rows[0] as {value:unknown}).value,error:null};}catch(error){return {data:null,error:{message:error instanceof Error?error.message:String(error)}};}}};
  const makeReceipt=(name:string,destinations=ds.slice(0,1))=>({...buildDueVideoReceipt({draftId:name,updatedAt:revision,scheduledAt:revision,payload:{contentId:name,title:'Video',media,imageUrl:media[0].url,scheduledDestinations:destinations}})});
  const makeInput=(receipt:any,index=0)=>({uid:A,receipt,destination:receipt.destinations[index]});
  const success=()=>({outcome:'succeeded' as const,evidence:{stage:'created' as const,classification:'succeeded' as const,pinId:'12345',pinUrl:'https://www.pinterest.com/pin/12345/'}});
  const deps:any=createV76RpcVideoPublishDependencies({
   inspect:input=>inspectV76VideoPublishState(readDb,input),
   materializeSources:(input,lease)=>materializePrivateVideoSources(input,lease,materializer),
+  loadReadySources:(input:any)=>loadReadyPrivateVideoSources(recoveryDb,input,materializer),
   publishVideo:async()=>{calls++;return success();},
   rpc:async(name,args)=>{const entries=Object.entries(args);const r=await db.query(`select public.${name}(${entries.map(([key],i)=>`${key} => $${i+1}`).join(',')}) as value`,entries.map(([,v])=>typeof v==='object'&&v!==null?JSON.stringify(v):v));return (r.rows[0] as {value:unknown}).value;}
  });

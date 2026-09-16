@@ -49,6 +49,8 @@ export const CORE: string[] = [
   "test-pinterest-video-adapter",
   "test-v76-pinterest-video-publish",
   "test-v76-pinterest-video-recovery",
+  "test-v78-pinterest-video-recovery",
+  "test-v78-pinterest-video-upgrade",
   "test-publish-due-video-races",
   "test-pinterest-video-legacy-route",
   "test-published-pin-summary",

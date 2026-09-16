@@ -1,5 +1,9 @@
 import type { PublishDestination } from "@/lib/contentDraftModel";
-import type { ConfirmedPublishReceipt } from "@/lib/studio/publishConfirmation";
+import {
+  sha256Hex,
+  stablePublishString,
+  type ConfirmedPublishReceipt,
+} from "@/lib/studio/publishConfirmation";
 import type {
   PinterestVideoPublishResult,
 } from "@/lib/server/pinterest/videoPinAdapter";
@@ -57,6 +61,7 @@ export type DurableVideoPublishDependencies = {
     input: DurableVideoPublishInput,
     lease: { leaseToken: string; deliveryId: string },
   ): Promise<MaterializedVideoSource[]>;
+  loadReadySources(input: DurableVideoPublishInput): Promise<MaterializedVideoSource[]>;
   settleItem(
     input: DurableVideoPublishInput,
     lease: { leaseToken: string; deliveryId: string },
@@ -88,12 +93,42 @@ export type V76RpcVideoPublishBoundary = {
   rpc: V76Rpc;
   inspect: DurableVideoPublishDependencies["inspect"];
   materializeSources: DurableVideoPublishDependencies["materializeSources"];
+  loadReadySources: DurableVideoPublishDependencies["loadReadySources"];
   publishVideo: DurableVideoPublishDependencies["publishVideo"];
 };
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("v76_rpc_invalid_result");
   return value as Record<string, unknown>;
+}
+
+export function videoPublishSourceIdentityFingerprint(receipt: ConfirmedPublishReceipt): string {
+  return sha256Hex(stablePublishString({
+    draftId: receipt.draftId,
+    contentId: receipt.contentId,
+    title: receipt.title,
+    description: receipt.description,
+    altText: receipt.altText,
+    destinationUrl: receipt.destinationUrl,
+    media: receipt.media.map(item => ({
+      id: item.id,
+      kind: item.kind,
+      url: item.url,
+      source: item.source ?? null,
+      width: item.width ?? null,
+      height: item.height ?? null,
+      durationMs: item.kind === "video" ? item.durationMs ?? null : null,
+      posterUrl: item.kind === "video" ? item.posterUrl?.trim() || null : null,
+      altText: item.kind === "video" ? item.altText?.trim() || null : null,
+    })),
+    destinations: receipt.publishableDestinations.map(item => ({
+      id: item.id,
+      provider: item.provider,
+      socialConnectionId: item.socialConnectionId,
+      boardId: item.boardId ?? null,
+    })).sort((left, right) => left.id.localeCompare(right.id)),
+    dispatchDestinationIds: [...receipt.dispatchDestinationIds].sort(),
+  }));
 }
 
 function requiredText(value: unknown, code: string): string {
@@ -116,9 +151,10 @@ export function createV76RpcVideoPublishDependencies(
   return {
     inspect: boundary.inspect,
     async confirmPrepare(input) {
-      await boundary.rpc("publish_intent_confirm_prepare", {
+      await boundary.rpc("publish_intent_confirm_prepare_v78", {
         p_user_id: input.uid,
         p_receipt: input.receipt,
+        p_source_identity_fingerprint: videoPublishSourceIdentityFingerprint(input.receipt),
       });
     },
     async leaseMaterialization(input) {
@@ -135,6 +171,7 @@ export function createV76RpcVideoPublishDependencies(
       };
     },
     materializeSources: boundary.materializeSources,
+    loadReadySources: boundary.loadReadySources,
     async settleItem(input, lease, source) {
       const value = record(await boundary.rpc("publish_asset_settle_item", {
         p_user_id: input.uid,
@@ -153,7 +190,7 @@ export function createV76RpcVideoPublishDependencies(
     },
     async claimReady(input) {
       const claimToken = globalThis.crypto.randomUUID();
-      const value = record(await boundary.rpc("publish_asset_claim_ready", {
+      const value = record(await boundary.rpc("publish_asset_claim_ready_v78", {
         p_user_id: input.uid,
         p_intent_id: input.receipt.intentId,
         p_destination_id: input.destination.id,
@@ -187,7 +224,7 @@ export function createV76RpcVideoPublishDependencies(
     async settleAttempt(input, status, attempt, provider) {
       const succeeded = status === "succeeded" ? provider?.evidence : undefined;
       const remoteUrl = canonicalPinterestUrl(succeeded?.pinId, succeeded?.pinUrl);
-      await boundary.rpc("publish_provider_attempt_settle", {
+      await boundary.rpc("publish_provider_attempt_settle_v78", {
         p_user_id: input.uid,
         p_attempt_id: attempt.attemptId,
         p_claim_token: attempt.claimToken,
@@ -277,7 +314,7 @@ export async function dispatchV76PinterestVideo(
     return unknownResult({ reason: "process_loss_after_provider_attempt" }, true);
   }
 
-  await deps.confirmPrepare(input);
+  if (prior.kind === "missing") await deps.confirmPrepare(input);
 
   let lease: Awaited<ReturnType<DurableVideoPublishDependencies["leaseMaterialization"]>> = {
     leaseToken: "durable-ready-replay",
@@ -292,7 +329,9 @@ export async function dispatchV76PinterestVideo(
     }
   }
 
-  const sources = await deps.materializeSources(input, lease);
+  const sources = prior.kind === "ready" || prior.kind === "claimed"
+    ? await deps.loadReadySources(input)
+    : await deps.materializeSources(input, lease);
   if (!sources.length || sources.length !== input.receipt.media.length) {
     return { outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" } };
   }
@@ -317,6 +356,9 @@ export async function dispatchV76PinterestVideo(
     }
   }
   const started = await deps.startAttempt(input, claim);
+  if (started.status === "started" && started.replayed) {
+    return { outcome: "in_progress", retryAllowed: false };
+  }
   if (started.status !== "started") {
     return started.status === "succeeded"
       ? { outcome: "published", replayed: true, retryAllowed: false }

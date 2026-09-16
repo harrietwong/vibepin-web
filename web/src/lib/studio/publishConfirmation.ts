@@ -243,7 +243,17 @@ export function buildPublishConfirmation(
   options: { onlyPending?: boolean; mode?: PublishConfirmationMode; actionId?: string } = {},
 ): PublishConfirmationSnapshot {
   const destinations = explicitPublishDestinations(draft);
-  const media = contentMedia(draft);
+  const media = contentMedia(draft).map(item => {
+    if (item.kind !== "video") return item;
+    const { altText, posterUrl, ...video } = item;
+    const canonicalAltText = altText?.trim();
+    const canonicalPosterUrl = posterUrl?.trim();
+    return {
+      ...video,
+      ...(canonicalAltText ? { altText: canonicalAltText } : {}),
+      ...(canonicalPosterUrl ? { posterUrl: canonicalPosterUrl } : {}),
+    };
+  });
   const blockers: PublishConfirmationBlocker[] = [];
   const publishableDestinations: PublishDestination[] = [];
 
@@ -306,7 +316,8 @@ export function buildPublishConfirmation(
       height: item.height ?? null,
       ...(item.kind === "video" ? {
         durationMs: item.durationMs ?? null,
-        posterUrl: item.posterUrl ?? null,
+        posterUrl: item.posterUrl?.trim() || null,
+        altText: item.altText?.trim() || null,
       } : {}),
     })),
     destinations: destinations.map(item => ({

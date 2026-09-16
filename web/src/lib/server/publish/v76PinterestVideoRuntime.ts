@@ -5,7 +5,10 @@ import type {
   DurableVideoPublishState,
   MaterializedVideoSource,
 } from "./v76PinterestVideoPublish";
-import { createV76RpcVideoPublishDependencies } from "./v76PinterestVideoPublish";
+import {
+  createV76RpcVideoPublishDependencies,
+  videoPublishSourceIdentityFingerprint,
+} from "./v76PinterestVideoPublish";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PinterestVideoPublishResult } from "@/lib/server/pinterest/videoPinAdapter";
 
@@ -160,8 +163,12 @@ export async function materializePrivateVideoSources(
         || await sha256(await file.arrayBuffer()) !== provenance.checksumSha256) {
       throw new Error("video_source_bytes_conflict");
     }
+    const sourceIdentity = videoPublishSourceIdentityFingerprint(input.receipt);
     const key = (await sha256(`${input.receipt.intentId}:${media.id}:${ordinal}`)).slice(0, 32);
-    const targetPath = `${input.uid}/publish/${input.receipt.fingerprint}/${ordinal}-${key}.${extension(provenance.contentType)}`;
+    // Operational draft timestamps participate in the confirmation receipt but
+    // not in the frozen media identity. Sibling passes must resolve to the same
+    // durable object locator after lifecycle bookkeeping advances updated_at.
+    const targetPath = `${input.uid}/publish/${sourceIdentity}/${ordinal}-${key}.${extension(provenance.contentType)}`;
     await boundary.storePublishCopy({
       uid: input.uid,
       intentId: input.receipt.intentId,
@@ -190,6 +197,61 @@ export async function materializePrivateVideoSources(
   return output;
 }
 
+export async function loadReadyPrivateVideoSources(
+  db: SupabaseClient,
+  input: DurableVideoPublishInput,
+  boundary: PrivateVideoMaterializationBoundary,
+): Promise<MaterializedVideoSource[]> {
+  const draft = await boundary.loadDraft(input.uid, input.receipt.draftId);
+  if (!draft) throw new Error("video_source_not_found");
+  if (!exactSourceIdentity(draft.payload, input.receipt)) throw new Error("publish_source_media_conflict");
+
+  const { data, error } = await db.rpc("publish_asset_ready_sources_v78", {
+    p_user_id: input.uid,
+    p_intent_id: input.receipt.intentId,
+    p_destination_id: input.destination.id,
+  });
+  if (error || !Array.isArray(data)) throw dbError(error, "publish_ready_sources_unavailable");
+  if (data.length !== input.receipt.media.length) throw new Error("publish_ready_asset_graph_invalid");
+
+  const output: MaterializedVideoSource[] = [];
+  for (const [ordinal, value] of data.entries()) {
+    const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const media = input.receipt.media[ordinal];
+    const objectPath = typeof row.objectPath === "string" ? row.objectPath : "";
+    const contentType = typeof row.contentType === "string" ? row.contentType : "";
+    const byteSize = Number(row.byteSize);
+    const checksumSha256 = typeof row.checksumSha256 === "string" ? row.checksumSha256 : "";
+    if (!media || media.kind !== "video"
+        || row.mediaId !== media.id || Number(row.ordinal) !== ordinal
+        || row.bucketId !== PRIVATE_BUCKET
+        || !objectPath.startsWith(`${input.uid}/publish/`)
+        || !VIDEO_TYPES.has(contentType)
+        || !Number.isSafeInteger(byteSize) || byteSize <= 0
+        || !/^[0-9a-f]{64}$/.test(checksumSha256)) {
+      throw new Error("publish_ready_asset_graph_invalid");
+    }
+    const file = await boundary.download(PRIVATE_BUCKET, objectPath);
+    if (file.size !== byteSize
+        || (file.type && file.type !== contentType)
+        || await sha256(await file.arrayBuffer()) !== checksumSha256) {
+      throw new Error("publish_ready_asset_bytes_conflict");
+    }
+    output.push({
+      mediaId: media.id,
+      ordinal,
+      bucketId: PRIVATE_BUCKET,
+      objectPath,
+      contentType: contentType as MaterializedVideoSource["contentType"],
+      byteSize,
+      checksumSha256,
+      fileName: objectPath.slice(objectPath.lastIndexOf("/") + 1),
+      file,
+    });
+  }
+  return output;
+}
+
 function dbError(error: { code?: string; message?: string } | null, fallback: string): Error {
   return new Error(error?.message || error?.code || fallback);
 }
@@ -200,13 +262,13 @@ export async function inspectV76VideoPublishState(
 ): Promise<DurableVideoPublishState> {
   const intentResult = await db
     .from("publish_intents")
-    .select("id,source_revision")
+    .select("id,source_identity_fingerprint")
     .eq("user_id", input.uid)
     .eq("intent_id", input.receipt.intentId)
     .maybeSingle();
   if (intentResult.error) throw dbError(intentResult.error, "publish_intent_inspection_failed");
   if (!intentResult.data) return { kind: "missing" };
-  const storedRevision = (intentResult.data as { source_revision?: string | null }).source_revision ?? "";
+  const storedSourceIdentity = (intentResult.data as { source_identity_fingerprint?: string | null }).source_identity_fingerprint ?? "";
   const intentDbId = String((intentResult.data as { id: unknown }).id);
   const destinationResult = await db
     .from("publish_intent_destinations")
@@ -265,8 +327,8 @@ export async function inspectV76VideoPublishState(
         : {},
     };
   }
-  if (!Number.isFinite(Date.parse(storedRevision))
-      || Date.parse(storedRevision) !== Date.parse(input.receipt.sourceUpdatedAt)) {
+  if (!/^[0-9a-f]{64}$/.test(storedSourceIdentity)
+      || storedSourceIdentity !== videoPublishSourceIdentityFingerprint(input.receipt)) {
     throw new Error("publish_source_revision_conflict");
   }
   if (destination?.status === "claimed") {
@@ -381,6 +443,7 @@ export function createSupabaseV76VideoPublishDependencies(input: {
   return createV76RpcVideoPublishDependencies({
     inspect: current => inspectV76VideoPublishState(input.db, current),
     materializeSources: (current, lease) => materializePrivateVideoSources(current, lease, materialization),
+    loadReadySources: current => loadReadyPrivateVideoSources(input.db, current, materialization),
     publishVideo: input.publishVideo,
     async rpc(name, args) {
       const { data, error } = await input.db.rpc(name, args);

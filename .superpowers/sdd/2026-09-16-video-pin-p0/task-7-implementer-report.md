@@ -155,3 +155,59 @@ npx eslint <Round 1 changed TS files>                  -> 0 errors, 0 warnings
 
 No external Pinterest, Storage, or database call occurred. No deployment, push, or
 merge occurred.
+
+## Independent Review Round 2
+
+Round 2 reviewed `aead8d05` and reported six Important findings, with no Critical
+findings. The report and both adversarial probes are retained unchanged in intent;
+the probes are now registered as the v78 recovery and upgrade suites.
+
+### R2-I1–I6 Closure
+
+- A replayed `started` attempt is no longer dispatch authority. Two callers racing
+  from the same claimed destination acquire one durable attempt and invoke the
+  provider exactly once; the replay returns `in_progress`.
+- Source identity now has its own v78 ledger fingerprint, separate from operational
+  `updated_at`. A later due pass can continue an untouched sibling with the same
+  frozen media/content/destination identity, while substantive mutations still fail
+  closed. The private publish-copy path is derived from that stable identity too.
+- v78 atomically validates and narrows a failed-only child retry before delegating
+  graph creation to the byte-identical v76 ledger. A real two-destination parent can
+  retry only its failed destination once; successful and unknown siblings cannot be
+  widened into the child.
+- Video media metadata uses one canonical builder/validator representation. Missing,
+  blank, trimmed, and non-empty `altText`/`posterUrl` agree; meaningful tampering
+  changes the fingerprint. Legacy image serialization retains its pinned hash.
+- Ready/claimed recovery loads the owner/intent/destination-bound frozen private
+  asset graph, downloads that publish copy, and verifies MIME, size, checksum, media
+  ordinal, and owner path. It does not re-read or rewrite the original upload.
+  Missing/corrupt/wrong-owner frozen assets fail closed; removing only the original
+  upload does not block recovery.
+- v76 is restored byte-for-byte to the official `04b0ebe0` blob. The repair ships as
+  additive v78 RPCs and a bounded rollback that retains historical identity evidence.
+  Upgrade coverage installs official v76, applies v78 twice, rolls v77 back/reapplies
+  it, rolls v78 back/reapplies it, and rejects same-marker function body drift.
+
+### Round 2 Verification
+
+```text
+npx tsx scripts/test-v78-pinterest-video-recovery.ts -> 5 adversarial groups passed, 0 failed
+npx tsx scripts/test-v78-pinterest-video-upgrade.ts  -> official v76 upgrade/reapply/drift checks passed
+npx tsx scripts/test-v76-pinterest-video-recovery.ts -> all R1–R8 production-boundary probes passed
+npx tsx scripts/test-v76-pinterest-video-publish.ts  -> 17 passed, 0 failed
+npx tsx scripts/test-publish-due-video-races.ts      -> 4/4 races, zero claim/meter/provider
+npx tsx scripts/test-pinterest-video-legacy-route.ts -> materialization_required, zero legacy provider
+npx tsx scripts/test-publish-due-claim.ts            -> 106 passed, 0 failed
+npx tsx scripts/test-publish-durable-intent.ts       -> 23 passed, 0 failed
+npx tsx scripts/test-publish-confirmation.ts         -> 16 passed, 0 failed
+npx tsx scripts/test-pinterest-video-adapter.ts      -> 16 passed, 0 failed
+node backend/tests/pglite_v37/verify-v76-publish-assets.mjs -> 280/280, two rounds
+node backend/tests/pglite_v37/verify-v77-video-media.mjs    -> 94/94
+npm run typecheck                                     -> exit 0
+npm run check:test-registry                           -> 244 tracked, 236 run, 8 excluded
+npx eslint <Round 2 changed web TS files>             -> 0 errors, 0 warnings
+git diff --cached --check                             -> exit 0
+```
+
+All database, Storage, and provider behavior in these tests is local PGlite or an
+explicit mock boundary. No external call, deployment, push, or merge occurred.
