@@ -4,6 +4,7 @@ import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { track, trackLatency } from "@/lib/analytics";
 import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
+import { readPinterestRegionFromStorage } from "@/lib/i18n/config";
 import type {
   GeneratePinterestPinCopyInput,
   GeneratePinterestPinCopyResult,
@@ -191,6 +192,7 @@ export function resolveDirectionContext(
 
 export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyInput): Promise<GeneratePinterestPinCopyResult> {
   const started = performance.now();
+  const country = input.country ?? readPinterestRegionFromStorage();
   const storeDraft = findStoreDraft(input.draftId, input.imageUrl);
   const previousMeta = storeDraft?.metadataDraft?.copyGenerationMeta;
   // Mode: caller override wins; else derive from whether copy was generated before.
@@ -223,7 +225,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     const v2 = await generatePinterestPinCopyV2({
       draftId: input.draftId,
       locale: input.language,
-      country: input.country,
+      country,
       length: input.length,
       product: productContext,
       image: cachedAnalysis,
@@ -268,7 +270,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
         keywordTermsUsed: selectedKeywords,
         boardId: input.boardId || undefined,
         language: input.language,
-        country: input.country,
+        country,
         contextSummary,
         contextDetails: v2.evidence.facts.map(fact => `${fact.key}: ${fact.value}`),
         timingsMs,
@@ -328,7 +330,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       category: input.category,
       keyword: input.keyword,
       language: input.language,
-      country: input.country,
+      country,
       length: input.length,
       mode,
       attempt,
@@ -473,7 +475,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       keywordTermsUsed: body.context?.keywordContext ?? [],
       boardId: input.boardId || undefined,
       language: input.language,
-      country: input.country,
+      country,
       contextSummary: body.contextSummary || "Based on generated context",
       contextDetails: body.contextDetails ?? [],
       timingsMs,

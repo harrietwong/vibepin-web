@@ -1068,7 +1068,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
    * Pin keeps its existing fields and never blocks the rest. No overwrite of edits on
    * failed items. Ends with a "N updated, M failed" summary.
    */
-  const handleGenerateCopyBatch = useCallback(async () => {
+  const runGenerateCopyBatch = useCallback(async () => {
     if (genProgress) return;
     const targets = pins.filter(p => checkedRows.has(p.pinId));
     if (!targets.length) return;
@@ -1122,6 +1122,28 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     else toast.error(tr("studioModals.genCopy.failedCount").replace("{n}", String(failed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genProgress, pins, checkedRows, rowEdits, boards, tr]);
+
+  const handleGenerateCopyBatch = useCallback(() => {
+    if (genProgress) return;
+    const targets = pins.filter(pin => checkedRows.has(pin.pinId));
+    if (!targets.length) return;
+    const pinsWithExistingCopy = targets.filter(pin =>
+      ["title", "description", "altText"].some(field =>
+        getVal(pin, rowEdits, field as "title" | "description" | "altText").trim(),
+      ),
+    );
+    if (pinsWithExistingCopy.length) {
+      setConfirm({
+        title: tr("pinForm.replaceExistingTitle"),
+        body: <>{tr("pinForm.replaceExistingBody")}</>,
+        confirmLabel: tr("pinForm.replaceWithAiCopy"),
+        danger: true,
+        onConfirm: () => { void runGenerateCopyBatch(); },
+      });
+      return;
+    }
+    void runGenerateCopyBatch();
+  }, [genProgress, pins, checkedRows, rowEdits, runGenerateCopyBatch, tr]);
 
   // Keep the closed render on the exact same hook path as the open render.
   // Returning before handleGenerateCopyBatch used to add one hook only when the

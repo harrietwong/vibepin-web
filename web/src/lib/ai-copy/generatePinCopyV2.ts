@@ -167,7 +167,9 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
   }
 
   const byId = new Map(analyzed.keywordEvidence.candidates.map(candidate => [candidate.id, candidate]));
-  const selectedKeywords = analyzed.keywordEvidence.selectedKeywordIds.map(id => byId.get(id)).filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate)).map(candidate => ({
+  // The server's usedKeywordIds are computed from the final validated copy. Do not
+  // present every candidate passed to the model as though it was actually used.
+  const selectedKeywords = result.usedKeywordIds.map(id => byId.get(id)).filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate)).map(candidate => ({
     id: candidate.id,
     phrase: candidate.phrase,
     provenance: candidate.provenance,

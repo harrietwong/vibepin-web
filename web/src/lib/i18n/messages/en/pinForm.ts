@@ -41,4 +41,12 @@ export const pinFormMessages = {
   "pinForm.recommendedPinterestKeywords": "Recommended Pinterest keywords",
   "pinForm.englishKeywordContext": "English Pinterest keyword context",
   "pinForm.board": "Board",
+  "pinForm.v2FactBasis": "Fact basis",
+  "pinForm.v2NoClaimsAuthorized": "No product claims were authorized.",
+  "pinForm.v2PrimaryKeyword": "Primary keyword",
+  "pinForm.v2DataUnknown": "Data unknown",
+  "pinForm.v2NoKeywordDemand": "No reliable keyword demand data.",
+  "pinForm.v2DemandUnavailable": "Generated from product and image meaning only; keyword demand data was unavailable.",
+  "pinForm.v2ValidationPassed": "Validation passed",
+  "pinForm.v2ValidationFailed": "Validation failed",
 } as const;

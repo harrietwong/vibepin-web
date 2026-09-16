@@ -369,10 +369,16 @@ function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, lang
 }
 
 function AICopyV2EvidenceBlock({ evidence }: { evidence: AICopyV2Evidence }) {
+  const { t: tr } = useLocale();
+  const provenanceLabel = evidence.primaryKeyword?.provenance === "official"
+    ? tr("trends.badge.official")
+    : evidence.primaryKeyword?.provenance === "estimated"
+      ? tr("trends.badge.estimated")
+      : tr("pinForm.v2DataUnknown");
   return (
     <div data-testid="ai-copy-v2-evidence" style={{ display: "flex", flexDirection: "column", gap: 7, padding: "8px 9px", borderRadius: 8, border: `1px solid ${P.border}`, background: P.surface }}>
       <div>
-        <div style={sectionLabel}>Fact basis</div>
+        <div style={sectionLabel}>{tr("pinForm.v2FactBasis")}</div>
         {evidence.facts.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {evidence.facts.slice(0, 4).map(fact => (
@@ -383,22 +389,22 @@ function AICopyV2EvidenceBlock({ evidence }: { evidence: AICopyV2Evidence }) {
               </div>
             ))}
           </div>
-        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>No product claims were authorized.</p>}
+        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>{tr("pinForm.v2NoClaimsAuthorized")}</p>}
       </div>
       <div>
-        <div style={sectionLabel}>Primary keyword</div>
+        <div style={sectionLabel}>{tr("pinForm.v2PrimaryKeyword")}</div>
         {evidence.primaryKeyword ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
             <span style={chip}>{evidence.primaryKeyword.phrase}</span>
-            <span data-testid="ai-copy-v2-provenance" style={{ fontSize: 9.5, color: P.textMuted }}>{evidence.primaryKeyword.label}</span>
+            <span data-testid="ai-copy-v2-provenance" style={{ fontSize: 9.5, color: P.textMuted }}>{provenanceLabel}</span>
           </div>
-        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>No reliable keyword demand data.</p>}
+        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>{tr("pinForm.v2NoKeywordDemand")}</p>}
       </div>
       {evidence.degradedMode === "no_keyword_demand_data" && (
-        <p data-testid="ai-copy-v2-degraded" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>Generated from product and image meaning only; keyword demand data was unavailable.</p>
+        <p data-testid="ai-copy-v2-degraded" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>{tr("pinForm.v2DemandUnavailable")}</p>
       )}
       <p data-testid="ai-copy-v2-validation" style={{ margin: 0, fontSize: 10.5, fontWeight: 700, color: evidence.validationReport.valid ? P.text : P.error }}>
-        {evidence.validationReport.valid ? "Validation passed" : "Validation failed"}
+        {evidence.validationReport.valid ? tr("pinForm.v2ValidationPassed") : tr("pinForm.v2ValidationFailed")}
       </p>
     </div>
   );

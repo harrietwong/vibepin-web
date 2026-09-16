@@ -3,10 +3,13 @@ import { buildQueryTerms, type KeywordContextInput, type KeywordRow } from "../k
 
 export type TrendKeywordLoader = (input: KeywordContextInput) => Promise<KeywordRow[]>;
 
-const FIELDS = [
+// Keep this list pinned to the versioned Postgres schema. Locale/language/country
+// are intentionally absent: the current table has only `region`, and pretending
+// otherwise makes PostgREST reject the entire select. Unlabelled rows are allowed
+// only for English by keywordEvidence's locale guard.
+export const TREND_KEYWORD_SELECT_FIELDS = [
   "id", "keyword", "category", "search_volume_level", "volume_signal",
-  "volume_score", "priority_score", "region", "data_quality", "language",
-  "locale", "source", "source_layer", "country",
+  "volume_score", "priority_score", "region", "data_quality", "source", "source_layer",
 ].join(",");
 
 const productionLoader: TrendKeywordLoader = async input => {
@@ -16,7 +19,7 @@ const productionLoader: TrendKeywordLoader = async input => {
   const db = createServerClient();
   const region = input.region ?? "US";
   const resultSets = await Promise.all(terms.slice(0, 8).map(async term => {
-    const { data, error } = await db.from("trend_keywords").select(FIELDS)
+    const { data, error } = await db.from("trend_keywords").select(TREND_KEYWORD_SELECT_FIELDS)
       .eq("status", "active").or(`region.eq.${region},region.is.null`)
       .ilike("keyword", `%${term}%`).order("priority_score", { ascending: false }).limit(15);
     if (error) throw new Error("trend_keyword_read_failed");

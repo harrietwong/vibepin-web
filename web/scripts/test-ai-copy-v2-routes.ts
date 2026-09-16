@@ -124,7 +124,7 @@ async function main() {
   const { __setRateLimitStoreForTests } = await import("../src/lib/server/rateLimit");
   const sessionModule = await import("../src/lib/ai-copy/v2/sessionStore");
   const { __setCopyProviderForTests, orchestrateCopyGeneration, buildPromptForSession } = await import("../src/lib/ai-copy/v2/orchestrator");
-  const { __setTrendKeywordLoaderForTests } = await import("../src/lib/ai-copy/v2/trendKeywordSource");
+  const { __setTrendKeywordLoaderForTests, TREND_KEYWORD_SELECT_FIELDS } = await import("../src/lib/ai-copy/v2/trendKeywordSource");
   const { POST: analyze } = await import("../src/app/api/ai-copy/v2/analyze/route");
   const { POST: generate } = await import("../src/app/api/ai-copy/v2/generate/route");
   const setProvider = (provider: Record<string, unknown>) => {
@@ -143,6 +143,12 @@ async function main() {
     __setTrendKeywordLoaderForTests(async () => []); setProvider({ async generate() { return validOutput(); } });
     return store;
   };
+
+  await test("trend keyword select matches the versioned schema", () => {
+    const fields = TREND_KEYWORD_SELECT_FIELDS.split(",");
+    for (const required of ["id", "keyword", "region", "data_quality", "source", "source_layer"]) assert(fields.includes(required), `select includes ${required}`);
+    for (const missing of ["language", "locale", "country"]) assert(!fields.includes(missing), `select excludes nonexistent ${missing}`);
+  });
 
   await test("feature off is 404 and unauthenticated is 401", async () => {
     reset(); delete process.env.AI_COPY_V2_ENABLED; eq((await analyze(analyzeReq("a"))).status, 404, "flag");
@@ -356,6 +362,13 @@ async function main() {
     const req = { generationId: randomUUID(), sessionId: randomUUID(), draftId: "d", factCard: { version: "fact-card-v1" as const, sessionId: "s", draftId: "d", locale: "en", facts: [] }, keywordEvidence: { keywordSetId: "k", candidates: [], selectedKeywordIds: [], degradedMode: "no_keyword_demand_data" as const } };
     assert(buildPromptForSession(req).includes("No reliable keyword demand data"), "degraded notice");
     const result = await orchestrateCopyGeneration(req); eq(result.degradedMode, "no_keyword_demand_data", "degraded output");
+  });
+
+  await test("generation prompt enforces the requested output language", () => {
+    const req = { generationId: randomUUID(), sessionId: randomUUID(), draftId: "d", factCard: { version: "fact-card-v1" as const, sessionId: "s", draftId: "d", locale: "zh-CN", facts: [] }, keywordEvidence: { keywordSetId: "k", candidates: [], selectedKeywordIds: [], degradedMode: "no_keyword_demand_data" as const } };
+    const prompt = buildPromptForSession(req);
+    assert(prompt.includes("Target output language: zh-CN"), "target locale is explicit");
+    assert(prompt.includes("Translate or naturally paraphrase"), "source-language context may not leak into localized copy");
   });
 
   await test("production store filters owner+completed+expiry and uses atomic finalize RPC", async () => {

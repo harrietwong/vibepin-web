@@ -35,7 +35,10 @@ async function main() {
     if (url.endsWith("/analyze")) return new Response(JSON.stringify({
       ok: true, sessionId: "session-1", degradedMode: "none",
       factCard: { version: "fact-card-v1", sessionId: "session-1", draftId: "draft-1", locale: "en", facts: [{ id: "f1", key: "product_title", value: "Oak desk", source: "product_catalog", trustLevel: "asserted", claimPolicy: "copy_allowed" }] },
-      keywordEvidence: { keywordSetId: "ks1", candidates: [{ id: "kw1", phrase: "home office ideas", provenance: "official", relevanceEvidence: [], status: "accepted" }], selectedKeywordIds: ["kw1"], degradedMode: "none" },
+      keywordEvidence: { keywordSetId: "ks1", candidates: [
+        { id: "kw1", phrase: "home office ideas", provenance: "official", relevanceEvidence: [], status: "accepted" },
+        { id: "kw2", phrase: "desk setup", provenance: "estimated", relevanceEvidence: [], status: "accepted" },
+      ], selectedKeywordIds: ["kw1", "kw2"], degradedMode: "none" },
     }), { status: 200, headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify({ ok: true, result: {
       generationId: "gen-1", sessionId: "session-1", draftId: "draft-1", angleId: "default", keywordSetId: "ks1",
@@ -57,6 +60,7 @@ async function main() {
   assert.deepEqual(stages, ["analyzing", "generating", "checking"]);
   assert.equal(result.fields.title, "Oak Desk Ideas");
   assert.equal(result.evidence.primaryKeyword?.label, "Official");
+  assert.deepEqual(result.evidence.selectedKeywords.map(keyword => keyword.id), ["kw1"], "evidence reports only keywords actually present in generated copy");
   assert.equal(result.evidence.validationReport.valid, true);
 
   const fallbackCalls: string[] = [];
@@ -104,8 +108,11 @@ async function main() {
   const sharedHelper = readFileSync(resolve(process.cwd(), "src/lib/ai-copy/generatePinCopy.ts"), "utf8");
   assert.match(sharedHelper, /if \(isAICopyV2ClientEnabled\(\)\)/, "v2 branches in the Studio\/Plan\/Batch shared helper");
   assert.match(sharedHelper, /fetch\("\/api\/ai-copy"/, "legacy endpoint remains available when the flag is off");
+  assert.match(sharedHelper, /input\.country \?\? readPinterestRegionFromStorage\(\)/, "shared callers use the user's Pinterest region instead of silently defaulting to US");
   const batch = readFileSync(resolve(process.cwd(), "src/components/studio/BatchEditDrawer.tsx"), "utf8");
   assert.match(batch, /generatePinterestPinCopy\(/, "Batch keeps using the shared helper");
+  assert.match(batch, /pinsWithExistingCopy/, "Batch detects generated copy that would overwrite existing user copy");
+  assert.match(batch, /pinForm\.replaceExistingTitle/, "Batch reuses the explicit overwrite confirmation before generation");
 
   console.log("AI Copy v2 UI/client tests passed");
 }

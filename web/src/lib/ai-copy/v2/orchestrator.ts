@@ -1,5 +1,5 @@
 /** Grounded single-result generation with one optional repair. */
-import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE } from "@/lib/ai-copy/visionServer";
+import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE, languageInstructions } from "@/lib/ai-copy/visionServer";
 import { containsTokenPhrase, validateCopy } from "./validateCopy";
 import { summarizeFacts } from "./factCard";
 import type { ClaimDetectionResult, CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
@@ -133,7 +133,7 @@ export function buildPromptForSession(req: GenerateCopyRequest): string {
   const facts = req.factCard.facts.filter(f => f.claimPolicy !== "blocked").map(f => `- ${f.key}: ${f.value} (${f.claimPolicy})`);
   const keywords = selectedPhrases(req.keywordEvidence);
   return [
-    `Locale: ${req.factCard.locale}`,
+    ...languageInstructions(req.factCard.locale),
     `Length preference: ${length}; ${guide}; hard limits title 100, description 800.`,
     `Grounding facts:\n${facts.length ? facts.join("\n") : "No product claims are authorized."}`,
     req.angleRequest?.trim() ? `Requested angle: ${req.angleRequest.trim()}` : "",
