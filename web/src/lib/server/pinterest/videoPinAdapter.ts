@@ -160,8 +160,14 @@ function validUploadParameters(value: unknown): Array<readonly [string, string]>
   return result;
 }
 
-function sensitiveRegistrationValues(token: string, uploadUrl: string, uploadParameters: Array<readonly [string, string]>): ReadonlySet<string> {
-  return new Set([token, uploadUrl, ...uploadParameters.map(([, value]) => value)]);
+function sensitiveRegistrationValues(token: string, uploadUrl: string, rawUploadParameters: unknown): ReadonlySet<string> {
+  const values = [token, uploadUrl];
+  if (rawUploadParameters && typeof rawUploadParameters === "object" && !Array.isArray(rawUploadParameters)) {
+    for (const value of Object.values(rawUploadParameters)) {
+      if (typeof value === "string") values.push(value);
+    }
+  }
+  return new Set(values);
 }
 
 async function withinPollDeadline<T>(
@@ -169,9 +175,10 @@ async function withinPollDeadline<T>(
   deps: PinterestVideoAdapterDependencies,
   operation: (signal: AbortSignal | undefined) => Promise<T>,
   remainingMs = deadline - deps.now(),
+  existingController?: AbortController,
 ): Promise<T> {
   if (remainingMs <= 0) throw new PollDeadlineExceeded();
-  const controller = typeof AbortController === "undefined" ? undefined : new AbortController();
+  const controller = existingController ?? (typeof AbortController === "undefined" ? undefined : new AbortController());
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -243,15 +250,18 @@ export async function publishPinterestVideo(
     const mediaId = safeId(body?.media_id);
     const uploadUrl = cleanText(body?.upload_url);
     const uploadParameters = validUploadParameters(body?.upload_parameters);
+    // Gather all recognizable response values before validating the response shape:
+    // a malformed registration is still untrusted provider input and may echo secrets
+    // in its request id.
+    const sensitiveValues = sensitiveRegistrationValues(token, uploadUrl, body?.upload_parameters);
     if (!mediaId || !uploadUrl || !uploadParameters) {
       return {
         outcome: "unknown",
         evidence: evidence("registered", "unknown", {
-          ...(safeRequestId(registerResponse, tokenSensitiveValues) ? { requestId: safeRequestId(registerResponse, tokenSensitiveValues) } : {}),
-        }, tokenSensitiveValues),
+          ...(safeRequestId(registerResponse, sensitiveValues) ? { requestId: safeRequestId(registerResponse, sensitiveValues) } : {}),
+        }, sensitiveValues),
       };
     }
-    const sensitiveValues = sensitiveRegistrationValues(token, uploadUrl, uploadParameters);
     if (containsSensitiveValue(mediaId, sensitiveValues)) {
       return { outcome: "unknown", evidence: evidence("registered", "unknown", {}, sensitiveValues) };
     }
@@ -277,23 +287,31 @@ export async function publishPinterestVideo(
       return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
     }
     let pollResponse: Response;
+    const pollController = typeof AbortController === "undefined" ? undefined : new AbortController();
     try {
       pollResponse = await withinPollDeadline(deadline, deps, (signal) => deps.fetch(
         apiUrl(deps.apiBase, `/media/${encodeURIComponent(registered.mediaId)}`),
         { method: "GET", headers: authenticatedHeaders(token), ...(signal ? { signal } : {}) },
-      ));
+      ), undefined, pollController);
     } catch {
       return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
     }
     if (!pollResponse.ok) return responseResult(pollResponse, "polled", registered.mediaId, registered.sensitiveValues);
     let pollBody: Record<string, unknown> | null;
     try {
-      pollBody = await withinPollDeadline(deadline, deps, () => safeJson(pollResponse));
+      // Keep the fetch's controller alive through body consumption: a body timeout
+      // aborts the original request/stream rather than a detached no-op controller.
+      pollBody = await withinPollDeadline(deadline, deps, () => safeJson(pollResponse), undefined, pollController);
     } catch {
       return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
     }
     const status = cleanText(pollBody?.status).toLowerCase();
-    if (status === "succeeded") break;
+    if (status === "succeeded") {
+      if (deadline - deps.now() <= 0) {
+        return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
+      }
+      break;
+    }
     if (["failed", "failure", "cancelled", "canceled", "rejected", "error"].includes(status)) {
       return {
         outcome: "failed",

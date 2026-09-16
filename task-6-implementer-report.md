@@ -117,3 +117,37 @@ git diff --check                                  -> passed
 The full-project TypeScript and OAuth/service gates remain blocked by the unchanged
 incomplete local dependency installation described above; the integration worktree
 must run them before acceptance.
+
+## Independent Review Repair — Round 2
+
+The scoped re-review found three remaining edge conditions in Round 1: a successful
+poll body could advance the injected clock past its deadline before create dispatch,
+the malformed registration branch did not consider partially valid upload parameters
+when redacting a RID, and response-body timeouts did not abort the controller attached
+to the original fetch.
+
+### Repair TDD Evidence
+
+Three tests were added before this repair and produced the expected RED result:
+13 passed and 3 failed. They demonstrated a `succeeded` poll body at clock 11 with a
+deadline of 10 still dispatching `/pins`, a missing-media registration leaking a policy
+value through `x-pinterest-rid`, and a stalled body leaving the captured fetch signal
+unaborted.
+
+The adapter now rechecks the injected deadline after a successful poll body and before
+leaving polling, gathers every recognizable string upload parameter before registration
+shape validation, and shares one AbortController between a poll fetch and its body
+consumption. A body timeout therefore aborts the original request signal.
+
+### Repair Verification
+
+```text
+npx tsx scripts/test-pinterest-video-adapter.ts  -> 16 passed, 0 failed
+npx tsx scripts/test-pinterest-video-adapter.ts  -> 16 passed, 0 failed
+npx tsx scripts/test-pin-media-source.ts         -> 8 passed, 0 failed
+npx tsx scripts/check-test-registry.ts           -> OK
+isolated strict TypeScript adapter check          -> passed
+git diff --check                                  -> passed
+```
+
+No external service, database, Storage, deployment, push, or merge was invoked.

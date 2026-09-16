@@ -189,6 +189,17 @@ async function main(): Promise<void> {
     }
   });
 
+  await test("filters a malformed registration RID that echoes an otherwise-valid upload parameter", async () => {
+    const secret = "upload-secret-456";
+    const source = dependencies([
+      response({ upload_url: "https://upload.example.test/form", upload_parameters: { policy: secret, invalid: 7 } }, 200, { "x-pinterest-rid": secret }),
+    ]);
+    const result = await publishPinterestVideo(input(), source.deps);
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "registered", classification: "unknown" } });
+    assert.equal(source.calls.length, 1);
+    assert.ok(!JSON.stringify(result).includes(secret));
+  });
+
   await test("definitely rejects provider 4xx and explicit failed poll states", async () => {
     const register4xx = dependencies([response({ secret: "provider body" }, 401)]);
     const rejected = await publishPinterestVideo(input(), register4xx.deps);
@@ -258,6 +269,7 @@ async function main(): Promise<void> {
   });
 
   await test("bounds a stalled polling response body to the remaining deadline", async () => {
+    let originalPollSignal: AbortSignal | undefined;
     const stalledBody = {
       ok: true,
       status: 200,
@@ -270,8 +282,38 @@ async function main(): Promise<void> {
       stalledBody,
     ], [0, 0, 0]);
     source.deps.pollDeadlineMs = 5;
+    const fetch = source.deps.fetch;
+    source.deps.fetch = async (url, init = {}) => {
+      if (String(url).endsWith("/media/media-1")) originalPollSignal = init.signal ?? undefined;
+      return fetch(url, init);
+    };
     const result = await finishesWithin(publishPinterestVideo(input(), source.deps));
     assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "polled", classification: "unknown", mediaId: "media-1" } });
+    assert.ok(originalPollSignal?.aborted, "a stalled response body must abort the controller originally attached to fetch");
+  });
+
+  await test("rechecks the deadline after a successful polling body before creating a Pin", async () => {
+    let clock = 0;
+    const lateSuccess = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => {
+        clock = 11;
+        return { status: "succeeded" };
+      },
+    } as unknown as Response;
+    const source = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      lateSuccess,
+      response({ id: "must-not-create" }, 201),
+    ]);
+    source.deps.now = () => clock;
+    source.deps.pollDeadlineMs = 10;
+    const result = await publishPinterestVideo(input(), source.deps);
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "polled", classification: "unknown", mediaId: "media-1" } });
+    assert.equal(source.calls.length, 3, "an expired successful poll must never dispatch /pins");
   });
 
   await test("caps a polling sleep to the remaining deadline when its interval is longer", async () => {
