@@ -157,6 +157,7 @@ export type PublishConfirmationFingerprintInput = {
     height?: number | null;
     durationMs?: number | null;
     posterUrl?: string | null;
+    altText?: string | null;
   }>;
   mode: PublishConfirmationMode;
   destinations: Array<{
@@ -188,17 +189,25 @@ export function publishConfirmationFingerprint(input: PublishConfirmationFingerp
     description: input.description,
     altText: input.altText,
     destinationUrl: input.destinationUrl,
-    media: input.media.map(item => ({
-      id: item.id,
-      url: item.url,
-      // `null` preserves every pre-video image fingerprint while making a video
-      // impossible to relabel as an image without invalidating confirmation.
-      kind: item.kind === "video" ? "video" : null,
-      width: item.width ?? null,
-      height: item.height ?? null,
-      durationMs: item.kind === "video" ? item.durationMs ?? null : null,
-      posterUrl: item.kind === "video" ? item.posterUrl ?? null : null,
-    })),
+    media: input.media.map(item => item.kind === "video"
+      ? {
+          id: item.id,
+          url: item.url,
+          kind: "video",
+          width: item.width ?? null,
+          height: item.height ?? null,
+          durationMs: item.durationMs ?? null,
+          posterUrl: item.posterUrl?.trim() || null,
+          altText: item.altText?.trim() || null,
+        }
+      // Byte-for-byte compatibility with the pre-video identity is deliberate:
+      // adding even null video-only keys would invalidate every frozen image receipt.
+      : {
+          id: item.id,
+          url: item.url,
+          width: item.width ?? null,
+          height: item.height ?? null,
+        }),
     destinations: input.destinations.map(item => ({
       id: item.id,
       provider: item.provider,

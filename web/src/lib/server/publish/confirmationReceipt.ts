@@ -194,13 +194,14 @@ export function validateImmediatePublishReceipt(
       ? row.durationMs
       : undefined;
     const posterUrl = text(row.posterUrl).trim();
+    const mediaAltText = text(row.altText).trim();
     return [{
       id: text(row.id),
       kind,
       url,
       ...(typeof row.width === "number" ? { width: row.width } : {}),
       ...(typeof row.height === "number" ? { height: row.height } : {}),
-      ...(text(row.altText) ? { altText: text(row.altText) } : {}),
+      ...(mediaAltText ? { altText: mediaAltText } : {}),
       source,
       ...(kind === "video" && durationMs ? { durationMs } : {}),
       ...(kind === "video" && posterUrl ? { posterUrl } : {}),

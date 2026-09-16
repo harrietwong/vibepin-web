@@ -7,7 +7,9 @@ import type {
 export type DurableVideoPublishState =
   | { kind: "missing" }
   | { kind: "prepared" }
-  | { kind: "attempt_started"; attemptId: string; claimToken: string }
+  | { kind: "ready" }
+  | { kind: "claimed"; claimToken: string; attempt: number }
+  | { kind: "attempt_started"; attemptId: string; claimToken: string; stale: boolean }
   | { kind: "published"; remoteId: string; remoteUrl?: string; evidence: Record<string, unknown> }
   | { kind: "failed"; evidence: Record<string, unknown> }
   | { kind: "delivery_unknown"; evidence: Record<string, unknown> };
@@ -63,10 +65,10 @@ export type DurableVideoPublishDependencies = {
   claimReady(
     input: DurableVideoPublishInput,
     lease: { leaseToken: string; deliveryId: string },
-  ): Promise<{ claimToken: string }>;
+  ): Promise<{ claimToken: string; attempt: number }>;
   startAttempt(
     input: DurableVideoPublishInput,
-    claim: { claimToken: string },
+    claim: { claimToken: string; attempt: number },
   ): Promise<{ attemptId: string; status: DurableAttemptSettlement | "started"; replayed: boolean }>;
   publishVideo(
     input: DurableVideoPublishInput,
@@ -157,7 +159,11 @@ export function createV76RpcVideoPublishDependencies(
         p_destination_id: input.destination.id,
         p_claim_token: claimToken,
       }));
-      return { claimToken: requiredText(value.claimToken, "publish_claim_missing") };
+      // v76 originally omitted attempt from this result; attempt one remains
+      // compatible while retry children return their inherited ordinal.
+      const attempt = Number(value.attempt ?? 1);
+      if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("publish_attempt_missing");
+      return { claimToken: requiredText(value.claimToken, "publish_claim_missing"), attempt };
     },
     async startAttempt(input, claim) {
       const value = record(await boundary.rpc("publish_provider_attempt_start", {
@@ -165,7 +171,7 @@ export function createV76RpcVideoPublishDependencies(
         p_intent_id: input.receipt.intentId,
         p_destination_id: input.destination.id,
         p_claim_token: claim.claimToken,
-        p_attempt: 1,
+        p_attempt: claim.attempt,
       }));
       const status = requiredText(value.status, "provider_attempt_status_missing");
       if (status !== "started" && status !== "succeeded" && status !== "failed" && status !== "unknown") {
@@ -258,6 +264,7 @@ export async function dispatchV76PinterestVideo(
     };
   }
   if (prior.kind === "attempt_started") {
+    if (!prior.stale) return { outcome: "in_progress", retryAllowed: false };
     try {
       await deps.settleAttempt(
         input,
@@ -272,31 +279,42 @@ export async function dispatchV76PinterestVideo(
 
   await deps.confirmPrepare(input);
 
-  let lease: Awaited<ReturnType<DurableVideoPublishDependencies["leaseMaterialization"]>>;
-  try {
-    lease = await deps.leaseMaterialization(input);
-  } catch (error) {
-    if (isLeaseCompetition(error)) return { outcome: "in_progress", retryAllowed: false };
-    throw error;
+  let lease: Awaited<ReturnType<DurableVideoPublishDependencies["leaseMaterialization"]>> = {
+    leaseToken: "durable-ready-replay",
+    deliveryId: "durable-ready-replay",
+  };
+  if (prior.kind !== "ready" && prior.kind !== "claimed") {
+    try {
+      lease = await deps.leaseMaterialization(input);
+    } catch (error) {
+      if (isLeaseCompetition(error)) return { outcome: "in_progress", retryAllowed: false };
+      throw error;
+    }
   }
 
   const sources = await deps.materializeSources(input, lease);
   if (!sources.length || sources.length !== input.receipt.media.length) {
     return { outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" } };
   }
-  let deliveryReady = false;
-  for (const source of [...sources].sort((left, right) => left.ordinal - right.ordinal)) {
-    const settled = await deps.settleItem(input, lease, source);
-    deliveryReady = settled.deliveryReady;
+  let deliveryReady = prior.kind === "ready" || prior.kind === "claimed";
+  if (!deliveryReady) {
+    for (const source of [...sources].sort((left, right) => left.ordinal - right.ordinal)) {
+      const settled = await deps.settleItem(input, lease, source);
+      deliveryReady = settled.deliveryReady;
+    }
   }
   if (!deliveryReady) return { outcome: "in_progress", retryAllowed: false };
 
-  let claim: { claimToken: string };
-  try {
-    claim = await deps.claimReady(input, lease);
-  } catch (error) {
-    if (isLeaseCompetition(error)) return { outcome: "in_progress", retryAllowed: false };
-    throw error;
+  let claim: { claimToken: string; attempt: number };
+  if (prior.kind === "claimed") {
+    claim = { claimToken: prior.claimToken, attempt: prior.attempt };
+  } else {
+    try {
+      claim = await deps.claimReady(input, lease);
+    } catch (error) {
+      if (isLeaseCompetition(error)) return { outcome: "in_progress", retryAllowed: false };
+      throw error;
+    }
   }
   const started = await deps.startAttempt(input, claim);
   if (started.status !== "started") {

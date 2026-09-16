@@ -82,10 +82,30 @@ function exactMediaIdentity(media: unknown): string {
       width: typeof row.width === "number" ? row.width : null,
       height: typeof row.height === "number" ? row.height : null,
       source: typeof row.source === "string" ? row.source : null,
-      posterUrl: typeof row.posterUrl === "string" ? row.posterUrl : null,
-      altText: typeof row.altText === "string" ? row.altText : null,
+      posterUrl: typeof row.posterUrl === "string" ? row.posterUrl.trim() || null : null,
+      altText: typeof row.altText === "string" ? row.altText.trim() || null : null,
     };
   }));
+}
+
+function exactSourceIdentity(
+  payload: Record<string, unknown>,
+  receipt: DurableVideoPublishInput["receipt"],
+): boolean {
+  const content = (value: unknown): string => typeof value === "string" ? value : "";
+  return stablePublishString({
+    title: content(payload.title),
+    description: content(payload.description),
+    altText: content(payload.altText),
+    destinationUrl: content(payload.destinationUrl),
+    media: exactMediaIdentity(payload.media),
+  }) === stablePublishString({
+    title: receipt.title,
+    description: receipt.description,
+    altText: receipt.altText,
+    destinationUrl: receipt.destinationUrl,
+    media: exactMediaIdentity(receipt.media),
+  });
 }
 
 function extension(contentType: string): string {
@@ -103,10 +123,10 @@ export async function materializePrivateVideoSources(
 ): Promise<MaterializedVideoSource[]> {
   const draft = await boundary.loadDraft(input.uid, input.receipt.draftId);
   if (!draft) throw new Error("video_source_not_found");
-  if (Date.parse(draft.updatedAt) !== Date.parse(input.receipt.sourceUpdatedAt)) {
-    throw new Error("publish_source_revision_conflict");
-  }
-  if (exactMediaIdentity(draft.payload.media) !== exactMediaIdentity(input.receipt.media)) {
+  // pin_drafts.updated_at is also advanced by publish lifecycle bookkeeping.
+  // Source authority is therefore the frozen content/media identity below, not
+  // this operational timestamp. A real media/content mutation still fails closed.
+  if (!exactSourceIdentity(draft.payload, input.receipt)) {
     throw new Error("publish_source_media_conflict");
   }
 
@@ -187,14 +207,10 @@ export async function inspectV76VideoPublishState(
   if (intentResult.error) throw dbError(intentResult.error, "publish_intent_inspection_failed");
   if (!intentResult.data) return { kind: "missing" };
   const storedRevision = (intentResult.data as { source_revision?: string | null }).source_revision ?? "";
-  if (!Number.isFinite(Date.parse(storedRevision))
-      || Date.parse(storedRevision) !== Date.parse(input.receipt.sourceUpdatedAt)) {
-    throw new Error("publish_source_revision_conflict");
-  }
   const intentDbId = String((intentResult.data as { id: unknown }).id);
   const destinationResult = await db
     .from("publish_intent_destinations")
-    .select("status,remote_id,remote_url,evidence")
+    .select("status,materialization_status,claim_token,attempt,remote_id,remote_url,evidence")
     .eq("publish_intent_id", intentDbId)
     .eq("destination_id", input.destination.id)
     .maybeSingle();
@@ -224,7 +240,7 @@ export async function inspectV76VideoPublishState(
   }
   const attemptResult = await db
     .from("provider_publish_attempts")
-    .select("id,status,claim_token_identity,evidence")
+    .select("id,status,claim_token_identity,evidence,started_at")
     .eq("publish_intent_id", intentDbId)
     .eq("destination_id", input.destination.id)
     .order("attempt", { ascending: false })
@@ -237,6 +253,8 @@ export async function inspectV76VideoPublishState(
       kind: "attempt_started",
       attemptId: String(attempt.id),
       claimToken: String(attempt.claim_token_identity),
+      stale: Number.isFinite(Date.parse(String(attempt.started_at)))
+        && Date.parse(String(attempt.started_at)) <= Date.now() - 10 * 60_000,
     };
   }
   if (attempt?.status === "unknown") {
@@ -246,6 +264,21 @@ export async function inspectV76VideoPublishState(
         ? attempt.evidence as Record<string, unknown>
         : {},
     };
+  }
+  if (!Number.isFinite(Date.parse(storedRevision))
+      || Date.parse(storedRevision) !== Date.parse(input.receipt.sourceUpdatedAt)) {
+    throw new Error("publish_source_revision_conflict");
+  }
+  if (destination?.status === "claimed") {
+    const claimToken = typeof destination.claim_token === "string" ? destination.claim_token : "";
+    const attempt = Number(destination.attempt);
+    if (!claimToken || !Number.isSafeInteger(attempt) || attempt < 1) {
+      throw new Error("publish_claim_state_invalid");
+    }
+    return { kind: "claimed", claimToken, attempt };
+  }
+  if (destination?.status === "prepared" && destination.materialization_status === "materialized") {
+    return { kind: "ready" };
   }
   return destination?.status === "failed"
     ? {

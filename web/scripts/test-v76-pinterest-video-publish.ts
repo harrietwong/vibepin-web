@@ -96,10 +96,10 @@ function harness(state: DurableVideoPublishState = { kind: "missing" }) {
     },
     materializeSources: async () => { calls.push("materialize"); return [source]; },
     settleItem: async () => { calls.push("settle-item"); return { deliveryReady: true }; },
-    claimReady: async () => { calls.push("claim"); return { claimToken: "claim-1" }; },
+    claimReady: async () => { calls.push("claim"); return { claimToken: "claim-1", attempt: 1 }; },
     startAttempt: async () => {
       calls.push("attempt-start");
-      inspection = { kind: "attempt_started", attemptId: "attempt-1", claimToken: "claim-1" };
+      inspection = { kind: "attempt_started", attemptId: "attempt-1", claimToken: "claim-1", stale: false };
       return { attemptId: "attempt-1", status: "started", replayed: false };
     },
     publishVideo: async () => {
@@ -285,7 +285,7 @@ await test("private materialization freezes the owner source revision and reject
   const boundary: PrivateVideoMaterializationBoundary = {
     loadDraft: async () => ({
       updatedAt: receipt.sourceUpdatedAt,
-      payload: { media: receipt.media },
+      payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: receipt.media },
     }),
     findProvenance: async (_uid, _bucket, objectPath) => ({
       ownerUserId: "owner-1",
@@ -311,13 +311,15 @@ await test("private materialization freezes the owner source revision and reject
   copied.length = 0;
   boundary.loadDraft = async () => ({
     updatedAt: "2026-09-16T12:00:03.000Z",
-    payload: { media: receipt.media },
+    payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: receipt.media },
   });
-  await assert.rejects(
-    materializePrivateVideoSources(input(), { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary),
-    /publish_source_revision_conflict/,
-  );
-  assert.equal(copied.length, 0);
+  assert.equal((await materializePrivateVideoSources(
+    input(),
+    { leaseToken: "lease-1", deliveryId: "delivery-1" },
+    boundary,
+  )).length, 1);
+  assert.equal(copied.length, 1);
+  copied.length = 0;
 
   const tampered = input({
     receipt: {
@@ -325,7 +327,7 @@ await test("private materialization freezes the owner source revision and reject
       media: [{ ...receipt.media[0], url: "/api/storage-media?path=owner-2%2Fuploads%2Fvideo.mp4" }],
     },
   });
-  boundary.loadDraft = async () => ({ updatedAt: receipt.sourceUpdatedAt, payload: { media: tampered.receipt.media } });
+  boundary.loadDraft = async () => ({ updatedAt: receipt.sourceUpdatedAt, payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: tampered.receipt.media } });
   await assert.rejects(
     materializePrivateVideoSources(tampered, { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary),
     /video_source_owner_mismatch/,
@@ -358,8 +360,15 @@ await test("lease competition and an all-items-ready refusal stop before provide
   assert.equal(unready.calls.includes("provider"), false);
 });
 
-await test("a process-loss started attempt becomes unknown and is never dispatched again", async () => {
-  const { calls, deps } = harness({ kind: "attempt_started", attemptId: "attempt-old", claimToken: "claim-old" });
+await test("an active started attempt remains in progress and is never dispatched again", async () => {
+  const { calls, deps } = harness({ kind: "attempt_started", attemptId: "attempt-old", claimToken: "claim-old", stale: false });
+  const result = await dispatchV76PinterestVideo(input(), deps);
+  assert.equal(result.outcome, "in_progress");
+  assert.deepEqual(calls, ["inspect"]);
+});
+
+await test("an authoritatively stale started attempt becomes unknown without provider redispatch", async () => {
+  const { calls, deps } = harness({ kind: "attempt_started", attemptId: "attempt-old", claimToken: "claim-old", stale: true });
   const result = await dispatchV76PinterestVideo(input(), deps);
   assert.equal(result.outcome, "delivery_unknown");
   assert.deepEqual(calls, ["inspect", "attempt-settle:unknown"]);

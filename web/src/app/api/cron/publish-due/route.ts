@@ -305,6 +305,14 @@ export async function GET(req: Request): Promise<Response> {
       .update({ publish_claimed_at: claimIso })
       .eq("vibepin_user_id", candidate.vibepin_user_id)
       .eq("draft_id", candidate.draft_id)
+      // Bind the write to the exact row scanned. Reschedule, cancel/delete, or
+      // any content/media edit advances one of these predicates and wins before
+      // metering or a provider boundary can be reached.
+      .eq("scheduled_at", candidate.scheduled_at)
+      .eq("updated_at", candidate.updated_at)
+      .lte("scheduled_at", claimIso)
+      .is("deleted_at", null)
+      .is("archived_at", null)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
       .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at");
 

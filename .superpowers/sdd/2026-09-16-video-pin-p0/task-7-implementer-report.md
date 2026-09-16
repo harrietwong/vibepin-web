@@ -92,3 +92,66 @@ green.
 - No independent reviewer subagent was dispatched because the active collaboration
   policy forbids unrequested subagent spawning; integration review remains required.
 - No real Pinterest, Storage, database, deployment, push, or merge operation occurred.
+
+## Independent Review Round 1
+
+The independent review at `c449e732` returned **NOT APPROVED** with eight Important
+findings and no Critical findings. The original report and both executable probes are
+retained beside this report. Round 1 converts those probes into registered regression
+tests that execute the production wrapper, real v76/v77 PGlite migrations, and actual
+GET/POST route boundaries.
+
+### R1–R8 Closure
+
+- **R1 retry lineage:** video retry confirmation now atomically locks the parent,
+  binds `priorIntentId` and the parent destination row, admits only a failed +
+  `retry_allowed` exact destination, inherits the attempt ordinal, and consumes the
+  entitlement once. Published, started, and delivery-unknown parents cannot mint a
+  child delivery.
+- **R2 source identity:** operational `pin_drafts.updated_at` is no longer treated as
+  content identity. Frozen title/description/alt/destination/media bytes are compared
+  instead; sibling lifecycle writes replay, while real content or media changes fail
+  before a provider call.
+- **R3 active attempts:** a fresh durable `started` attempt returns `in_progress` and
+  cannot be settled unknown by a concurrent replay. A stale started attempt remains
+  anti-retry and is moved to unknown through the locked settlement boundary.
+- **R4 crash recovery:** durable `materialized` and `claimed` destinations resume from
+  those states without attempting a second materialization lease. Ready-before-claim
+  and claimed-before-attempt process-loss regressions both pass.
+- **R5 sibling continuation:** parent lifecycle is derived from all destination rows;
+  success, failure, or unknown in one destination never overwrites or blocks an
+  untouched sibling.
+- **R6 cron TOCTOU:** claim UPDATE is bound to the scanned schedule, revision, due
+  window, deleted state, and archive state. Real GET route tests mutate reschedule,
+  cancel, delete, and media between scan and claim and observe zero claim, meter,
+  durable wrapper, or provider calls.
+- **R7 image compatibility:** image fingerprint serialization is byte-identical to the
+  pre-video shape; pinned fixture
+  `ffc2819b87d6225015c56d27af70f4b8c2883cf8c10f9fdd5757efee6da7e54d` passes.
+- **R8 optional canonicalization:** missing/blank video `altText` and `posterUrl` share
+  one representation, while non-empty mutations still change the fingerprint and
+  source identity.
+
+The actual `/api/pinterest/pins` POST route also rejects a mixed/video legacy bypass
+with `materialization_required` before database or legacy provider execution.
+
+### Round 1 Verification
+
+```text
+npx tsx scripts/test-v76-pinterest-video-recovery.ts -> all R1–R8 production-boundary probes passed
+npx tsx scripts/test-publish-due-video-races.ts      -> 4/4 races, zero claim/meter/provider
+npx tsx scripts/test-pinterest-video-legacy-route.ts -> materialization_required, zero legacy provider
+npx tsx scripts/test-v76-pinterest-video-publish.ts  -> 17 passed, 0 failed
+npx tsx scripts/test-publish-due-claim.ts             -> 106 passed, 0 failed
+npx tsx scripts/test-publish-durable-intent.ts        -> 23 passed, 0 failed
+npx tsx scripts/test-publish-confirmation.ts          -> 16 passed, 0 failed
+npx tsx scripts/test-pinterest-video-adapter.ts       -> 16 passed, 0 failed
+node backend/tests/pglite_v37/verify-v76-publish-assets.mjs -> 280/280, two rounds
+node backend/tests/pglite_v37/verify-v77-video-media.mjs    -> 94/94
+npm run typecheck                                     -> exit 0
+npm run check:test-registry                           -> 242 tracked, 234 run, 8 excluded
+npx eslint <Round 1 changed TS files>                  -> 0 errors, 0 warnings
+```
+
+No external Pinterest, Storage, or database call occurred. No deployment, push, or
+merge occurred.

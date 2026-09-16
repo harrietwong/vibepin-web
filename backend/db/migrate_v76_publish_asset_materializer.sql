@@ -27,20 +27,20 @@ begin
   end loop;
 
   for v_expected in select * from (values
-    ('publish_intent_confirm_prepare','public.publish_intent_confirm_prepare(uuid,jsonb)','vibepin:v76:publish-intent-confirm-prepare','jsonb','cec4333de13036aa19bff218b3f5f32f'),
+    ('publish_intent_confirm_prepare','public.publish_intent_confirm_prepare(uuid,jsonb)','vibepin:v76:publish-intent-confirm-prepare','jsonb','aa2be92161f032a5fe7f30de861e1bed'),
     ('publish_intent_prepare','public.publish_intent_prepare(uuid,text,text,text,jsonb,timestamptz,jsonb)','vibepin:v76:publish-intent-prepare','jsonb','8b1223d07ca4ffe76ccc8527ccb99b0a'),
     ('publish_asset_lease_materialization','public.publish_asset_lease_materialization(uuid,text,text,uuid,integer)','vibepin:v76:publish-asset-lease-materialization','jsonb','31041499144013fbe173873bab7b02f2'),
     ('publish_asset_settle_materialization','public.publish_asset_settle_materialization(uuid,text,text,uuid,text,text,text,text,bigint,text,text)','vibepin:v76:publish-asset-settle-materialization','jsonb','05aeaf68837a95a5cdc6177383ee6092'),
-    ('publish_asset_claim_ready','public.publish_asset_claim_ready(uuid,text,text,uuid)','vibepin:v76:publish-asset-claim-ready','jsonb','35acedfaf1a8ee6c1d2658b423614987'),
+    ('publish_asset_claim_ready','public.publish_asset_claim_ready(uuid,text,text,uuid)','vibepin:v76:publish-asset-claim-ready','jsonb','4518fb77f5887d240e853a9900b69212'),
     ('publish_asset_settle_item','public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)','vibepin:v76:publish-asset-settle-item','jsonb','a05aef6619c3ec795b6ceee080e04843'),
     ('publish_intent_cancel','public.publish_intent_cancel(uuid,text,text)','vibepin:v76:publish-intent-cancel','jsonb','467d2ac4723ce507fc9cc4117d16e234'),
     ('publish_cleanup_lease','public.publish_cleanup_lease(bigint,uuid,integer)','vibepin:v76:publish-cleanup-lease','jsonb','3531021d2ace2d006b58e7e8052e4465'),
     ('publish_cleanup_settle','public.publish_cleanup_settle(bigint,uuid,text,text)','vibepin:v76:publish-cleanup-settle','jsonb','b6cfaa4737737f04996320e4efb35738'),
     ('publish_provider_attempt_start','public.publish_provider_attempt_start(uuid,text,text,uuid,integer)','vibepin:v76:publish-provider-attempt-start','jsonb','6c3b5b84394576742ff7d484aef1e30d'),
-    ('publish_provider_attempt_settle','public.publish_provider_attempt_settle(uuid,uuid,uuid,text,integer,text,text,jsonb)','vibepin:v76:publish-provider-attempt-settle','jsonb','1338440656fe5dd29a797adab9a1631d'),
+    ('publish_provider_attempt_settle','public.publish_provider_attempt_settle(uuid,uuid,uuid,text,integer,text,text,jsonb)','vibepin:v76:publish-provider-attempt-settle','jsonb','5eab4a26ba5fdaf07a9b474045126650'),
     ('v76_bind_publish_owner','public.v76_bind_publish_owner()','vibepin:v76:v76-bind-publish-owner','trigger','e0b5285eeab2d65a60d5ec379595fa05'),
     ('v76_evidence_owner_guard','public.v76_evidence_owner_guard()','vibepin:v76:v76-evidence-owner-guard','trigger','cd0d8f7c210bc48579ce0bcf7d1e6b4d'),
-    ('v76_legacy_transition_guard','public.v76_legacy_transition_guard()','vibepin:v76:v76-legacy-transition-guard','trigger','e2dfe87f5368c365d1bd774fe9eb779f')
+    ('v76_legacy_transition_guard','public.v76_legacy_transition_guard()','vibepin:v76:v76-legacy-transition-guard','trigger','4d49c02b3c734efebc4e2d5c3e770002')
   ) as expected(function_name,signature,marker,return_type,body_hash) loop
     v_oid := to_regprocedure(v_expected.signature);
     -- An unexpected overload must never be silently adopted or left callable.
@@ -672,6 +672,7 @@ begin
   end if;
 
   if new.status in ('published','failed','delivery_unknown')
+     and (tg_op='INSERT' or new.status is distinct from old.status)
      and not (new.status='failed' and old.status='materializing'
        and new.materialization_status='materialization_failed') then
     if tg_op<>'UPDATE' or old.status<>'claimed' or old.claim_token is null
@@ -718,6 +719,7 @@ declare
   v_confirmed_at timestamptz;
   v_source_at timestamptz;
   v_destination jsonb;
+  v_parent_destination public.publish_intent_destinations%rowtype;
   v_destination_id text;
   v_provider text;
   v_connection_id text;
@@ -728,6 +730,9 @@ declare
   v_asset_id uuid;
   v_delivery_id uuid;
   v_count integer;
+  v_prior_intent_id text := nullif(btrim(coalesce(p_receipt->>'priorIntentId','')), '');
+  v_new_retry boolean := false;
+  v_parent_internal_id uuid;
   v_canonical_destinations jsonb := '[]'::jsonb;
   v_canonical_media jsonb := '[]'::jsonb;
 begin
@@ -888,21 +893,54 @@ begin
   -- Persist only immutable dispatch identity and typed media metadata. Transient
   -- URLs, content strings, account labels, and arbitrary caller keys never enter
   -- the receipt, including on replay comparison.
-  p_receipt := jsonb_build_object('intentId',v_intent_id,'fingerprint',v_fingerprint,
+  if v_prior_intent_id is not null then
+    select child.* into v_intent
+      from public.publish_intents child
+      join public.publish_intents parent on parent.id=child.prior_intent_id
+     where child.user_id=p_user_id and child.intent_id=v_intent_id
+       and parent.user_id=p_user_id and parent.intent_id=v_prior_intent_id
+     for update of child, parent;
+    if found then
+      select parent.id into v_parent_internal_id from public.publish_intents parent
+       where parent.user_id=p_user_id and parent.intent_id=v_prior_intent_id;
+    end if;
+    if not found then
+      select parent.id into v_parent_internal_id from public.publish_intents parent
+       where parent.user_id=p_user_id and parent.intent_id=v_prior_intent_id
+         and parent.draft_id=v_draft_id and parent.content_id=v_content_id for update;
+      if not found or exists (
+        select 1 from jsonb_array_elements(v_canonical_destinations) requested(value)
+         left join public.publish_intent_destinations parent_destination
+           on parent_destination.publish_intent_id=v_parent_internal_id
+          and parent_destination.destination_id=requested.value->>'id'
+        where parent_destination.id is null
+           or parent_destination.provider is distinct from requested.value->>'provider'
+           or parent_destination.social_connection_id is distinct from requested.value->>'socialConnectionId'
+           or parent_destination.subdestination_id is distinct from nullif(requested.value->>'boardId','')
+           or parent_destination.status<>'failed' or not parent_destination.retry_allowed
+      ) then
+        raise exception using errcode='P0001',message='retry_not_allowed';
+      end if;
+      v_new_retry := true;
+    end if;
+  end if;
+
+  p_receipt := jsonb_strip_nulls(jsonb_build_object('intentId',v_intent_id,'fingerprint',v_fingerprint,
+    'priorIntentId',v_prior_intent_id,
     'draftId',v_draft_id,'contentId',v_content_id,'sourceUpdatedAt',v_source_revision,
     'confirmedAt',to_char(v_confirmed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'mode',jsonb_build_object('kind','now'),
     'dispatchDestinationIds',(select jsonb_agg(value->'id' order by value->>'id')
       from jsonb_array_elements(v_canonical_destinations)),
-    'publishableDestinations',v_canonical_destinations,'media',v_canonical_media);
+    'publishableDestinations',v_canonical_destinations,'media',v_canonical_media));
   insert into public.publish_intents(
     user_id,intent_id,fingerprint,draft_id,content_id,confirmed_at,mode,receipt,
     lifecycle_status,schedule_at,source_revision,source_fingerprint,prepared_at,
-    v76_frozen_legacy
+    v76_frozen_legacy,prior_intent_id
   ) values (
     p_user_id,v_intent_id,v_fingerprint,v_draft_id,v_content_id,v_confirmed_at,
     p_receipt->'mode',p_receipt,'prepared',null,v_source_revision,v_fingerprint,
-    now(),false
+    now(),false,v_parent_internal_id
   ) on conflict(user_id,intent_id) do nothing returning * into v_intent;
   v_inserted := found;
 
@@ -911,6 +949,7 @@ begin
      where user_id=p_user_id and intent_id=v_intent_id for update;
     if not found
        or v_intent.v76_frozen_legacy
+       or v_intent.prior_intent_id is distinct from v_parent_internal_id
        or v_intent.fingerprint is distinct from v_fingerprint
        or v_intent.draft_id is distinct from v_draft_id
        or v_intent.content_id is distinct from v_content_id
@@ -919,7 +958,7 @@ begin
        or v_intent.receipt is distinct from p_receipt
        or v_intent.source_revision is distinct from v_source_revision
        or v_intent.source_fingerprint is distinct from v_fingerprint
-       or v_intent.lifecycle_status in ('canceled','settled','delivery_unknown') then
+       or v_intent.lifecycle_status='canceled' then
       raise exception using errcode='23505', message='publish_intent_conflict';
     end if;
 
@@ -1033,6 +1072,24 @@ begin
     v_provider := btrim(v_destination->>'provider');
     v_connection_id := lower(btrim(v_destination->>'socialConnectionId'));
     v_board_id := nullif(btrim(coalesce(v_destination->>'boardId','')), '');
+    if v_new_retry then
+      select * into v_parent_destination from public.publish_intent_destinations
+       where publish_intent_id=v_parent_internal_id and destination_id=v_destination_id for update;
+      if not found or v_parent_destination.status<>'failed' or not v_parent_destination.retry_allowed then
+        raise exception using errcode='P0001',message='retry_not_allowed';
+      end if;
+      insert into public.publish_intent_destinations(
+        publish_intent_id,destination_id,provider,social_connection_id,
+        subdestination_id,status,materialization_status,source_revision,
+        attempt,retry_allowed,retry_of_destination_id
+      ) values (
+        v_intent.id,v_destination_id,v_provider,v_connection_id,v_board_id,
+        'prepared','prepared',v_source_revision,v_parent_destination.attempt+1,false,v_parent_destination.id
+      );
+      update public.publish_intent_destinations set retry_allowed=false,updated_at=now()
+       where id=v_parent_destination.id and status='failed' and retry_allowed;
+      if not found then raise exception using errcode='P0001',message='retry_not_allowed'; end if;
+    else
     insert into public.publish_intent_destinations(
       publish_intent_id,destination_id,provider,social_connection_id,
       subdestination_id,status,materialization_status,source_revision
@@ -1040,6 +1097,7 @@ begin
       v_intent.id,v_destination_id,v_provider,v_connection_id,v_board_id,
       'prepared','prepared',v_source_revision
     );
+    end if;
     select id into v_asset_id from public.publish_assets
      where publish_intent_id=v_intent.id order by media_ordinal limit 1;
     insert into public.publish_asset_deliveries(
@@ -1069,6 +1127,7 @@ exception when others then
     when 'receipt_media_set_invalid' then 'receipt_media_set_invalid'
     when 'receipt_media_key_invalid' then 'receipt_media_key_invalid'
     when 'receipt_media_metadata_invalid' then 'receipt_media_metadata_invalid'
+    when 'retry_not_allowed' then 'retry_not_allowed'
     when 'publish_intent_conflict' then 'publish_intent_conflict'
     when 'publish_intent_graph_conflict' then 'publish_intent_graph_conflict'
     when 'materialization_required' then 'materialization_required'
@@ -1335,7 +1394,8 @@ begin
           and connection.disconnected_at is null)
     returning d.* into v_d;
   if not found then raise exception 'publish_destination_is_not_ready_or_already_claimed' using errcode='40001'; end if;
-  return jsonb_build_object('claimed',true,'destinationId',v_d.destination_id,'claimToken',v_d.claim_token);
+  return jsonb_build_object('claimed',true,'destinationId',v_d.destination_id,
+    'claimToken',v_d.claim_token,'attempt',v_d.attempt);
 exception when others then
   -- Rebuild the exception from static codes; never forward database DETAIL or
   -- an unexpected message that can contain a caller's value.
@@ -1828,13 +1888,23 @@ begin
     remote_id=nullif(btrim(p_remote_id),''),remote_url=nullif(btrim(p_remote_url),''),
     evidence=coalesce(p_evidence,'{}'::jsonb),claim_token=null,finished_at=now(),updated_at=now()
    where id=v_d.id;
-  if p_status='unknown' then
+  -- Parent lifecycle is an aggregate, never a veto from whichever sibling
+  -- happened to finish first. Untouched destinations must remain dispatchable.
+  if exists (select 1 from public.publish_intent_destinations
+              where publish_intent_id=v_i.id
+                and status not in ('published','failed','delivery_unknown','canceled')) then
+    update public.publish_intents set lifecycle_status='partially_ready',settled_at=null,updated_at=now()
+     where id=v_i.id;
+  elsif exists (select 1 from public.publish_intent_destinations
+                 where publish_intent_id=v_i.id and status='delivery_unknown') then
     update public.publish_intents set lifecycle_status='delivery_unknown',settled_at=now(),updated_at=now()
      where id=v_i.id;
-  elsif p_status='succeeded' and not exists (
-    select 1 from public.publish_intent_destinations where publish_intent_id=v_i.id and status<>'published'
-  ) then
+  elsif not exists (select 1 from public.publish_intent_destinations
+                     where publish_intent_id=v_i.id and status<>'published') then
     update public.publish_intents set lifecycle_status='settled',settled_at=now(),updated_at=now()
+     where id=v_i.id;
+  else
+    update public.publish_intents set lifecycle_status='partially_ready',settled_at=null,updated_at=now()
      where id=v_i.id;
   end if;
   return jsonb_build_object('settled',true,'replayed',false,'status',p_status,'attemptId',v_a.id);
