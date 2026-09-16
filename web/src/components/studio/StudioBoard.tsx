@@ -32,6 +32,19 @@ import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestination
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage, UploadPinImageError } from "@/lib/studio/uploadPinImage";
+import {
+  createVideoBatchState,
+  isVideoCandidate,
+  queueFailedVideoItems,
+  runVideoBatch,
+  safeVideoBatchError,
+  summarizeVideoBatch,
+  validateVideoBatchSelection,
+  type VideoBatchItem,
+  type VideoBatchState,
+} from "@/lib/studio/videoBatchUpload";
+import { finalizeVideoDirectUpload, prepareVideoDirectUpload, sha256, uploadVideoToSignedStorage } from "@/lib/studio/videoDirectUpload";
+import { probeVideoFile } from "@/lib/studio/videoBrowserMedia";
 import type { CreativeRequestError } from "@/lib/studio/recommendationRequest";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
@@ -85,7 +98,8 @@ import {
 import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 
-const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
+const IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
+const VIDEO_AND_IMAGE_ACCEPT = `${IMAGE_ACCEPT},video/mp4,video/x-m4v,video/quicktime,.mp4,.m4v,.mov`;
 type AiDrawerState =
   // `product` on the version variant carries a RETRY's own product forward, so a
   // failed run that chose a different product than its parent is not re-inherited
@@ -179,6 +193,10 @@ function parseSubParam(raw: string | null | undefined): FailedSubFilter | null {
 
 export function StudioBoard() {
   const { t: tr } = useLocale();
+  // The public flag controls browser affordances. The independently configured
+  // server flag is enforced again by prepare/finalize before Storage is reachable.
+  const videoBatchUploadEnabled = process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD === "true";
+  const fileAccept = videoBatchUploadEnabled ? VIDEO_AND_IMAGE_ACCEPT : IMAGE_ACCEPT;
   // Deep-link filter/sub source of truth (reload-durable). Read here (component is inside
   // the page's Suspense boundary — see app/studio/page.tsx) and consumed once on mount.
   const searchParams = useSearchParams();
@@ -328,6 +346,8 @@ export function StudioBoard() {
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [uploadFailures, setUploadFailures] = useState<Array<{ fileName: string; detail: CreativeRequestError }>>([]);
   const [uploadRetry, setUploadRetry] = useState<{ files: File[]; mode: MultiUploadMode } | null>(null);
+  const [videoBatch, setVideoBatch] = useState<VideoBatchState | null>(null);
+  const videoBatchAbortRef = useRef<AbortController | null>(null);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -641,9 +661,119 @@ export function StudioBoard() {
     }
   }, [defaultDestinationsForNewContent, flashSaved, tr]);
 
+  const executeVideoBatch = useCallback(async (initial: VideoBatchState) => {
+    const controller = new AbortController();
+    videoBatchAbortRef.current = controller;
+    setUploading(true);
+    setVideoBatch(initial);
+    setUploadProgress({ done: initial.items.filter(item => item.state === "succeeded").length, total: initial.items.length });
+    const result = await runVideoBatch(initial, {
+      signal: controller.signal,
+      prepare: descriptors => prepareVideoDirectUpload(initial.clientBatchId, descriptors),
+      upload: (upload, item, batchId, signal) => uploadVideoToSignedStorage(upload, item.file, { batchId, signal }),
+      finalize: finalizeVideoDirectUpload,
+      createDraft: (item, finalized) => {
+        const inspection = item.inspection;
+        if (!inspection) throw Object.assign(new Error("video_decode_failed"), { code: "video_decode_failed" });
+        const title = item.file.name.replace(/\.[^.]+$/, "").slice(0, 100);
+        pinDraftStore.createBoardDraft({
+          // `imageUrl` is a legacy alias and may be only the poster. Never put the
+          // private video binary there: legacy image consumers would misrender it.
+          imageUrl: inspection.posterUrl ?? "",
+          media: [{
+            id: `${item.draftIdempotencyKey}:media`, kind: "video", url: finalized.proxyUrl,
+            ...(inspection.posterUrl ? { posterUrl: inspection.posterUrl } : {}),
+            altText: title, source: "upload", width: inspection.width, height: inspection.height,
+            durationMs: inspection.durationMs,
+          }],
+          source: "uploaded_image", idempotencyKey: item.draftIdempotencyKey,
+          title, defaultDestinations: defaultDestinationsForNewContent(),
+        });
+      },
+      onState: next => {
+        setVideoBatch(next);
+        setUploadProgress({ done: next.items.filter(item => item.state !== "queued" && item.state !== "uploading").length, total: next.items.length });
+      },
+    });
+    if (videoBatchAbortRef.current === controller) videoBatchAbortRef.current = null;
+    setVideoBatch(result);
+    setUploading(false);
+    setUploadProgress(null);
+    const status = summarizeVideoBatch(result);
+    if (status === "completed") toast.success(`${result.items.length} video Pins uploaded`);
+    else if (status === "partial") toast.error("Some video Pins need attention");
+    else if (status === "failed") toast.error("Video uploads could not be completed");
+    if (result.items.some(item => item.state === "succeeded")) flashSaved();
+  }, [defaultDestinationsForNewContent, flashSaved]);
+
+  const startVideoBatch = useCallback(async (files: File[]) => {
+    const clientBatchId = `video_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`;
+    const items: VideoBatchItem[] = [];
+    setUploading(true);
+    setUploadProgress({ done: 0, total: files.length });
+    for (const [ordinal, file] of files.entries()) {
+      try {
+        const probe = await probeVideoFile(file);
+        const { posterFile, ...observed } = probe;
+        // A missing poster is deliberately not a failed video: AI Copy v2 has an
+        // explicit no-cover mode. Poster bytes still use the owner-protected image route.
+        let posterUrl: string | undefined;
+        if (posterFile) {
+          try { posterUrl = (await uploadPinImage(posterFile)).proxyUrl; }
+          catch { track("creative_upload_failed", { stage: "upload", code: "video_cover_unavailable", requestId: `${clientBatchId}_${ordinal}`, httpStatus: null, retryAfterSeconds: null }); }
+        }
+        items.push({
+          id: `${ordinal}`, ordinal, file, state: "queued",
+          inspection: { ...observed, ...(posterUrl ? { posterUrl } : {}), checksumSha256: await sha256(file) },
+        });
+      } catch (error) {
+        items.push({ id: `${ordinal}`, ordinal, file, state: "failed", error: safeVideoBatchError(error, "video_decode_failed") });
+      }
+      setUploadProgress({ done: ordinal + 1, total: files.length });
+    }
+    const initial = createVideoBatchState(clientBatchId, items);
+    setVideoBatch(initial);
+    if (!initial.items.some(item => item.state === "queued")) {
+      setUploading(false);
+      setUploadProgress(null);
+      toast.error("Video files need attention before upload");
+      return;
+    }
+    await executeVideoBatch(initial);
+  }, [executeVideoBatch]);
+
+  const processMixedVideoSelection = useCallback(async (arr: File[]) => {
+    const videoFiles = arr.filter(isVideoCandidate);
+    const imageFiles = arr.filter(file => !isVideoCandidate(file));
+    // Mixed content is always separate: images never join a video in a carousel.
+    if (imageFiles.length) await processFiles(imageFiles, "separate");
+    if (videoFiles.length) await startVideoBatch(videoFiles);
+  }, [processFiles, startVideoBatch]);
+
+  const retryVideoBatch = useCallback(() => {
+    if (!videoBatch || uploading) return;
+    const next = queueFailedVideoItems(videoBatch);
+    if (next.items.every(item => item.state !== "queued")) return;
+    void executeVideoBatch(next);
+  }, [executeVideoBatch, uploading, videoBatch]);
+
+  const cancelVideoBatch = useCallback(() => {
+    videoBatchAbortRef.current?.abort();
+  }, []);
+
   const handleFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files);
     if (!arr.length) return;
+    if (videoBatchUploadEnabled) {
+      const selection = validateVideoBatchSelection(arr, true);
+      if (selection.kind === "rejected") {
+        const rejected = createVideoBatchState(`video_${Date.now()}`, [{ id: "selection", ordinal: 0, file: arr[0], state: "failed", error: selection.error ?? { code: "invalid_video_upload" } }]);
+        setVideoBatch(rejected);
+        toast.error("Video selection needs attention");
+        return;
+      }
+      if (selection.kind !== "image") { void processMixedVideoSelection(arr); return; }
+    }
     if (arr.length === 1) { void processFiles(arr, "separate"); return; }
     // PRD §12: the merchant's standing answer wins; "ask" (the default) opens the dialog.
     // migrate… adopts a pre-prefs answer from the old browser key exactly once.
@@ -652,7 +782,7 @@ export function StudioBoard() {
     setUploadChoice("together");
     setRememberUploadChoice(false);
     setPendingUploadFiles(arr);
-  }, [processFiles]);
+  }, [processFiles, processMixedVideoSelection, videoBatchUploadEnabled]);
 
   const continueMultiUpload = useCallback(() => {
     const files = pendingUploadFiles;
@@ -1455,8 +1585,34 @@ export function StudioBoard() {
   return (
     <div ref={boardRootRef} data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0, background: BUI.bg, position: "relative", overflow: "hidden" }}>
       <div data-testid="studio-board-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
+      <input ref={fileRef} type="file" accept={fileAccept} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
+
+      {videoBatch && (
+        <section data-testid="video-upload-batch" role="status" aria-live="polite"
+          style={{ margin: "10px 22px 0", padding: "10px 12px", borderRadius: 10, border: `1px solid ${BUI.border}`, background: "#20242B", color: BUI.text, display: "flex", flexDirection: "column", gap: 5 }}>
+          <strong style={{ fontSize: 12 }}>Video upload: {videoBatch.status}</strong>
+          {videoBatch.items.filter(item => item.state === "failed").slice(0, 3).map(item => (
+            <span key={item.id} style={{ fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
+              {item.file.name} · Code: {item.error?.code ?? "video_upload_failed"}{item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}
+            </span>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 3 }}>
+            {videoBatch.items.some(item => item.state === "failed") && (
+              <button type="button" data-testid="video-upload-retry" disabled={uploading} onClick={retryVideoBatch}
+                style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: uploading ? "default" : "pointer" }}>
+                Retry failed videos
+              </button>
+            )}
+            {videoBatch.status === "running" && (
+              <button type="button" data-testid="video-upload-cancel" onClick={cancelVideoBatch}
+                style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
+                Cancel video upload
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       {uploadFailures.length > 0 && (
         <section data-testid="upload-error-evidence" role="status"

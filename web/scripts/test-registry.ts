@@ -272,6 +272,8 @@ export const STUDIO: string[] = [
   "test-generation-recovery",
   "test-generation-failure-media",
   "test-video-media-rendering",
+  "test-video-batch-upload",
+  "test-video-batch-upload-ui",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */
