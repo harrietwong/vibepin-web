@@ -22,6 +22,11 @@ const text = (value: unknown, max = 2000): string | undefined =>
 const texts = (value: unknown, maxItems = 30): string[] =>
   Array.isArray(value) ? value.slice(0, maxItems).map(v => text(v, 200)).filter((v): v is string => Boolean(v)) : [];
 const badKey = (value: unknown) => !text(value, 200);
+function validLocale(value: string): boolean {
+  if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(value)) return false;
+  try { Intl.getCanonicalLocales(value); return true; } catch { return false; }
+}
+const validCountry = (value: string) => /^[A-Za-z]{2}$/.test(value);
 
 function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
   const facts: CreateFactInput[] = [];
@@ -76,8 +81,11 @@ export async function POST(req: Request) {
   if (!body || typeof body !== "object" || badKey(body.draftId) || badKey(body.idempotencyKey) || (body.userKeywords != null && !Array.isArray(body.userKeywords))) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
   }
-  const locale = text(body.locale, 35) ?? "en";
-  const country = text(body.country, 10) ?? "US";
+  const locale = body.locale == null ? "en" : text(body.locale, 35);
+  const country = body.country == null ? "US" : text(body.country, 10);
+  if (!locale || !country || !validLocale(locale) || !validCountry(country)) {
+    return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
+  }
   const store = getSessionStore();
   let claim;
   try {
@@ -103,10 +111,10 @@ export async function POST(req: Request) {
       userInput: texts(body.userKeywords).join(" "),
       pageMetadata: { title: text(body.pageContext?.title), description: text(body.pageContext?.description) },
     });
-    const completed = await store.completeSession({ sessionId: claim.row.id, userId, factCard, keywordEvidence });
+    const completed = await store.completeSession({ sessionId: claim.row.id, userId, claimToken: claim.row.claim_token, factCard, keywordEvidence });
     return NextResponse.json({ ok: true, sessionId: completed.id, draftId: completed.draft_id, factCard, keywordEvidence, degradedMode: keywordEvidence.degradedMode, replayed: false });
   } catch {
-    await store.releaseSessionClaim(claim.row.id, userId).catch(() => undefined);
+    await store.releaseSessionClaim(claim.row.id, userId, claim.row.claim_token).catch(() => undefined);
     return NextResponse.json({ ok: false, error: "analysis_failed", message: "Unable to analyze right now" }, { status: 502 });
   }
 }

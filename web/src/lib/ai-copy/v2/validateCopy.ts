@@ -131,7 +131,7 @@ function countOccurrences(text: string, phrase: string): number {
   return countTokenSequence(tokenizeWords(text), tokenizeWords(phrase));
 }
 
-function containsTokenPhrase(text: string, phrase: string): boolean {
+export function containsTokenPhrase(text: string, phrase: string): boolean {
   return countTokenSequence(tokenizeWords(text), tokenizeWords(phrase)) > 0;
 }
 

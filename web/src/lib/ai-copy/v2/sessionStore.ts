@@ -1,5 +1,6 @@
 /** Server-only durable claims for AI Copy v2. */
 import { createServerClient } from "@/lib/supabase";
+import { randomUUID } from "node:crypto";
 import type { CopyResultV2, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
 
 export interface SessionRow {
@@ -9,6 +10,8 @@ export interface SessionRow {
   draft_id: string;
   analyze_idempotency_key: string;
   status: "pending" | "completed" | "expired";
+  claim_token: string;
+  claim_expires_at: string;
   fact_card: FactCardV1 | null;
   keyword_evidence: KeywordEvidence | null;
   last_output: CopyResultV2 | null;
@@ -28,6 +31,8 @@ export interface GenerationLedgerRow {
   vibepin_user_id: string;
   idempotency_key: string;
   status: "pending" | "completed";
+  claim_token: string;
+  claim_expires_at: string;
   angle_id: string | null;
   output: CopyResultV2 | null;
   validation_report: ValidationReport | null;
@@ -48,6 +53,7 @@ export interface ClaimSessionParams {
 export interface CompleteSessionParams {
   sessionId: string;
   userId: string;
+  claimToken: string;
   factCard: FactCardV1;
   keywordEvidence: KeywordEvidence;
 }
@@ -67,20 +73,22 @@ export type ClaimResult<T> =
 export interface SessionStore {
   claimSession(params: ClaimSessionParams): Promise<ClaimResult<SessionRow>>;
   completeSession(params: CompleteSessionParams): Promise<SessionRow>;
-  releaseSessionClaim(sessionId: string, userId: string): Promise<void>;
+  releaseSessionClaim(sessionId: string, userId: string, claimToken: string): Promise<void>;
   getValidSession(sessionId: string, userId: string, nowIso?: string): Promise<SessionRow | null>;
   claimGeneration(params: ClaimGenerationParams): Promise<ClaimResult<GenerationLedgerRow>>;
   completeGeneration(params: {
     generationId: string;
     sessionId: string;
     userId: string;
+    claimToken: string;
     output: CopyResultV2;
     validationReport: ValidationReport;
   }): Promise<GenerationLedgerRow>;
-  releaseGenerationClaim(generationId: string, sessionId: string, userId: string): Promise<void>;
+  releaseGenerationClaim(generationId: string, sessionId: string, userId: string, claimToken: string): Promise<void>;
 }
 
 const expiry = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+const claimExpiry = () => new Date(Date.now() + 2 * 60 * 1000).toISOString();
 
 function stateFor<T extends { status: "pending" | "completed" }>(row: T): ClaimResult<T> {
   return row.status === "completed"
@@ -107,12 +115,15 @@ function supabaseSessionStore(): SessionStore {
   return {
     async claimSession(params) {
       const now = new Date().toISOString();
+      const claimToken = randomUUID();
       const { data, error } = await db().from("ai_copy_v2_sessions").insert({
         vibepin_user_id: params.userId,
         workspace_id: params.workspaceId,
         draft_id: params.draftId,
         analyze_idempotency_key: params.analyzeIdempotencyKey,
         status: "pending",
+        claim_token: claimToken,
+        claim_expires_at: claimExpiry(),
         model_version: params.modelVersion,
         prompt_version: params.promptVersion,
         expires_at: params.expiresAtIso ?? expiry(),
@@ -121,6 +132,16 @@ function supabaseSessionStore(): SessionStore {
       }).select("*").single();
       if (!error && data) return { state: "claimed", row: data as SessionRow };
       if (error?.code === "23505") {
+        const { data: stolen, error: stealError } = await db().from("ai_copy_v2_sessions").update({
+          claim_token: claimToken,
+          claim_expires_at: claimExpiry(),
+          updated_at: now,
+        }).eq("vibepin_user_id", params.userId)
+          .eq("analyze_idempotency_key", params.analyzeIdempotencyKey)
+          .eq("status", "pending").lt("claim_expires_at", now)
+          .select("*").maybeSingle();
+        if (stealError) throw new Error("session_claim_failed");
+        if (stolen) return { state: "claimed", row: stolen as SessionRow };
         const existing = await findSession(params.userId, params.analyzeIdempotencyKey);
         if (existing) return existing.status === "completed"
           ? { state: "completed", row: existing }
@@ -136,14 +157,14 @@ function supabaseSessionStore(): SessionStore {
         keyword_evidence: params.keywordEvidence,
         updated_at: new Date().toISOString(),
       }).eq("id", params.sessionId).eq("vibepin_user_id", params.userId)
-        .eq("status", "pending").select("*").single();
+        .eq("status", "pending").eq("claim_token", params.claimToken).select("*").single();
       if (error || !data) throw new Error("session_finalize_failed");
       return data as SessionRow;
     },
 
-    async releaseSessionClaim(sessionId, userId) {
+    async releaseSessionClaim(sessionId, userId, claimToken) {
       const { error } = await db().from("ai_copy_v2_sessions").delete()
-        .eq("id", sessionId).eq("vibepin_user_id", userId).eq("status", "pending");
+        .eq("id", sessionId).eq("vibepin_user_id", userId).eq("status", "pending").eq("claim_token", claimToken);
       if (error) throw new Error("session_release_failed");
     },
 
@@ -157,17 +178,32 @@ function supabaseSessionStore(): SessionStore {
 
     async claimGeneration(params) {
       const now = new Date().toISOString();
+      const claimToken = randomUUID();
       const { data, error } = await db().from("ai_copy_v2_generations").insert({
         session_id: params.sessionId,
         vibepin_user_id: params.userId,
         idempotency_key: params.idempotencyKey,
         status: "pending",
+        claim_token: claimToken,
+        claim_expires_at: claimExpiry(),
         angle_id: params.angleId ?? null,
         created_at: now,
         updated_at: now,
       }).select("*").single();
       if (!error && data) return { state: "claimed", row: data as GenerationLedgerRow };
       if (error?.code === "23505") {
+        const { data: stolen, error: stealError } = await db().from("ai_copy_v2_generations").update({
+          claim_token: claimToken,
+          claim_expires_at: claimExpiry(),
+          angle_id: params.angleId ?? null,
+          output: null,
+          validation_report: null,
+          updated_at: now,
+        }).eq("session_id", params.sessionId).eq("vibepin_user_id", params.userId)
+          .eq("idempotency_key", params.idempotencyKey).eq("status", "pending")
+          .lt("claim_expires_at", now).select("*").maybeSingle();
+        if (stealError) throw new Error("generation_claim_failed");
+        if (stolen) return { state: "claimed", row: stolen as GenerationLedgerRow };
         const existing = await findGeneration(params.sessionId, params.userId, params.idempotencyKey);
         if (existing) return stateFor(existing);
       }
@@ -179,6 +215,7 @@ function supabaseSessionStore(): SessionStore {
         p_generation_id: params.generationId,
         p_session_id: params.sessionId,
         p_user_id: params.userId,
+        p_claim_token: params.claimToken,
         p_output: params.output,
         p_validation_report: params.validationReport,
       });
@@ -187,10 +224,10 @@ function supabaseSessionStore(): SessionStore {
       return row as GenerationLedgerRow;
     },
 
-    async releaseGenerationClaim(generationId, sessionId, userId) {
+    async releaseGenerationClaim(generationId, sessionId, userId, claimToken) {
       const { error } = await db().from("ai_copy_v2_generations").delete()
         .eq("id", generationId).eq("session_id", sessionId)
-        .eq("vibepin_user_id", userId).eq("status", "pending");
+        .eq("vibepin_user_id", userId).eq("status", "pending").eq("claim_token", claimToken);
       if (error) throw new Error("generation_release_failed");
     },
   };

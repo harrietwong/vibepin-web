@@ -148,10 +148,9 @@ export interface DetectedClaim {
   field?: "title" | "description" | "altText";
 }
 
-export interface ClaimDetectionResult {
-  status: "completed";
-  claims: DetectedClaim[];
-}
+export type ClaimDetectionResult =
+  | { status: "completed"; claims: DetectedClaim[] }
+  | { status: "incomplete"; claims: [] };
 
 export interface FactSummaryItem {
   factId: string;

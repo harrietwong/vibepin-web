@@ -1,10 +1,10 @@
 /** Grounded single-result generation with one optional repair. */
 import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE } from "@/lib/ai-copy/visionServer";
-import { validateCopy } from "./validateCopy";
+import { containsTokenPhrase, validateCopy } from "./validateCopy";
 import { summarizeFacts } from "./factCard";
-import type { CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
+import type { ClaimDetectionResult, CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
 
-export const AI_COPY_V2_PROMPT_VERSION = "ai_copy_v2_grounded_v2";
+export const AI_COPY_V2_PROMPT_VERSION = "ai_copy_v2_grounded_v3_independent_claims";
 export function getAI_COPY_V2ModelVersion(): string {
   const cfg = providerConfig();
   return `${cfg.provider}:${cfg.textModel}`;
@@ -14,7 +14,6 @@ export interface ProviderCopyOutput {
   title: string;
   description: string;
   altText: string;
-  detectedClaims: DetectedClaim[];
 }
 
 export interface GenerateCopyRequest {
@@ -30,6 +29,7 @@ export interface GenerateCopyRequest {
 
 export interface CopyGenerationProvider {
   generate(prompt: string, systemPrompt?: string): Promise<ProviderCopyOutput>;
+  detectClaims(output: ProviderCopyOutput, grounding: FactCardV1): Promise<unknown>;
   repair?(original: ProviderCopyOutput, report: ValidationReport, prompt: string): Promise<ProviderCopyOutput>;
 }
 
@@ -40,18 +40,25 @@ const CLAIM_TYPES = new Set<DetectedClaimType>([
 function parseProviderOutput(raw: unknown): ProviderCopyOutput {
   if (!raw || typeof raw !== "object") throw new CopyError("provider_invalid_schema", 502, PROVIDER_MESSAGE);
   const value = raw as Record<string, unknown>;
-  if (typeof value.title !== "string" || typeof value.description !== "string" || typeof value.altText !== "string" || !Array.isArray(value.detectedClaims)) {
+  if (typeof value.title !== "string" || typeof value.description !== "string" || typeof value.altText !== "string") {
     throw new CopyError("provider_invalid_schema", 502, PROVIDER_MESSAGE);
   }
+  return { title: value.title.trim(), description: value.description.trim(), altText: value.altText.trim() };
+}
+
+function parseClaimDetection(raw: unknown): ClaimDetectionResult {
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as Record<string, unknown>).claims)) {
+    return { status: "incomplete", claims: [] };
+  }
   const claims: DetectedClaim[] = [];
-  for (const item of value.detectedClaims) {
-    if (!item || typeof item !== "object") throw new CopyError("provider_invalid_claim_schema", 502, PROVIDER_MESSAGE);
+  for (const item of (raw as { claims: unknown[] }).claims) {
+    if (!item || typeof item !== "object") return { status: "incomplete", claims: [] };
     const claim = item as Record<string, unknown>;
     if (!CLAIM_TYPES.has(claim.type as DetectedClaimType) || typeof claim.value !== "string" || !claim.value.trim()) {
-      throw new CopyError("provider_invalid_claim_schema", 502, PROVIDER_MESSAGE);
+      return { status: "incomplete", claims: [] };
     }
     if (claim.field != null && !["title", "description", "altText"].includes(String(claim.field))) {
-      throw new CopyError("provider_invalid_claim_schema", 502, PROVIDER_MESSAGE);
+      return { status: "incomplete", claims: [] };
     }
     claims.push({
       type: claim.type as DetectedClaimType,
@@ -59,12 +66,11 @@ function parseProviderOutput(raw: unknown): ProviderCopyOutput {
       ...(claim.field ? { field: claim.field as DetectedClaim["field"] } : {}),
     });
   }
-  return {
-    title: value.title.trim(), description: value.description.trim(), altText: value.altText.trim(), detectedClaims: claims,
-  };
+  return { status: "completed", claims };
 }
 
-const SYSTEM = `You write grounded Pinterest copy. Return one JSON object only with title, description, altText, and detectedClaims. detectedClaims must list every commercial claim in the copy (material, brand, price, availability, efficacy, numeric_commercial) with type, value, and field; use [] only when there truly are none. Never invent facts.`;
+const SYSTEM = "You write grounded Pinterest copy. Return one JSON object only with title, description, and altText. Never invent facts.";
+const DETECTOR_SYSTEM = "Independently extract every commercial claim from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, or numeric_commercial), value, and field (title, description, or altText). Use [] only when no commercial claim exists. Do not trust or use any claims self-reported by the copy generator.";
 
 export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   async generate(prompt: string, systemPrompt = SYSTEM): Promise<ProviderCopyOutput> {
@@ -80,6 +86,19 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
       if (error instanceof CopyError) throw error;
       throw new CopyError("provider_failed", 502, PROVIDER_MESSAGE);
     }
+  }
+
+  async detectClaims(output: ProviderCopyOutput, grounding: FactCardV1): Promise<unknown> {
+    const cfg = providerConfig();
+    if (!cfg.key) throw new CopyError("provider_not_configured", 502, PROVIDER_MESSAGE);
+    return chatJson({
+      key: cfg.key, baseUrl: cfg.baseUrl, model: cfg.textModel, provider: cfg.provider,
+      messages: [
+        { role: "system", content: DETECTOR_SYSTEM },
+        { role: "user", content: JSON.stringify({ copy: output, groundingFacts: summarizeFacts(grounding) }) },
+      ],
+      timeoutMs: 15_000, temperature: 0,
+    });
   }
 
   async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string): Promise<ProviderCopyOutput> {
@@ -125,11 +144,16 @@ export class ValidationErrorV2 extends Error {
   constructor(public validationReport: ValidationReport) { super("Generated copy failed validation"); }
 }
 
-function validate(output: ProviderCopyOutput, req: GenerateCopyRequest): ValidationReport {
+async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1): Promise<ClaimDetectionResult> {
+  try { return parseClaimDetection(await provider.detectClaims(output, factCard)); }
+  catch { return { status: "incomplete", claims: [] }; }
+}
+
+function validate(output: ProviderCopyOutput, req: GenerateCopyRequest, claimDetection: ClaimDetectionResult): ValidationReport {
   return validateCopy({
     title: output.title, description: output.description, altText: output.altText,
     factCard: req.factCard, keywords: selectedPhrases(req.keywordEvidence),
-    claimDetection: { status: "completed", claims: output.detectedClaims },
+    claimDetection,
   });
 }
 
@@ -137,18 +161,17 @@ export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promi
   const provider = getCopyProvider();
   const prompt = buildPromptForSession(req);
   let output = await provider.generate(prompt);
-  let report = validate(output, req);
+  let report = validate(output, req, await detectClaims(provider, output, req.factCard));
   if (!report.valid) {
     if (!isRepairableWithoutInventingFacts(report) || !provider.repair) throw new ValidationErrorV2(report);
     output = await provider.repair(output, report, prompt);
-    report = validate(output, req);
+    report = validate(output, req, await detectClaims(provider, output, req.factCard));
     if (!report.valid) throw new ValidationErrorV2(report);
   }
   const usedKeywordIds = req.keywordEvidence.selectedKeywordIds.slice(0, 5).filter(id => {
     const candidate = req.keywordEvidence.candidates.find(c => c.id === id && c.status === "accepted");
     if (!candidate) return false;
-    const phrase = candidate.phrase.toLocaleLowerCase(req.factCard.locale);
-    return `${output.title} ${output.description}`.toLocaleLowerCase(req.factCard.locale).includes(phrase);
+    return containsTokenPhrase(`${output.title} ${output.description}`, candidate.phrase);
   });
   return {
     generationId: req.generationId, sessionId: req.sessionId, draftId: req.draftId,

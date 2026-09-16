@@ -12,6 +12,8 @@ create table if not exists ai_copy_v2_sessions (
   analyze_idempotency_key text not null,
   status text not null default 'pending'
     check (status in ('pending', 'completed', 'expired')),
+  claim_token uuid not null default uuid_generate_v4(),
+  claim_expires_at timestamptz not null default (now() + interval '2 minutes'),
   fact_card jsonb,
   keyword_evidence jsonb,
   last_output jsonb,
@@ -39,6 +41,8 @@ create table if not exists ai_copy_v2_generations (
   idempotency_key text not null,
   status text not null default 'pending'
     check (status in ('pending', 'completed')),
+  claim_token uuid not null default uuid_generate_v4(),
+  claim_expires_at timestamptz not null default (now() + interval '2 minutes'),
   angle_id text,
   output jsonb,
   validation_report jsonb,
@@ -55,6 +59,7 @@ create or replace function complete_ai_copy_v2_generation(
   p_generation_id uuid,
   p_session_id uuid,
   p_user_id text,
+  p_claim_token uuid,
   p_output jsonb,
   p_validation_report jsonb
 )
@@ -71,6 +76,7 @@ begin
   where id = p_generation_id
     and session_id = p_session_id
     and vibepin_user_id = p_user_id
+    and claim_token = p_claim_token
   for update;
 
   if not found or v_generation.status <> 'pending' then
@@ -106,5 +112,5 @@ begin
 end;
 $$;
 
-revoke all on function complete_ai_copy_v2_generation(uuid, uuid, text, jsonb, jsonb) from public;
-grant execute on function complete_ai_copy_v2_generation(uuid, uuid, text, jsonb, jsonb) to service_role;
+revoke all on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) from public;
+grant execute on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) to service_role;

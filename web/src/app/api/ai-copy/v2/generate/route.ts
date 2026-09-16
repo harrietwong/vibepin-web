@@ -44,11 +44,11 @@ export async function POST(req: Request) {
       factCard: session.fact_card, keywordEvidence: session.keyword_evidence,
       angleId: body.angleId?.trim(), angleRequest: body.angleRequest?.trim(), lengthPreference: body.lengthPreference,
     });
-    const completed = await store.completeGeneration({ generationId: claim.row.id, sessionId: session.id, userId, output: result, validationReport: result.validationReport });
+    const completed = await store.completeGeneration({ generationId: claim.row.id, sessionId: session.id, userId, claimToken: claim.row.claim_token, output: result, validationReport: result.validationReport });
     if (!completed.output) throw new Error("empty_completion");
     return NextResponse.json({ ok: true, result: completed.output, replayed: false });
   } catch (error) {
-    await store.releaseGenerationClaim(claim.row.id, session.id, userId).catch(() => undefined);
+    await store.releaseGenerationClaim(claim.row.id, session.id, userId, claim.row.claim_token).catch(() => undefined);
     if (error instanceof ValidationErrorV2) return NextResponse.json({ ok: false, error: "validation_failed", validationReport: error.validationReport }, { status: 422 });
     if (error instanceof CopyError) return NextResponse.json({ ok: false, error: "provider_error", message: error.userMessage || PROVIDER_MESSAGE }, { status: 502 });
     return NextResponse.json({ ok: false, error: "generation_failed", message: PROVIDER_MESSAGE }, { status: 502 });
