@@ -66,6 +66,8 @@ import {
 import { findConnection } from "@/lib/social/server/socialConnectionStore";
 import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
+import { confirmedMediaKind } from "@/lib/server/publish/v76PinterestVideoBindings";
+import { publishImmediateV76PinterestVideo } from "@/lib/server/publish/v76PinterestVideoImmediate";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +123,14 @@ export async function POST(req: Request) {
       || confirmedDestination.socialConnectionId !== (typeof body.connectionId === "string" ? body.connectionId.trim() : "")) {
     return Response.json({ error: "The Pinterest account or Board no longer matches the confirmation.", code: "invalid_confirmation" }, { status: 409 });
   }
-  if (imageUrls.some(url => requiresPublishAsset(url, new URL(req.url).origin))) {
+  const confirmedKind = confirmedMediaKind(confirmation.receipt);
+  if (confirmedKind === "unsupported") {
+    return Response.json({
+      error: "Video publishing requires exactly one frozen video asset.",
+      code: "materialization_required",
+    }, { status: 409 });
+  }
+  if (confirmedKind === "image" && imageUrls.some(url => requiresPublishAsset(url, new URL(req.url).origin))) {
     return Response.json({
       error: "Publish media asset is not materialized for provider delivery.",
       code: "publish_asset_required",
@@ -156,6 +165,19 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("[publish] durable preflight unavailable:", (error as Error)?.message ?? String(error));
     return Response.json({ error: "Could not verify the publishing destination.", code: "publish_intent_unavailable" }, { status: 503 });
+  }
+
+  // Video has one production path: v76 prepare/materialize/claim/attempt/settle.
+  // The legacy image claim below must never see video bytes or a private locator.
+  if (confirmedKind === "video") {
+    return publishImmediateV76PinterestVideo({
+      db: durableDb,
+      uid,
+      receipt: confirmation.receipt,
+      destination: confirmedDestination,
+      draftId,
+      sourcePinId,
+    });
   }
 
   let durableClaim: Awaited<ReturnType<typeof claimPublishIntentDestination>>;

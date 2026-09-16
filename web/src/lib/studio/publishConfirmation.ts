@@ -149,7 +149,15 @@ export type PublishConfirmationFingerprintInput = {
   description: string;
   altText: string;
   destinationUrl: string;
-  media: Array<{ id: string; url: string; width?: number | null; height?: number | null }>;
+  media: Array<{
+    id: string;
+    url: string;
+    kind?: "image" | "video";
+    width?: number | null;
+    height?: number | null;
+    durationMs?: number | null;
+    posterUrl?: string | null;
+  }>;
   mode: PublishConfirmationMode;
   destinations: Array<{
     id: string;
@@ -183,8 +191,13 @@ export function publishConfirmationFingerprint(input: PublishConfirmationFingerp
     media: input.media.map(item => ({
       id: item.id,
       url: item.url,
+      // `null` preserves every pre-video image fingerprint while making a video
+      // impossible to relabel as an image without invalidating confirmation.
+      kind: item.kind === "video" ? "video" : null,
       width: item.width ?? null,
       height: item.height ?? null,
+      durationMs: item.kind === "video" ? item.durationMs ?? null : null,
+      posterUrl: item.kind === "video" ? item.posterUrl ?? null : null,
     })),
     destinations: input.destinations.map(item => ({
       id: item.id,
@@ -276,7 +289,17 @@ export function buildPublishConfirmation(
     description: draft.description ?? "",
     altText: draft.altText ?? "",
     destinationUrl: draft.destinationUrl ?? "",
-    media: media.map(item => ({ id: item.id, url: item.url, width: item.width ?? null, height: item.height ?? null })),
+    media: media.map(item => ({
+      id: item.id,
+      url: item.url,
+      kind: item.kind,
+      width: item.width ?? null,
+      height: item.height ?? null,
+      ...(item.kind === "video" ? {
+        durationMs: item.durationMs ?? null,
+        posterUrl: item.posterUrl ?? null,
+      } : {}),
+    })),
     destinations: destinations.map(item => ({
       id: item.id,
       provider: item.provider,

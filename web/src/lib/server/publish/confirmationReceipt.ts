@@ -61,6 +61,24 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function confirmedMediaUrl(value: unknown, kind: "image" | "video"): string | null {
+  const url = text(value).trim();
+  if (/^https?:\/\//i.test(url)) return url;
+  if (kind !== "video") return null;
+  try {
+    const parsed = new URL(url, "https://vibepin.invalid");
+    if (parsed.origin !== "https://vibepin.invalid"
+        || parsed.pathname !== "/api/storage-media"
+        || parsed.hash
+        || parsed.searchParams.getAll("path").length !== 1
+        || [...parsed.searchParams.keys()].some(key => key !== "path")
+        || !parsed.searchParams.get("path")) return null;
+    return `${parsed.pathname}?path=${encodeURIComponent(parsed.searchParams.get("path") as string)}`;
+  } catch {
+    return null;
+  }
+}
+
 function destination(value: unknown): PublishDestination | null {
   const row = object(value);
   if (!row) return null;
@@ -162,19 +180,30 @@ export function validateImmediatePublishReceipt(
 
   const normalizedMedia: ConfirmedPublishReceipt["media"] = media.flatMap(item => {
     const row = object(item);
-    if (!row || !text(row.id) || !/^https?:\/\//i.test(text(row.url))) return [];
+    if (!row || !text(row.id)) return [];
+    const kind = row.kind === "video" ? "video" : row.kind === "image" ? "image" : null;
+    if (!kind) return [];
+    const url = confirmedMediaUrl(row.url, kind);
+    if (!url) return [];
     const rawSource = text(row.source);
     const source = rawSource === "upload" || rawSource === "ai" || rawSource === "product" || rawSource === "legacy"
       ? rawSource
       : "legacy";
+    if (kind === "video" && source !== "upload") return [];
+    const durationMs = typeof row.durationMs === "number" && Number.isFinite(row.durationMs) && row.durationMs > 0
+      ? row.durationMs
+      : undefined;
+    const posterUrl = text(row.posterUrl).trim();
     return [{
       id: text(row.id),
-      kind: "image" as const,
-      url: text(row.url),
+      kind,
+      url,
       ...(typeof row.width === "number" ? { width: row.width } : {}),
       ...(typeof row.height === "number" ? { height: row.height } : {}),
       ...(text(row.altText) ? { altText: text(row.altText) } : {}),
       source,
+      ...(kind === "video" && durationMs ? { durationMs } : {}),
+      ...(kind === "video" && posterUrl ? { posterUrl } : {}),
     }];
   });
   if (!normalizedMedia.length || normalizedMedia.length !== media.length) return invalid("The confirmed media is invalid.");

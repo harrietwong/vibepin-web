@@ -298,6 +298,19 @@ test("payloadAfterOutcomes: nothing published ⇒ WP-B failure semantics + the l
   assert.equal(after.scheduledDate, "", "drops out of the due scan — no retry storm");
 });
 
+test("payloadAfterOutcomes: delivery_unknown stays closed to retry and is never rewritten as failed", () => {
+  const after = payloadAfterOutcomes(
+    { scheduledDate: "2026-08-27", plannedAt: "2026-08-27T09:30" },
+    [{ provider: "pinterest", socialConnectionId: "pin_A", status: "delivery_unknown", error: "Reconcile first" }],
+    "2026-08-27T10:00:00.000Z",
+    null,
+    "delivery_unknown",
+  );
+  const row = (after.destinationResults as Array<Record<string, unknown>>)[0];
+  assert.equal(row.status, "delivery_unknown");
+  assert.equal(after.publishError, "Reconcile first");
+});
+
 test("payloadAfterOutcomes: the failure CODE drives the category, not the wording", () => {
   // The outcome rows carry only a user-facing message. Categorizing from that alone
   // puts a differently-worded needs_reconnect in "transient" and offers the wrong fix.
@@ -658,8 +671,8 @@ test("each destination's outcome is stored the moment it is known", () => {
   );
   assert.ok(!/outcomes\.push\(/.test(pinterestLoop),
     "a Pinterest outcome collected without being stored is one a process death loses");
-  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 6,
-    "every branch of the Pinterest loop must go through the recorder — trial-access included");
+  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 11,
+    "every image and video branch of the Pinterest loop must go through the recorder — unknown and trial-access included");
   const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
   const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
   assert.ok(!/scheduled_at|publish_claimed_at|postedAt/.test(upToFinal),

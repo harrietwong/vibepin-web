@@ -43,6 +43,8 @@ import {
 } from "@/lib/server/usage/deliveryOutcome";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
+import { dispatchSupabaseV76PinterestVideo } from "@/lib/server/publish/v76PinterestVideoServer";
+import { buildDueVideoReceipt } from "@/lib/server/publish/v76PinterestVideoBindings";
 import {
   NeedsReconnectError,
   NotConnectedError,
@@ -102,7 +104,20 @@ type DueRow = {
   payload: Record<string, unknown>;
   /** The due instant — the stable half of the 5B metering idempotency key. */
   scheduled_at: string | null;
+  /** Exact database revision frozen into the due-time v76 confirmation. */
+  updated_at: string;
 };
+
+function payloadMedia(payload: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(payload.media)
+    ? payload.media.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    : [];
+}
+
+function isSingleVideoPayload(payload: Record<string, unknown>): boolean {
+  const media = payloadMedia(payload);
+  return media.length === 1 && media[0].kind === "video";
+}
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
@@ -225,7 +240,7 @@ export async function GET(req: Request): Promise<Response> {
     // scheduled_at is selected because it is the STABLE half of the metering
     // idempotency key (Phase 5B). Claim time is not usable: it is regenerated on
     // every run, so a stale re-claim would mint a new key and double-count.
-    .select("vibepin_user_id, draft_id, payload, scheduled_at")
+    .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at")
     .lte("scheduled_at", nowIso)
     .not("scheduled_at", "is", null)
     .is("deleted_at", null)
@@ -242,10 +257,12 @@ export async function GET(req: Request): Promise<Response> {
   let candidates = (dueRows ?? []) as DueRow[];
   if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
 
-  // Scheduled execution has no user session/owner confirmation to resolve private
-  // media. Defer before claim, metering, job creation, or any provider work.
+  // Private video is resolved by the owner-scoped v76 materializer after claim.
+  // Protected legacy images and mixed/multi-video shapes still defer before claim.
   const requestOrigin = new URL(req.url).origin;
   const safeCandidates = candidates.filter(row => {
+    const mediaRows = payloadMedia(row.payload);
+    if (mediaRows.some(item => item.kind === "video")) return isSingleVideoPayload(row.payload);
     const media = publishMediaUrls(row.payload);
     return !media.some(url => requiresPublishAsset(url, requestOrigin));
   });
@@ -289,7 +306,7 @@ export async function GET(req: Request): Promise<Response> {
       .eq("vibepin_user_id", candidate.vibepin_user_id)
       .eq("draft_id", candidate.draft_id)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
-      .select("vibepin_user_id, draft_id, payload, scheduled_at");
+      .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at");
 
     if (claimError) {
       // A schema hiccup mid-run: treat as un-claimable, don't crash the batch.
@@ -414,6 +431,14 @@ export async function GET(req: Request): Promise<Response> {
         failed++;
         continue;
       }
+      const videoReceipt = isSingleVideoPayload(row.payload) && row.scheduled_at
+        ? buildDueVideoReceipt({
+          draftId: row.draft_id,
+          updatedAt: row.updated_at,
+          scheduledAt: row.scheduled_at,
+          payload: row.payload,
+        })
+        : null;
 
       // ── Phase 5B: meter the scheduled post ────────────────────────────────────
       // Keyed on (draft_id, scheduled_at), NOT on claim time and NOT on the success
@@ -510,7 +535,7 @@ export async function GET(req: Request): Promise<Response> {
        */
       const persistOne = async (outcome: DestinationOutcome): Promise<void> => {
         // `pending`/`skipped` describe nothing that happened — see outcomeRows.
-        if (outcome.status !== "published" && outcome.status !== "failed") return;
+        if (outcome.status !== "published" && outcome.status !== "failed" && outcome.status !== "delivery_unknown") return;
         const { error: incErr } = await mergeOutcomesIntoRow(io, row, [outcome]);
         if (incErr) console.error("[cron/publish-due] incremental persist:", incErr);
       };
@@ -548,6 +573,57 @@ export async function GET(req: Request): Promise<Response> {
           continue;
         }
         try {
+          if (videoReceipt) {
+            const frozenDestination = videoReceipt.destinations.find(item =>
+              item.provider === destination.provider
+              && item.socialConnectionId === (destination.socialConnectionId ?? null));
+            if (!frozenDestination) {
+              deliveries.push(classifyDelivery({ preNetwork: true }));
+              await record({
+                provider: "pinterest", status: "failed",
+                socialConnectionId: destination.socialConnectionId ?? null,
+                error: "The scheduled Pinterest destination no longer matches the frozen intent.",
+                preNetwork: true,
+              });
+              if (!firstFailure) firstFailure = { code: "invalid_confirmation", message: "The scheduled Pinterest destination no longer matches the frozen intent." };
+              continue;
+            }
+            const durable = await dispatchSupabaseV76PinterestVideo(db, {
+              uid: row.vibepin_user_id,
+              receipt: videoReceipt,
+              destination: frozenDestination,
+              scheduleAt: row.scheduled_at ?? undefined,
+              latestStartMs: deadlineMs,
+            });
+            if (durable.outcome === "published") {
+              deliveries.push(classifyDelivery({ ok: true }));
+              await record({
+                provider: "pinterest", status: "published",
+                socialConnectionId: destination.socialConnectionId ?? null,
+                externalPostId: durable.remoteId ?? null,
+                externalPostUrl: durable.remoteUrl ?? null,
+              });
+            } else if (durable.outcome === "delivery_unknown") {
+              deliveries.push(classifyDelivery({}));
+              await record({
+                provider: "pinterest", status: "delivery_unknown",
+                socialConnectionId: destination.socialConnectionId ?? null,
+                error: "Delivery is unknown. Reconcile the original intent before retrying.",
+              });
+              if (!firstFailure) firstFailure = { code: "delivery_unknown", message: "Delivery is unknown. Reconcile the original intent before retrying." };
+            } else if (durable.outcome === "in_progress" || durable.outcome === "not_due") {
+              await record(deferredOutcome(destination));
+            } else {
+              deliveries.push(classifyDelivery({ providerStatus: 400 }));
+              await record({
+                provider: "pinterest", status: "failed",
+                socialConnectionId: destination.socialConnectionId ?? null,
+                error: "Pinterest rejected the video publish.",
+              });
+              if (!firstFailure) firstFailure = { code: "pinterest_video_publish_failed", message: "Pinterest rejected the video publish." };
+            }
+            continue;
+          }
           const result = await publishPinForUser(perDestination);
           // A typed failure is decided before (or instead of) a create; a success is
           // a real Pin id. Either way this destination's state is known here.

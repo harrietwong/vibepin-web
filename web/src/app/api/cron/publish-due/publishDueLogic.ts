@@ -292,11 +292,12 @@ function outcomeRows(
         ? o.socialConnectionId.trim()
         : null;
       const published = o.status === "published";
+      const deliveryUnknown = o.status === "delivery_unknown";
       const row: Record<string, unknown> = {
         destinationId: `${o.provider}:${connectionId ?? "legacy"}`,
         provider: o.provider,
         socialConnectionId: connectionId,
-        status: published ? "published" : "failed",
+        status: published ? "published" : deliveryUnknown ? "delivery_unknown" : "failed",
         submittedAt: nowIso,
       };
       if (o.accountName) row.accountLabel = o.accountName;
@@ -740,7 +741,8 @@ export function payloadAfterOutcomes(
 
   // Nothing was delivered. The first failure is what the Content-level banner reports;
   // every destination keeps its own reason in its own row.
-  const firstFailure = attempted.find(o => o.status === "failed");
+  const firstFailure = attempted.find(o => o.status === "failed")
+    ?? attempted.find(o => o.status === "delivery_unknown");
   const message = firstFailure?.error || "Publish failed";
   const previousScheduled = previousScheduledIso(payload);
   next.publishError = message;
@@ -781,6 +783,7 @@ export function destinationPublishInput(
   /** Retained for call-site compatibility; legacy target fields are never fallbacks. */
   _legacyTargetConnectionId: string,
 ): PinterestPublishInput | null {
+  void _legacyTargetConnectionId;
   const own = typeof destination.boardId === "string" ? destination.boardId.trim() : "";
   const id = typeof destination.socialConnectionId === "string" ? destination.socialConnectionId.trim() : "";
   if (!own || !id) return null;

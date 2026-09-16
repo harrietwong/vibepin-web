@@ -25,6 +25,12 @@ import {
 } from "./config";
 import { buildPinMediaSource } from "./pinMediaSource";
 import {
+  publishPinterestVideo,
+  type PinterestVideoAdapterDependencies,
+  type PinterestVideoPublishInput,
+  type PinterestVideoPublishResult,
+} from "./videoPinAdapter";
+import {
   getActiveConnection,
   getConnectionById,
   reloadConnectionRow,
@@ -765,6 +771,29 @@ export class PinterestClient {
       boardId: typeof data.board_id === "string" ? data.board_id : input.boardId,
       url: canonicalUrl ?? `https://www.pinterest.com/pin/${id}/`,
     };
+  }
+
+  /**
+   * Publish one video through the verified register/upload/poll/create adapter.
+   * The same refreshed account token is frozen for every stage of this attempt.
+   */
+  async createVideoPin(
+    input: Omit<PinterestVideoPublishInput, "accessToken" | "accountId">,
+    dependencies: Partial<PinterestVideoAdapterDependencies> = {},
+  ): Promise<PinterestVideoPublishResult> {
+    if (this.isExpiringSoon()) await this.doRefresh();
+    return publishPinterestVideo({
+      ...input,
+      accessToken: this.accessToken,
+      accountId: this.connectionId,
+    }, {
+      fetch: dependencies.fetch ?? this.hooks.fetchImpl,
+      sleep: dependencies.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+      now: dependencies.now ?? (() => Date.now()),
+      apiBase: dependencies.apiBase ?? getPinterestApiBase(),
+      ...(dependencies.pollIntervalMs !== undefined ? { pollIntervalMs: dependencies.pollIntervalMs } : {}),
+      ...(dependencies.pollDeadlineMs !== undefined ? { pollDeadlineMs: dependencies.pollDeadlineMs } : {}),
+    });
   }
 }
 
