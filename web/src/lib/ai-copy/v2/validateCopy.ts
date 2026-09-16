@@ -471,7 +471,7 @@ export function validateCopy(input: ValidateCopyInput): ValidationReport {
   }
 
   // 8, 9, 11. Deterministic Traps: Price, Availability, Numeric Commercial (defense-in-depth)
-  const regexTraps: { type: DetectedClaimType; regex: RegExp; code: ValidationIssueCode }[] = [
+  const regexTraps: { type: CommercialDetectedClaimType; regex: RegExp; code: ValidationIssueCode }[] = [
     {
       type: "price",
       regex: /\$\d+(?:\.\d{2})?|\b(?:\d+%\s*off|free shipping|half price|on sale|discount)\b/gi,

@@ -7,13 +7,14 @@ import { chatJson, fetchImageAsDataUrl, providerConfig } from "@/lib/ai-copy/vis
 
 export type VideoCoverImageObserved = { summary: string; objects: string[]; colors: string[]; style: string; ocrText: string[] };
 export type VideoCoverAnalysis = { mode: "video_cover"; degradedMode: "none" | "video_cover_unavailable"; imageObserved?: VideoCoverImageObserved };
-export type StaticCoverObservation = { objects: string[]; colors: string[]; composition: string; layout: string };
+export type StaticCoverObservation = { objects: string[]; colors: string[]; composition?: string; layout?: string };
 
 export type VideoCoverDeps = {
   loadOwnedDraft: (userId: string, draftId: string) => Promise<unknown | null>;
   findProvenance: (userId: string, bucketId: string, path: string) => Promise<MediaProvenance | null>;
   fetchStorageObject: typeof fetch;
-  analyzePoster: (input: { dataUrl: string; userId: string; draftId: string; prompt: string }) => Promise<StaticCoverObservation>;
+  /** Provider output is untrusted until the static observation parser accepts it. */
+  analyzePoster: (input: { dataUrl: string; userId: string; draftId: string; prompt: string }) => Promise<unknown>;
 };
 
 const OBJECTS = new Set(["mug", "cup", "table", "chair", "desk", "sofa", "lamp", "book", "plant", "flower", "vase", "plate", "bowl", "bed", "pillow", "rug", "wall", "frame", "bag", "shoe", "bottle", "box", "phone", "laptop", "keyboard", "notebook", "pen", "watch", "ring", "necklace", "earring", "shirt", "dress", "jacket", "hat", "food", "fruit", "cake", "candle", "glass", "mirror", "canvas", "poster", "car", "bicycle", "beach", "mountain", "tree", "building"]);
@@ -25,7 +26,7 @@ const bucket = () => process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private";
 const oneOf = (values: unknown, allowed: Set<string>) => Array.isArray(values)
   ? values.filter((value): value is string => typeof value === "string" && allowed.has(value.trim().toLowerCase())).map(value => value.trim().toLowerCase()).slice(0, 8)
   : [];
-const choice = (value: unknown, allowed: Set<string>, fallback: string) => typeof value === "string" && allowed.has(value.trim().toLowerCase()) ? value.trim().toLowerCase() : fallback;
+const choice = (value: unknown, allowed: Set<string>) => typeof value === "string" && allowed.has(value.trim().toLowerCase()) ? value.trim().toLowerCase() : undefined;
 
 export function buildVideoCoverObservationPrompt(): string {
   return [
@@ -38,15 +39,18 @@ export function buildVideoCoverObservationPrompt(): string {
   ].join("\n");
 }
 
-function parseStaticObservation(raw: unknown): StaticCoverObservation {
+function parseStaticObservation(raw: unknown): StaticCoverObservation | null {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  return { objects: oneOf(value.objects, OBJECTS), colors: oneOf(value.colors, COLORS), composition: choice(value.composition, COMPOSITIONS, "still_life"), layout: choice(value.layout, LAYOUTS, "centered") };
+  const observation = { objects: oneOf(value.objects, OBJECTS), colors: oneOf(value.colors, COLORS), composition: choice(value.composition, COMPOSITIONS), layout: choice(value.layout, LAYOUTS) };
+  return observation.objects.length || observation.colors.length || observation.composition || observation.layout ? observation : null;
 }
 
-function videoPosterFromDraft(raw: unknown): { kind: "image" } | { kind: "video"; posterUrl: string | null } {
-  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { media?: unknown }).media)) return { kind: "image" };
+function videoPosterFromDraft(raw: unknown): { kind: "image" } | { kind: "video"; posterUrl: string | null } | { kind: "unknown" } {
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { media?: unknown }).media)) return { kind: "unknown" };
   const cover = (raw as { media: unknown[] }).media[0];
-  if (!cover || typeof cover !== "object" || (cover as { kind?: unknown }).kind !== "video") return { kind: "image" };
+  if (!cover || typeof cover !== "object") return { kind: "unknown" };
+  if ((cover as { kind?: unknown }).kind === "image") return { kind: "image" };
+  if ((cover as { kind?: unknown }).kind !== "video") return { kind: "unknown" };
   const poster = (cover as { posterUrl?: unknown }).posterUrl;
   return { kind: "video", posterUrl: typeof poster === "string" && poster.trim() ? poster.trim() : null };
 }
@@ -57,7 +61,7 @@ async function defaultLoadOwnedDraft(userId: string, draftId: string): Promise<u
   return error || !data ? null : (data as { payload?: unknown }).payload ?? null;
 }
 async function defaultFindProvenance(userId: string, bucketId: string, path: string) { return createMediaProvenanceStore().findExact(userId, bucketId, path); }
-async function defaultAnalyzePoster(input: { dataUrl: string; userId: string; draftId: string; prompt: string }): Promise<StaticCoverObservation> {
+async function defaultAnalyzePoster(input: { dataUrl: string; userId: string; draftId: string; prompt: string }): Promise<StaticCoverObservation | null> {
   const cfg = providerConfig();
   if (!cfg.key) throw new Error("provider_not_configured");
   const raw = await chatJson({
@@ -93,17 +97,19 @@ async function resolvePosterDataUrl(userId: string, posterUrl: string, deps: Vid
 }
 
 /** Persisted media kind, not a client field, selects the protected video path. */
-export async function resolveOwnedMediaEvidence(input: { userId: string; draftId: string }, injected: Partial<VideoCoverDeps> = {}): Promise<{ kind: "image" } | { kind: "video"; analysis: VideoCoverAnalysis }> {
+export async function resolveOwnedMediaEvidence(input: { userId: string; draftId: string }, injected: Partial<VideoCoverDeps> = {}): Promise<{ kind: "image" } | { kind: "video"; analysis: VideoCoverAnalysis } | { kind: "unknown"; analysis: VideoCoverAnalysis }> {
   const deps = { ...defaultDeps, ...injected };
   const draft = await deps.loadOwnedDraft(input.userId, input.draftId).catch(() => null);
   const media = videoPosterFromDraft(draft);
   if (media.kind === "image") return { kind: "image" };
+  if (media.kind === "unknown") return { kind: "unknown", analysis: { mode: "video_cover", degradedMode: "video_cover_unavailable" } };
   if (!media.posterUrl) return { kind: "video", analysis: { mode: "video_cover", degradedMode: "video_cover_unavailable" } };
   const poster = await resolvePosterDataUrl(input.userId, media.posterUrl, deps);
   if (!poster) return { kind: "video", analysis: { mode: "video_cover", degradedMode: "video_cover_unavailable" } };
   try {
     const safe = parseStaticObservation(await deps.analyzePoster({ dataUrl: poster.dataUrl, userId: input.userId, draftId: input.draftId, prompt: buildVideoCoverObservationPrompt() }));
-    return { kind: "video", analysis: { mode: "video_cover", degradedMode: "none", imageObserved: { summary: `${safe.composition} composition`, objects: safe.objects, colors: safe.colors, style: safe.layout, ocrText: [] } } };
+    if (!safe) return { kind: "video", analysis: { mode: "video_cover", degradedMode: "video_cover_unavailable" } };
+    return { kind: "video", analysis: { mode: "video_cover", degradedMode: "none", imageObserved: { summary: safe.composition ? `${safe.composition} composition` : "", objects: safe.objects, colors: safe.colors, style: safe.layout ?? "", ocrText: [] } } };
   } catch { return { kind: "video", analysis: { mode: "video_cover", degradedMode: "video_cover_unavailable" } }; }
 }
 

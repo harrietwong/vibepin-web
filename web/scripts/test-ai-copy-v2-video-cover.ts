@@ -13,7 +13,7 @@ async function main() {
   const providerInputs: string[] = [];
   const analyzed = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
     loadOwnedDraft: async () => ({ media: [{ kind: "video", url: "private://video-bytes.mp4", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fposter.png" }] }),
-    findProvenance: async () => ({ id: "p", user_id: "user-1", bucket_id: "studio", object_path: "uploads/user-1/poster.png", source_kind: "upload", status: "ready", bytes: 10, sha256: "x", created_at: "now", updated_at: "now" }),
+    findProvenance: async () => ({ owner_user_id: "user-1", bucket_id: "generated-private", object_path: "studio/uploads/user-1/poster.png", source_type: "upload", intent_id: null, lifecycle_state: "ready" }),
     fetchStorageObject: async () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } }),
     analyzePoster: async ({ dataUrl }) => {
       providerInputs.push(dataUrl);
@@ -41,7 +41,7 @@ async function main() {
   const isolatedInputs: string[] = [];
   const [firstRequest, secondRequest] = await Promise.all(["alpha", "bravo"].map(draftId => analyzeOwnedVideoCover({ userId: "user-1", draftId }, {
     loadOwnedDraft: async () => ({ media: [{ kind: "video", posterUrl: `/api/storage-image?path=studio%2Fuploads%2Fuser-1%2F${draftId}.png` }] }),
-    findProvenance: async () => ({ id: draftId, user_id: "user-1", bucket_id: "studio", object_path: `uploads/user-1/${draftId}.png`, source_kind: "upload", status: "ready", bytes: 4, sha256: "x", created_at: "now", updated_at: "now" }),
+    findProvenance: async () => ({ owner_user_id: "user-1", bucket_id: "generated-private", object_path: `studio/uploads/user-1/${draftId}.png`, source_type: "upload", intent_id: null, lifecycle_state: "ready" }),
     fetchStorageObject: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
     analyzePoster: async ({ dataUrl }) => {
       isolatedInputs.push(dataUrl);
@@ -54,13 +54,13 @@ async function main() {
 
   const restricted = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
     loadOwnedDraft: async () => ({ media: [{ kind: "video", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fcover.png" }] }),
-    findProvenance: async () => ({ id: "p", user_id: "user-1", bucket_id: "studio", object_path: "uploads/user-1/cover.png", source_kind: "upload", status: "ready", bytes: 4, sha256: "x", created_at: "now", updated_at: "now" }),
+    findProvenance: async () => ({ owner_user_id: "user-1", bucket_id: "generated-private", object_path: "studio/uploads/user-1/cover.png", source_type: "upload", intent_id: null, lifecycle_state: "ready" }),
     fetchStorageObject: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
     analyzePoster: async () => ({ objects: ["Nike shoes", "person dancing", "mug"], colors: ["blue", "ultraviolet"], composition: "action scene", layout: "minimal" }),
   });
   assert.deepEqual(restricted.imageObserved?.objects, ["mug"], "only static taxonomy objects survive");
   assert.deepEqual(restricted.imageObserved?.colors, ["blue"], "only static taxonomy colors survive");
-  assert.equal(restricted.imageObserved?.summary, "still_life composition", "unallowlisted composition cannot become a fact");
+  assert.equal(restricted.imageObserved?.summary, "", "unallowlisted composition cannot become a fact");
 
   const coverCard = createFactCardV1({
     sessionId: "cover-session", draftId: "draft-1", locale: "en",

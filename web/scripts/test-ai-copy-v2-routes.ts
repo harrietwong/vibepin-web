@@ -199,8 +199,9 @@ async function main() {
 
   await test("analyze preserves raw trend ID and data quality; client semantics are asserted", async () => {
     const store = reset();
+    const imageAnalyze = createAnalyzeHandler({ videoCoverDeps: { loadOwnedDraft: async () => ({ media: [{ kind: "image", url: "private://confirmed-image.png" }] }) } });
     __setTrendKeywordLoaderForTests(async () => [{ id: "raw-db-id", keyword: "oak desk ideas", data_quality: "estimated", language: "en", volume_score: 4 }]);
-    const response = await analyze(analyzeReq("raw", { productContext: { title: "Oak Desk", vendor: "Acme", price: "$20", availability: "in stock" }, pageContext: { title: "Oak collection" }, imageObserved: { summary: "oak desk" }, boardContext: { name: "Office ideas" }, userKeywords: ["desk office"] }));
+    const response = await imageAnalyze(analyzeReq("raw", { productContext: { title: "Oak Desk", vendor: "Acme", price: "$20", availability: "in stock" }, pageContext: { title: "Oak collection" }, imageObserved: { summary: "oak desk" }, boardContext: { name: "Office ideas" }, userKeywords: ["desk office"] }));
     eq(response.status, 200, "status"); const json = await response.json();
     assert(/^[0-9a-f-]{36}$/.test(json.sessionId), "real UUID session");
     eq(json.keywordEvidence.candidates[0].id, "raw-db-id", "raw id"); eq(json.keywordEvidence.candidates[0].provenance, "estimated", "quality");
@@ -296,8 +297,30 @@ async function main() {
     }));
     eq(image.status, 200, "actual image keeps backward compatible input behavior"); const imageBody = await image.json();
     assert(!imageBody.factCard.mediaEvidence, "forged video hint does not classify an image as video");
-    assert(imageBody.factCard.facts.some((fact: { key: string }) => fact.key === "image_summary" && fact.value === "Blue mug"), "image observations remain supported for actual images");
+    assert(imageBody.factCard.facts.some((fact: { key: string; value: string }) => fact.key === "image_summary" && fact.value === "Blue mug"), "image observations remain supported for actual images");
     assert(store.sessions.size >= 2, "both requests were persisted independently");
+  });
+
+  await test("unreadable, absent, or malformed owned drafts fail closed instead of accepting client image evidence", async () => {
+    for (const [key, loadOwnedDraft] of [
+      ["draft-read-error", async () => { throw new Error("temporary DB failure"); }],
+      ["draft-not-found", async () => null],
+      ["draft-malformed", async () => ({ media: "broken" })],
+    ] as const) {
+      const store = reset();
+      const analyzeUnknown = createAnalyzeHandler({ videoCoverDeps: {
+        loadOwnedDraft,
+        findProvenance: async () => { throw new Error("unknown draft must not query provenance"); },
+        fetchStorageObject: async () => { throw new Error("unknown draft must not download"); },
+        analyzePoster: async () => { throw new Error("unknown draft must not invoke provider"); },
+      } });
+      const response = await analyzeUnknown(analyzeReq(key, { mediaEvidenceMode: "video_cover", imageObserved: { summary: "A person walks while singing" } }));
+      eq(response.status, 200, `${key} persists only safe degraded evidence`); const body = await response.json();
+      eq(body.degradedMode, "video_cover_unavailable", `${key} is unavailable rather than a fake image`);
+      eq(body.factCard.mediaEvidence?.degradedMode, "video_cover_unavailable", `${key} records unavailable media evidence`);
+      eq(body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, `${key} discards client visual evidence`);
+      assert(store.sessions.has(body.sessionId), `${key} may safely complete without ungrounded facts`);
+    }
   });
 
   await test("route facts retain negated availability and reject an opposite in-stock claim", async () => {

@@ -140,10 +140,10 @@ export function createAnalyzeHandler(deps: { videoCoverDeps?: Partial<VideoCover
     // The persisted owner-scoped media discriminator, never a client mode hint,
     // decides whether client visual assertions are legal inputs.
     const ownedMedia = await resolveOwnedMediaEvidence({ userId, draftId: body.draftId.trim() }, deps.videoCoverDeps);
-    const cover = ownedMedia.kind === "video" ? ownedMedia.analysis : null;
-    const evidenceBody = ownedMedia.kind === "video"
-      ? { ...body, imageObserved: cover.imageObserved ?? {} }
-      : body;
+    const cover = ownedMedia.kind === "image" ? null : ownedMedia.analysis;
+    const evidenceBody = ownedMedia.kind === "image"
+      ? body
+      : { ...body, imageObserved: cover?.imageObserved ?? {} };
     const factCard = createFactCardV1({
       sessionId: claim.row.id, draftId: body.draftId.trim(), locale, facts: buildFacts(evidenceBody),
       ...(cover ? { mediaEvidence: { mode: cover.mode, degradedMode: cover.degradedMode } } : {}),
