@@ -82,7 +82,7 @@ function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
     <div className={styles.errorCopy}>
       <span>{error.message}</span>
       <small data-testid="product-error-evidence">
-        {error.method} {error.path} · status {error.status ?? "unavailable"} · {error.code}
+        {error.method} {error.path} · status {error.status ?? "not reported"} · {error.code}
         {error.requestId ? ` · request ${error.requestId}` : ""}
         {` · ${error.occurredAt}`}{error.runtime ? ` · runtime ${error.runtime}` : ""}{error.deployment ? ` · deployment ${error.deployment}` : ""}
       </small>
