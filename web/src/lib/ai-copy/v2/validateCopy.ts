@@ -238,6 +238,32 @@ function supportsMaterialClaim(canonicalClaim: string, claimValue: string): bool
   return false;
 }
 
+type NormalizedPrice = { amount: string; currency: string };
+
+/**
+ * Price grounding needs both an amount and a currency. Token comparison would
+ * otherwise treat `USD 20` and `€20` as the same bare number. This deliberately
+ * accepts only a standalone, recognizable commercial price; ambiguous source
+ * text cannot authorize price copy.
+ */
+function normalizePriceClaim(value: string): NormalizedPrice | null {
+  const normalized = value.normalize("NFC").trim().toUpperCase();
+  const match = /^(USD|US\$|\$|EUR|€|GBP|£|JPY|¥|￥|CAD|C\$|AUD|A\$)\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)$/.exec(normalized);
+  if (!match) return null;
+
+  const currencyAliases: Record<string, string> = {
+    USD: "USD", "US$": "USD", "$": "USD",
+    EUR: "EUR", "€": "EUR",
+    GBP: "GBP", "£": "GBP",
+    JPY: "JPY", "¥": "JPY", "￥": "JPY",
+    CAD: "CAD", "C$": "CAD",
+    AUD: "AUD", "A$": "AUD",
+  };
+  const numericAmount = Number(match[2].replace(/,/g, ""));
+  if (!Number.isFinite(numericAmount) || numericAmount < 0) return null;
+  return { currency: currencyAliases[match[1]], amount: String(numericAmount) };
+}
+
 /**
  * Checks whether a commercial claim is grounded in copy-allowed facts.
  */
@@ -262,7 +288,12 @@ function isClaimSupported(
     }
 
     case "price": {
-      return eligibleFacts.some(f => containsTokenPhrase(f.canonicalClaim!, val));
+      const detectedPrice = normalizePriceClaim(claimValue);
+      if (!detectedPrice) return false;
+      return eligibleFacts.some(f => {
+        const catalogPrice = normalizePriceClaim(f.canonicalClaim!);
+        return catalogPrice?.currency === detectedPrice.currency && catalogPrice.amount === detectedPrice.amount;
+      });
     }
 
     case "availability": {

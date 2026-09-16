@@ -253,6 +253,28 @@ async function main() {
     assert((await generated.json()).validationReport.issues.some((issue: { code: string }) => issue.code === "UNSUPPORTED_EFFICACY_CLAIM"), "efficacy rejection code");
   });
 
+  await test("route price grounding preserves currency and only accepts the exact price", async () => {
+    const priceSession = async (key: string) => {
+      const analyzed = await analyze(analyzeReq(key, { productContext: { price: "USD 20" } }));
+      eq(analyzed.status, 200, `${key} analyze status`);
+      return (await analyzed.json()).sessionId as string;
+    };
+    const generateWithPriceClaim = async (sessionId: string, key: string, price: string) => {
+      setProvider({
+        async generate() { return validOutput({ title: `Available for ${price}` }); },
+        async detectClaims() { return { claims: [{ type: "price", value: price, field: "title" }] }; },
+      });
+      return generate(generateReq(sessionId, key));
+    };
+
+    reset();
+    eq((await generateWithPriceClaim(await priceSession("price-eur"), "price-eur", "€20")).status, 422, "EUR is not interchangeable with USD");
+    reset();
+    eq((await generateWithPriceClaim(await priceSession("price-dollar"), "price-dollar", "$20")).status, 200, "USD symbol alias is accepted");
+    reset();
+    eq((await generateWithPriceClaim(await priceSession("price-amount"), "price-amount", "USD 21")).status, 422, "different USD amount is rejected");
+  });
+
   await test("true concurrent analyze claims before delayed loader; loser is 409 and spends zero", async () => {
     const store = reset(); let loads = 0;
     __setTrendKeywordLoaderForTests(async () => { loads++; await delay(40); return []; });
