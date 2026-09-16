@@ -64,6 +64,9 @@ const NAV_ITEMS: NavItem[] = [
   { id: "help-support",   href: "/app/help",                 icon: HelpCircle,    labelKey: "nav.helpSupport",    matchFn: (p) => p.startsWith("/app/help") || p.startsWith("/app/support") },
 ];
 
+const HIDE_LEGACY_DISCOVERY = process.env.NEXT_PUBLIC_HIDE_LEGACY_DISCOVERY === "true";
+const LEGACY_DISCOVERY_NAV_IDS = new Set(["keyword-trends", "viral-pins"]);
+
 
 // ── Sidebar nav item (compact icon-only + hover tooltip) ─────────────────────────
 // The sidebar is icon-only by default; the text label lives in `data-sidebar-label`
@@ -302,6 +305,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const navItems = useMemo(
     () => NAV_ITEMS
       .filter(item => !item.superAdminOnly || isSuperAdmin)
+      .filter(item => !HIDE_LEGACY_DISCOVERY || !LEGACY_DISCOVERY_NAV_IDS.has(item.id))
       .filter((item, idx, arr) => arr.findIndex(i => i.id === item.id) === idx),
     [isSuperAdmin],
   );

@@ -169,11 +169,17 @@ async function main() {
   await test("analyze preserves raw trend ID and data quality; client semantics are asserted", async () => {
     const store = reset();
     __setTrendKeywordLoaderForTests(async () => [{ id: "raw-db-id", keyword: "oak desk ideas", data_quality: "estimated", language: "en", volume_score: 4 }]);
-    const response = await analyze(analyzeReq("raw", { productContext: { title: "Oak Desk", vendor: "Acme", price: "$20" }, imageObserved: { summary: "oak desk" }, userKeywords: ["desk office"] }));
+    const response = await analyze(analyzeReq("raw", { productContext: { title: "Oak Desk", vendor: "Acme", price: "$20", availability: "in stock" }, pageContext: { title: "Oak collection" }, imageObserved: { summary: "oak desk" }, boardContext: { name: "Office ideas" }, userKeywords: ["desk office"] }));
     eq(response.status, 200, "status"); const json = await response.json();
     assert(/^[0-9a-f-]{36}$/.test(json.sessionId), "real UUID session");
     eq(json.keywordEvidence.candidates[0].id, "raw-db-id", "raw id"); eq(json.keywordEvidence.candidates[0].provenance, "estimated", "quality");
-    assert(json.factCard.facts.every((f: { source: string; trustLevel: string }) => f.source === "user_input" && f.trustLevel === "asserted"), "asserted client facts");
+    assert(json.factCard.facts.every((f: { trustLevel: string }) => ["asserted", "observed"].includes(f.trustLevel)), "client facts never marked verified");
+    const sources = new Set(json.factCard.facts.map((f: { source: string }) => f.source));
+    for (const source of ["product_catalog", "page_metadata", "image_observed", "board_context"]) assert(sources.has(source), `source preserved: ${source}`);
+    for (const key of ["product_vendor", "product_price", "product_availability"]) {
+      const fact = json.factCard.facts.find((f: { key: string }) => f.key === key);
+      eq(fact?.claimPolicy, "copy_allowed", `${key} is explicitly asserted`); eq(fact?.claimPolarity, "affirmed", `${key} polarity`);
+    }
     assert(!json.factCard.facts.some((f: { key: string }) => f.key === "user_keywords"), "keywords are relevance only");
     eq(store.sessionClaims, 1, "one claim");
   });

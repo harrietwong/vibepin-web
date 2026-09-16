@@ -19,7 +19,7 @@ import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
-import type { CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
+import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import type { SetupSnapshot } from "@/lib/studioPersistence";
@@ -119,7 +119,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   // AI copy overwrites them. Gates the actual generate() call, not just the apply.
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [result, setResult] = useState<{
-    summary?: string; imageSummary?: string; recommendedKeywords: string[]; boardName?: string | null;
+    summary?: string; imageSummary?: string; recommendedKeywords: string[]; boardName?: string | null; aiCopyV2?: AICopyV2Evidence;
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [generatedThisSession, setGeneratedThisSession] = useState(false);
@@ -132,7 +132,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const shownImageSummary = result?.imageSummary ?? props.imageSummary;
   const shownKeywords = result?.recommendedKeywords?.length ? result.recommendedKeywords : (props.recommendedKeywords ?? []);
   const shownBoard = result?.boardName ?? props.boardName;
-  const hasContext = !!shownImageSummary || shownKeywords.length > 0 || !!shownBoard;
+  const hasContext = !!shownImageSummary || shownKeywords.length > 0 || !!shownBoard || !!result?.aiCopyV2;
 
   const progressLabel = useMemo(() => {
     if (stage === "analyzing") return analysisReady ? tr("pinForm.usingSavedImageContext") : tr("pinForm.analyzingImage");
@@ -187,6 +187,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
         imageSummary: res.context.imageSummary,
         recommendedKeywords: res.context.recommendedKeywords ?? [],
         boardName: res.context.boardName ?? undefined,
+        aiCopyV2: res.context.aiCopyV2,
       });
       setStage("done");
       setGeneratedThisSession(true);
@@ -316,7 +317,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
           )}
           {stage === "done" && hasContext && (
             <ContextDisclosure open={ctxOpen} onToggle={() => setCtxOpen(o => !o)}
-              imageSummary={shownImageSummary} keywords={shownKeywords} board={shownBoard} language={props.language} />
+              imageSummary={shownImageSummary} keywords={shownKeywords} board={shownBoard} language={props.language} aiCopyV2={result?.aiCopyV2} />
           )}
         </div>
       )}
@@ -324,8 +325,8 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   );
 });
 
-function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, language }: {
-  open: boolean; onToggle: () => void; imageSummary?: string; keywords: string[]; board?: string | null; language?: LanguageCode;
+function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, language, aiCopyV2 }: {
+  open: boolean; onToggle: () => void; imageSummary?: string; keywords: string[]; board?: string | null; language?: LanguageCode; aiCopyV2?: AICopyV2Evidence;
 }) {
   const { t: tr } = useLocale();
   // Never imply localized keywords: the DB is English-only.
@@ -339,6 +340,7 @@ function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, lang
       </button>
       {open && (
         <div data-testid="ai-copy-context-details" style={{ margin: "7px 0 0", display: "flex", flexDirection: "column", gap: 8 }}>
+          {aiCopyV2 && <AICopyV2EvidenceBlock evidence={aiCopyV2} />}
           {imageSummary && (
             <div>
               <div style={sectionLabel}>{tr("pinForm.imageSummary")}</div>
@@ -362,6 +364,42 @@ function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, lang
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function AICopyV2EvidenceBlock({ evidence }: { evidence: AICopyV2Evidence }) {
+  return (
+    <div data-testid="ai-copy-v2-evidence" style={{ display: "flex", flexDirection: "column", gap: 7, padding: "8px 9px", borderRadius: 8, border: `1px solid ${P.border}`, background: P.surface }}>
+      <div>
+        <div style={sectionLabel}>Fact basis</div>
+        {evidence.facts.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {evidence.facts.slice(0, 4).map(fact => (
+              <div key={fact.factId} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 10.5, lineHeight: 1.4 }}>
+                <span style={{ color: P.text, fontWeight: 700 }}>{fact.key}</span>
+                <span style={{ color: P.textSec, minWidth: 0 }}>{fact.value}</span>
+                <span style={{ color: P.textMuted, fontSize: 9 }}>{fact.source ?? "unknown"} · {fact.trustLevel}</span>
+              </div>
+            ))}
+          </div>
+        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>No product claims were authorized.</p>}
+      </div>
+      <div>
+        <div style={sectionLabel}>Primary keyword</div>
+        {evidence.primaryKeyword ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+            <span style={chip}>{evidence.primaryKeyword.phrase}</span>
+            <span data-testid="ai-copy-v2-provenance" style={{ fontSize: 9.5, color: P.textMuted }}>{evidence.primaryKeyword.label}</span>
+          </div>
+        ) : <p style={{ margin: 0, fontSize: 10.5, color: P.textMuted }}>No reliable keyword demand data.</p>}
+      </div>
+      {evidence.degradedMode === "no_keyword_demand_data" && (
+        <p data-testid="ai-copy-v2-degraded" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>Generated from product and image meaning only; keyword demand data was unavailable.</p>
+      )}
+      <p data-testid="ai-copy-v2-validation" style={{ margin: 0, fontSize: 10.5, fontWeight: 700, color: evidence.validationReport.valid ? P.text : P.error }}>
+        {evidence.validationReport.valid ? "Validation passed" : "Validation failed"}
+      </p>
     </div>
   );
 }

@@ -31,24 +31,39 @@ const validCountry = (value: string) => /^[A-Za-z]{2}$/.test(value);
 function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
   const facts: CreateFactInput[] = [];
   let index = 0;
-  const add = (key: string, value: unknown, category: CreateFactInput["category"] = "general") => {
+  const add = (
+    key: string,
+    value: unknown,
+    source: CreateFactInput["source"],
+    trustLevel: CreateFactInput["trustLevel"] = "asserted",
+    category: CreateFactInput["category"] = "general",
+    commercialAssertion = false,
+  ) => {
     const normalized = text(value);
     if (!normalized) return;
-    facts.push({ id: `fact_${++index}`, key, value: normalized, source: "user_input", trustLevel: "asserted", category });
+    facts.push({
+      id: `fact_${++index}`, key, value: normalized, source, trustLevel, category,
+      ...(commercialAssertion ? { canonicalClaim: normalized, claimPolarity: "affirmed" as const } : {}),
+    });
   };
   const product = body.productContext ?? {};
-  add("product_title", product.title);
-  add("product_description", product.description);
-  add("product_vendor", product.vendor, "brand");
-  add("product_type", product.productType);
-  add("product_price", product.price, "price");
-  const tags = texts(product.tags); if (tags.length) add("product_tags", tags.join(", "));
-  const page = body.pageContext ?? {}; add("page_title", page.title); add("page_description", page.description);
-  const image = body.imageObserved ?? {}; add("image_summary", image.summary); add("visual_style", image.style);
-  const objects = texts(image.objects); if (objects.length) add("visible_objects", objects.join(", "));
-  const colors = texts(image.colors); if (colors.length) add("colors", colors.join(", "));
-  const ocr = texts(image.ocrText); if (ocr.length) add("ocr_text", ocr.join(" "));
-  const board = body.boardContext ?? {}; add("board_name", board.name); add("board_description", board.description);
+  add("product_title", product.title, "product_catalog");
+  add("product_description", product.description, "product_catalog");
+  add("product_vendor", product.vendor ?? product.brand, "product_catalog", "asserted", "brand", true);
+  add("product_type", product.productType, "product_catalog");
+  add("product_price", product.price, "product_catalog", "asserted", "price", true);
+  add("product_availability", product.availability, "product_catalog", "asserted", "availability", true);
+  add("product_material", product.material, "product_catalog", "asserted", "material", true);
+  add("product_efficacy", product.efficacy, "product_catalog", "asserted", "efficacy", true);
+  add("product_quantity", product.quantity, "product_catalog", "asserted", "numeric_commercial", true);
+  const tags = texts(product.tags); if (tags.length) add("product_tags", tags.join(", "), "product_catalog");
+  const attributes = texts(product.attributes); if (attributes.length) add("product_attributes", attributes.join(", "), "product_catalog");
+  const page = body.pageContext ?? {}; add("page_title", page.title, "page_metadata"); add("page_description", page.description, "page_metadata");
+  const image = body.imageObserved ?? {}; add("image_summary", image.summary, "image_observed", "observed", "visual_description"); add("visual_style", image.style, "image_observed", "observed", "visual_description");
+  const objects = texts(image.objects); if (objects.length) add("visible_objects", objects.join(", "), "image_observed", "observed", "visual_description");
+  const colors = texts(image.colors); if (colors.length) add("colors", colors.join(", "), "image_observed", "observed", "visual_description");
+  const ocr = texts(image.ocrText); if (ocr.length) add("ocr_text", ocr.join(" "), "image_observed", "observed", "visual_description");
+  const board = body.boardContext ?? {}; add("board_name", board.name, "board_context"); add("board_description", board.description, "board_context");
   return facts.map(createFact);
 }
 

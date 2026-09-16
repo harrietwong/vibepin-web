@@ -56,6 +56,7 @@
     "test:ai-copy-v2-facts": "npx tsx scripts/test-ai-copy-v2-facts.ts",
     "test:ai-copy-v2-keyword-evidence": "npx tsx scripts/test-ai-copy-v2-keyword-evidence.ts",
     "test:ai-copy-v2-routes": "npx tsx scripts/test-ai-copy-v2-routes.ts",
+    "test:ai-copy-v2-ui": "npx tsx scripts/test-ai-copy-v2-ui.ts",
     "test:support-ai-responder": "npx tsx scripts/test-support-ai-responder.ts",
     "test:support-translator": "npx tsx scripts/test-support-translator.ts",
     "test:support-metrics": "npx tsx scripts/test-support-metrics.ts",

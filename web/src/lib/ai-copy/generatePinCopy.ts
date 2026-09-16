@@ -12,6 +12,7 @@ import type {
   PageContext,
   ProductContext,
 } from "./types";
+import { generatePinterestPinCopyV2, isAICopyV2ClientEnabled } from "./generatePinCopyV2";
 
 /**
  * Error thrown by generatePinterestPinCopy, carrying a machine-readable `code` so the
@@ -217,6 +218,89 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     name: board?.name || input.boardName || undefined,
     description: board?.description,
   };
+
+  if (isAICopyV2ClientEnabled()) {
+    const v2 = await generatePinterestPinCopyV2({
+      draftId: input.draftId,
+      locale: input.language,
+      country: input.country,
+      length: input.length,
+      product: productContext,
+      image: cachedAnalysis,
+      imageUrl: input.imageUrl,
+      board: boardContext,
+      userKeywords: [input.keyword, directionContext?.title, ...(directionContext?.terms ?? [])].filter((value): value is string => Boolean(value?.trim())),
+      onStage: input.onStage,
+    });
+    const selectedKeywords = v2.evidence.selectedKeywords.map(item => item.phrase);
+    const contextSourcesUsed = Array.from(new Set(v2.evidence.facts.map(fact => fact.source).filter((source): source is NonNullable<typeof source> => Boolean(source))));
+    const metadataDraft = generatePinMetadataDraft({
+      keyword: input.keyword,
+      category: input.category,
+      setupSnapshot: input.setupSnapshot,
+      promptSnapshot: input.promptSnapshot,
+      opportunityTitle: input.opportunity,
+      contentLanguage: input.language,
+      imageCaption: cachedAnalysis?.imageSummary,
+    });
+    const baseFields = applyDraftToPinFields(metadataDraft);
+    const timingsMs = { regenerationAttempt: attempt, perceivedTotal: Math.round(performance.now() - started) };
+    const contextSummary = v2.evidence.degradedMode === "no_keyword_demand_data"
+      ? `Generated from ${v2.evidence.facts.length} grounded facts; keyword demand data was unavailable.`
+      : `Generated from ${v2.evidence.facts.length} grounded facts and ${selectedKeywords.length} demand-backed keyword${selectedKeywords.length === 1 ? "" : "s"}.`;
+    const enhancedDraft = {
+      ...metadataDraft,
+      selectedTitle: v2.fields.title,
+      titleCandidates: [v2.fields.title, ...metadataDraft.titleCandidates.filter(title => title !== v2.fields.title)].slice(0, 3),
+      selectedDescription: v2.fields.description,
+      descriptionCandidates: [v2.fields.description, ...metadataDraft.descriptionCandidates.filter(description => description !== v2.fields.description)].slice(0, 3),
+      altText: v2.fields.altText,
+      topics: metadataDraft.topics,
+      boardId: input.boardId,
+      boardName: input.boardName,
+      copyGenerationMeta: {
+        generatedAt: new Date().toISOString(),
+        provider: "ai-copy-v2",
+        model: "server-selected",
+        promptVersion: "ai_copy_v2_grounded_v3_independent_claims",
+        strategy: mode,
+        contextSourcesUsed,
+        keywordTermsUsed: selectedKeywords,
+        boardId: input.boardId || undefined,
+        language: input.language,
+        country: input.country,
+        contextSummary,
+        contextDetails: v2.evidence.facts.map(fact => `${fact.key}: ${fact.value}`),
+        timingsMs,
+      },
+    };
+    track("ai_copy_success", {
+      draftId: input.draftId, mode, cacheHit, pathUsed: "v2_grounded", keywords: v2.result.usedKeywordIds.length,
+      versions: { promptVersion: "ai_copy_v2_grounded_v3_independent_claims" },
+    });
+    return {
+      metadataDraft: enhancedDraft,
+      fields: { ...v2.fields, destinationUrl: baseFields.destinationUrl },
+      tags: [],
+      strategy: mode === "regenerate" ? "regenerate" : "default",
+      context: {
+        product: productContext,
+        board: { boardId: input.boardId, boardName: boardContext.name, boardDescription: boardContext.description },
+        keywords: { terms: selectedKeywords, source: selectedKeywords.length ? "cached" : "none" },
+        recommendedKeywords: selectedKeywords,
+        imageSummary: cachedAnalysis?.imageSummary,
+        boardName: boardContext.name ?? null,
+        contextSourcesUsed,
+        contextSummary,
+        contextDetails: v2.evidence.facts.map(fact => `${fact.key}: ${fact.value}`),
+        timingsMs,
+        provider: "ai-copy-v2",
+        model: "server-selected",
+        fallbackUsed: false,
+        aiCopyV2: v2.evidence,
+      },
+    };
+  }
 
   input.onStage?.("generating");
   await yieldForUi();

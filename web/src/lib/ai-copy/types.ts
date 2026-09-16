@@ -2,6 +2,15 @@ import type { PinterestBoard } from "@/lib/pinterestClient";
 import type { SetupSnapshot } from "@/lib/studioPersistence";
 import type { LanguageCode } from "@/lib/i18n/config";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
+import type { FactSummaryItem, KeywordProvenance, ValidationReport } from "./v2/types";
+
+export type AICopyV2Evidence = {
+  facts: FactSummaryItem[];
+  primaryKeyword?: { id: string; phrase: string; provenance: KeywordProvenance; label: string };
+  selectedKeywords: Array<{ id: string; phrase: string; provenance: KeywordProvenance; label: string }>;
+  degradedMode: "none" | "no_keyword_demand_data";
+  validationReport: ValidationReport;
+};
 
 export type CopyStrategy = "default" | "regenerate";
 
@@ -91,6 +100,8 @@ export type CopyContextBundle = {
   model?: string;
   fallbackUsed?: boolean;
   promptContext?: unknown;
+  /** Present only when NEXT_PUBLIC_AI_COPY_V2=true. */
+  aiCopyV2?: AICopyV2Evidence;
 };
 
 /**
