@@ -74,7 +74,7 @@ Implement batch Video Pin P0 without deployment: one video per draft, secure pri
 ## Task Status
 
 - Task 0: complete (base `3f74653c`; plan commits `1bb3780d..654cf4f5`; baseline evidence above).
-- Task 1: complete — `873a98db`, hardened by review-fix commits `644e4af1` and `b66746b5`, on base `654cf4f5`; v77 contracts now include exact schema/RPC collision preflight, poster aliasing through every store media write path, and non-NULL finalized-row database enforcement. PGlite and focused TypeScript coverage passed. The v75 verifier still reports its pre-existing `deployment_blocked` broad Storage-policy evidence (65 assertions, no failures); Task 1 did not remove or mask it.
+- Task 1: complete — `873a98db`, review fixes `644e4af1` and `b66746b5`, and round-three hardening `f6a4f1f7`, on base `654cf4f5`. v77 now rejects drift in every owned ledger column/default/nullability/constraint, additive provenance column, standalone index, RLS/policy, and client/server privilege boundary; split children are born as video media with a poster-only image alias. PGlite (87 assertions), focused media-store coverage (23/23), and `tsc --noEmit` passed. The v75 verifier still reports its pre-existing `deployment_blocked` broad Storage-policy evidence (65 assertions, no failures); Task 1 did not remove or mask it.
 - Task 2: not started.
 - Task 3: not started.
 - Task 4: not started.
