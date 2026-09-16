@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
   }
   const locale = body.locale == null ? "en" : text(body.locale, 35);
-  const country = body.country == null ? "US" : text(body.country, 10);
+  const country = body.country == null ? "US" : text(body.country, 10)?.toUpperCase();
   if (!locale || !country || !validLocale(locale) || !validCountry(country)) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
   }

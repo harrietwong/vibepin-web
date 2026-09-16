@@ -12,6 +12,7 @@ alter table ai_copy_v2_sessions alter column claim_expires_at set not null;
 alter table ai_copy_v2_sessions alter column fact_card drop not null;
 alter table ai_copy_v2_sessions alter column keyword_evidence drop not null;
 update ai_copy_v2_sessions set status = 'completed' where status = 'active';
+alter table ai_copy_v2_sessions alter column status set default 'pending';
 alter table ai_copy_v2_sessions drop constraint if exists ai_copy_v2_sessions_status_check;
 alter table ai_copy_v2_sessions add constraint ai_copy_v2_sessions_status_check
   check (status in ('pending', 'completed', 'expired')) not valid;

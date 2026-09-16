@@ -338,10 +338,12 @@ async function main() {
     assert(!json.result.usedKeywordIds.includes("art"), "art does not match inside smart/cart"); assert(json.result.usedKeywordIds.includes("smart"), "full token phrase matches");
   });
 
-  await test("invalid locale and injectable country are rejected before keyword lookup", async () => {
-    reset(); let loads = 0; __setTrendKeywordLoaderForTests(async () => { loads++; return []; });
+  await test("invalid locale/country are rejected and lowercase country is canonicalized", async () => {
+    reset(); let loads = 0; let observedRegion = ""; __setTrendKeywordLoaderForTests(async input => { loads++; observedRegion = input.region ?? ""; return []; });
     eq((await analyze(analyzeReq("bad-country", { country: "US),status.eq.anything" }))).status, 400, "country rejected");
     eq((await analyze(analyzeReq("bad-locale", { locale: "not_a_locale_%%%" }))).status, 400, "locale rejected"); eq(loads, 0, "no query attempted");
+    eq((await analyze(analyzeReq("lower-country", { country: "us" }))).status, 200, "lowercase country accepted");
+    eq(observedRegion, "US", "country canonicalized before keyword lookup");
   });
 
   await test("degraded prompt does not include demand wording", async () => {
@@ -385,6 +387,8 @@ async function main() {
     sessionModule.__setSessionStoreForTests(null); const prod = sessionModule.getSessionStore();
     const claim = await prod.claimSession({ userId: "owner", workspaceId: "owner", draftId: "d", analyzeIdempotencyKey: "lease", modelVersion: "m", promptVersion: "p" });
     eq(claim.state, "claimed", "expired lease stolen"); assert(ops.some(o => o[0] === "lt" && o[1] === "claim_expires_at"), "steal is conditional on expired lease");
+    const stealUpdate = ops.find(o => o[0] === "update")?.[1] as { expires_at?: string } | undefined;
+    assert(Boolean(stealUpdate?.expires_at), "session TTL refreshes when an expired lease is stolen");
     await prod.completeSession({ sessionId: stolen.id, userId: "owner", claimToken: stolen.claim_token, factCard: {} as never, keywordEvidence: {} as never });
     await prod.releaseSessionClaim(stolen.id, "owner", stolen.claim_token);
     const tokenFilters = ops.filter(o => o[0] === "eq" && o[1] === "claim_token" && o[2] === stolen.claim_token);
@@ -403,6 +407,7 @@ async function main() {
     assert(/alter table\s+ai_copy_v2_sessions[\s\S]*add column if not exists claim_token/i.test(sql), "session token additive alter");
     assert(/alter table\s+ai_copy_v2_generations[\s\S]*add column if not exists claim_expires_at/i.test(sql), "generation lease additive alter");
     assert(sql.includes("p_claim_token"), "RPC is token-bound"); assert(sql.includes("enable row level security"), "RLS preserved");
+    assert(/alter table\s+ai_copy_v2_sessions\s+alter column status set default 'pending'/i.test(sql), "old status default upgraded");
   });
 
   sessionModule.__setSessionStoreForTests(null); __setTrendKeywordLoaderForTests(null); __setCopyProviderForTests(null);

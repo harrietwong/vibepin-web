@@ -135,6 +135,7 @@ function supabaseSessionStore(): SessionStore {
         const { data: stolen, error: stealError } = await db().from("ai_copy_v2_sessions").update({
           claim_token: claimToken,
           claim_expires_at: claimExpiry(),
+          expires_at: params.expiresAtIso ?? expiry(),
           updated_at: now,
         }).eq("vibepin_user_id", params.userId)
           .eq("analyze_idempotency_key", params.analyzeIdempotencyKey)

@@ -88,14 +88,16 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
     }
   }
 
-  async detectClaims(output: ProviderCopyOutput, grounding: FactCardV1): Promise<unknown> {
+  async detectClaims(output: ProviderCopyOutput, _grounding: FactCardV1): Promise<unknown> {
     const cfg = providerConfig();
     if (!cfg.key) throw new CopyError("provider_not_configured", 502, PROVIDER_MESSAGE);
     return chatJson({
       key: cfg.key, baseUrl: cfg.baseUrl, model: cfg.textModel, provider: cfg.provider,
       messages: [
         { role: "system", content: DETECTOR_SYSTEM },
-        { role: "user", content: JSON.stringify({ copy: output, groundingFacts: summarizeFacts(grounding) }) },
+        // Claim extraction is intentionally blind to grounding. Its only job is
+        // to enumerate claims; the deterministic validator decides support.
+        { role: "user", content: JSON.stringify({ copy: output }) },
       ],
       timeoutMs: 15_000, temperature: 0,
     });
