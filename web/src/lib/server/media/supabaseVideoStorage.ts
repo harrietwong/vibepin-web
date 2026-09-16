@@ -15,11 +15,9 @@ export function createSupabaseVideoStorage(input: { supabaseUrl: string; service
       if (!response.ok) throw new Error("storage_stat_failed");
       const size = Number(response.headers.get("content-length"));
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-      // Supabase-compatible object stores may expose an authoritative SHA-256
-      // as object metadata. When unavailable the v77 declared checksum is retained
-      // as an explicitly declared fact; bytes are never buffered to hash them here.
-      const checksumSha256 = response.headers.get("x-amz-meta-sha256") ?? undefined;
-      return { exists: true, contentType, byteSize: Number.isSafeInteger(size) ? size : undefined, checksumSha256 };
+      // x-amz-meta-* is uploader-controlled metadata, not a Storage-computed
+      // digest. This adapter intentionally exposes no verified checksum.
+      return { exists: true, contentType, byteSize: Number.isSafeInteger(size) ? size : undefined };
     },
     readRange({ bucket, path, start, end }) {
       return fetchImpl(objectUrl(input.supabaseUrl, bucket, path), { headers: { ...headers, Range: `bytes=${start}-${end}` } });

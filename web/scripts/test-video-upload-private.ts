@@ -24,15 +24,112 @@ function preparedItem(overrides: Record<string, unknown> = {}) {
   return { batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, status: "prepared", privatePath: `${OWNER}/video/a.mp4`, declaredContentType: "video/mp4", declaredByteSize: 12, declaredChecksumSha256: SHA, declaredWidth: 1080, declaredHeight: 1920, declaredDurationMs: 5_000, expiresAt: "2099-01-01T00:00:00.000Z", ...overrides };
 }
 
+function storeStub(overrides: Record<string, unknown> = {}) {
+  const item = preparedItem();
+  return {
+    prepareBatch: async () => ({ batchId: item.batchId }),
+    prepareItem: async () => ({ status: "prepared" }),
+    findItem: async () => item,
+    claimItem: async (input: { claimToken: string }) => ({ status: "finalizing", claimToken: input.claimToken }),
+    finalizeItem: async () => ({ status: "finalized", provenanceReady: true }),
+    failItem: async () => ({ status: "failed", cleanupAllowed: true }),
+    ...overrides,
+  };
+}
+
 async function main() {
   const { handleVideoUploadPrepare, handleVideoUploadFinalize } = await import("../src/lib/server/media/videoUploadHandler");
+  const { createVideoUploadStore } = await import("../src/lib/server/media/videoUploadStore");
+  const { createSupabaseVideoStorage } = await import("../src/lib/server/media/supabaseVideoStorage");
   const { handleStorageMediaGet } = await import("../src/lib/server/media/storageMediaHandler");
+
+  await test("production Storage adapter never promotes uploader-controlled SHA metadata", async () => {
+    const storage = createSupabaseVideoStorage({ supabaseUrl: "https://storage.invalid", serviceRoleKey: "test-key",
+      fetchImpl: async () => new Response(null, { status: 200, headers: { "content-length": "12", "content-type": "video/mp4", "x-amz-meta-sha256": SHA } }) });
+    const stat = await storage.stat({ bucket: "generated-private", path: `${OWNER}/video/a.mp4` });
+    assert.equal("checksumSha256" in stat, false);
+    assert.equal(stat.verifiedChecksumSha256, undefined);
+  });
+
+  await test("production store routes claim, atomic finalize, and failure through owner-scoped v77 RPCs", async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const db = {
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "video_upload_item_claim") return { data: { status: "finalizing", claimToken: args.p_claim_token }, error: null };
+        if (name === "video_upload_item_finalize") return { data: { status: "finalized", provenanceReady: true }, error: null };
+        if (name === "video_upload_item_fail") return { data: { status: "failed", cleanupAllowed: true }, error: null };
+        throw new Error(`unexpected RPC ${name}`);
+      },
+      from: () => { throw new Error("direct table write is forbidden for lifecycle transitions"); },
+    };
+    const store = createVideoUploadStore(db);
+    const claimToken = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await store.claimItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken, claimExpiresAt: "2099-01-01T00:00:00.000Z" });
+    await store.finalizeItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken,
+      bucketId: "generated-private", contentType: "video/mp4", byteSize: 12, checksumSha256: null });
+    await store.failItem({ ownerUserId: OWNER, batchId: preparedItem().batchId, ordinal: 0, claimToken, code: "invalid_video_container" });
+    assert.deepEqual(calls.map(call => call.name), ["video_upload_item_claim", "video_upload_item_finalize", "video_upload_item_fail"]);
+    assert.equal(calls[1].args.p_verified_checksum_sha256, null);
+    assert.equal("p_verified_width" in calls[1].args, false);
+    assert.equal("p_verified_duration_ms" in calls[1].args, false);
+    assert.equal(calls[2].args.p_claim_token, claimToken);
+  });
+
+  await test("expired or terminal prepare replay never issues another signed capability", async () => {
+    const existing = { ...preparedItem(), status: "failed", expiresAt: "2000-01-01T00:00:00.000Z" };
+    let signed = 0;
+    const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_replay", files: [descriptor()] }), {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: storeStub({ prepareBatch: async () => ({ batchId: existing.batchId }), prepareItem: async () => ({ status: "failed" }), findItem: async () => existing }),
+      createSignedUpload: async () => { signed++; return { token: "must-not-issue", signedUrl: "https://storage.test/must-not-issue" }; },
+    });
+    assert.equal(response.status, 409);
+    assert.equal(signed, 0);
+  });
+
+  await test("a losing finalize race cannot delete an object finalized by the winner", async () => {
+    const item = preparedItem();
+    let statCalls = 0; let removed = 0; let claimed = false;
+    const deps = {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: storeStub({
+        findItem: async () => item,
+        claimItem: async (input: { claimToken: string }) => {
+          if (claimed) throw new Error("video_upload_item_claimed");
+          claimed = true;
+          return { status: "finalizing", claimToken: input.claimToken };
+        },
+      }),
+      createSignedUpload: async () => ({ token: "unused", signedUrl: "https://storage.test/unused" }),
+      storage: { stat: async () => { statCalls++; return { exists: true, contentType: "video/mp4", byteSize: 12, verifiedChecksumSha256: SHA }; }, readRange: async () => new Response(MP4_FTYP), remove: async () => { removed++; } },
+      recordCleanup: async () => {},
+    };
+    const winner = handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), deps);
+    const loser = handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), deps);
+    assert.equal((await winner).status, 200);
+    assert.equal((await loser).status, 409);
+    assert.equal(removed, 0);
+    assert.equal(statCalls, 1);
+  });
+
+  await test("finalized replay fails closed when atomic provenance is incomplete", async () => {
+    const item = { ...preparedItem(), status: "finalized" };
+    const response = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: storeStub({ findItem: async () => item, claimItem: async () => { throw new Error("video_upload_provenance_incomplete"); } }),
+      createSignedUpload: async () => ({ token: "unused", signedUrl: "https://storage.test/unused" }), storage: { stat: async () => { throw new Error("must not stat"); }, readRange: async () => { throw new Error("must not read"); }, remove: async () => {} },
+      recordCleanup: async () => {},
+    });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json() as { code: string }).code, "provenance_unavailable");
+  });
 
   await test("prepare authenticates before parsing, storage, or database side effects", async () => {
     let effects = 0;
     const response = await handleVideoUploadPrepare(new Request("https://app.test/api/studio/video-upload/prepare", { method: "POST", body: "not json" }), {
       getUserId: async () => null, enabled: true, configured: true,
-      store: { prepareBatch: async () => { effects++; throw new Error("unexpected"); }, prepareItem: async () => { effects++; throw new Error("unexpected"); }, findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({ prepareBatch: async () => { effects++; throw new Error("unexpected"); }, prepareItem: async () => { effects++; throw new Error("unexpected"); }, findItem: async () => null }),
       createSignedUpload: async () => { effects++; throw new Error("unexpected"); },
     });
     assert.equal(response.status, 401);
@@ -42,7 +139,7 @@ async function main() {
 
   await test("feature and configuration gates deny prepare before database or Storage work", async () => {
     let effects = 0;
-    const base = { getUserId: async () => OWNER, store: { prepareBatch: async () => { effects++; return { batchId: "unexpected" }; }, prepareItem: async () => ({ status: "prepared" }), findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} }, createSignedUpload: async () => { effects++; return { token: "unexpected", signedUrl: "https://storage.test/unexpected" }; } };
+    const base = { getUserId: async () => OWNER, store: storeStub({ prepareBatch: async () => { effects++; return { batchId: "unexpected" }; }, findItem: async () => null }), createSignedUpload: async () => { effects++; return { token: "unexpected", signedUrl: "https://storage.test/unexpected" }; } };
     const disabled = await handleVideoUploadPrepare(request("https://app.test/prepare", { bad: "body" }), { ...base, enabled: false, configured: true });
     const unconfigured = await handleVideoUploadPrepare(request("https://app.test/prepare", { bad: "body" }), { ...base, enabled: true, configured: false });
     assert.equal(disabled.status, 404);
@@ -54,10 +151,11 @@ async function main() {
     let signed = 0;
     const deps = {
       getUserId: async () => OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: "11111111-1111-4111-8111-111111111111" }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({ prepareBatch: async () => ({ batchId: "11111111-1111-4111-8111-111111111111" }), findItem: async () => null }),
       createSignedUpload: async () => { signed++; return { token: "secret-token", signedUrl: "https://storage.test/secret" }; },
     };
-    for (const files of [[], Array.from({ length: 21 }, (_, ordinal) => descriptor(ordinal)), [descriptor(0, { contentType: "video/webm" })], [descriptor(0, { byteSize: 104857601 })], [descriptor(0), descriptor(0)]]) {
+    for (const files of [[], Array.from({ length: 21 }, (_, ordinal) => descriptor(ordinal)), [descriptor(0, { contentType: "video/webm" })],
+      [descriptor(0, { byteSize: 104857601 })], [descriptor(0, { durationMs: 3_999 })], [descriptor(0, { durationMs: 300_001 })], [descriptor(0), descriptor(0)]]) {
       const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_1", files }), deps);
       assert.equal(response.status, files.length === 21 ? 413 : 400);
       assert.equal((await response.json() as { code: string }).code, files.length === 21 ? "batch_limit_exceeded" : "invalid_video_upload");
@@ -70,10 +168,10 @@ async function main() {
     const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_1", files: [descriptor()] }), {
       getUserId: async () => OWNER, enabled: true, configured: true,
       pathFactory: (owner, batch, ordinal) => `${owner}/videos/${batch}/${ordinal}.mp4`,
-      store: {
-        prepareBatch: async input => { calls.push(input); return { batchId: "11111111-1111-4111-8111-111111111111" }; },
-        prepareItem: async input => { calls.push(input); return { status: "prepared" }; }, findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {},
-      },
+      store: storeStub({
+        prepareBatch: async (input: unknown) => { calls.push(input); return { batchId: "11111111-1111-4111-8111-111111111111" }; },
+        prepareItem: async (input: unknown) => { calls.push(input); return { status: "prepared" }; }, findItem: async () => null,
+      }),
       createSignedUpload: async input => { calls.push(input); return { token: "signed-token", signedUrl: "https://storage.test/signed" }; },
     });
     assert.equal(response.status, 200);
@@ -87,7 +185,7 @@ async function main() {
     let signed = 0;
     const base = {
       getUserId: async () => OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: "11111111-1111-4111-8111-111111111111" }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({ prepareBatch: async () => ({ batchId: "11111111-1111-4111-8111-111111111111" }), findItem: async () => null }),
       createSignedUpload: async () => { signed++; return { token: "capability-token", signedUrl: "https://storage.test/capability" }; },
     };
     const twenty = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_twenty", files: Array.from({ length: 20 }, (_, ordinal) => descriptor(ordinal)) }), base);
@@ -105,7 +203,7 @@ async function main() {
     let preparedPath = "";
     const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_replay", files: [descriptor()] }), {
       getUserId: async () => OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: existing.batchId }), prepareItem: async input => { preparedPath = input.privatePath; return { status: "prepared" }; }, findItem: async () => existing, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({ prepareBatch: async () => ({ batchId: existing.batchId }), prepareItem: async (input: { privatePath: string }) => { preparedPath = input.privatePath; return { status: "prepared" }; }, findItem: async () => existing }),
       createSignedUpload: async () => ({ token: "fresh-capability", signedUrl: "https://storage.test/fresh" }),
       pathFactory: () => `${OWNER}/should-not-be-used.mp4`,
     });
@@ -114,28 +212,61 @@ async function main() {
     assert.equal((await response.json() as { uploads: Array<{ path: string }> }).uploads[0].path, existing.privatePath);
   });
 
-  await test("finalize checks only server-loaded facts, validates ftyp, registers exact video provenance, and is idempotent", async () => {
+  await test("finalize owns an atomic claim before any Storage read", async () => {
+    const item = preparedItem();
+    let claims = 0;
+    const deps = {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: {
+        prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => item,
+        claimItem: async (input: { claimToken: string }) => { claims++; return { status: "finalizing", claimToken: input.claimToken }; },
+        finalizeItem: async () => ({ status: "finalized", provenanceReady: true }), failItem: async () => ({ status: "failed", cleanupAllowed: true }),
+      },
+      createSignedUpload: async () => ({ token: "unused", signedUrl: "https://storage.test/unused" }),
+      storage: {
+        stat: async () => { assert.equal(claims, 1); return { exists: true, contentType: "video/mp4", byteSize: 12, verifiedChecksumSha256: SHA }; },
+        readRange: async () => new Response(MP4_FTYP), remove: async () => {},
+      },
+      recordCleanup: async () => {},
+    };
+    const response = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), deps);
+    assert.equal(response.status, 200);
+    assert.equal(claims, 1);
+  });
+
+  await test("finalize passes only server-verified facts to atomic settlement and complete replay skips Storage", async () => {
     let reads = 0;
-    let registered: unknown;
+    let finalizedInput: Record<string, unknown> = {};
+    let replay = false;
     const item = preparedItem();
     const deps = {
       getUserId: async () => OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => item, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({
+        findItem: async () => ({ ...item, status: replay ? "finalized" : "prepared" }),
+        claimItem: async (input: { claimToken: string }) => replay
+          ? { status: "finalized", claimToken: null, provenanceReady: true }
+          : { status: "finalizing", claimToken: input.claimToken },
+        finalizeItem: async (input: Record<string, unknown>) => { finalizedInput = input; return { status: "finalized", provenanceReady: true }; },
+      }),
       createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/token" }),
       storage: {
-        stat: async () => ({ exists: true, contentType: "video/mp4", byteSize: 12, checksumSha256: SHA }),
+        stat: async () => ({ exists: true, contentType: "video/mp4", byteSize: 12 }),
         readRange: async () => { reads++; return new Response(MP4_FTYP); },
         remove: async () => {},
       },
-      registerProvenance: async (input: unknown) => { registered = input; return true; }, recordCleanup: async () => {},
+      recordCleanup: async () => {},
     };
     const success = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), deps);
     assert.equal(success.status, 200);
     assert.equal(reads, 1);
-    assert.deepEqual(registered, { owner_user_id: OWNER, bucket_id: "generated-private", object_path: item.privatePath, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: "video/mp4", byte_size: 12, checksum_sha256: SHA, width: 1080, height: 1920, duration_ms: 5_000 });
+    assert.equal(finalizedInput?.checksumSha256, null, "a browser declaration must not become a verified checksum");
+    assert.equal("width" in (finalizedInput ?? {}), false);
+    assert.equal("height" in (finalizedInput ?? {}), false);
+    assert.equal("durationMs" in (finalizedInput ?? {}), false);
 
-    const replay = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), { ...deps, store: { ...deps.store, findItem: async () => ({ ...item, status: "finalized" }) } });
-    assert.equal(replay.status, 200);
+    replay = true;
+    const replayResponse = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), deps);
+    assert.equal(replayResponse.status, 200);
     assert.equal(reads, 1, "successful replay must not re-read Storage");
   });
 
@@ -145,10 +276,10 @@ async function main() {
     const item = preparedItem();
     const response = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), {
       getUserId: async () => OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => item, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+      store: storeStub({ findItem: async () => item }),
       createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/token" }),
-      storage: { stat: async () => ({ exists: true, contentType: "video/mp4", byteSize: 12, checksumSha256: SHA }), readRange: async () => new Response(new Uint8Array([1, 2, 3])), remove: async () => { removed++; throw new Error("storage failure"); } },
-      registerProvenance: async () => true, recordCleanup: async input => { cleanup = input; },
+      storage: { stat: async () => ({ exists: true, contentType: "video/mp4", byteSize: 12, verifiedChecksumSha256: SHA }), readRange: async () => new Response(new Uint8Array([1, 2, 3])), remove: async () => { removed++; throw new Error("storage failure"); } },
+      recordCleanup: async input => { cleanup = input; },
     });
     assert.equal(response.status, 422);
     assert.equal((await response.json() as { code: string }).code, "invalid_video_container");
@@ -160,26 +291,26 @@ async function main() {
     const item = preparedItem();
     for (const [name, stat, itemOverride, expected] of [
       ["missing", { exists: false }, {}, 404],
-      ["empty", { exists: true, contentType: "video/mp4", byteSize: 0, checksumSha256: SHA }, {}, 422],
-      ["type", { exists: true, contentType: "video/quicktime", byteSize: 12, checksumSha256: SHA }, {}, 422],
-      ["size", { exists: true, contentType: "video/mp4", byteSize: 13, checksumSha256: SHA }, {}, 422],
-      ["expired", { exists: true, contentType: "video/mp4", byteSize: 12, checksumSha256: SHA }, { expiresAt: "2000-01-01T00:00:00.000Z" }, 422],
+      ["empty", { exists: true, contentType: "video/mp4", byteSize: 0, verifiedChecksumSha256: SHA }, {}, 422],
+      ["type", { exists: true, contentType: "video/quicktime", byteSize: 12, verifiedChecksumSha256: SHA }, {}, 422],
+      ["size", { exists: true, contentType: "video/mp4", byteSize: 13, verifiedChecksumSha256: SHA }, {}, 422],
+      ["expired", { exists: true, contentType: "video/mp4", byteSize: 12, verifiedChecksumSha256: SHA }, { expiresAt: "2000-01-01T00:00:00.000Z" }, 422],
     ] as const) {
-      let registered = 0; let reads = 0;
+      let finalized = 0; let reads = 0;
       const result = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), {
         getUserId: async () => OWNER, enabled: true, configured: true,
-        store: { prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => ({ ...item, ...itemOverride }), finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} },
+        store: storeStub({ findItem: async () => ({ ...item, ...itemOverride }), finalizeItem: async () => { finalized++; return { status: "finalized", provenanceReady: true }; } }),
         createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/token" }),
-        storage: { stat: async () => stat, readRange: async () => { reads++; return new Response(MP4_FTYP); }, remove: async () => {} }, registerProvenance: async () => { registered++; return true; },
+        storage: { stat: async () => stat, readRange: async () => { reads++; return new Response(MP4_FTYP); }, remove: async () => {} },
       });
       assert.equal(result.status, expected, name);
-      assert.equal(registered, 0, `${name} must not register ready provenance`);
+      assert.equal(finalized, 0, `${name} must not atomically register ready provenance`);
       if (name !== "expired") assert.equal(reads, 0, `${name} must fail before ftyp`);
     }
     const crossOwner = await handleVideoUploadFinalize(request("https://app.test/finalize", { batchId: item.batchId, ordinal: 0 }), {
       getUserId: async () => OTHER_OWNER, enabled: true, configured: true,
-      store: { prepareBatch: async () => ({ batchId: item.batchId }), prepareItem: async () => ({ status: "prepared" }), findItem: async () => null, finalizeItem: async () => ({ status: "finalized" }), failItem: async () => {} }, createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/token" }),
-      storage: { stat: async () => { throw new Error("must not stat"); }, readRange: async () => { throw new Error("must not read"); }, remove: async () => {} }, registerProvenance: async () => true,
+      store: storeStub({ findItem: async () => null }), createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/token" }),
+      storage: { stat: async () => { throw new Error("must not stat"); }, readRange: async () => { throw new Error("must not read"); }, remove: async () => {} },
     });
     assert.equal(crossOwner.status, 404);
   });

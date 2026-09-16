@@ -19,7 +19,6 @@ export async function POST(req: Request) {
     store: createVideoUploadStore(client()),
     createSignedUpload: async () => { throw new Error("unused"); },
     storage: createSupabaseVideoStorage({ supabaseUrl: url, serviceRoleKey: key }),
-    registerProvenance: input => createMediaProvenanceStore(client()).register(input),
     recordCleanup: input => createMediaProvenanceStore(client()).recordCleanup(input),
   });
 }

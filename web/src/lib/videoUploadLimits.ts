@@ -1,0 +1,5 @@
+export const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+export const MAX_VIDEO_UPLOAD_ITEMS = 20;
+export const MIN_VIDEO_DURATION_MS = 4_000;
+export const MAX_VIDEO_DURATION_MS = 5 * 60_000;
+export const VIDEO_FINALIZE_CLAIM_MS = 2 * 60_000;

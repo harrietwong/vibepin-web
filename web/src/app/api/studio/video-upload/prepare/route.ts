@@ -1,5 +1,4 @@
 import { getUserIdFromBearer } from "@/lib/server/authUser";
-import { createMediaProvenanceStore } from "@/lib/server/mediaProvenance";
 import { handleVideoUploadPrepare, VIDEO_UPLOAD_BUCKET } from "@/lib/server/media/videoUploadHandler";
 import { createVideoUploadStore } from "@/lib/server/media/videoUploadStore";
 import { createServerClient } from "@/lib/supabase";
@@ -21,8 +20,5 @@ export async function POST(req: Request) {
       if (error || !data?.token || !data.signedUrl) throw new Error("signed_upload_unavailable");
       return { token: data.token, signedUrl: data.signedUrl };
     },
-    // Kept here only to make the service dependency explicit for the route's
-    // compile-time wiring; prepare itself has no provenance write.
-    registerProvenance: input => createMediaProvenanceStore(client()).register(input),
   });
 }

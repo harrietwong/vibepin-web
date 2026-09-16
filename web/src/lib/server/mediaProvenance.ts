@@ -15,6 +15,11 @@ export type MediaProvenance = {
   width?: number | null;
   height?: number | null;
   duration_ms?: number | null;
+  content_type_source?: string | null;
+  byte_size_source?: string | null;
+  checksum_source?: string | null;
+  dimensions_source?: string | null;
+  duration_source?: string | null;
 };
 
 export type MediaProvenanceStore = {
@@ -29,7 +34,7 @@ export function createMediaProvenanceStore(db = createServerClient()): MediaProv
     async findExact(ownerUserId, bucketId, objectPath) {
       const { data, error } = await db
         .from("media_asset_provenance")
-        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms")
+        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms,content_type_source,byte_size_source,checksum_source,dimensions_source,duration_source")
         .eq("owner_user_id", ownerUserId)
         .eq("bucket_id", bucketId)
         .eq("object_path", objectPath)
@@ -41,7 +46,7 @@ export function createMediaProvenanceStore(db = createServerClient()): MediaProv
       if (!objectPaths.length) return [];
       const { data, error } = await db
         .from("media_asset_provenance")
-        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms")
+        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms,content_type_source,byte_size_source,checksum_source,dimensions_source,duration_source")
         .eq("owner_user_id", ownerUserId)
         .eq("bucket_id", bucketId)
         .in("object_path", [...new Set(objectPaths)]);

@@ -1,8 +1,13 @@
-import type { MediaProvenance } from "@/lib/server/mediaProvenance";
+import {
+  MAX_VIDEO_DURATION_MS,
+  MAX_VIDEO_UPLOAD_BYTES,
+  MAX_VIDEO_UPLOAD_ITEMS,
+  MIN_VIDEO_DURATION_MS,
+  VIDEO_FINALIZE_CLAIM_MS,
+} from "@/lib/videoUploadLimits";
 
 export const VIDEO_UPLOAD_BUCKET = "generated-private";
-export const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
-export const MAX_VIDEO_UPLOAD_ITEMS = 20;
+export { MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_UPLOAD_ITEMS, MIN_VIDEO_DURATION_MS, MAX_VIDEO_DURATION_MS };
 export const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/x-m4v", "video/quicktime"]);
 
 type PreparedItem = {
@@ -15,12 +20,13 @@ export type VideoUploadStore = {
   prepareBatch(input: { ownerUserId: string; idempotencyKey: string; expiresAt: string }): Promise<{ batchId: string }>;
   prepareItem(input: { ownerUserId: string; batchId: string; ordinal: number; idempotencyKey: string; privatePath: string; contentType: string; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number }): Promise<{ status: string }>;
   findItem(ownerUserId: string, batchId: string, ordinal: number): Promise<PreparedItem | null>;
-  finalizeItem(input: { ownerUserId: string; batchId: string; ordinal: number; contentType: string; byteSize: number; checksumSha256: string; width: number; height: number; durationMs: number }): Promise<{ status: string }>;
-  failItem(input: { ownerUserId: string; batchId: string; ordinal: number; code: string }): Promise<void>;
+  claimItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; claimExpiresAt: string }): Promise<{ status: string; claimToken?: string | null; provenanceReady?: boolean }>;
+  finalizeItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; bucketId: string; contentType: string; byteSize: number; checksumSha256: string | null }): Promise<{ status: string; provenanceReady: boolean }>;
+  failItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; code: string }): Promise<{ status: string; cleanupAllowed: boolean }>;
 };
 
 export type VideoObjectStorage = {
-  stat(input: { bucket: string; path: string }): Promise<{ exists: boolean; contentType?: string; byteSize?: number; checksumSha256?: string }>;
+  stat(input: { bucket: string; path: string }): Promise<{ exists: boolean; contentType?: string; byteSize?: number; verifiedChecksumSha256?: string }>;
   readRange(input: { bucket: string; path: string; start: number; end: number }): Promise<Response>;
   remove(input: { bucket: string; path: string }): Promise<void>;
 };
@@ -32,7 +38,6 @@ export type VideoUploadHandlerDeps = {
   createSignedUpload(input: { bucket: string; path: string; contentType: string; upsert: false }): Promise<{ token: string; signedUrl: string }>;
   pathFactory?: (ownerUserId: string, batchId: string, ordinal: number, contentType: string) => string;
   storage?: VideoObjectStorage;
-  registerProvenance?: (input: Omit<MediaProvenance, "bucket_id"> & { bucket_id: string }) => Promise<boolean>;
   recordCleanup?: (input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }) => Promise<void>;
 };
 
@@ -58,7 +63,8 @@ function descriptorFrom(value: unknown): Descriptor | null {
     || typeof item.filename !== "string" || !SAFE_NAME.test(item.filename)
     || typeof item.contentType !== "string" || !ALLOWED_VIDEO_TYPES.has(item.contentType)
     || typeof item.checksumSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(item.checksumSha256)
-    || byteSize < 1 || byteSize > MAX_VIDEO_UPLOAD_BYTES || width < 1 || height < 1 || durationMs < 1) return null;
+    || byteSize < 1 || byteSize > MAX_VIDEO_UPLOAD_BYTES || width < 1 || height < 1
+    || durationMs < MIN_VIDEO_DURATION_MS || durationMs > MAX_VIDEO_DURATION_MS) return null;
   return { ordinal, idempotencyKey: item.idempotencyKey, filename: item.filename, contentType: item.contentType, byteSize, checksumSha256: item.checksumSha256.toLowerCase(), width, height, durationMs };
 }
 
@@ -92,6 +98,9 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
     let existing: PreparedItem | null;
     try { existing = await deps.store.findItem(owner, batch.batchId, file.ordinal); }
     catch { return error("video_upload_unavailable", id, 503); }
+    if (existing && (Date.parse(existing.expiresAt) <= now.getTime() || existing.status !== "prepared")) {
+      return error("video_upload_not_uploadable", id, 409);
+    }
     const path = existing?.privatePath ?? (deps.pathFactory ?? defaultPath)(owner, batch.batchId, file.ordinal, file.contentType);
     if (!ownerPath(owner, path)) return error("video_upload_unavailable", id, 503);
     try {
@@ -113,40 +122,69 @@ async function readBounded(response: Response, maximum = 64 * 1024): Promise<Uin
 }
 function hasFtyp(bytes: Uint8Array | null) { return Boolean(bytes && bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70); }
 function safeResult(item: PreparedItem, id: string) { return { ok: true, batchId: item.batchId, ordinal: item.ordinal, proxyUrl: `/api/storage-media?path=${encodeURIComponent(item.privatePath)}`, requestId: id }; }
+function storeErrorCode(value: unknown) {
+  const message = value instanceof Error ? value.message : "";
+  return new Set([
+    "video_upload_item_claimed", "video_upload_claim_lost", "video_upload_provenance_incomplete",
+    "video_upload_batch_expired", "video_upload_item_not_finalizable", "video_upload_batch_not_finalizable",
+  ]).has(message) ? message : null;
+}
 
 export async function handleVideoUploadFinalize(req: Request, deps: VideoUploadHandlerDeps): Promise<Response> {
   const id = requestId(req);
   const owner = await deps.getUserId(req).catch(() => null);
   if (!owner) return error("unauthorized", id, 401);
   if (!deps.enabled) return error("video_upload_disabled", id, 404);
-  if (!deps.configured || !deps.storage || !deps.registerProvenance) return error("config_error", id, 503);
+  if (!deps.configured || !deps.storage) return error("config_error", id, 503);
   const body = await json(req);
   if (!body || typeof body.batchId !== "string" || !SAFE_ID.test(body.batchId) || typeof body.ordinal !== "number" || !Number.isInteger(body.ordinal) || body.ordinal < 0 || body.ordinal >= MAX_VIDEO_UPLOAD_ITEMS) return error("invalid_video_upload", id, 400);
   let item: PreparedItem | null;
   try { item = await deps.store.findItem(owner, body.batchId, body.ordinal); } catch { return error("video_upload_unavailable", id, 503); }
   if (!item || !ownerPath(owner, item.privatePath)) return error("video_upload_not_found", id, 404);
-  if (item.status === "finalized") return Response.json(safeResult(item, id));
+  const now = deps.now?.() ?? new Date();
+  const claimToken = crypto.randomUUID();
+  let claim: Awaited<ReturnType<VideoUploadStore["claimItem"]>>;
+  try {
+    claim = await deps.store.claimItem({ ownerUserId: owner, batchId: item.batchId, ordinal: item.ordinal, claimToken, claimExpiresAt: new Date(now.getTime() + VIDEO_FINALIZE_CLAIM_MS).toISOString() });
+  } catch (cause) {
+    const code = storeErrorCode(cause);
+    if (code === "video_upload_item_claimed" || code === "video_upload_claim_lost") return error("video_upload_in_progress", id, 409);
+    if (code === "video_upload_provenance_incomplete") return error("provenance_unavailable", id, 503);
+    if (code === "video_upload_batch_expired") return error("video_upload_expired", id, 422);
+    if (code === "video_upload_item_not_finalizable" || code === "video_upload_batch_not_finalizable") return error("video_upload_not_finalizable", id, 409);
+    return error("video_upload_unavailable", id, 503);
+  }
+  if (claim.status === "finalized") {
+    return claim.provenanceReady ? Response.json(safeResult(item, id)) : error("provenance_unavailable", id, 503);
+  }
+  if (claim.status !== "finalizing" || claim.claimToken !== claimToken) return error("video_upload_in_progress", id, 409);
   const cleanup = async (code: string) => {
-    try { await deps.store.failItem({ ownerUserId: owner, batchId: item!.batchId, ordinal: item!.ordinal, code }); } catch { /* failure state is best effort; cleanup remains mandatory */ }
+    let failure: Awaited<ReturnType<VideoUploadStore["failItem"]>>;
+    try { failure = await deps.store.failItem({ ownerUserId: owner, batchId: item!.batchId, ordinal: item!.ordinal, claimToken, code }); }
+    catch (cause) {
+      const lost = storeErrorCode(cause) === "video_upload_claim_lost";
+      return error(lost ? "video_upload_in_progress" : "video_upload_unavailable", id, lost ? 409 : 503);
+    }
+    if (!failure.cleanupAllowed || failure.status !== "failed") return error("video_upload_in_progress", id, 409);
     try { await deps.storage!.remove({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item!.privatePath }); }
     catch { try { await deps.recordCleanup?.({ owner_user_id: owner, bucket_id: deps.bucket ?? VIDEO_UPLOAD_BUCKET, object_path: item!.privatePath, reason: code }); } catch { /* safe failure response below */ } }
     return error(code, id, code === "missing_video_object" ? 404 : code === "video_upload_unavailable" ? 503 : 422);
   };
-  if (Date.parse(item.expiresAt) <= (deps.now?.() ?? new Date()).getTime()) return cleanup("video_upload_expired");
+  if (Date.parse(item.expiresAt) <= now.getTime()) return cleanup("video_upload_expired");
   let stat: Awaited<ReturnType<VideoObjectStorage["stat"]>>;
   try { stat = await deps.storage.stat({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item.privatePath }); } catch { return cleanup("video_upload_unavailable"); }
   if (!stat.exists) return cleanup("missing_video_object");
   if (!stat.byteSize || stat.byteSize > MAX_VIDEO_UPLOAD_BYTES) return cleanup("invalid_video_size");
   if (stat.contentType !== item.declaredContentType || !ALLOWED_VIDEO_TYPES.has(stat.contentType)) return cleanup("video_content_type_mismatch");
-  if (stat.byteSize !== item.declaredByteSize || (stat.checksumSha256 && stat.checksumSha256.toLowerCase() !== item.declaredChecksumSha256)) return cleanup("video_facts_mismatch");
+  if (stat.byteSize !== item.declaredByteSize || (stat.verifiedChecksumSha256 && stat.verifiedChecksumSha256.toLowerCase() !== item.declaredChecksumSha256)) return cleanup("video_facts_mismatch");
   let header: Uint8Array | null;
   try { header = await readBounded(await deps.storage.readRange({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item.privatePath, start: 0, end: Math.min(63, stat.byteSize - 1) })); } catch { return cleanup("video_upload_unavailable"); }
   if (!hasFtyp(header)) return cleanup("invalid_video_container");
   try {
-    const checksum = stat.checksumSha256?.toLowerCase() ?? item.declaredChecksumSha256;
-    await deps.store.finalizeItem({ ownerUserId: owner, batchId: item.batchId, ordinal: item.ordinal, contentType: stat.contentType, byteSize: stat.byteSize, checksumSha256: checksum, width: item.declaredWidth, height: item.declaredHeight, durationMs: item.declaredDurationMs });
-    const registered = await deps.registerProvenance({ owner_user_id: owner, bucket_id: deps.bucket ?? VIDEO_UPLOAD_BUCKET, object_path: item.privatePath, source_type: "upload", intent_id: null, lifecycle_state: "draft", media_kind: "video", content_type: stat.contentType, byte_size: stat.byteSize, checksum_sha256: checksum, width: item.declaredWidth, height: item.declaredHeight, duration_ms: item.declaredDurationMs });
-    if (!registered) return cleanup("provenance_unavailable");
+    const finalized = await deps.store.finalizeItem({ ownerUserId: owner, batchId: item.batchId, ordinal: item.ordinal, claimToken,
+      bucketId: deps.bucket ?? VIDEO_UPLOAD_BUCKET, contentType: stat.contentType, byteSize: stat.byteSize,
+      checksumSha256: stat.verifiedChecksumSha256?.toLowerCase() ?? null });
+    if (finalized.status !== "finalized" || !finalized.provenanceReady) return cleanup("provenance_unavailable");
   } catch { return cleanup("video_upload_unavailable"); }
   return Response.json(safeResult(item, id));
 }
