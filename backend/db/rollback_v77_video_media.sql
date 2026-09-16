@@ -11,10 +11,17 @@ begin
     end if;
   end loop;
   if to_regclass('public.video_upload_items') is not null then
-    select format_type(a.atttypid,a.atttypmod),a.attnotnull into v_type,v_not_null
-      from pg_attribute a where a.attrelid='public.video_upload_items'::regclass
-        and a.attname='capability_expires_at' and a.attnum>0 and not a.attisdropped;
-    if not found or v_type is distinct from 'timestamp with time zone' or not v_not_null then
+    foreach v_name in array array['capability_expires_at','late_upload_recheck_after'] loop
+      select format_type(a.atttypid,a.atttypmod),a.attnotnull into v_type,v_not_null
+        from pg_attribute a where a.attrelid='public.video_upload_items'::regclass
+          and a.attname=v_name and a.attnum>0 and not a.attisdropped;
+      if not found or v_type is distinct from 'timestamp with time zone' or not v_not_null then
+        raise exception using errcode='P0001',message='v77_rollback_collision';
+      end if;
+    end loop;
+    select pg_get_constraintdef(oid) into v_definition from pg_constraint
+      where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_late_recheck_check';
+    if not found or v_definition is distinct from 'CHECK ((late_upload_recheck_after = (capability_expires_at + ''00:20:00''::interval)))' then
       raise exception using errcode='P0001',message='v77_rollback_collision';
     end if;
   end if;
@@ -27,7 +34,7 @@ begin
     select * into v_proc from pg_proc where oid=to_regprocedure('public.v77_video_cleanup_guard()');
     if obj_description(v_proc.oid,'pg_proc') is distinct from 'vibepin:v77:video-cleanup-guard'
        or not v_proc.prosecdef or v_proc.prorettype<>to_regtype('trigger')
-       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'a5c5b35925778b58bf7bdf3d89455d68' then
+       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'5c44133337a597110e4c44a6d4c729fa' then
       raise exception using errcode='P0001',message='v77_rollback_collision';
     end if;
   end if;

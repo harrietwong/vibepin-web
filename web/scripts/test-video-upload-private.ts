@@ -106,15 +106,20 @@ async function main() {
   });
 
   await test("prepare ledger covers the fixed two-hour signed-upload capability", async () => {
-    let expiresAt = "";
+    let expiresAt = ""; let capabilityExpiresAt = "";
     const now = new Date("2030-01-01T00:00:00.000Z");
     const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_ttl", files: [descriptor()] }), {
       getUserId: async () => OWNER, enabled: true, configured: true, now: () => now,
-      store: storeStub({ prepareBatch: async (input: { expiresAt: string }) => { expiresAt = input.expiresAt; return { batchId: preparedItem().batchId }; }, findItem: async () => null }),
+      store: storeStub({
+        prepareBatch: async (input: { expiresAt: string }) => { expiresAt = input.expiresAt; return { batchId: preparedItem().batchId }; },
+        findItem: async () => null,
+        confirmCapability: async (input: { capabilityExpiresAt: string }) => { capabilityExpiresAt = input.capabilityExpiresAt; return { status: "prepared", cleanupScheduled: true }; },
+      }),
       createSignedUpload: async () => ({ token: "token", signedUrl: "https://storage.test/signed" }),
     });
     assert.equal(response.status, 200);
-    assert.equal(expiresAt, "2030-01-01T02:05:00.000Z");
+    assert.equal(expiresAt, "2030-01-01T02:20:00.000Z");
+    assert.equal(capabilityExpiresAt, "2030-01-01T02:00:00.000Z");
   });
 
   await test("prepare never reveals a signed token unless durable issuance confirmation succeeds", async () => {
@@ -552,13 +557,10 @@ async function main() {
     }
   });
 
-  await test("production browser client preserves private bucket, token, path, and upsert=false", async () => {
-    const calls: unknown[] = [];
+  await test("production browser client mirrors signed upload protocol with an abortable deadline", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fakeClient = {
       auth: { getSession: async () => ({ data: { session: { access_token: "access-token" } } }) },
-      storage: { from: (bucket: string) => ({ uploadToSignedUrl: async (path: string, token: string, file: File, options: unknown) => {
-        calls.push({ bucket, path, token, file, options }); return { error: null };
-      } }) },
     };
     const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
     (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = function(this: unknown, request: string, parent: unknown, isMain: boolean) {
@@ -566,13 +568,68 @@ async function main() {
       return originalLoad.call(this, request, parent, isMain);
     } as never;
     try {
-      const { uploadVideoToSignedStorage } = await import("../src/lib/studio/videoDirectUpload");
+      const { uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
       const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
-      await uploadVideoToSignedStorage({ ordinal: 0, path: `${OWNER}/videos/a.mp4`, token: "signed-token", signedUrl: "https://storage.test/signed", contentType: "video/mp4", upsert: false }, file);
-      assert.deepEqual(calls, [{ bucket: "generated-private", path: `${OWNER}/videos/a.mp4`, token: "signed-token", file, options: { contentType: "video/mp4", upsert: false } }]);
+      let timeoutMs = 0; let cleared = false;
+      const signedUrl = `https://storage.test/object/upload/sign/generated-private/${OWNER}/videos/a.mp4?token=signed-token`;
+      await uploadVideoToSignedStorage({ ordinal: 0, path: `${OWNER}/videos/a.mp4`, token: "signed-token", signedUrl, contentType: "video/mp4", upsert: false }, file, {
+        batchId: preparedItem().batchId,
+        fetchImpl: async (input, init) => { calls.push({ input, init }); return new Response(JSON.stringify({ Key: "private.mp4" }), { status: 200 }); },
+        setTimeoutImpl: ((_callback: () => void, delay: number) => { timeoutMs = delay; return 7; }) as typeof setTimeout,
+        clearTimeoutImpl: ((_timer: ReturnType<typeof setTimeout>) => { cleared = true; }) as typeof clearTimeout,
+      });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].input, signedUrl);
+      assert.equal(calls[0].init?.method, "PUT");
+      assert.equal(new Headers(calls[0].init?.headers).get("x-upsert"), "false");
+      assert.equal(new Headers(calls[0].init?.headers).has("content-type"), false, "browser must generate the multipart boundary");
+      assert(calls[0].init?.body instanceof FormData);
+      assert.equal((calls[0].init?.body as FormData).get("cacheControl"), "3600");
+      assert.equal((calls[0].init?.body as FormData).get(""), file);
+      assert(calls[0].init?.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
+      assert.equal(timeoutMs, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS);
+      assert.equal(cleared, true);
+      await assert.rejects(() => uploadVideoToSignedStorage({ ordinal: 0, path: `${OWNER}/videos/a.mp4`, token: "other-token", signedUrl, contentType: "video/mp4", upsert: false }, file, {
+        batchId: preparedItem().batchId, fetchImpl: async () => { throw new Error("must not dispatch"); },
+      }), (error: unknown) => (error as { code?: string }).code === "video_upload_invalid_capability");
+      assert.equal(calls.length, 1, "a mismatched path/token capability never dispatches");
     } finally {
       (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
     }
+  });
+
+  await test("browser upload deadline and caller abort have distinct stable codes and notify finalize cleanup", async () => {
+    const { uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
+    const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
+    const upload = { ordinal: 3, path: `${OWNER}/videos/late.mp4`, token: "secret-token",
+      signedUrl: `https://storage.test/object/upload/sign/generated-private/${OWNER}/videos/late.mp4?token=secret-token`, contentType: "video/mp4", upsert: false as const };
+    const run = async (externalSignal?: AbortSignal) => {
+      let deadline: (() => void) | null = null; const finalized: unknown[] = [];
+      const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("https://storage.test/")) {
+          queueMicrotask(() => externalSignal ? (externalSignal as AbortSignal & { throwIfAborted?: () => void }).throwIfAborted?.() : deadline?.());
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+            if (init?.signal?.aborted) reject(new DOMException("aborted", "AbortError"));
+          });
+        }
+        finalized.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ code: "missing_video_object" }), { status: 404, headers: { "content-type": "application/json" } });
+      };
+      const promise = uploadVideoToSignedStorage(upload, file, {
+        batchId: preparedItem().batchId, signal: externalSignal, fetchImpl,
+        setTimeoutImpl: ((callback: () => void, delay: number) => { assert.equal(delay, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS); deadline = callback; return 9; }) as typeof setTimeout,
+        clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+      });
+      return { promise, finalized, fireDeadline: () => deadline?.() };
+    };
+    const timed = await run(); timed.fireDeadline();
+    await assert.rejects(timed.promise, (error: unknown) => (error as { code?: string }).code === "video_upload_timeout");
+    assert.deepEqual(timed.finalized, [{ batchId: preparedItem().batchId, ordinal: 3 }]);
+
+    const caller = new AbortController(); const aborted = await run(caller.signal); caller.abort();
+    await assert.rejects(aborted.promise, (error: unknown) => (error as { code?: string }).code === "video_upload_aborted");
+    assert.deepEqual(aborted.finalized, [{ batchId: preparedItem().batchId, ordinal: 3 }]);
   });
 
   await test("browser SHA-256 is incremental and does not allocate the entire video", async () => {

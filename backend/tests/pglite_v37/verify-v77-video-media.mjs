@@ -146,6 +146,7 @@ async function run() {
       ["video_upload_items", "finalize_claim_token", "uuid", false, null],
       ["video_upload_items", "finalize_claim_expires_at", "timestamp with time zone", false, null],
       ["video_upload_items", "capability_expires_at", "timestamp with time zone", true, null],
+      ["video_upload_items", "late_upload_recheck_after", "timestamp with time zone", true, null],
       ["video_upload_items", "status", "text", true, "'prepared'::text"],
       ["video_upload_items", "error_code", "text", false, null],
       ["video_upload_items", "prepared_at", "timestamp with time zone", true, "now()"],
@@ -201,18 +202,19 @@ async function run() {
     const item = await asRole(db, "service_role", () => prepareItem(db, A, one.batchId, 0, "item-key"));
     const itemAgain = await asRole(db, "service_role", () => prepareItem(db, A, one.batchId, 0, "item-key"));
     assert(item.itemId === itemAgain.itemId && item.status === "prepared", "item prepare is idempotent and starts prepared");
-    const capabilityGuard = (await db.query(`select i.capability_expires_at,o.status,o.next_attempt_at,o.dedupe_key
+    const capabilityGuard = (await db.query(`select i.capability_expires_at,i.late_upload_recheck_after,o.status,o.next_attempt_at,o.dedupe_key
       from public.video_upload_items i join public.media_cleanup_outbox o
         on o.dedupe_key='video-upload:'||i.id::text where i.id=$1`, [item.itemId])).rows[0];
     assert(capabilityGuard?.status === "pending" && capabilityGuard.dedupe_key === `video-upload:${item.itemId}`
       && Date.parse(capabilityGuard.next_attempt_at) >= Date.parse(capabilityGuard.capability_expires_at),
       "prepare atomically persists delayed cleanup through the signed capability lifetime");
     const confirmed = await asRole(db, "service_role", () => confirmCapability(db, A, one.batchId, 0));
-    const confirmedGuard = (await db.query(`select i.capability_expires_at,o.next_attempt_at
+    const confirmedGuard = (await db.query(`select i.capability_expires_at,i.late_upload_recheck_after,o.next_attempt_at
       from public.video_upload_items i join public.media_cleanup_outbox o on o.dedupe_key='video-upload:'||i.id::text
       where i.id=$1`, [item.itemId])).rows[0];
     assert(confirmed.cleanupScheduled === true
-      && Date.parse(confirmedGuard.next_attempt_at) === Date.parse(confirmedGuard.capability_expires_at)
+      && Date.parse(confirmedGuard.next_attempt_at) === Date.parse(confirmedGuard.capability_expires_at) + 5 * 60_000
+      && Date.parse(confirmedGuard.late_upload_recheck_after) === Date.parse(confirmedGuard.capability_expires_at) + 20 * 60_000
       && Date.parse(confirmedGuard.capability_expires_at) > Date.parse(capabilityGuard.capability_expires_at),
       "post-sign confirmation extends durable cleanup from the actual capability issuance boundary");
     const changedPrepare = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_prepare(
@@ -313,6 +315,33 @@ async function run() {
     assert(cleanupLease.rows[0].value.leased === true && cleanupFirstState.status === "cleaning"
       && cleanupFirstState.finalize_claim_token === null && Boolean(cleanupFirstClaim) && Boolean(cleanupFirstPrepare),
       "a cleanup lease atomically acquires deletion authority and permanently excludes reissue/claim/finalize success");
+    await asRole(db, "service_role", () => db.query(
+      "select public.publish_cleanup_settle($1,$2,'done','object_not_found')", [cleanupFirstOutbox.id, competingToken],
+    ));
+    const earlyMissing = (await db.query(`select o.status,o.completed_at,o.next_attempt_at,i.late_upload_recheck_after
+      from public.media_cleanup_outbox o join public.video_upload_items i on o.dedupe_key='video-upload:'||i.id::text
+      where o.id=$1`, [cleanupFirstOutbox.id])).rows[0];
+    assert(earlyMissing.status === "pending" && earlyMissing.completed_at === null
+      && Date.parse(earlyMissing.next_attempt_at) === Date.parse(earlyMissing.late_upload_recheck_after),
+      "object_not_found before the maximum in-flight tail remains a durable final-recheck responsibility");
+    await db.query("insert into storage.objects(id,bucket_id,name,owner_id) values(gen_random_uuid(),'generated-private',$1,$2)", [
+      `${A}/uploads/${cleanupFirstBatch.batchId}/0.mp4`, A,
+    ]);
+    await db.query(`update public.video_upload_items set capability_expires_at=now()-interval '20 minutes 1 second',
+      late_upload_recheck_after=now()-interval '1 second' where id=$1`, [cleanupFirstItem.itemId]);
+    await db.query("update public.media_cleanup_outbox set next_attempt_at=now()-interval '1 second' where id=$1", [cleanupFirstOutbox.id]);
+    await asRole(db, "service_role", () => db.query(
+      "select public.publish_cleanup_lease($1,$2,60)", [cleanupFirstOutbox.id, claimToken],
+    ));
+    await db.query("delete from storage.objects where bucket_id='generated-private' and name=$1", [`${A}/uploads/${cleanupFirstBatch.batchId}/0.mp4`]);
+    await asRole(db, "service_role", () => db.query(
+      "select public.publish_cleanup_settle($1,$2,'done',null)", [cleanupFirstOutbox.id, claimToken],
+    ));
+    const finalRecheck = (await db.query(`select o.status,o.completed_at,
+      exists(select 1 from storage.objects s where s.bucket_id=o.bucket_id and s.name=o.object_path) as object_exists
+      from public.media_cleanup_outbox o where o.id=$1`, [cleanupFirstOutbox.id])).rows[0];
+    assert(finalRecheck.status === "done" && Boolean(finalRecheck.completed_at) && !finalRecheck.object_exists,
+      "a late object is removed by the mandatory post-tail recheck before cleanup can terminate");
 
     const partialBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "partial-batch"));
     const partialFailed = await asRole(db, "service_role", () => prepareItem(db, A, partialBatch.batchId, 0, "partial-failed"));
@@ -518,6 +547,10 @@ async function collisionRejections() {
       alter: db => db.exec("alter table public.video_upload_items alter column owner_user_id drop not null"),
     },
     {
+      name: "late upload recheck nullability drift",
+      alter: db => db.exec("alter table public.video_upload_items alter column late_upload_recheck_after drop not null"),
+    },
+    {
       name: "marked modified v77 RPC",
       alter: async db => {
         const definition = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
@@ -549,6 +582,10 @@ async function collisionRejections() {
     {
       name: "same-name altered item status constraint",
       alter: db => db.exec("alter table public.video_upload_items drop constraint video_upload_items_status_check; alter table public.video_upload_items add constraint video_upload_items_status_check check (true)"),
+    },
+    {
+      name: "same-name altered late recheck constraint",
+      alter: db => db.exec("alter table public.video_upload_items drop constraint video_upload_items_late_recheck_check; alter table public.video_upload_items add constraint video_upload_items_late_recheck_check check (true)"),
     },
     {
       name: "client upload privilege drift",
@@ -619,6 +656,19 @@ async function collisionRejections() {
       const after = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
       assert(rollbackError?.message === "v77_rollback_collision" && before.service_insert && after.service_insert,
         "rollback rejects capability-expiry shape drift before revoking service writes");
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
+      await db.exec("alter table public.video_upload_items alter column late_upload_recheck_after drop not null");
+      const before = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      const rollbackError = await rejected(() => db.exec(rollback));
+      await db.exec("rollback");
+      const after = (await db.query("select has_table_privilege('service_role','public.video_upload_items','insert') as service_insert")).rows[0];
+      assert(rollbackError?.message === "v77_rollback_collision" && before.service_insert && after.service_insert,
+        "rollback rejects late-upload recheck shape drift before revoking service writes");
     } finally { await db.close(); }
   }
   {

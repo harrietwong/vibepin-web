@@ -6,7 +6,6 @@ import {
   VIDEO_FINALIZE_CLAIM_MS,
   VIDEO_SIGNED_UPLOAD_CAPABILITY_MS,
   VIDEO_UPLOAD_LEDGER_MS,
-  VIDEO_UPLOAD_SETTLE_GRACE_MS,
 } from "@/lib/videoUploadLimits";
 
 export const VIDEO_UPLOAD_BUCKET = "generated-private";
@@ -118,7 +117,7 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
       if (!signed.token || !signed.signedUrl) throw new Error("capability unavailable");
       const issuedAt = deps.now?.() ?? new Date();
       const confirmation = await deps.store.confirmCapability({ ownerUserId: owner, batchId: batch.batchId, ordinal: file.ordinal,
-        capabilityExpiresAt: new Date(issuedAt.getTime() + VIDEO_SIGNED_UPLOAD_CAPABILITY_MS + VIDEO_UPLOAD_SETTLE_GRACE_MS).toISOString() });
+        capabilityExpiresAt: new Date(issuedAt.getTime() + VIDEO_SIGNED_UPLOAD_CAPABILITY_MS).toISOString() });
       if (confirmation.status !== "prepared" || !confirmation.cleanupScheduled) throw new Error("capability confirmation unavailable");
       uploads.push({ ordinal: file.ordinal, path, token: signed.token, signedUrl: signed.signedUrl, contentType: file.contentType, upsert: false });
     } catch (cause) {

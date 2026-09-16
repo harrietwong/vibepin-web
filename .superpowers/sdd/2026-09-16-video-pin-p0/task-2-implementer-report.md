@@ -6,6 +6,7 @@
 - Atomic-state/fact-contract implementation commit: `d47f6bcddd9164b680fbdffae286adec387fda04`.
 - Round-1 continuation base: `1c9f4615aa30e9b70b270b1d72b53b52e0e07a35`.
 - Round-2 remediation base: `c65e0f802fb95bb972d8515229c391a43af29f7d`.
+- Round-3 late-upload remediation base: `3b6b11239562189cae00cf7e882bad9c89ca7d4a`.
 - Branch/worktree: `codex/video-pin-p0-0916-final` / `D:/vp-tmp/wt-video-pin-p0-0916-final`.
 - This continuation closes the remaining review findings I3, I4, I5, I6, and I7, plus the stable-error and 100 MiB browser-digest minors. It preserves the earlier C1/I1/I2 atomic state/fact work.
 
@@ -28,6 +29,10 @@
 - The post-sign capability confirmation RPC is owner/batch/ordinal scoped and service-only. It moves the cleanup boundary from the actual provider issuance time, retains a five-minute settle grace beyond the two-hour capability, and refuses to reveal a signed token unless the pending cleanup responsibility was durably confirmed.
 - The provenance source constraint now wraps the complete video predicate in `IS TRUE`, so every required value/source `NULL` fails closed rather than passing through SQL `UNKNOWN`. Migration collision detection, rollback preflight, and function/trigger manifests enforce the exact contract. Playback independently rejects missing, unknown, or contradictory source labels.
 - The production store contract now observes the real Supabase query builder and requires the exact `owner_user_id`, `batch_id`, and `ordinal` predicates; database query errors propagate as the stable `video_upload_store_error`.
+- Round 3 gives a 100 MiB browser upload a hard 15-minute AbortController deadline. The direct client mirrors the installed Storage SDK's signed-upload wire contract: PUT to the verified signed URL, `FormData` with `cacheControl=3600` and the file under the empty field name, `x-upsert: false`, and no manually supplied multipart boundary. Signed bucket/path/token mismatches fail before dispatch, and neither capability value is logged.
+- Deadline expiry and caller abort are distinct stable client outcomes (`video_upload_timeout` / `video_upload_aborted`). Both attempt the finalize endpoint so the server can accelerate failure cleanup; that notification is not the cleanup root, so its own failure cannot lose the responsibility created during prepare.
+- `capability_expires_at` now records the actual two-hour provider capability boundary. The new required `late_upload_recheck_after` records capability expiry plus the 15-minute maximum request and five-minute commit-visibility/finalization tail; the batch ledger covers the complete 2h20m interval.
+- The v77 cleanup trigger now prevents every early video cleanup `done` or `failed` settlement from terminating the responsibility. It converts the result back to pending at `late_upload_recheck_after`; only a worker lease and fresh Storage observation after that boundary may settle done. An early absence followed by a late object therefore produces a second lease that removes the object before termination.
 - Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
 - Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
 - Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
@@ -48,17 +53,22 @@
 - RED (Round 2): focused tests failed with `store.confirmCapability is not a function` before post-sign settlement existed.
 - RED (Round 2): v77 stopped at assertion 65 because a video provenance insert with `NULL` fact values/sources still passed the database constraint.
 - RED (Round 2): production store query-shape tests exposed the absence of observable owner/batch/ordinal filtering and stable query-error propagation.
+- RED (Round 3): focused upload-ledger coverage observed `02:05:00` instead of the required `02:20:00` terminal window.
+- RED (Round 3): v77 failed at assertion 33 because `late_upload_recheck_after` did not exist in the owned schema.
+- RED (Round 3): the production client dispatched a signed URL whose token contradicted the separately returned token instead of failing before network work.
 - GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 134 assertions, no failures.
 - GREEN: `test-video-upload-private.ts` reports 30 passed, 0 failed after the final production/store/cleanup tests.
+- GREEN (Round 3): `verify-v77-video-media.mjs` reports `verdict: pass`, 140 assertions, no failures.
+- GREEN (Round 3): `test-video-upload-private.ts` reports 31 passed, 0 failed.
 
 ## Verification
 
-- v77 PGlite: 134/134, pass; additionally covers durable capability cleanup creation, post-sign delayed scheduling, active-claim-versus-cleanup barriers in both acquisition orders, the terminal `cleaning` state, atomic successful settlement, failure preservation, fail-closed provenance `NULL`/source collisions, trigger/function privilege manifests, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry or provenance shape drift before mutation.
+- v77 PGlite: 140/140, pass; additionally covers durable capability cleanup creation, post-sign delayed scheduling, active-claim-versus-cleanup barriers in both acquisition orders, early absence rescheduling, a simulated late Storage object and mandatory post-tail deletion, the terminal `cleaning` state, atomic successful settlement, failure preservation, fail-closed provenance `NULL`/source collisions, trigger/function privilege manifests, cleanup evidence across rollback/reapply, and rollback rejection of capability-expiry, late-recheck, or provenance shape drift before mutation.
 - v76 PGlite: 280/280 across two rounds, pass.
 - v75 PGlite: 65 assertions with no failures; expected pre-existing `deployment_blocked` result remains for the legacy broad Storage policy.
 - Media privacy architecture: 16/16, pass.
 - Pinterest video adapter: 16/16, pass.
-- Focused private video upload: 30/30, pass after final production changes, including production store query shape/error behavior and playback source-label rejection.
+- Focused private video upload: 31/31, pass after final production changes, including production store query shape/error behavior, playback source-label rejection, exact abortable signed-upload transport, and timeout/abort cleanup notification.
 - Test registry: 239 tracked, 231 run by `npm test`, 8 documented exclusions.
 - `npm run typecheck`: exit 0.
 - `git diff --check`: exit 0 before the implementation commit; the follow-up report-only diff is also clean.
