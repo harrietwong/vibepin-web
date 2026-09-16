@@ -23,21 +23,20 @@ const ownerA = { ownerUserId: "11111111-1111-4111-8111-111111111111", workspaceI
 const ownerB = { ownerUserId: "22222222-2222-4222-8222-222222222222", workspaceId: "default" };
 
 async function pgliteHelpers() {
-  // This isolated worktree intentionally has no vendored dependency directory;
-  // use the already-installed local PGlite runtime, never a network install.
-  const requireFromBackend = createRequire("D:/vp-tmp/wt-video-pin-p0-0916-final/backend/tests/pglite_v37/package.json");
+  const requireFromBackend = createRequire(resolve(process.cwd(), "../backend/tests/pglite_v37/package.json"));
   const { PGlite } = requireFromBackend("@electric-sql/pglite") as { PGlite: unknown };
   const verifier = readFileSync(resolve(process.cwd(), "../backend/tests/pglite_v37/verify-v77-video-media.mjs"), "utf8");
   const begin = verifier.indexOf("async function bootstrap");
   const end = verifier.indexOf("async function run()");
   const root = resolve(process.cwd(), "..");
   const load = (path: string) => readFileSync(resolve(root, path), "utf8").replace(/\r\n?/g, "\n");
+  type PGliteDb = { exec(sql: string): Promise<void>; close(): Promise<void> };
   return new Function("PGlite", "load", `${verifier.slice(begin, end)}\nreturn { dbWithV76, prepareBatch, prepareItem, claimItem, finalizeItem };`)(PGlite, load) as {
-    dbWithV76(): Promise<{ exec(sql: string): Promise<void>; close(): Promise<void> }>;
-    prepareBatch(db: any, owner: string, key: string): Promise<{ batchId: string }>;
-    prepareItem(db: any, owner: string, batchId: string, ordinal: number, key: string): Promise<{ itemId: string; status: string }>;
-    claimItem(db: any, owner: string, batchId: string, ordinal: number, token: string): Promise<{ status: string }>;
-    finalizeItem(db: any, owner: string, batchId: string, ordinal: number, token: string): Promise<{ status: string }>;
+    dbWithV76(): Promise<PGliteDb>;
+    prepareBatch(db: PGliteDb, owner: string, key: string): Promise<{ batchId: string }>;
+    prepareItem(db: PGliteDb, owner: string, batchId: string, ordinal: number, key: string): Promise<{ itemId: string; status: string }>;
+    claimItem(db: PGliteDb, owner: string, batchId: string, ordinal: number, token: string): Promise<{ status: string }>;
+    finalizeItem(db: PGliteDb, owner: string, batchId: string, ordinal: number, token: string): Promise<{ status: string }>;
   };
 }
 
@@ -85,7 +84,7 @@ async function main() {
     memory.clear(); quota = false;
     const record = { version: 1 as const, logicalId: "logical-1", draftIdempotencyKey: "video:logical-1", owner: ownerA,
       filename: "clip.mp4", title: "clip", inspection: { width: 1080, height: 1920, durationMs: 5000 },
-      finalized: { proxyUrl: "/api/storage-media?path=owner-a%2Fclip.mp4", requestId: "req-a" }, createdAt: "2026-09-16T00:00:00.000Z" };
+      finalized: { proxyUrl: `/api/storage-media?path=${ownerA.ownerUserId}%2Fclip.mp4`, requestId: "req-a" }, createdAt: "2026-09-16T00:00:00.000Z" };
     assert.equal(saveVideoRecovery(record), true);
     quota = true;
     const store = await import("../src/lib/pinDraftStore"); store.__resetMemoryCacheForTests(); store.setPinDraftOwnerScope(ownerA.ownerUserId);
@@ -101,7 +100,7 @@ async function main() {
 
   await test("poster cleanup handler authenticates, enforces owner prefix, and records only a safe outbox row", async () => {
     const rows: Array<{ owner_user_id: string; bucket_id: string; object_path: string; reason: string }> = [];
-    const deps = { configured: true, getUserId: async () => ownerA.ownerUserId, recordCleanup: async (row: typeof rows[number]) => { rows.push(row); } };
+    const deps = { configured: true, getUserId: async () => ownerA.ownerUserId, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), recordCleanup: async (row: typeof rows[number]) => { rows.push(row); } };
     const good = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerA.ownerUserId}/cover.jpg` }) }), deps);
     assert.equal(good.status, 200); assert.equal(rows.length, 1); assert.equal(rows[0].reason, "unattached_video_poster");
     const foreign = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerB.ownerUserId}/cover.jpg` }) }), deps);

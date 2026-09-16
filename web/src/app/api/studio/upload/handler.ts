@@ -37,6 +37,7 @@ export type StudioUploadCleanupDeps = {
   getUserId(req: Request): Promise<string | null>;
   configured: boolean;
   bucket?: string;
+  findProvenance(input: { owner_user_id: string; bucket_id: string; object_path: string }): Promise<{ source_type: string; lifecycle_state: string } | null>;
   recordCleanup(input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }): Promise<void>;
 };
 
@@ -124,16 +125,26 @@ export async function handleStudioUploadCleanup(req: Request, deps: StudioUpload
   const uid = await deps.getUserId(req);
   if (!uid) return Response.json({ error: "Unauthorized", code: "unauthorized", requestId }, { status: 401 });
   if (!deps.configured) return Response.json({ error: "Storage is not configured", code: "config_error", requestId }, { status: 503 });
-  let body: { path?: unknown };
-  try { body = await req.json() as { path?: unknown }; } catch { return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 }); }
+  let body: { path?: unknown } | null;
+  try { body = await req.json() as { path?: unknown } | null; } catch { return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 }); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
   const path = typeof body.path === "string" ? body.path : "";
   // The browser can only request cleanup inside its own image upload prefix; never
   // accept arbitrary bucket paths or video objects through this endpoint.
-  if (!path.startsWith(`studio/uploads/${uid}/`) || path.length > 512) {
+  const escapedOwner = uid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const safePath = new RegExp(`^studio/uploads/${escapedOwner}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.(?:png|jpe?g|webp|gif)$`, "i");
+  if (!safePath.test(path) || /[%\\\0]|\.\.|\/\//.test(path)) {
+    return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
+  }
+  const bucket = deps.bucket ?? DEFAULT_DRAFT_BUCKET;
+  let provenance: { source_type: string; lifecycle_state: string } | null;
+  try { provenance = await deps.findProvenance({ owner_user_id: uid, bucket_id: bucket, object_path: path }); }
+  catch { return Response.json({ error: "Cleanup unavailable", code: "cleanup_unavailable", requestId }, { status: 503 }); }
+  if (!provenance || provenance.source_type !== "upload" || provenance.lifecycle_state !== "draft") {
     return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
   }
   try {
-    await deps.recordCleanup({ owner_user_id: uid, bucket_id: deps.bucket ?? DEFAULT_DRAFT_BUCKET, object_path: path, reason: "unattached_video_poster" });
+    await deps.recordCleanup({ owner_user_id: uid, bucket_id: bucket, object_path: path, reason: "unattached_video_poster" });
   } catch {
     return Response.json({ error: "Cleanup unavailable", code: "cleanup_unavailable", requestId }, { status: 503 });
   }

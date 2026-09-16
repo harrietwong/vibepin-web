@@ -44,6 +44,8 @@ export type VideoBatchItem = {
 
 export type VideoBatchState = {
   clientBatchId: string;
+  /** Immutable owner binding; retries must never adopt a later browser session. */
+  ownerScope?: { ownerUserId: string; workspaceId: string };
   items: VideoBatchItem[];
   status: VideoBatchStatus;
 };
@@ -248,7 +250,7 @@ function safePreparedUpload(
 function terminalReplayError(error: unknown): boolean {
   const code = safeVideoBatchError(error).code;
   return code === "video_upload_not_uploadable" || code === "video_upload_expired"
-    || code === "missing_video_object" || code === "video_upload_failed";
+    || code === "missing_video_object" || code === "video_upload_failed" || code === "video_upload_not_finalizable";
 }
 
 /**
@@ -301,12 +303,19 @@ export async function runVideoBatch(initial: VideoBatchState, deps: VideoBatchRu
               await deps.onPoster?.(item(), poster);
             }
           }
-          await deps.upload(upload, current, prepared.batchId, deps.signal);
-          if (deps.signal?.aborted) { transition({ type: "cancelled", id: current.id }); continue; }
+          const transferItem = item();
+          await deps.upload(upload, transferItem, prepared.batchId, deps.signal);
+          if (deps.signal?.aborted) {
+            if (transferItem.posterPath) { try { await deps.cleanupPoster?.(transferItem); } catch { /* receipt keeps cleanup retry */ } }
+            transition({ type: "cancelled", id: transferItem.id });
+            continue;
+          }
           try {
             finalized = await deps.finalize(prepared.batchId, current.ordinal);
           } catch (error) {
-            transition({ type: "attempt", id: current.id, attempt: { ...attempt, phase: "finalize_pending" } });
+            const pendingAttempt = { ...attempt, phase: "finalize_pending" as const };
+            await deps.onAttempt?.(item(), pendingAttempt);
+            transition({ type: "attempt", id: current.id, attempt: pendingAttempt });
             throw error;
           }
         }

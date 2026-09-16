@@ -220,13 +220,14 @@ async function main() {
       body: JSON.stringify({ path: "studio/uploads/owner-a/cover.jpg" }),
     }), {
       getUserId: async () => "owner-a", configured: true,
+      findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }),
       recordCleanup: async entry => { recorded.push(entry); },
     });
     assert.equal(response.status, 200);
     assert.deepEqual(recorded, [{ owner_user_id: "owner-a", bucket_id: "generated-private", object_path: "studio/uploads/owner-a/cover.jpg", reason: "unattached_video_poster" }]);
     const rejected = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "studio/uploads/owner-b/cover.jpg" }),
-    }), { getUserId: async () => "owner-a", configured: true, recordCleanup: async entry => { recorded.push(entry); } });
+    }), { getUserId: async () => "owner-a", configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), recordCleanup: async entry => { recorded.push(entry); } });
     assert.equal(rejected.status, 400);
   });
 

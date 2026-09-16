@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     getUserId: getUserIdFromBearer,
     configured: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
     bucket: process.env.VIBEPIN_DRAFT_BUCKET ?? DEFAULT_DRAFT_BUCKET,
+    findProvenance: async input => createMediaProvenanceStore(db()).findExact(input.owner_user_id, input.bucket_id, input.object_path),
     recordCleanup: input => createMediaProvenanceStore(db()).recordCleanup(input),
   });
 }

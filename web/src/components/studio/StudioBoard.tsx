@@ -672,9 +672,10 @@ export function StudioBoard() {
 
   const executeVideoBatch = useCallback(async (initial: VideoBatchState, existingOperation?: { controller: AbortController; scope: VideoRecoveryScope; id: string }) => {
     const currentScope = pinDraftStore.getPinDraftOwnerScope();
+    const boundScope = initial.ownerScope ?? currentScope;
     const operation = existingOperation ?? (() => {
-      if (!currentScope) return null;
-      return { controller: new AbortController(), scope: currentScope, id: initial.clientBatchId };
+      if (!boundScope || !videoRecoveryScopeEquals(boundScope, currentScope)) return null;
+      return { controller: new AbortController(), scope: boundScope, id: initial.clientBatchId };
     })();
     if (!operation || videoOperationRef.current && videoOperationRef.current !== existingOperation) return;
     videoOperationRef.current = operation;
@@ -692,10 +693,11 @@ export function StudioBoard() {
         ...(item.posterPath ? { posterPath: item.posterPath } : {}), createdAt: new Date().toISOString(), ...patch,
       };
     };
+    const ownedInitial = initial.ownerScope ? initial : { ...initial, ownerScope: operation.scope };
     setUploading(true);
-    setVideoBatch(initial);
-    setUploadProgress({ done: initial.items.filter(item => item.state === "succeeded").length, total: initial.items.length });
-    const result = await runVideoBatch(initial, {
+    setVideoBatch(ownedInitial);
+    setUploadProgress({ done: ownedInitial.items.filter(item => item.state === "succeeded").length, total: ownedInitial.items.length });
+    const result = await runVideoBatch(ownedInitial, {
       signal: controller.signal,
       // One descriptor per fresh transfer attempt avoids the v77 batch-level
       // finalizing state coupling unrelated siblings. The logical draft key stays stable.
@@ -703,7 +705,7 @@ export function StudioBoard() {
       upload: (upload, item, batchId, signal) => uploadVideoToSignedStorage(upload, item.file, { batchId, signal }),
       finalize: finalizeVideoDirectUpload,
       onAttempt: (item, attempt) => {
-        if (!ownerIsCurrent()) throw Object.assign(new Error("video_owner_changed"), { code: "video_owner_changed" });
+        if (attempt.phase !== "finalize_pending" && !ownerIsCurrent()) throw Object.assign(new Error("video_owner_changed"), { code: "video_owner_changed" });
         const record = recoveryRecord(item, { attempt });
         if (!record || !saveVideoRecovery(record)) throw Object.assign(new Error("video_recovery_persist_failed"), { code: "video_recovery_persist_failed" });
       },
@@ -778,14 +780,25 @@ export function StudioBoard() {
     let disposed = false;
     void (async () => {
       for (const record of listVideoRecovery(scope)) {
-        if (!record.finalized && record.posterPath) {
+        if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+        if (!record.finalized && record.attempt?.phase === "finalize_pending") {
+          try {
+            const finalized = await finalizeVideoDirectUpload(record.attempt.batchId, record.attempt.ordinal);
+            if (!saveVideoRecovery({ ...record, finalized, attempt: undefined })) continue;
+            record.finalized = finalized;
+          } catch {
+            // Unknown/in-progress remains durable for the original owner; no poster cleanup.
+            continue;
+          }
+        }
+        if (!record.finalized && record.posterPath && record.attempt?.phase !== "finalize_pending") {
           try {
             await requestPinImageCleanup(record.posterPath);
             removeVideoRecovery(scope, record.logicalId);
           } catch { /* retain the receipt for the returning owner to retry cleanup */ }
           continue;
         }
-        if (disposed || !record.finalized || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+        if (!record.finalized) continue;
         const created = pinDraftStore.createBoardDraft({
           imageUrl: record.inspection.posterUrl ?? "",
           media: [{
@@ -807,16 +820,18 @@ export function StudioBoard() {
     return () => { disposed = true; };
   }, [defaultDestinationsForNewContent, ownerScopeKey]);
 
-  const startVideoBatch = useCallback(async (files: File[]) => {
-    if (videoOperationRef.current) { toast.error("A video upload is already running"); return; }
-    const scope = pinDraftStore.getPinDraftOwnerScope();
+  const startVideoBatch = useCallback(async (files: File[], existingOperation?: { controller: AbortController; scope: VideoRecoveryScope; id: string }) => {
+    if (!existingOperation && videoOperationRef.current) { toast.error("A video upload is already running"); return; }
+    const scope = existingOperation?.scope ?? pinDraftStore.getPinDraftOwnerScope();
     if (!scope) { toast.error("Sign in before uploading video"); return; }
-    const operation = { controller: new AbortController(), scope, id: `video_${Date.now()}` };
+    const operation = existingOperation ?? { controller: new AbortController(), scope, id: `video_${Date.now()}` };
+    if (videoOperationRef.current && videoOperationRef.current !== operation) return;
     videoOperationRef.current = operation;
     videoBatchAbortRef.current = operation.controller;
     const clientBatchId = `video_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`;
     const items: VideoBatchItem[] = [];
     setUploading(true);
+    setVideoBatch({ ...createVideoBatchState(clientBatchId, files.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "queued" }))), ownerScope: scope });
     setUploadProgress({ done: 0, total: files.length });
     for (const [ordinal, file] of files.entries()) {
       if (operation.controller.signal.aborted || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) {
@@ -841,7 +856,7 @@ export function StudioBoard() {
       }
       setUploadProgress({ done: ordinal + 1, total: files.length });
     }
-    const initial = createVideoBatchState(clientBatchId, items);
+    const initial = { ...createVideoBatchState(clientBatchId, items), ownerScope: scope };
     setVideoBatch(initial);
     if (!initial.items.some(item => item.state === "queued")) {
       setUploading(false);
@@ -856,9 +871,23 @@ export function StudioBoard() {
   const processMixedVideoSelection = useCallback(async (arr: File[]) => {
     const videoFiles = arr.filter(isVideoCandidate);
     const imageFiles = arr.filter(file => !isVideoCandidate(file));
+    if (videoOperationRef.current) { toast.error("A video upload is already running"); return; }
+    const scope = pinDraftStore.getPinDraftOwnerScope();
+    if (!scope) { toast.error("Sign in before uploading video"); return; }
+    const operation = { controller: new AbortController(), scope, id: `mixed_${Date.now()}` };
+    videoOperationRef.current = operation;
+    videoBatchAbortRef.current = operation.controller;
+    setVideoBatch(createVideoBatchState(operation.id, videoFiles.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "queued" as const }))));
     // Mixed content is always separate: images never join a video in a carousel.
-    if (imageFiles.length) await processFiles(imageFiles, "separate");
-    if (videoFiles.length) await startVideoBatch(videoFiles);
+    try {
+      if (imageFiles.length) await processFiles(imageFiles, "separate");
+      if (videoFiles.length && !operation.controller.signal.aborted) await startVideoBatch(videoFiles, operation);
+    } finally {
+      if (videoOperationRef.current === operation && !videoFiles.length) {
+        videoOperationRef.current = null;
+        videoBatchAbortRef.current = null;
+      }
+    }
   }, [processFiles, startVideoBatch]);
 
   const retryVideoBatch = useCallback(() => {
