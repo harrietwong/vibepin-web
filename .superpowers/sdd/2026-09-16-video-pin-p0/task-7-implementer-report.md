@@ -211,3 +211,51 @@ git diff --cached --check                             -> exit 0
 
 All database, Storage, and provider behavior in these tests is local PGlite or an
 explicit mock boundary. No external call, deployment, push, or merge occurred.
+
+## Independent Review Round 3
+
+Round 3 reviewed `7fd7588c` and confirmed all six Round 2 application findings
+closed. It identified one Important v78 manifest/rollback integrity gap and one Minor
+NULL-fingerprint guard gap; both are covered by the registered Round 3 PGlite suite.
+
+- Migration and rollback now accept only explicit fresh, active, or rolled-back v78
+  manifests. Every exact RPC signature, marker, body hash, language, SECURITY DEFINER
+  setting, search path, return shape, and effective/direct ACL is verified before a
+  change. Any same-name overload or partial function set fails closed.
+- PUBLIC, anon, authenticated, inherited-role, unknown direct-role, and grant-option
+  EXECUTE drift is rejected. A post-create manifest check also rolls back a fresh or
+  rolled-back install if ambient default privileges grant an unowned role access.
+- The retained `source_identity_fingerprint` column is pinned as nullable `text`
+  without a default or direct column ACL. Effective SELECT is service-only; type,
+  nullability, default, client grant, marker, or grant-option drift blocks migration
+  and rollback before known objects are changed.
+- Rollback mirrors the exact overload/function/ACL/column checks, remains idempotent,
+  preserves historical source identity, and verifies that all owned RPC names are
+  absent after the bounded drop.
+- Confirmation now rejects NULL, blank, and malformed source identity fingerprints
+  before the v76 graph can be created.
+
+### Round 3 Verification
+
+```text
+npx tsx scripts/test-v78-pinterest-video-manifest.ts -> 10 manifest/ACL/input groups passed
+npx tsx scripts/test-v78-pinterest-video-recovery.ts -> 5 adversarial groups passed
+npx tsx scripts/test-v78-pinterest-video-upgrade.ts  -> official v76 upgrade/reapply/drift passed
+npx tsx scripts/test-v76-pinterest-video-publish.ts  -> 17 passed, 0 failed
+npx tsx scripts/test-v76-pinterest-video-recovery.ts -> all R1–R8 probes passed
+npx tsx scripts/test-publish-due-video-races.ts      -> 4/4 races, zero claim/meter/provider
+npx tsx scripts/test-pinterest-video-legacy-route.ts -> materialization_required, zero provider
+npx tsx scripts/test-publish-due-claim.ts            -> 106 passed, 0 failed
+npx tsx scripts/test-publish-durable-intent.ts       -> 23 passed, 0 failed
+npx tsx scripts/test-publish-confirmation.ts         -> 16 passed, 0 failed
+npx tsx scripts/test-pinterest-video-adapter.ts      -> 16 passed, 0 failed
+node backend/tests/pglite_v37/verify-v76-publish-assets.mjs -> 280/280, two rounds
+node backend/tests/pglite_v37/verify-v77-video-media.mjs    -> 94/94
+npm run typecheck                                     -> exit 0
+npm run check:test-registry                           -> 245 tracked, 237 run, 8 excluded
+npx eslint <Round 3 changed web TS files>             -> 0 errors, 0 warnings
+git diff --cached --check                             -> exit 0
+```
+
+Official v76 remains byte-identical to `04b0ebe0`. All tests use local PGlite or
+explicit mocks; no external call, deployment, push, or merge occurred.
