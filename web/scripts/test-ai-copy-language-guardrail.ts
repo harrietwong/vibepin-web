@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
-import {
-  languageInstructions,
-  buildFastPathPrompt,
-  buildVisionPrompt,
-  buildContextBlock,
-  type FastPathPromptArgs,
-  type VisionPromptArgs,
+import type {
+  FastPathPromptArgs,
+  VisionPromptArgs,
 } from "../src/lib/ai-copy/visionServer";
+
+// This is a prompt-only unit test. Keep the module import hermetic because
+// visionServer's dependency graph constructs the browser Supabase singleton.
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://127.0.0.1:54321";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
+void (async () => {
+  const {
+    languageInstructions,
+    buildFastPathPrompt,
+    buildVisionPrompt,
+    buildContextBlock,
+  } = await import("../src/lib/ai-copy/visionServer");
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -127,3 +135,7 @@ test("buildContextBlock: product/brand name allowed to stay original; category/k
 });
 
 console.log(`\nAll ${passed} AI-copy language-guardrail tests passed.`);
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -184,6 +184,7 @@ const { POST } = await import("../src/app/api/publish/social/route");
 function request(onlyPending: boolean, selectedIds: string[]): Request {
   const selected = destinations.filter(destination => selectedIds.includes(destination.id));
   return {
+    url: "https://app.example.com/api/publish/social",
     json: async () => ({
       postId: DRAFT_ID,
       post: { imageUrls: ["https://example.com/pin.png"], title: "Title", caption: "Caption" },

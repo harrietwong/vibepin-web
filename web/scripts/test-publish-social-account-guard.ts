@@ -204,9 +204,9 @@ test("the meter runs BEFORE any destination is dispatched", () => {
 });
 
 test("it uses the SAME key derivation as the Pinterest route (draft id + UTC day)", () => {
-  // Same two arguments, no provider and no connection id: that identity is what makes a
-  // Pinterest + Instagram publish of ONE Content collapse onto ONE ledger row.
-  const shape = /deriveScheduledPostKey[(]uid, [A-Za-z][A-Za-z0-9]*[)]/;
+  // Both routes may carry an authenticated bucket override, but neither may key by
+  // provider or connection. That shared content identity collapses one fan-out.
+  const shape = /deriveScheduledPostKey[(]uid,\s*[A-Za-z][A-Za-z0-9]*,\s*undefined,\s*[A-Za-z][A-Za-z0-9]*[)]/;
   assert.match(route, shape);
   assert.match(pinsRoute, shape, "the Pinterest route must still derive it the same way");
   assert.ok(!/deriveScheduledPostKey[(][^)]*provider/.test(route),
@@ -216,22 +216,23 @@ test("it uses the SAME key derivation as the Pinterest route (draft id + UTC day
 });
 
 test("a request that dispatches nothing is not charged", () => {
-  const guard = /if [(]postId && publishableRequests[.]length > 0[)]/;
-  assert.match(route, guard, "no publishable destination ⇒ no unit consumed");
-  // Pinterest is published (and metered) by its own route, so it must not be what makes
-  // this one charge — otherwise a Pinterest-only request pays twice.
-  const filterAt = route.indexOf("const publishableRequests");
-  const filterBody = route.slice(filterAt, route.indexOf("});", filterAt));
-  assert.match(filterBody, /provider !== "pinterest"/);
-  assert.match(filterBody, /liveConnect/, "a platform with no publish path is never charged");
+  const guardAt = route.indexOf("if (dispatchDestinationIds.size === 0)");
+  const meterAt = route.indexOf("await consumeScheduledPost(");
+  assert.ok(guardAt > 0 && meterAt > guardAt,
+    "no newly claimed publishable destination ⇒ no unit consumed");
+  assert.match(route.slice(guardAt, meterAt), /return Response\.json/);
 });
 
-test("metering never blocks the publish (shadow / fail-open)", () => {
+test("scheduled-post enforcement blocks before provider dispatch and releases fresh claims", () => {
   const meterAt = route.indexOf("await consumeScheduledPost(");
-  const after = route.slice(meterAt, meterAt + 400);
-  assert.ok(!/status: 4[0-9][0-9]/.test(after), "enforcement is Phase 6C — nothing here may refuse");
-  assert.ok(!route.includes("scheduled_post_limit_reached"),
-    "the limit body must not be wired into this route yet");
+  const enforceAt = route.indexOf('consumed.kind === "insufficient" && usageEnforceFor("scheduled_post")', meterAt);
+  const publishAt = route.indexOf("publishPost({", meterAt);
+  assert.ok(enforceAt > meterAt && publishAt > enforceAt,
+    "an enforced refusal must happen after metering and before provider dispatch");
+  const block = route.slice(enforceAt, publishAt);
+  assert.match(block, /settleFreshClaimsNotSent\("scheduled_post_limit_reached"\)/);
+  assert.match(block, /scheduledPostLimitResponseBody\(\)/);
+  assert.match(block, /status: 402/);
 });
 
 

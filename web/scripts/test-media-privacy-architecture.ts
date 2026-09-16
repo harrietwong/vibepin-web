@@ -213,8 +213,8 @@ async function main() {
     for (const relative of ["src/app/api/pinterest/pins/route.ts", "src/app/api/publish/social/route.ts"]) {
       const source = fs.readFileSync(path.join(root, relative), "utf8");
       const confirmation = source.indexOf("if (!confirmation.ok)");
-      const assetGate = source.indexOf("if (imageUrls.some(url => requiresPublishAsset", confirmation) >= 0
-        ? source.indexOf("if (imageUrls.some(url => requiresPublishAsset", confirmation)
+      const assetGate = source.indexOf("imageUrls.some(url => requiresPublishAsset", confirmation) >= 0
+        ? source.indexOf("imageUrls.some(url => requiresPublishAsset", confirmation)
         : source.indexOf("if (post.imageUrls.some(url =>", confirmation);
       const postGateWork = relative.includes("pinterest/")
         ? source.indexOf("let durableDb", assetGate)

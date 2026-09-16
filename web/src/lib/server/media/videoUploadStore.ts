@@ -1,8 +1,14 @@
 import type { VideoUploadStore } from "./videoUploadHandler";
 
+type DbResult = { data: unknown; error: unknown };
+type DbQuery = {
+  eq(column: string, value: unknown): DbQuery;
+  maybeSingle(): PromiseLike<DbResult>;
+};
+type DbFrom = { select(columns: string): DbQuery };
 type Db = {
-  rpc(name: string, args: Record<string, unknown>): any;
-  from(table: string): any;
+  rpc(name: string, args: Record<string, unknown>): PromiseLike<DbResult>;
+  from(table: string): DbFrom;
 };
 
 function rpcData(value: unknown): Record<string, unknown> | null {
@@ -25,7 +31,8 @@ function must<T>(result: { data: unknown; error: unknown }, map: (data: Record<s
 }
 
 /** Service-only v77 boundary. Every direct query includes the verified owner. */
-export function createVideoUploadStore(db: Db): VideoUploadStore {
+export function createVideoUploadStore(database: unknown): VideoUploadStore {
+  const db = database as Db;
   return {
     async prepareBatch(input) {
       const result = await db.rpc("video_upload_batch_prepare", { p_owner_user_id: input.ownerUserId, p_idempotency_key: input.idempotencyKey, p_expires_at: input.expiresAt });
@@ -44,11 +51,12 @@ export function createVideoUploadStore(db: Db): VideoUploadStore {
         .select("batch_id,ordinal,status,private_path,declared_content_type,declared_byte_size,declared_checksum_sha256,declared_width,declared_height,declared_duration_ms,expires_at")
         .eq("owner_user_id", ownerUserId).eq("batch_id", batchId).eq("ordinal", ordinal).maybeSingle();
       if (error) throw storeFailure(error);
-      if (!data) return null;
+      const row = rpcData(data);
+      if (!row) return null;
       return {
-        batchId: data.batch_id, ordinal: data.ordinal, status: data.status, privatePath: data.private_path,
-        declaredContentType: data.declared_content_type, declaredByteSize: Number(data.declared_byte_size), declaredChecksumSha256: data.declared_checksum_sha256,
-        declaredWidth: Number(data.declared_width), declaredHeight: Number(data.declared_height), declaredDurationMs: Number(data.declared_duration_ms), expiresAt: data.expires_at,
+        batchId: String(row.batch_id ?? ""), ordinal: Number(row.ordinal), status: String(row.status ?? ""), privatePath: String(row.private_path ?? ""),
+        declaredContentType: String(row.declared_content_type ?? ""), declaredByteSize: Number(row.declared_byte_size), declaredChecksumSha256: String(row.declared_checksum_sha256 ?? ""),
+        declaredWidth: Number(row.declared_width), declaredHeight: Number(row.declared_height), declaredDurationMs: Number(row.declared_duration_ms), expiresAt: String(row.expires_at ?? ""),
       };
     },
     async confirmCapability(input) {
