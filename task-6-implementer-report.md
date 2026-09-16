@@ -80,3 +80,40 @@ before acceptance.
   blind replay until reconciliation.
 - No route, database, storage, scheduler, deployment, push, or real Pinterest call
   was made by this task.
+
+## Independent Review Repair — Round 1
+
+The independent review found that the original polling deadline only applied between
+awaits, evidence identifiers were format-checked but not checked against known
+secrets, and a normal object dropped an own `__proto__` upload parameter.
+
+### Repair TDD Evidence
+
+New regression tests were added before the repair. Against the pre-repair adapter,
+the focused suite produced the expected RED result: 8 passed and 6 failed. The
+failures specifically showed a dropped `__proto__` multipart field, two indefinitely
+pending polling operations, an uncapped sleep of `100` instead of the `5` ms budget,
+an echoed token in `requestId`, and a token-shaped media ID reaching later stages.
+
+The adapter now races each polling fetch, poll response-body parse, and injected sleep
+against the remaining deadline; it aborts an in-flight fetch where `AbortController`
+is available. A deadline returns the bounded `unknown` receipt. It preserves upload
+parameters as validated entry tuples, so every own field remains ordered and
+`__proto__` is appended. Final evidence applies a secret-aware filter against the
+access token, presigned upload URL, and upload-parameter values; canonical Pin URLs
+must match the filtered Pin ID exactly.
+
+### Repair Verification
+
+```text
+npx tsx scripts/test-pinterest-video-adapter.ts  -> 14 passed, 0 failed
+npx tsx scripts/test-pinterest-video-adapter.ts  -> 14 passed, 0 failed
+npx tsx scripts/test-pin-media-source.ts         -> 8 passed, 0 failed
+npx tsx scripts/check-test-registry.ts           -> OK
+isolated strict TypeScript adapter check          -> passed
+git diff --check                                  -> passed
+```
+
+The full-project TypeScript and OAuth/service gates remain blocked by the unchanged
+incomplete local dependency installation described above; the integration worktree
+must run them before acceptance.

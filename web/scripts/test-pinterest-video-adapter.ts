@@ -68,6 +68,20 @@ async function json(init: RequestInit): Promise<unknown> {
   return JSON.parse(String(init.body));
 }
 
+async function finishesWithin<T>(promise: Promise<T>, milliseconds = 50): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`adapter remained pending beyond ${milliseconds}ms`)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 let passed = 0;
 let failed = 0;
 async function test(name: string, fn: () => Promise<void>): Promise<void> {
@@ -135,6 +149,20 @@ async function main(): Promise<void> {
     assert.ok(!String(calls[5].init.body).includes("cover_image_url"));
   });
 
+  await test("preserves every returned multipart parameter including an own __proto__ key", async () => {
+    const uploadParameters = JSON.parse('{"__proto__":"provider-value","key":"k"}') as Record<string, string>;
+    const { deps, calls } = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: uploadParameters }),
+      new Response(null, { status: 204 }),
+      response({ status: "succeeded" }),
+      response({ id: "pin-1" }, 201),
+    ]);
+    await publishPinterestVideo(input(), deps);
+    const entries = Array.from((calls[1].init.body as FormData).entries());
+    assert.deepEqual(entries.map(([key]) => key), ["__proto__", "key", "file"]);
+    assert.equal(entries[0][1], "provider-value");
+  });
+
   await test("requires 204 from the unauthenticated multipart upload", async () => {
     const { deps } = dependencies([
       response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
@@ -198,6 +226,67 @@ async function main(): Promise<void> {
     });
   });
 
+  await test("bounds a never-resolving polling fetch to the remaining deadline and aborts it", async () => {
+    let pollSignal: AbortSignal | undefined;
+    const { deps } = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+    ], [0, 0, 0]);
+    deps.pollDeadlineMs = 5;
+    deps.fetch = async (url, init = {}) => {
+      if (String(url).endsWith("/media/media-1")) {
+        pollSignal = init.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      }
+      throw new Error("test setup expected helper fetches only");
+    };
+    // Keep register/upload deterministic while making only the polling boundary stall.
+    const original = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+    ], [0, 0, 0]);
+    let call = 0;
+    deps.fetch = async (url, init = {}) => {
+      call++;
+      if (call <= 2) return original.deps.fetch(url, init);
+      pollSignal = init.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    };
+    const result = await finishesWithin(publishPinterestVideo(input(), deps));
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "polled", classification: "unknown", mediaId: "media-1" } });
+    assert.ok(pollSignal?.aborted, "deadline must abort a still-running poll request when AbortSignal is supported");
+  });
+
+  await test("bounds a stalled polling response body to the remaining deadline", async () => {
+    const stalledBody = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => new Promise<unknown>(() => {}),
+    } as unknown as Response;
+    const source = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      stalledBody,
+    ], [0, 0, 0]);
+    source.deps.pollDeadlineMs = 5;
+    const result = await finishesWithin(publishPinterestVideo(input(), source.deps));
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "polled", classification: "unknown", mediaId: "media-1" } });
+  });
+
+  await test("caps a polling sleep to the remaining deadline when its interval is longer", async () => {
+    const source = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      response({ status: "processing" }),
+    ], [0, 0, 0, 0, 0, 5]);
+    source.deps.pollDeadlineMs = 5;
+    source.deps.pollIntervalMs = 100;
+    const result = await publishPinterestVideo(input(), source.deps);
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "polled", classification: "unknown", mediaId: "media-1" } });
+    assert.deepEqual(source.sleeps, [5], "sleep must not consume more than the remaining polling budget");
+  });
+
   await test("fails malformed input before dispatch and never leaks secret input or provider credentials", async () => {
     const invalid = dependencies([]);
     const result = await publishPinterestVideo(input({ boardId: "", accessToken: "super-secret-token" }), invalid.deps);
@@ -241,6 +330,40 @@ async function main(): Promise<void> {
       outcome: "unknown", evidence: { stage: "created", classification: "unknown", mediaId: "media-1" },
     });
     assert.ok(!JSON.stringify(result).includes("never-return"));
+  });
+
+  await test("filters echoed tokens and registration secrets from every final evidence field", async () => {
+    const token = "secret-token-123";
+    const registerRejection = dependencies([response({}, 401, { "x-pinterest-rid": token })]);
+    const rejected = await publishPinterestVideo(input({ accessToken: token }), registerRejection.deps);
+    assert.deepEqual(rejected, { outcome: "failed", evidence: { stage: "registered", classification: "definite_rejection" } });
+
+    const echoed = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { policy: "upload-secret-456" } }),
+      new Response(null, { status: 204 }),
+      response({ status: "succeeded" }),
+      response({ id: "upload-secret-456", url: "https://www.pinterest.com/pin/upload-secret-456/" }, 201, { "x-request-id": token }),
+    ]);
+    const result = await publishPinterestVideo(input({ accessToken: token }), echoed.deps);
+    assert.deepEqual(result, {
+      outcome: "succeeded",
+      evidence: { stage: "created", classification: "succeeded", mediaId: "media-1" },
+    });
+    const receipt = JSON.stringify(result);
+    for (const secret of [token, "upload-secret-456", "upload.example.test/form"]) {
+      assert.ok(!receipt.includes(secret), `final evidence leaked ${secret}`);
+    }
+  });
+
+  await test("does not dispatch a media identifier that echoes an access token", async () => {
+    const token = "secret-token-123";
+    const source = dependencies([
+      response({ media_id: token, upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+    ]);
+    const result = await publishPinterestVideo(input({ accessToken: token }), source.deps);
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "registered", classification: "unknown" } });
+    assert.equal(source.calls.length, 1, "a credential-shaped media id must not be sent back to provider paths");
+    assert.ok(!JSON.stringify(result).includes(token));
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
