@@ -38,6 +38,8 @@ export type StudioUploadCleanupDeps = {
   configured: boolean;
   bucket?: string;
   findProvenance(input: { owner_user_id: string; bucket_id: string; object_path: string }): Promise<{ source_type: string; lifecycle_state: string } | null>;
+  /** Service-owned operation/capability decision; missing is fail-closed. */
+  canCleanupPoster?(input: { owner_user_id: string; bucket_id: string; object_path: string }): Promise<boolean>;
   recordCleanup(input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }): Promise<void>;
 };
 
@@ -143,6 +145,10 @@ export async function handleStudioUploadCleanup(req: Request, deps: StudioUpload
   if (!provenance || provenance.source_type !== "upload" || provenance.lifecycle_state !== "draft") {
     return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
   }
+  let allowed = false;
+  try { allowed = await deps.canCleanupPoster?.({ owner_user_id: uid, bucket_id: bucket, object_path: path }) ?? false; }
+  catch { return Response.json({ error: "Cleanup unavailable", code: "cleanup_unavailable", requestId }, { status: 503 }); }
+  if (!allowed) return Response.json({ error: "Cleanup not allowed", code: "cleanup_not_allowed", requestId }, { status: 409 });
   try {
     await deps.recordCleanup({ owner_user_id: uid, bucket_id: bucket, object_path: path, reason: "unattached_video_poster" });
   } catch {

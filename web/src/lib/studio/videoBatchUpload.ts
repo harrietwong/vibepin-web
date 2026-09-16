@@ -310,14 +310,12 @@ export async function runVideoBatch(initial: VideoBatchState, deps: VideoBatchRu
             transition({ type: "cancelled", id: transferItem.id });
             continue;
           }
-          try {
-            finalized = await deps.finalize(prepared.batchId, current.ordinal);
-          } catch (error) {
-            const pendingAttempt = { ...attempt, phase: "finalize_pending" as const };
-            await deps.onAttempt?.(item(), pendingAttempt);
-            transition({ type: "attempt", id: current.id, attempt: pendingAttempt });
-            throw error;
-          }
+          // Write-ahead: a tab can disappear after dispatch but before a response.
+          // Never send finalize unless recovery can replay that exact operation.
+          const pendingAttempt = { ...attempt, phase: "finalize_pending" as const };
+          await deps.onAttempt?.(item(), pendingAttempt);
+          transition({ type: "attempt", id: current.id, attempt: pendingAttempt });
+          finalized = await deps.finalize(prepared.batchId, current.ordinal);
         }
         if (!finalized) throw Object.assign(new Error("video_upload_failed"), { code: "video_upload_failed" });
         await deps.onFinalized?.(item(), finalized);

@@ -203,9 +203,9 @@ async function main() {
     const original = globalThis.localStorage;
     Object.assign(globalThis, { localStorage: { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => data.set(key, value), removeItem: (key: string) => data.delete(key) } });
     try {
-      const ownerA = { ownerUserId: "owner-a", workspaceId: "default" };
-      assert.equal(saveVideoRecovery({ version: 1, logicalId: "a", draftIdempotencyKey: "video:a", owner: ownerA, filename: "clip.mp4", title: "clip", inspection: { width: 1, height: 2, durationMs: 5000 }, finalized: { proxyUrl: "/api/storage-media?path=owner-a%2Fclip.mp4", requestId: "req-a" }, createdAt: "2026-09-16T00:00:00.000Z" }), true);
-      assert.equal(listVideoRecovery({ ownerUserId: "owner-b", workspaceId: "default" }).length, 0);
+      const ownerA = { ownerUserId: "11111111-1111-4111-8111-111111111111", workspaceId: "default" };
+      assert.equal(saveVideoRecovery({ version: 1, logicalId: "a", draftIdempotencyKey: "video:a", owner: ownerA, filename: "clip.mp4", title: "clip", inspection: { width: 1, height: 2, durationMs: 5000 }, finalized: { proxyUrl: `/api/storage-media?path=${ownerA.ownerUserId}%2Fclip.mp4`, requestId: "req-a" }, createdAt: "2026-09-16T00:00:00.000Z" }), true);
+      assert.equal(listVideoRecovery({ ownerUserId: "22222222-2222-4222-8222-222222222222", workspaceId: "default" }).length, 0);
       assert.equal(listVideoRecovery(ownerA).length, 1);
       assert.doesNotMatch(JSON.stringify(listVideoRecovery(ownerA)), /signedUrl|token|REVIEW_TOKEN/);
       assert.equal(removeVideoRecovery(ownerA, "a"), true);
@@ -221,13 +221,14 @@ async function main() {
     }), {
       getUserId: async () => "owner-a", configured: true,
       findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }),
+      canCleanupPoster: async () => true,
       recordCleanup: async entry => { recorded.push(entry); },
     });
     assert.equal(response.status, 200);
     assert.deepEqual(recorded, [{ owner_user_id: "owner-a", bucket_id: "generated-private", object_path: "studio/uploads/owner-a/cover.jpg", reason: "unattached_video_poster" }]);
     const rejected = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "studio/uploads/owner-b/cover.jpg" }),
-    }), { getUserId: async () => "owner-a", configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), recordCleanup: async entry => { recorded.push(entry); } });
+    }), { getUserId: async () => "owner-a", configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), canCleanupPoster: async () => true, recordCleanup: async entry => { recorded.push(entry); } });
     assert.equal(rejected.status, 400);
   });
 

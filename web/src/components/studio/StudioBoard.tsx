@@ -784,6 +784,7 @@ export function StudioBoard() {
         if (!record.finalized && record.attempt?.phase === "finalize_pending") {
           try {
             const finalized = await finalizeVideoDirectUpload(record.attempt.batchId, record.attempt.ordinal);
+            if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
             if (!saveVideoRecovery({ ...record, finalized, attempt: undefined })) continue;
             record.finalized = finalized;
           } catch {
@@ -799,6 +800,7 @@ export function StudioBoard() {
           continue;
         }
         if (!record.finalized) continue;
+        if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
         const created = pinDraftStore.createBoardDraft({
           imageUrl: record.inspection.posterUrl ?? "",
           media: [{
@@ -883,7 +885,14 @@ export function StudioBoard() {
       if (imageFiles.length) await processFiles(imageFiles, "separate");
       if (videoFiles.length && !operation.controller.signal.aborted) await startVideoBatch(videoFiles, operation);
     } finally {
-      if (videoOperationRef.current === operation && !videoFiles.length) {
+      // startVideoBatch normally owns completion. If image work throws/cancels
+      // before it enters, this is the one unconditional lock-release boundary.
+      if (videoOperationRef.current === operation) {
+        if (operation.controller.signal.aborted) {
+          setVideoBatch(createVideoBatchState(operation.id, videoFiles.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "cancelled" as const }))));
+          setUploading(false);
+          setUploadProgress(null);
+        }
         videoOperationRef.current = null;
         videoBatchAbortRef.current = null;
       }

@@ -274,6 +274,7 @@ export const STUDIO: string[] = [
   "test-video-media-rendering",
   "test-video-batch-upload",
   "test-video-batch-safety",
+  "test-video-batch-safety-round3",
   "test-video-batch-runtime",
   "test-video-batch-upload-ui",
 ];

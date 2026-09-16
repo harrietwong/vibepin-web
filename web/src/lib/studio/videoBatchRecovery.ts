@@ -53,19 +53,30 @@ function validRecord(value: unknown, scope: VideoRecoveryScope): value is VideoR
     || !Number.isSafeInteger(r.inspection.durationMs) || r.inspection.width < 1 || r.inspection.height < 1 || r.inspection.durationMs < 1
     || typeof r.createdAt !== "string") return false;
   if (r.finalized) {
-    if (typeof r.finalized.proxyUrl !== "string" || !r.finalized.proxyUrl.startsWith("/api/storage-media?path=")
-      || typeof r.finalized.requestId !== "string") return false;
-    try { if (!decodeURIComponent(r.finalized.proxyUrl).includes(`${scope.ownerUserId}/`)) return false; } catch { return false; }
+    if (typeof r.finalized.proxyUrl !== "string" || typeof r.finalized.requestId !== "string") return false;
+    try {
+      const url = new URL(r.finalized.proxyUrl, "https://app.invalid");
+      const path = url.searchParams.get("path");
+      if (url.pathname !== "/api/storage-media" || url.searchParams.size !== 1 || !path
+        || !path.startsWith(`${scope.ownerUserId}/`) || /[\\\0]|\.\.|\/\//.test(path)) return false;
+    } catch { return false; }
   }
-  if (r.attempt && (typeof r.attempt.batchId !== "string" || typeof r.attempt.id !== "string" || !Number.isSafeInteger(r.attempt.ordinal)
+  if (r.inspection.posterUrl && (typeof r.inspection.posterUrl !== "string" || !r.inspection.posterUrl.startsWith("/api/storage-image?path="))) return false;
+  if (r.posterPath && (typeof r.posterPath !== "string" || !r.posterPath.startsWith(`studio/uploads/${scope.ownerUserId}/`) || /[\\\0]|\.\.|\/\//.test(r.posterPath))) return false;
+  if (r.attempt && (typeof r.attempt.batchId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(r.attempt.batchId)
+    || typeof r.attempt.id !== "string" || r.attempt.id.length > 128 || !Number.isSafeInteger(r.attempt.ordinal) || r.attempt.ordinal < 0 || r.attempt.ordinal >= 20
     || (r.attempt.phase !== "prepared" && r.attempt.phase !== "finalize_pending"))) return false;
   return Boolean(r.finalized || r.attempt);
+}
+function scopedRecords(all: Record<string, VideoRecoveryRecord[]>, scope: VideoRecoveryScope): VideoRecoveryRecord[] {
+  const values: unknown = all[key(scope)];
+  return Array.isArray(values) ? values.filter(value => validRecord(value, scope)) : [];
 }
 export function saveVideoRecovery(record: VideoRecoveryRecord): boolean {
   const storage = usableStorage(); if (!storage) return false;
   if (!validScope(record.owner) || !validRecord(record, record.owner)) return false;
   const all = read(storage); const scopeKey = key(record.owner);
-  const current = all[scopeKey] ?? [];
+  const current = scopedRecords(all, record.owner);
   const replacing = current.some(item => item.logicalId === record.logicalId);
   // Never evict a live receipt: capacity is an explicit fail-closed outcome.
   if (!replacing && current.length >= MAX_RECORDS) return false;
@@ -75,12 +86,11 @@ export function saveVideoRecovery(record: VideoRecoveryRecord): boolean {
 export function listVideoRecovery(scope: VideoRecoveryScope): VideoRecoveryRecord[] {
   const storage = usableStorage(); if (!storage) return [];
   if (!validScope(scope)) return [];
-  const values = read(storage)[key(scope)];
-  return Array.isArray(values) ? values.filter(value => validRecord(value, scope)) : [];
+  return scopedRecords(read(storage), scope);
 }
 export function removeVideoRecovery(scope: VideoRecoveryScope, logicalId: string): boolean {
   const storage = usableStorage(); if (!storage) return false;
   const all = read(storage); const scopeKey = key(scope);
-  all[scopeKey] = (all[scopeKey] ?? []).filter(item => item.logicalId !== logicalId);
+  all[scopeKey] = scopedRecords(all, scope).filter(item => item.logicalId !== logicalId);
   return write(storage, all);
 }

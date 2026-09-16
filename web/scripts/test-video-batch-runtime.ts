@@ -100,7 +100,7 @@ async function main() {
 
   await test("poster cleanup handler authenticates, enforces owner prefix, and records only a safe outbox row", async () => {
     const rows: Array<{ owner_user_id: string; bucket_id: string; object_path: string; reason: string }> = [];
-    const deps = { configured: true, getUserId: async () => ownerA.ownerUserId, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), recordCleanup: async (row: typeof rows[number]) => { rows.push(row); } };
+    const deps = { configured: true, getUserId: async () => ownerA.ownerUserId, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), canCleanupPoster: async () => true, recordCleanup: async (row: typeof rows[number]) => { rows.push(row); } };
     const good = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerA.ownerUserId}/cover.jpg` }) }), deps);
     assert.equal(good.status, 200); assert.equal(rows.length, 1); assert.equal(rows[0].reason, "unattached_video_poster");
     const foreign = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerB.ownerUserId}/cover.jpg` }) }), deps);
