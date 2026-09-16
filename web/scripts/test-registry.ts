@@ -273,6 +273,7 @@ export const STUDIO: string[] = [
   "test-generation-failure-media",
   "test-video-media-rendering",
   "test-video-batch-upload",
+  "test-video-batch-runtime",
   "test-video-batch-upload-ui",
 ];
 
