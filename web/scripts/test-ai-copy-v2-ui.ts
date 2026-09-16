@@ -3,12 +3,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   buildAICopyV2AnalyzePayload,
+  AICopyV2ClientError,
   generatePinterestPinCopyV2,
   isAICopyV2ClientEnabled,
   keywordProvenanceLabel,
   shouldConfirmAICopyV2Overwrite,
 } from "../src/lib/ai-copy/generatePinCopyV2";
-import { generatePinterestPinCopy } from "../src/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "../src/lib/ai-copy/generatePinCopy";
 
 async function main() {
   assert.equal(isAICopyV2ClientEnabled("true"), true);
@@ -127,6 +128,37 @@ async function main() {
     /grounded copy right now/,
   );
 
+  const v2FailureFetch = (status: number, payload: Record<string, unknown>, retryAfter?: string): typeof fetch => async input => {
+    if (String(input).endsWith("/analyze")) return new Response(JSON.stringify({
+      ok: true, sessionId: "session-error", factCard: { version: "fact-card-v1", sessionId: "session-error", draftId: "draft-error", locale: "en", facts: [] },
+      keywordEvidence: { keywordSetId: "ks", candidates: [], selectedKeywordIds: [], degradedMode: "no_keyword_demand_data" },
+    }), { status: 200 });
+    return new Response(JSON.stringify(payload), { status, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+  };
+  await assert.rejects(
+    generatePinterestPinCopyV2({ draftId: "draft-error", locale: "en", image: null, fetcher: v2FailureFetch(429, { ok: false, error: "rate_limited", message: "slow down" }, "17"), createId: () => "id" }),
+    error => error instanceof AICopyV2ClientError && error.status === 429 && error.code === "rate_limited" && error.retryAfterSeconds === 17 && isRateLimitError(error),
+    "v2 429 preserves structured error and is recognized by shared Batch guard",
+  );
+  await assert.rejects(
+    generatePinterestPinCopyV2({ draftId: "draft-error", locale: "en", image: null, fetcher: v2FailureFetch(402, { ok: false, error: "ai_text_limit_reached", code: "ai_text_limit_reached", userMessage: "limit" }), createId: () => "id" }),
+    error => error instanceof AICopyV2ClientError && error.status === 402 && error.code === "ai_text_limit_reached" && error.retryAfterSeconds === null && isTextLimitReachedError(error),
+    "v2 402 preserves structured error and stops shared Batch work",
+  );
+
+  const legacyAnalyzeLimitedFetch: typeof fetch = async input => {
+    assert.equal(String(input), "/api/ai-copy/analyze", "missing cached analysis uses the legacy vision endpoint first");
+    return new Response(JSON.stringify({ ok: false, error: "rate_limited", code: "rate_limited", message: "slow down" }), {
+      status: 429,
+      headers: { "retry-after": "23" },
+    });
+  };
+  await assert.rejects(
+    generatePinterestPinCopyV2({ draftId: "legacy-limit", locale: "en", image: null, imageUrl: "https://example.test/image.jpg", fetcher: legacyAnalyzeLimitedFetch, createId: () => "id" }),
+    error => error instanceof AICopyV2ClientError && error.status === 429 && error.code === "rate_limited" && error.retryAfterSeconds === 23 && isRateLimitError(error),
+    "legacy vision fallback preserves a 429 as the structured Batch-stop error",
+  );
+
   const panel = readFileSync(resolve(process.cwd(), "src/components/pins/PinAICopyPanel.tsx"), "utf8");
   assert.match(panel, /data-testid="ai-copy-v2-evidence"/);
   assert.match(panel, /confirmedReplace/);
@@ -141,6 +173,10 @@ async function main() {
   assert.match(sharedHelper, /fetch\("\/api\/ai-copy"[\s\S]*?country: input\.country,/, "flag-off legacy request keeps its original optional country semantics");
   const batch = readFileSync(resolve(process.cwd(), "src/components/studio/BatchEditDrawer.tsx"), "utf8");
   assert.match(batch, /generatePinterestPinCopy\(/, "Batch keeps using the shared helper");
+  assert.match(batch, /if \(isTextLimitReachedError\(err\)\) \{\s*textLimitReached = true;\s*break;\s*\}/, "Batch stops immediately on 402 and tracks it independently from rate limiting");
+  assert.match(batch, /if \(isRateLimitError\(err\)\) \{\s*rateLimited = true;\s*break;\s*\}/, "Batch keeps the 429 stop path independently");
+  assert.match(batch, /if \(textLimitReached\) \{\s*toast\.message\(tr\("studioBoard\.limit\.text\.allUsed"\)\)/, "Batch shows the plan text-limit message for 402 instead of a retry prompt");
+  assert.match(batch, /else if \(rateLimited\) \{\s*toast\.message\(tr\("history\.error\.rateLimited\.label"\), \{ description: tr\("studio\.error\.serviceBusy\.body"\) \}\)/, "Batch keeps the retry-oriented 429 message");
   assert.match(batch, /pinsWithExistingCopy/, "Batch detects generated copy that would overwrite existing user copy");
   assert.match(batch, /pinForm\.replaceExistingTitle/, "Batch reuses the explicit overwrite confirmation before generation");
   assert.match(batch, /if \(!isAICopyV2ClientEnabled\(\)\) \{\s+void runGenerateCopyBatch\(\)/, "flag-off Batch preserves the legacy immediate generation path");

@@ -256,9 +256,9 @@ function isClaimSupported(
     }
 
     case "efficacy": {
-      return eligibleFacts.some(f => {
-        return containsTokenPhrase(f.canonicalClaim!, val) || containsTokenPhrase(val, f.canonicalClaim!);
-      });
+      // Efficacy claims are not safely extensible: a grounded "pain relief" fact
+      // cannot authorize timing, degree, clinical, or other stronger assertions.
+      return eligibleFacts.some(f => f.canonicalClaim!.normalize("NFC").toLowerCase().trim() === val);
     }
 
     case "price": {
@@ -266,7 +266,7 @@ function isClaimSupported(
     }
 
     case "availability": {
-      return eligibleFacts.some(f => containsTokenPhrase(f.canonicalClaim!, val));
+      return eligibleFacts.some(f => f.claimPolarity === "affirmed" && f.canonicalClaim!.normalize("NFC").toLowerCase().trim() === val);
     }
 
     case "brand": {

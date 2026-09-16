@@ -28,7 +28,7 @@ import { publishContent } from "@/lib/studio/publishContent";
 import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
 import { buildPublishConfirmation, confirmPublishSnapshot, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
 import type { PinterestClientError } from "@/lib/pinterestClient";
 import { isAICopyV2ClientEnabled, shouldConfirmAICopyV2Overwrite } from "@/lib/ai-copy/generatePinCopyV2";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
@@ -1079,6 +1079,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     const next: Record<string, RowEdit> = { ...rowEdits };
     let updated = 0, failed = 0;
     let rateLimited = false;
+    let textLimitReached = false;
     for (let i = 0; i < targets.length; i++) {
       const pin = targets[i];
       setGenProgress({ current: i + 1, total: targets.length, failed });
@@ -1103,10 +1104,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         };
         updated++;
       } catch (err) {
-        // 429 = the per-user AI cost ceiling. Stop the loop immediately: every
-        // remaining Pin in this batch would get the same 429, so continuing would
-        // just report N spurious "failed" rows. Pins already updated keep their copy.
-        if (isRateLimitError(err)) { rateLimited = true; break; }
+        // Both limits stop the batch, but only a transient 429 asks the user to
+        // retry. A 402 means the plan allowance is exhausted and needs upgrade copy.
+        if (isTextLimitReachedError(err)) {
+          textLimitReached = true;
+          break;
+        }
+        if (isRateLimitError(err)) {
+          rateLimited = true;
+          break;
+        }
         failed++;
       }
     }
@@ -1115,7 +1122,11 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     // Rate limit is a "wait a moment", not a failure — neutral toast severity,
     // matching how /api/generate's user_generation_limit is surfaced in Studio.
     // Reuses the existing all-locale rate-limit strings.
-    if (rateLimited) {
+    if (textLimitReached) {
+      toast.message(tr("studioBoard.limit.text.allUsed"));
+      if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
+    }
+    else if (rateLimited) {
       toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
       if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
     }

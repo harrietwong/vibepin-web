@@ -21,12 +21,36 @@ const delay = (ms: number) => new Promise(resolveDelay => setTimeout(resolveDela
 
 let mockUserId: string | null = "user_123";
 let productionDb: unknown = null;
+type MeterHarness = {
+  mode: () => "off" | "shadow" | "enforce";
+  enforce: () => boolean;
+  reserve: (args: { userId: string; generationRequestId: string }) => Promise<Record<string, unknown>>;
+  settle: (args: { reservation: Record<string, unknown> }) => Promise<void>;
+  release: (args: { reservation: Record<string, unknown>; reason?: string }) => Promise<void>;
+};
+let meterHarness: MeterHarness = {
+  mode: () => "off", enforce: () => false,
+  reserve: async () => ({ kind: "off" }), settle: async () => {}, release: async () => {},
+};
+const costEvents: Array<Record<string, unknown>> = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) return { getUserIdFromBearerOrCookies: async () => mockUserId };
   if (request === "@/lib/supabase" || request.endsWith("/lib/supabase")) return { createServerClient: () => productionDb };
+  if (request.includes("meterTextGeneration")) return {
+    reserveTextGeneration: (args: { userId: string; generationRequestId: string }) => meterHarness.reserve(args),
+    settleTextGeneration: (args: { reservation: Record<string, unknown> }) => meterHarness.settle(args),
+    releaseTextGeneration: (args: { reservation: Record<string, unknown>; reason?: string }) => meterHarness.release(args),
+    usageMeteringMode: () => meterHarness.mode(),
+    usageEnforceFor: () => meterHarness.enforce(),
+    aiTextLimitResponseBody: (requestId: string) => ({ ok: false, requestId, error: "ai_text_limit_reached", code: "ai_text_limit_reached" }),
+  };
+  if (request.includes("aiCostLog")) return {
+    estimateCost: () => null,
+    recordAiCost: async (event: Record<string, unknown>) => { costEvents.push(event); return { recorded: true }; },
+  };
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -139,6 +163,7 @@ async function main() {
   };
   const reset = (store = memoryStore()) => {
     process.env.AI_COPY_V2_ENABLED = "true"; mockUserId = "user_123";
+    meterHarness = { mode: () => "off", enforce: () => false, reserve: async () => ({ kind: "off" }), settle: async () => {}, release: async () => {} };
     __setRateLimitStoreForTests(rateStore()); sessionModule.__setSessionStoreForTests(store);
     __setTrendKeywordLoaderForTests(async () => []); setProvider({ async generate() { return validOutput(); } });
     return store;
@@ -190,6 +215,44 @@ async function main() {
     eq(store.sessionClaims, 1, "one claim");
   });
 
+  await test("route facts retain negated availability and reject an opposite in-stock claim", async () => {
+    const store = reset();
+    const analyzed = await analyze(analyzeReq("availability-negated", { productContext: { availability: "not in stock" } }));
+    eq(analyzed.status, 200, "analyze status"); const body = await analyzed.json();
+    const availability = body.factCard.facts.find((fact: { key: string }) => fact.key === "product_availability");
+    eq(availability.claimPolarity, "negated", "availability polarity is retained"); eq(availability.claimPolicy, "blocked", "negated availability is not copyable");
+    setProvider({ async generate() { return validOutput({ title: "In Stock Today" }); }, async detectClaims() { return { claims: [{ type: "availability", value: "in stock", field: "title" }] }; } });
+    const generated = await generate(generateReq(body.sessionId, "availability-opposite"));
+    eq(generated.status, 422, "opposite availability claim is rejected");
+    assert((await generated.json()).validationReport.issues.some((issue: { code: string }) => issue.code === "UNSUPPORTED_AVAILABILITY_CLAIM"), "availability rejection code");
+    assert(store.generations.size === 0, "rejected output releases its claim");
+  });
+
+  await test("commercial catalog raw text retains generic negation and uncertainty instead of auto-affirming", async () => {
+    reset();
+    const negated = await analyze(analyzeReq("material-negated", { productContext: { material: "not leather", brand: "not Nike" } }));
+    const negatedFacts = (await negated.json()).factCard.facts;
+    for (const key of ["product_material", "product_vendor"]) {
+      const fact = negatedFacts.find((item: { key: string }) => item.key === key);
+      eq(fact.claimPolarity, "negated", `${key} keeps negation`); eq(fact.claimPolicy, "blocked", `${key} cannot authorize copy`);
+    }
+    const unknown = await analyze(analyzeReq("availability-unknown", { productContext: { availability: "see listing for availability" } }));
+    const unknownFact = (await unknown.json()).factCard.facts.find((item: { key: string }) => item.key === "product_availability");
+    eq(unknownFact.claimPolarity, "unknown", "uncertain availability remains unknown"); eq(unknownFact.claimPolicy, "blocked", "unknown commercial value cannot authorize copy");
+  });
+
+  await test("route fact efficacy only authorizes the exact grounded claim, never a stronger timed assertion", async () => {
+    reset();
+    const analyzed = await analyze(analyzeReq("efficacy-exact", { productContext: { efficacy: "pain relief" } }));
+    eq(analyzed.status, 200, "analyze status"); const body = await analyzed.json();
+    const efficacy = body.factCard.facts.find((fact: { key: string }) => fact.key === "product_efficacy");
+    eq(efficacy.claimPolarity, "affirmed", "explicit efficacy is affirmed"); eq(efficacy.claimPolicy, "copy_allowed", "exact efficacy is available to the validator");
+    setProvider({ async generate() { return validOutput({ title: "Pain Relief Within 10 Seconds" }); }, async detectClaims() { return { claims: [{ type: "efficacy", value: "pain relief within 10 seconds", field: "title" }] }; } });
+    const generated = await generate(generateReq(body.sessionId, "efficacy-stronger"));
+    eq(generated.status, 422, "stronger timed efficacy claim is rejected");
+    assert((await generated.json()).validationReport.issues.some((issue: { code: string }) => issue.code === "UNSUPPORTED_EFFICACY_CLAIM"), "efficacy rejection code");
+  });
+
   await test("true concurrent analyze claims before delayed loader; loser is 409 and spends zero", async () => {
     const store = reset(); let loads = 0;
     __setTrendKeywordLoaderForTests(async () => { loads++; await delay(40); return []; });
@@ -202,6 +265,14 @@ async function main() {
     const first = await analyze(analyzeReq("replay-analysis")); const firstJson = await first.json();
     const replay = await analyze(analyzeReq("replay-analysis", { draftId: "changed" })); const replayJson = await replay.json();
     eq(replay.status, 200, "replay status"); eq(replayJson.replayed, true, "replay marker"); eq(replayJson.sessionId, firstJson.sessionId, "same session"); eq(loads, 1, "no second load");
+  });
+
+  await test("expired completed analyze sessions do not replay and disclose no session data", async () => {
+    const store = reset(); const first = await analyze(analyzeReq("expired-completed")); const firstBody = await first.json();
+    const row = store.sessions.get(firstBody.sessionId)!; row.expires_at = new Date(Date.now() - 1_000).toISOString();
+    const replay = await analyze(analyzeReq("expired-completed")); const replayBody = await replay.json();
+    eq(replay.status, 404, "expired completed session is concealed"); eq(replayBody.error, "session_expired", "clear machine code");
+    assert(!("sessionId" in replayBody) && !("factCard" in replayBody), "expired data is not leaked");
   });
 
   await test("failed analyze finalization releases claim for retry", async () => {
@@ -238,6 +309,99 @@ async function main() {
     eq([a.status, b.status].sort().join(","), "200,409", "race statuses"); eq(calls, 1, "one provider");
     const replay = await generate(generateReq(session.id, "race-gen")); eq(replay.status, 200, "replay"); eq((await replay.json()).replayed, true, "marked replay");
     eq(session.generation_count, 1, "atomic count"); eq(store.generationClaims, 1, "one claim");
+  });
+
+  await test("enforced text allowance rejects after claim before provider work and releases the new claim", async () => {
+    const store = reset(); let providerCalls = 0;
+    meterHarness = {
+      mode: () => "enforce", enforce: () => true,
+      reserve: async () => ({ kind: "insufficient" }), settle: async () => {}, release: async () => {},
+    };
+    setProvider({ async generate() { providerCalls++; return validOutput(); } });
+    const session = await seed(store);
+    const response = await generate(generateReq(session.id, "no-credit")); const json = await response.json();
+    eq(response.status, 402, "enforced insufficient status"); eq(json.code, "ai_text_limit_reached", "existing limit envelope");
+    eq(providerCalls, 0, "provider is never called without allowance"); eq(store.generations.size, 0, "new claim is released");
+  });
+
+  await test("one successful v2 generation reserves and settles exactly one text unit despite multiple provider calls", async () => {
+    const store = reset(); const session = await seed(store); let reserves = 0, settles = 0, providerCalls = 0;
+    meterHarness = {
+      mode: () => "shadow", enforce: () => false,
+      reserve: async ({ generationRequestId }) => { reserves++; return { kind: "reserved", reservationId: `reservation:${generationRequestId}` }; },
+      settle: async () => { settles++; }, release: async () => {},
+    };
+    setProvider({
+      async generate() { providerCalls++; return validOutput({ title: "X".repeat(101) }); },
+      async repair() { providerCalls++; return validOutput(); },
+      async detectClaims() { providerCalls++; return { claims: [] }; },
+    });
+    eq((await generate(generateReq(session.id, "one-unit"))).status, 200, "generation succeeds");
+    assert(providerCalls >= 4, "generate, detect, repair, and detect all ran"); eq(reserves, 1, "one reservation"); eq(settles, 1, "one settlement");
+  });
+
+  await test("completed replay makes no provider or additional metering calls", async () => {
+    const store = reset(); const session = await seed(store); let providerCalls = 0, reserves = 0, settles = 0;
+    meterHarness = {
+      mode: () => "shadow", enforce: () => false,
+      reserve: async ({ generationRequestId }) => { reserves++; return { kind: "reserved", reservationId: `reservation:${generationRequestId}` }; },
+      settle: async () => { settles++; },
+      release: async () => {},
+    };
+    setProvider({ async generate() { providerCalls++; return validOutput(); } });
+    eq((await generate(generateReq(session.id, "replay-settle"))).status, 200, "first succeeds");
+    const reservesAfterFirst = reserves; const settlesAfterFirst = settles;
+    const replay = await generate(generateReq(session.id, "replay-settle"));
+    eq(replay.status, 200, "replay succeeds"); eq((await replay.json()).replayed, true, "completed replay");
+    eq(providerCalls, 1, "replay has no provider calls"); eq(reserves, reservesAfterFirst, "replay never reserves a historical completed generation"); eq(settles, settlesAfterFirst, "replay never settles a historical completed generation");
+  });
+
+  await test("chatJson records failed cost only when a successful provider envelope has invalid JSON content", async () => {
+    reset(); costEvents.length = 0;
+    const priorFetch = globalThis.fetch;
+    const responses = [
+      new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }], usage: { prompt_tokens: 7, completion_tokens: 3 } }), { status: 200 }),
+      new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 9, completion_tokens: 4 } }), { status: 200 }),
+    ];
+    globalThis.fetch = (async () => {
+      const response = responses.shift();
+      if (!response) throw new Error("unexpected provider call");
+      return response;
+    }) as typeof fetch;
+    try {
+      const { chatJson, __setChatCostLoggerForTests } = await import("../src/lib/ai-copy/visionServer");
+      __setChatCostLoggerForTests((_provider, _model, _usage, _context, requestStatus) => {
+        costEvents.push({ requestStatus });
+      });
+      let malformedRejected = false;
+      try {
+        await chatJson({ key: "test", baseUrl: "https://provider.example", model: "test-model", messages: [], timeoutMs: 1000, costContext: { userId: "user_123", operationType: "ai_copy_v2_generation", referenceId: "generation_1" } });
+      } catch { malformedRejected = true; }
+      assert(malformedRejected, "non-object provider JSON is rejected");
+      await delay(20);
+      await chatJson({ key: "test", baseUrl: "https://provider.example", model: "test-model", messages: [], timeoutMs: 1000, costContext: { userId: "user_123", operationType: "ai_copy_v2_generation", referenceId: "generation_2" } });
+      await delay(20);
+      eq(costEvents.length, 2, "one cost event per completed provider response");
+      eq(costEvents[0]?.requestStatus, "failed", "parseJsonLoose failure is recorded as failed");
+      eq(costEvents[1]?.requestStatus, "success", "only a parsed object response is recorded as success");
+    } finally {
+      const { __setChatCostLoggerForTests } = await import("../src/lib/ai-copy/visionServer");
+      __setChatCostLoggerForTests(null);
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  await test("provider and validation failures release text reservations as well as generation claims", async () => {
+    const store = reset(); const session = await seed(store); let releases = 0;
+    meterHarness = {
+      mode: () => "shadow", enforce: () => false,
+      reserve: async () => ({ kind: "reserved", reservationId: "r" }), settle: async () => {}, release: async () => { releases++; },
+    };
+    setProvider({ async generate() { throw new Error("provider failed"); } });
+    eq((await generate(generateReq(session.id, "release-provider"))).status, 502, "provider failure");
+    setProvider({ async generate() { return validOutput({ title: "Acrylic Shelf" }); }, async detectClaims() { return { claims: [{ type: "material", value: "acrylic", field: "title" }] }; } });
+    eq((await generate(generateReq(session.id, "release-validation"))).status, 422, "validation failure");
+    eq(releases, 2, "both failed requests release their reservation"); eq(store.generations.size, 0, "failed claims are released");
   });
 
   await test("expired generation lease has one stealer and stale owner cannot release", async () => {
@@ -311,6 +475,20 @@ async function main() {
       async detectClaims() { detectorCalls++; return { status: "completed", claims: [] }; },
     });
     eq((await generate(generateReq(session.id, "repair-detect"))).status, 200, "repair succeeds"); eq(detectorCalls, 2, "both outputs detected");
+  });
+
+  await test("every v2 generation provider operation receives owner-scoped cost context keyed by its claim", async () => {
+    const store = reset(); const session = await seed(store); const contexts: Array<Record<string, unknown> | undefined> = [];
+    setProvider({
+      async generate(...args: unknown[]) { contexts.push(args[2] as Record<string, unknown> | undefined); return validOutput({ title: "X".repeat(101) }); },
+      async repair(...args: unknown[]) { contexts.push(args[3] as Record<string, unknown> | undefined); return validOutput(); },
+      async detectClaims(...args: unknown[]) { contexts.push(args[2] as Record<string, unknown> | undefined); return { claims: [] }; },
+    });
+    const response = await generate(generateReq(session.id, "cost-context")); const json = await response.json();
+    eq(response.status, 200, "generation succeeds"); assert(contexts.length >= 4, "generate/detect/repair/detect received context");
+    for (const context of contexts) {
+      eq(context?.userId, "user_123", "owner context"); eq(context?.operationType, "ai_copy_v2_generation", "operation type"); eq(context?.referenceId, json.result.generationId, "claim id is the reference");
+    }
   });
 
   await test("defense traps reject acrylic, carbon fiber, and lifetime guarantee even with empty detectedClaims", async () => {

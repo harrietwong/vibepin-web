@@ -370,6 +370,31 @@ function logChatCost(
   })();
 }
 
+type ChatCostLogger = (
+  provider: string,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  context: ChatCostContext | undefined,
+  requestStatus: "success" | "failed",
+) => void;
+
+let chatCostLoggerOverride: ChatCostLogger | null = null;
+
+/** Narrow test seam for asserting chat response outcome classification. */
+export function __setChatCostLoggerForTests(logger: ChatCostLogger | null): void {
+  chatCostLoggerOverride = logger;
+}
+
+function recordChatCost(
+  provider: string,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  context: ChatCostContext | undefined,
+  requestStatus: "success" | "failed",
+): void {
+  (chatCostLoggerOverride ?? logChatCost)(provider, model, usage, context, requestStatus);
+}
+
 /** Call chat/completions. Throws CopyError(502) for genuine upstream failures. */
 export async function chatJson(opts: {
   key: string;
@@ -403,26 +428,32 @@ export async function chatJson(opts: {
       signal: AbortSignal.timeout(opts.timeoutMs),
     });
   } catch (err) {
-    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
+    recordChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
     throw new CopyError(`provider_network_error:${(err as Error)?.message?.slice(0, 120) || "unknown"}`, 502, PROVIDER_MESSAGE);
   }
   const text = await res.text();
   if (!res.ok) {
-    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
+    recordChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
     throw new CopyError(`provider_http_${res.status}:${text.slice(0, 180)}`, 502, PROVIDER_MESSAGE);
   }
   let parsed: { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
   try { parsed = JSON.parse(text); } catch {
-    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
+    recordChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
     throw new CopyError("provider_envelope_unparseable", 502, PROVIDER_MESSAGE);
   }
   const content = parsed.choices?.[0]?.message?.content;
   if (!content) {
-    logChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "failed");
+    recordChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "failed");
     throw new CopyError("provider_empty_response", 502, PROVIDER_MESSAGE);
   }
-  logChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "success");
-  return parseJsonLoose(content);
+  try {
+    const result = parseJsonLoose(content);
+    recordChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "success");
+    return result;
+  } catch (error) {
+    recordChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "failed");
+    throw error;
+  }
 }
 
 // ── Image fetch ───────────────────────────────────────────────────────────────

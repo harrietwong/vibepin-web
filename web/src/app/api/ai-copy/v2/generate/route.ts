@@ -4,6 +4,7 @@ import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/li
 import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
 import { orchestrateCopyGeneration, ValidationErrorV2 } from "@/lib/ai-copy/v2/orchestrator";
 import { CopyError, PROVIDER_MESSAGE } from "@/lib/ai-copy/visionServer";
+import { aiTextLimitResponseBody, releaseTextGeneration, reserveTextGeneration, settleTextGeneration, usageEnforceFor } from "@/lib/server/usage/meterTextGeneration";
 
 export const runtime = "nodejs";
 interface Body { sessionId: string; idempotencyKey: string; lengthPreference?: "short" | "standard" | "seo-rich"; angleId?: string; angleRequest?: string; }
@@ -35,7 +36,15 @@ export async function POST(req: Request) {
   if (claim.state === "pending") return NextResponse.json({ ok: false, error: "request_in_progress" }, { status: 409 });
   if (claim.state === "completed") {
     if (!claim.row.output) return NextResponse.json({ ok: false, error: "generation_failed", message: PROVIDER_MESSAGE }, { status: 502 });
+    // Completion is terminal: a client replay returns the saved output only. It
+    // never opens a historical reservation or re-settles customer usage.
     return NextResponse.json({ ok: true, result: claim.row.output, replayed: true });
+  }
+
+  const reservation = await reserveTextGeneration({ userId, generationRequestId: claim.row.id });
+  if (reservation.kind === "insufficient" && usageEnforceFor("ai_text_generation")) {
+    await store.releaseGenerationClaim(claim.row.id, session.id, userId, claim.row.claim_token).catch(() => undefined);
+    return NextResponse.json(aiTextLimitResponseBody(claim.row.id), { status: 402 });
   }
 
   try {
@@ -43,11 +52,14 @@ export async function POST(req: Request) {
       generationId: claim.row.id, sessionId: session.id, draftId: session.draft_id,
       factCard: session.fact_card, keywordEvidence: session.keyword_evidence,
       angleId: body.angleId?.trim(), angleRequest: body.angleRequest?.trim(), lengthPreference: body.lengthPreference,
+      costContext: { userId, operationType: "ai_copy_v2_generation", referenceId: claim.row.id },
     });
     const completed = await store.completeGeneration({ generationId: claim.row.id, sessionId: session.id, userId, claimToken: claim.row.claim_token, output: result, validationReport: result.validationReport });
     if (!completed.output) throw new Error("empty_completion");
+    await settleTextGeneration({ reservation }).catch(() => undefined);
     return NextResponse.json({ ok: true, result: completed.output, replayed: false });
   } catch (error) {
+    await releaseTextGeneration({ reservation, reason: "ai_copy_v2_generation_failed" }).catch(() => undefined);
     await store.releaseGenerationClaim(claim.row.id, session.id, userId, claim.row.claim_token).catch(() => undefined);
     if (error instanceof ValidationErrorV2) return NextResponse.json({ ok: false, error: "validation_failed", validationReport: error.validationReport }, { status: 422 });
     if (error instanceof CopyError) return NextResponse.json({ ok: false, error: "provider_error", message: error.userMessage || PROVIDER_MESSAGE }, { status: 502 });

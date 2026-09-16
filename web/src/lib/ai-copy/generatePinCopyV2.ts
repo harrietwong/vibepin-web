@@ -113,6 +113,30 @@ async function readJson<T>(response: Response): Promise<T> {
 
 const SAFE_ERROR = "We couldn't generate grounded copy right now. Please try again.";
 
+/** Structured v2 route failure. Kept independent from PinCopyError to avoid a client cycle. */
+export class AICopyV2ClientError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+    message: string,
+    readonly retryAfterSeconds: number | null,
+  ) {
+    super(message);
+    this.name = "AICopyV2ClientError";
+  }
+}
+
+function responseError(response: Response, body: { error?: string; code?: string; message?: string; userMessage?: string }): AICopyV2ClientError {
+  const retryAfterHeader = response.headers.get("retry-after");
+  const retryAfter = retryAfterHeader === null ? null : Number(retryAfterHeader);
+  return new AICopyV2ClientError(
+    body.code || body.error || "ai_copy_v2_failed",
+    response.status,
+    body.userMessage || body.message || SAFE_ERROR,
+    retryAfter !== null && Number.isFinite(retryAfter) ? retryAfter : null,
+  );
+}
+
 export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopyV2Input): Promise<GeneratePinterestPinCopyV2Result> {
   const fetcher = input.fetcher ?? fetch;
   const createId = input.createId ?? (() => globalThis.crypto.randomUUID());
@@ -135,8 +159,8 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
         productTags: input.product?.tags,
       }),
     });
-    const vision = await readJson<{ ok?: boolean; message?: string; userMessage?: string; analysis?: CachedImageAnalysis }>(visionResponse);
-    if (!visionResponse.ok || !vision.ok || !vision.analysis?.imageSummary) throw new Error(vision.userMessage || vision.message || SAFE_ERROR);
+    const vision = await readJson<{ ok?: boolean; error?: string; code?: string; message?: string; userMessage?: string; analysis?: CachedImageAnalysis }>(visionResponse);
+    if (!visionResponse.ok || !vision.ok || !vision.analysis?.imageSummary) throw responseError(visionResponse, vision);
     image = vision.analysis;
   }
   const analyzeResponse = await fetcher("/api/ai-copy/v2/analyze", {
@@ -147,7 +171,7 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
   });
   const analyzed = await readJson<AnalyzeResponse>(analyzeResponse);
   if (!analyzeResponse.ok || !analyzed.ok || !analyzed.sessionId || !analyzed.factCard || !analyzed.keywordEvidence) {
-    throw new Error(analyzed.message || SAFE_ERROR);
+    throw responseError(analyzeResponse, analyzed);
   }
 
   input.onStage?.("generating");
@@ -167,7 +191,7 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
   const generated = await readJson<GenerateResponse>(generateResponse);
   const result = generated.result;
   if (!generateResponse.ok || !generated.ok || !result || !result.title || !result.description || !result.altText || !result.validationReport?.valid) {
-    throw new Error(generated.message || SAFE_ERROR);
+    throw responseError(generateResponse, generated);
   }
 
   const byId = new Map(analyzed.keywordEvidence.candidates.map(candidate => [candidate.id, candidate]));

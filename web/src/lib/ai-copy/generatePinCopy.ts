@@ -37,8 +37,8 @@ export class PinCopyError extends Error {
 }
 
 /** True when `err` is the rate-limit stop (429), so the UI can soften the toast. */
-export function isRateLimitError(err: unknown): err is PinCopyError {
-  return err instanceof PinCopyError && err.code === "rate_limited";
+export function isRateLimitError(err: unknown): err is PinCopyError | { code: string; status?: number; retryAfterSeconds?: number | null } {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "rate_limited";
 }
 
 /**
@@ -46,8 +46,8 @@ export function isRateLimitError(err: unknown): err is PinCopyError {
  * ai_text_limit_reached). Distinct from `rate_limited`: waiting does NOT fix this, so
  * the UI must show the PRD's upgrade message instead of "try again in a moment".
  */
-export function isTextLimitReachedError(err: unknown): err is PinCopyError {
-  return err instanceof PinCopyError && err.code === "ai_text_limit_reached";
+export function isTextLimitReachedError(err: unknown): err is PinCopyError | { code: string; status?: number; retryAfterSeconds?: number | null } {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "ai_text_limit_reached";
 }
 
 const UI_STAGE_YIELD_MS = 40;

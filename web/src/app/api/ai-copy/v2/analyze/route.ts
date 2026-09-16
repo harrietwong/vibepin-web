@@ -27,6 +27,17 @@ function validLocale(value: string): boolean {
   try { Intl.getCanonicalLocales(value); return true; } catch { return false; }
 }
 const validCountry = (value: string) => /^[A-Za-z]{2}$/.test(value);
+function commercialPolarity(category: CreateFactInput["category"], value: string): CreateFactInput["claimPolarity"] {
+  // Product-catalog fields are explicit category assertions, but their raw values are
+  // not automatically positive claims: retain any negation/uncertainty before a
+  // validator ever sees a canonical claim.
+  if (/^\s*(?:not|no|without|never|neither)\b|\b(?:not|no|without|never|neither)\b[^.]{0,60}\b(?:available|stock|ship|material|leather|brand|price|cost|relief|treat|warranty|guarantee)\b|\b(?:out of stock|sold out|unavailable)\b/i.test(value)) return "negated";
+  if (/\b(?:unknown|not specified|see (?:details|listing)|varies|n\/?a)\b/i.test(value)) return "unknown";
+  if (category !== "availability") return "affirmed";
+  if (/\b(?:not|out of|unavailable|sold out|no longer)\b[^.]{0,40}\b(?:in stock|available|shipping)\b|\b(?:out of stock|unavailable|sold out)\b/i.test(value)) return "negated";
+  if (/\b(?:in stock|available now|ready to ship|ships today)\b/i.test(value)) return "affirmed";
+  return "unknown";
+}
 
 function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
   const facts: CreateFactInput[] = [];
@@ -43,7 +54,7 @@ function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
     if (!normalized) return;
     facts.push({
       id: `fact_${++index}`, key, value: normalized, source, trustLevel, category,
-      ...(commercialAssertion ? { canonicalClaim: normalized, claimPolarity: "affirmed" as const } : {}),
+      ...(commercialAssertion ? { canonicalClaim: normalized, claimPolarity: commercialPolarity(category, normalized) } : {}),
     });
   };
   const product = body.productContext ?? {};
@@ -113,6 +124,7 @@ export async function POST(req: Request) {
   }
   if (claim.state === "pending") return NextResponse.json({ ok: false, error: "request_in_progress" }, { status: 409 });
   if (claim.state === "completed") {
+    if (claim.row.expires_at <= new Date().toISOString()) return NextResponse.json({ ok: false, error: "session_expired" }, { status: 404 });
     if (!claim.row.fact_card || !claim.row.keyword_evidence) return NextResponse.json({ ok: false, error: "analysis_failed" }, { status: 502 });
     return NextResponse.json({ ok: true, sessionId: claim.row.id, draftId: claim.row.draft_id, factCard: claim.row.fact_card, keywordEvidence: claim.row.keyword_evidence, degradedMode: claim.row.keyword_evidence.degradedMode, replayed: true });
   }

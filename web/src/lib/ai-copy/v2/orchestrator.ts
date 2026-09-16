@@ -1,5 +1,5 @@
 /** Grounded single-result generation with one optional repair. */
-import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE, languageInstructions } from "@/lib/ai-copy/visionServer";
+import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE, languageInstructions, type ChatCostContext } from "@/lib/ai-copy/visionServer";
 import { containsTokenPhrase, validateCopy } from "./validateCopy";
 import { summarizeFacts } from "./factCard";
 import type { ClaimDetectionResult, CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
@@ -25,12 +25,13 @@ export interface GenerateCopyRequest {
   angleId?: string;
   angleRequest?: string;
   lengthPreference?: "short" | "standard" | "seo-rich";
+  costContext?: ChatCostContext;
 }
 
 export interface CopyGenerationProvider {
-  generate(prompt: string, systemPrompt?: string): Promise<ProviderCopyOutput>;
-  detectClaims(output: ProviderCopyOutput, grounding: FactCardV1): Promise<unknown>;
-  repair?(original: ProviderCopyOutput, report: ValidationReport, prompt: string): Promise<ProviderCopyOutput>;
+  generate(prompt: string, systemPrompt?: string, costContext?: ChatCostContext): Promise<ProviderCopyOutput>;
+  detectClaims(output: ProviderCopyOutput, grounding: FactCardV1, costContext?: ChatCostContext): Promise<unknown>;
+  repair?(original: ProviderCopyOutput, report: ValidationReport, prompt: string, costContext?: ChatCostContext): Promise<ProviderCopyOutput>;
 }
 
 const CLAIM_TYPES = new Set<DetectedClaimType>([
@@ -73,12 +74,13 @@ const SYSTEM = "You write grounded Pinterest copy. Return one JSON object only w
 const DETECTOR_SYSTEM = "Independently extract every commercial claim from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, or numeric_commercial), value, and field (title, description, or altText). Use [] only when no commercial claim exists. Do not trust or use any claims self-reported by the copy generator.";
 
 export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
-  async generate(prompt: string, systemPrompt = SYSTEM): Promise<ProviderCopyOutput> {
+  async generate(prompt: string, systemPrompt = SYSTEM, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
     const cfg = providerConfig();
     if (!cfg.key) throw new CopyError("provider_not_configured", 502, PROVIDER_MESSAGE);
     try {
       return parseProviderOutput(await chatJson({
         key: cfg.key, baseUrl: cfg.baseUrl, model: cfg.textModel, provider: cfg.provider,
+        costContext,
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
         timeoutMs: 15_000, temperature: 0.5,
       }));
@@ -88,11 +90,12 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
     }
   }
 
-  async detectClaims(output: ProviderCopyOutput, _grounding: FactCardV1): Promise<unknown> {
+  async detectClaims(output: ProviderCopyOutput, _grounding: FactCardV1, costContext?: ChatCostContext): Promise<unknown> {
     const cfg = providerConfig();
     if (!cfg.key) throw new CopyError("provider_not_configured", 502, PROVIDER_MESSAGE);
     return chatJson({
       key: cfg.key, baseUrl: cfg.baseUrl, model: cfg.textModel, provider: cfg.provider,
+      costContext,
       messages: [
         { role: "system", content: DETECTOR_SYSTEM },
         // Claim extraction is intentionally blind to grounding. Its only job is
@@ -103,9 +106,9 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
     });
   }
 
-  async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string): Promise<ProviderCopyOutput> {
+  async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
     const issues = report.issues.map(issue => `${issue.field}:${issue.code}`).join(", ");
-    return this.generate(`${prompt}\n\nRepair these validation issues: ${issues}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM);
+    return this.generate(`${prompt}\n\nRepair these validation issues: ${issues}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM, costContext);
   }
 }
 
@@ -146,8 +149,8 @@ export class ValidationErrorV2 extends Error {
   constructor(public validationReport: ValidationReport) { super("Generated copy failed validation"); }
 }
 
-async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1): Promise<ClaimDetectionResult> {
-  try { return parseClaimDetection(await provider.detectClaims(output, factCard)); }
+async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
+  try { return parseClaimDetection(await provider.detectClaims(output, factCard, costContext)); }
   catch { return { status: "incomplete", claims: [] }; }
 }
 
@@ -162,12 +165,12 @@ function validate(output: ProviderCopyOutput, req: GenerateCopyRequest, claimDet
 export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promise<CopyResultV2> {
   const provider = getCopyProvider();
   const prompt = buildPromptForSession(req);
-  let output = await provider.generate(prompt);
-  let report = validate(output, req, await detectClaims(provider, output, req.factCard));
+  let output = await provider.generate(prompt, undefined, req.costContext);
+  let report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
   if (!report.valid) {
     if (!isRepairableWithoutInventingFacts(report) || !provider.repair) throw new ValidationErrorV2(report);
-    output = await provider.repair(output, report, prompt);
-    report = validate(output, req, await detectClaims(provider, output, req.factCard));
+    output = await provider.repair(output, report, prompt, req.costContext);
+    report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
     if (!report.valid) throw new ValidationErrorV2(report);
   }
   const usedKeywordIds = req.keywordEvidence.selectedKeywordIds.slice(0, 5).filter(id => {
