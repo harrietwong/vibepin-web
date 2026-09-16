@@ -92,4 +92,3 @@ green.
 - No independent reviewer subagent was dispatched because the active collaboration
   policy forbids unrequested subagent spawning; integration review remains required.
 - No real Pinterest, Storage, database, deployment, push, or merge operation occurred.
-
