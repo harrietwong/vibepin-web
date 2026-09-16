@@ -102,6 +102,18 @@ async function run() {
     assert(live.rows[0].count === 2, 'two server-owned associations were materialized before rollback');
     await db.exec("alter table public.video_poster_operations drop constraint video_poster_operations_path_check; alter table public.video_poster_operations add constraint video_poster_operations_path_check check (object_path like '%studio/uploads%' or true)");
     assert(Boolean(await rejected(() => db.exec(v80))), 'reapply rejects a same-keyword tautological path constraint');
+    const mutation = async (name, sql) => {
+      const isolated = new PGlite();
+      try {
+        await bootstrap(isolated); await isolated.exec(v77); await isolated.exec(v80); await isolated.exec(sql);
+        assert(Boolean(await rejected(() => isolated.exec(v80))), `reapply rejects ${name}`);
+      } finally { await isolated.close(); }
+    };
+    await mutation('UNIQUE(video_item_id)', "alter table public.video_poster_operations drop constraint video_poster_operations_bucket_id_object_path_key; alter table public.video_poster_operations add constraint video_poster_operations_bucket_id_object_path_key unique(video_item_id)");
+    await mutation('FK target/action drift', "alter table public.video_poster_operations drop constraint video_poster_operations_video_item_id_fkey; alter table public.video_poster_operations add constraint video_poster_operations_video_item_id_fkey foreign key(video_item_id) references public.video_upload_batches(id) on delete restrict");
+    await mutation('PK column drift', "alter table public.video_poster_operations drop constraint video_poster_operations_pkey; alter table public.video_poster_operations add constraint video_poster_operations_pkey primary key(owner_user_id)");
+    await mutation('state default drift', "alter table public.video_poster_operations alter column state set default 'retained'");
+    await mutation('path CHECK literal-space drift', "alter table public.video_poster_operations drop constraint video_poster_operations_path_check; alter table public.video_poster_operations add constraint video_poster_operations_path_check check (object_path ~ '^studio/uploads/ [0-9A-Fa-f-]{8,64}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.(png|jpg|jpeg|webp|gif)$')");
     console.log(`v80 video poster operations: ${assertions} assertions passed`);
   } finally { await db.close(); }
 }
