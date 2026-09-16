@@ -45,8 +45,17 @@ async function seedOperation(db, owner=A, ordinal=0) {
 async function associate(db, owner, batchId, ordinal, path) {
   return (await db.query("select public.video_poster_operation_associate($1,$2,$3,'generated-private',$4) as v", [owner, batchId, ordinal, path])).rows[0].v;
 }
+async function associateBucket(db, owner, batchId, ordinal, bucket, path) {
+  return (await db.query("select public.video_poster_operation_associate($1,$2,$3,$4,$5) as v", [owner, batchId, ordinal, bucket, path])).rows[0].v;
+}
+async function retainBucket(db, owner, batchId, ordinal, bucket, path) {
+  return (await db.query("select public.video_poster_operation_retain($1,$2,$3,$4,$5) as v", [owner, batchId, ordinal, bucket, path])).rows[0].v;
+}
 async function authorize(db, owner, path) {
   return (await db.query("select public.video_poster_cleanup_authorize($1,'generated-private',$2) as v", [owner, path])).rows[0].v;
+}
+async function authorizeBucket(db, owner, bucket, path) {
+  return (await db.query("select public.video_poster_cleanup_authorize($1,$2,$3) as v", [owner, bucket, path])).rows[0].v;
 }
 
 async function run() {
@@ -61,6 +70,18 @@ async function run() {
       to_regprocedure('public.video_poster_cleanup_authorize(uuid,text,text)')::text as cleanup`)).rows[0];
     assert(schema.relation === 'video_poster_operations' && schema.rls === true, 'v80 relation is forced RLS');
     assert(Boolean(schema.associate) && Boolean(schema.retain) && Boolean(schema.cleanup), 'v80 exact RPC overloads exist');
+    const invalidBucket = await seedOperation(db, A, 19);
+    for (const bucket of ['public', 'generated', 'unexpected-private']) {
+      assert(Boolean(await rejected(() => associateBucket(db, A, invalidBucket.batchId, 19, bucket, invalidBucket.path))), `associate must reject ${bucket} bucket`);
+      assert(Boolean(await rejected(() => retainBucket(db, A, invalidBucket.batchId, 19, bucket, invalidBucket.path))), `retain must reject ${bucket} bucket`);
+      assert(Boolean(await rejected(() => authorizeBucket(db, A, bucket, invalidBucket.path))), `cleanup authorization must reject ${bucket} bucket`);
+    }
+    assert((await db.query("select count(*)::int as count from public.video_poster_operations")).rows[0].count === 0, 'invalid buckets never create poster operation rows');
+    await db.exec("update storage.buckets set public=true where id='generated-private'");
+    assert(Boolean(await rejected(() => associateBucket(db, A, invalidBucket.batchId, 19, 'generated-private', invalidBucket.path))), 'associate must reject a public generated-private bucket');
+    assert(Boolean(await rejected(() => retainBucket(db, A, invalidBucket.batchId, 19, 'generated-private', invalidBucket.path))), 'retain must reject a public generated-private bucket');
+    assert(Boolean(await rejected(() => authorizeBucket(db, A, 'generated-private', invalidBucket.path))), 'cleanup authorization must reject a public generated-private bucket');
+    await db.exec("update storage.buckets set public=false where id='generated-private'");
     const procedures = (await db.query(`select p.proname, count(*)::int as count, string_agg(pg_get_functiondef(p.oid), E'\n') as bodies
       from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='public' and p.proname in ('video_poster_operation_associate','video_poster_operation_retain','video_poster_cleanup_authorize')
@@ -114,6 +135,7 @@ async function run() {
     await mutation('PK column drift', "alter table public.video_poster_operations drop constraint video_poster_operations_pkey; alter table public.video_poster_operations add constraint video_poster_operations_pkey primary key(owner_user_id)");
     await mutation('state default drift', "alter table public.video_poster_operations alter column state set default 'retained'");
     await mutation('state default removal', "alter table public.video_poster_operations alter column state drop default");
+    await mutation('public generated-private bucket drift', "update storage.buckets set public=true where id='generated-private'");
     await mutation('path CHECK literal-space drift', "alter table public.video_poster_operations drop constraint video_poster_operations_path_check; alter table public.video_poster_operations add constraint video_poster_operations_path_check check (object_path ~ '^studio/uploads/ [0-9A-Fa-f-]{8,64}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.(png|jpg|jpeg|webp|gif)$')");
     console.log(`v80 video poster operations: ${assertions} assertions passed`);
   } finally { await db.close(); }

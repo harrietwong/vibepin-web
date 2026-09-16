@@ -6,11 +6,16 @@ begin;
 do $v80_preflight$
 declare
   v_marker text;
+  v_bucket_public boolean;
 begin
   if to_regclass('public.video_upload_items') is null
      or to_regclass('public.media_asset_provenance') is null
      or to_regclass('public.pin_drafts') is null then
     raise exception using errcode='P0001', message='v80_requires_v77';
+  end if;
+  select public into v_bucket_public from storage.buckets where id='generated-private';
+  if not found or v_bucket_public is distinct from false then
+    raise exception using errcode='P0001', message='v80_requires_private_bucket';
   end if;
   if to_regclass('public.video_poster_operations') is not null then
     select obj_description('public.video_poster_operations'::regclass, 'pg_class') into v_marker;
@@ -31,6 +36,7 @@ create table if not exists public.video_poster_operations (
     constraint video_poster_operations_state_check check (state in ('associated','retained')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  constraint video_poster_operations_bucket_id_check check (bucket_id = 'generated-private'),
   constraint video_poster_operations_path_check check (
     object_path ~ '^studio/uploads/[0-9A-Fa-f-]{8,64}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.(png|jpg|jpeg|webp|gif)$'
   ),
@@ -41,6 +47,25 @@ comment on column public.video_poster_operations.state is 'Server-owned lifecycl
 
 create index if not exists video_poster_operations_owner_path_idx
   on public.video_poster_operations(owner_user_id, bucket_id, object_path);
+
+-- v80 poster objects are always private draft media.  Keep this invariant in
+-- the database so an RPC caller cannot redirect cleanup or association into a
+-- public/legacy bucket, including after an idempotent migration re-run.
+do $v80_bucket_constraint$
+declare v_definition text;
+begin
+  select pg_get_constraintdef(oid, true) into v_definition
+    from pg_constraint
+   where conrelid='public.video_poster_operations'::regclass
+     and conname='video_poster_operations_bucket_id_check';
+  if found and v_definition is distinct from $v80_bucket$CHECK (bucket_id = 'generated-private'::text)$v80_bucket$ then
+    raise exception using errcode='P0001', message='v80_schema_collision';
+  end if;
+  if not found then
+    alter table public.video_poster_operations
+      add constraint video_poster_operations_bucket_id_check check (bucket_id = 'generated-private');
+  end if;
+end $v80_bucket_constraint$;
 
 alter table public.video_poster_operations enable row level security;
 alter table public.video_poster_operations force row level security;
@@ -61,6 +86,8 @@ declare
   v_existing public.video_poster_operations%rowtype;
 begin
   if p_owner_user_id is null or p_batch_id is null or p_ordinal not between 0 and 19
+     or p_bucket_id is distinct from 'generated-private'
+     or not exists (select 1 from storage.buckets where id='generated-private' and public=false)
      or p_bucket_id is null or length(p_bucket_id) not between 1 and 100
      or p_object_path is null
      or p_object_path !~ ('^studio/uploads/' || p_owner_user_id::text || '/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.(png|jpg|jpeg|webp|gif)$')
@@ -115,6 +142,10 @@ language plpgsql security definer set search_path = public, pg_temp
 as $v80_retain$
 declare v_updated integer;
 begin
+  if p_bucket_id is distinct from 'generated-private'
+     or not exists (select 1 from storage.buckets where id='generated-private' and public=false) then
+    raise exception using errcode='P0001', message='v80_poster_operation_invalid';
+  end if;
   update public.video_poster_operations o
   set state='retained', updated_at=now()
   from public.video_upload_items i
@@ -148,6 +179,10 @@ declare
 begin
   -- This is a positive capability check.  It deliberately does not accept a
   -- browser lifecycle/status declaration: v77's server ledger is the authority.
+  if p_bucket_id is distinct from 'generated-private'
+     or not exists (select 1 from storage.buckets where id='generated-private' and public=false) then
+    raise exception using errcode='P0001', message='v80_poster_operation_invalid';
+  end if;
   select o.state,i.status into v_state,v_status
   from public.video_poster_operations o
   join public.video_upload_items i on i.id=o.video_item_id
@@ -190,6 +225,8 @@ begin
   if not found or v_actual IS DISTINCT FROM $v80_state$CHECK (state = ANY (ARRAY['associated'::text, 'retained'::text]))$v80_state$ then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
   select pg_get_constraintdef(oid,true) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_path_check';
   if not found or v_actual IS DISTINCT FROM $v80_path$CHECK (object_path ~ '^studio/uploads/[0-9A-Fa-f-]{8,64}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.(png|jpg|jpeg|webp|gif)$'::text)$v80_path$ then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  select pg_get_constraintdef(oid,true) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_bucket_id_check';
+  if not found or v_actual IS DISTINCT FROM $v80_bucket$CHECK (bucket_id = 'generated-private'::text)$v80_bucket$ then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
   select pg_get_expr(adbin,adrelid) into v_default from pg_attrdef where adrelid='public.video_poster_operations'::regclass and adnum=(select attnum from pg_attribute where attrelid='public.video_poster_operations'::regclass and attname='state');
   if exists(select 1 from pg_attribute where attrelid='public.video_poster_operations'::regclass and attname in ('video_item_id','owner_user_id','bucket_id','object_path','state','created_at','updated_at') and not attnotnull)
     or not found or v_default IS DISTINCT FROM '''associated''::text' then raise exception using errcode='P0001',message='v80_schema_collision'; end if;

@@ -125,6 +125,33 @@ async function main() {
     assert(calls.every(call => call.args.p_owner_user_id === ownerA.ownerUserId));
     assert.equal("state" in calls[2].args, false, "the client cannot declare an operation failed/cancelled");
   });
+  await test("v80 poster upload fails closed before touching a non-private bucket", async () => {
+    const form = new FormData(); form.append("file", new File([new Uint8Array([1])], "poster.png", { type: "image/png" }));
+    form.append("videoBatchId", "11111111-1111-4111-8111-111111111111"); form.append("videoOrdinal", "0");
+    let uploads = 0;
+    const response = await handleStudioUpload(new Request("https://app.invalid/upload", { method: "POST", body: form }), {
+      getUserId: async () => ownerA.ownerUserId, configured: true, bucket: "public",
+      uploadObject: async () => { uploads++; return { error: null }; },
+      registerProvenance: async () => true, associatePosterOperation: async () => true, removeObject: async () => {},
+    });
+    assert.equal(response.status, 500);
+    assert.equal((await response.json() as { code: string }).code, "config_error");
+    assert.equal(uploads, 0, "a poster must never be uploaded to a non-private bucket before v80 association");
+  });
+  await test("v80 poster service rejects public and unexpected buckets before calling the database", async () => {
+    const calls: string[] = [];
+    const operation = createVideoPosterOperationStore({ rpc: async (name: string) => {
+      calls.push(name);
+      return { data: { ok: true, allowed: true }, error: null };
+    } });
+    const input = { ownerUserId: ownerA.ownerUserId, batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, objectPath: `studio/uploads/${ownerA.ownerUserId}/poster.png` };
+    for (const bucketId of ["public", "generated", "unexpected-private"]) {
+      await assert.rejects(() => operation.associate({ ...input, bucketId }), /v80_poster_operation_invalid/);
+      await assert.rejects(() => operation.retain({ ...input, bucketId }), /v80_poster_operation_invalid/);
+      await assert.rejects(() => operation.canCleanup({ ...input, bucketId }), /v80_poster_operation_invalid/);
+    }
+    assert.deepEqual(calls, [], "invalid bucket input never reaches the RPC boundary");
+  });
   await test("v80 binds a poster during the server upload transaction and compensates an association failure", async () => {
     const form = new FormData(); form.append("file", new File([new Uint8Array([1])], "poster.png", { type: "image/png" }));
     form.append("videoBatchId", "11111111-1111-4111-8111-111111111111"); form.append("videoOrdinal", "0");

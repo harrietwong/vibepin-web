@@ -86,13 +86,15 @@ export async function handleStudioUpload(req: Request, deps: StudioUploadHandler
   const rawBatchId = form.get("videoBatchId");
   const rawOrdinal = form.get("videoOrdinal");
   const hasPosterOperation = rawBatchId !== null || rawOrdinal !== null;
+  const bucket = deps.bucket ?? DEFAULT_DRAFT_BUCKET;
   const batchId = typeof rawBatchId === "string" ? rawBatchId : "";
   const ordinal = typeof rawOrdinal === "string" && /^\d{1,2}$/.test(rawOrdinal) ? Number(rawOrdinal) : -1;
   if (hasPosterOperation && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(batchId) || ordinal < 0 || ordinal > 19 || !deps.associatePosterOperation)) {
     return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
   }
-
-  const bucket = deps.bucket ?? DEFAULT_DRAFT_BUCKET;
+  if (hasPosterOperation && bucket !== DEFAULT_DRAFT_BUCKET) {
+    return Response.json({ error: "Storage is not configured", code: "config_error", requestId }, { status: 500 });
+  }
   const path = (deps.pathFactory ?? defaultPath)(uid, extension);
   const bytes = new Uint8Array(await file.arrayBuffer());
 

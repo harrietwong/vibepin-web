@@ -1,7 +1,13 @@
 /** Service-only v80 boundary. Browser input never chooses an operation lifecycle. */
 type Db = { rpc(name: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> };
 type RpcValue = Record<string, unknown>;
+export const VIDEO_POSTER_BUCKET = "generated-private" as const;
 function dataOf(value: unknown): RpcValue | null { return value && typeof value === "object" && !Array.isArray(value) ? value as RpcValue : null; }
+function assertExpectedBucket(bucketId: string): void {
+  if (bucketId !== VIDEO_POSTER_BUCKET) {
+    throw Object.assign(new Error("v80_poster_operation_invalid"), { code: "v80_poster_operation_invalid" });
+  }
+}
 function errorCode(error: unknown, fallback: string): Error {
   const message = error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : "";
   const code = ["v80_poster_operation_invalid", "v80_poster_operation_not_associable", "v80_poster_provenance_missing", "v80_poster_operation_conflict", "v80_poster_operation_not_retainable"].find(value => message.includes(value)) ?? fallback;
@@ -23,9 +29,10 @@ export function createVideoPosterOperationStore(db: Db): VideoPosterOperationSto
     p_owner_user_id: input.ownerUserId, p_batch_id: input.batchId, p_ordinal: input.ordinal, p_bucket_id: input.bucketId, p_object_path: input.objectPath,
   });
   return {
-    async associate(input) { await rpc(db, "video_poster_operation_associate", args(input)); },
-    async retain(input) { await rpc(db, "video_poster_operation_retain", args(input)); },
+    async associate(input) { assertExpectedBucket(input.bucketId); await rpc(db, "video_poster_operation_associate", args(input)); },
+    async retain(input) { assertExpectedBucket(input.bucketId); await rpc(db, "video_poster_operation_retain", args(input)); },
     async canCleanup(input) {
+      assertExpectedBucket(input.bucketId);
       const data = await rpc(db, "video_poster_cleanup_authorize", { p_owner_user_id: input.ownerUserId, p_bucket_id: input.bucketId, p_object_path: input.objectPath });
       return data.allowed === true;
     },
