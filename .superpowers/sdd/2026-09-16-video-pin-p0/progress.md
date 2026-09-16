@@ -74,7 +74,7 @@ Implement batch Video Pin P0 without deployment: one video per draft, secure pri
 ## Task Status
 
 - Task 0: complete (base `3f74653c`; plan commits `1bb3780d..654cf4f5`; baseline evidence above).
-- Task 1: complete — `873a98db` on base `654cf4f5`; v77 video-media contracts, discriminated media types, PGlite verifier, and focused TypeScript coverage passed. The v75 verifier still reports its pre-existing `deployment_blocked` broad Storage-policy evidence (65 assertions, no failures); Task 1 did not remove or mask it.
+- Task 1: complete — `873a98db`, hardened by review-fix commit `644e4af1`, on base `654cf4f5`; v77 video-media contracts, exact v76 function integrity checks, discriminated media/poster aliasing, collision/lifecycle/idempotency PGlite coverage, and focused TypeScript coverage passed. The v75 verifier still reports its pre-existing `deployment_blocked` broad Storage-policy evidence (65 assertions, no failures); Task 1 did not remove or mask it.
 - Task 2: not started.
 - Task 3: not started.
 - Task 4: not started.
