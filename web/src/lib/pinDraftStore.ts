@@ -804,7 +804,10 @@ export function createBoardDraft(input: {
 
   const now = new Date().toISOString();
   const id = genId();
-  const normalizedMedia = input.media?.filter(item => item.id && item.url) ?? [];
+  const normalizedMedia = input.media?.filter(item => item.url).map((item, index) => ({
+    ...item,
+    id: ("id" in item && item.id) ? item.id : mediaId(id, index),
+  } as ContentMedia)) ?? [];
   const initialMedia = normalizedMedia.length ? normalizedMedia : (input.imageUrl ? [{
     id: mediaId(id, 0), kind: "image" as const, url: input.imageUrl,
     altText: input.altText?.trim(), source: input.source === "uploaded_image" ? "upload" as const : "ai" as const,
@@ -1114,10 +1117,16 @@ export function splitContentMedia(id: string, mediaIds?: readonly string[]): Pin
   const now = new Date().toISOString();
   const created: PinDraft[] = [];
   for (const item of splitting) {
+    const { id: _sourceMediaId, ...childMedia } = item;
     const child = createBoardDraft({
-      imageUrl: item.url,
-      // createBoardDraft mints the id, so the media id must be minted against it —
-      // hence the two-step (create, then write the media with the real content id).
+      // The first durable child state is already the video contract. This avoids an
+      // event/localStorage window where private video bytes appear as an image.
+      imageUrl: legacyImageAlias(item, draft.imageUrl),
+      media: [{
+        ...childMedia,
+        id: "", // createBoardDraft mints the fresh child-scoped id before persistence.
+        ...(item.altText ? {} : (draft.altText ? { altText: draft.altText } : {})),
+      }],
       source: draft.source === "ai_generated_from_upload" ? "ai_generated_from_upload" : "uploaded_image",
       title: draft.title || undefined,
       description: draft.description || undefined,
@@ -1129,12 +1138,6 @@ export function splitContentMedia(id: string, mediaIds?: readonly string[]): Pin
       parentDraftId: draft.id,
     });
     const written = updateDraft(child.id, {
-      media: [{
-        ...item,
-        id: mediaId(child.contentId || child.id, 0),
-        ...(item.altText ? {} : (draft.altText ? { altText: draft.altText } : {})),
-      }],
-      coverMediaId: undefined, // writeMedia's normalization sets it from media[0]
       // The destination intent, re-captured now: it is this Content's own record from
       // here on, and a stale capturedAt would misdate it.
       ...(draft.scheduledDestinations?.length

@@ -91,6 +91,66 @@ async function run() {
     assert(schema.rows[0].batches && schema.rows[0].items && schema.rows[0].batch_rls && schema.rows[0].item_rls,
       "apply twice creates RLS-protected batch/item ledgers exactly once");
 
+    // This is deliberately table-driven: v77 reapply owns the complete shape of
+    // its ledgers, rather than only a hand-picked set of columns.
+    const expectedColumns = [
+      ["video_upload_batches", "id", "uuid", true, "gen_random_uuid()"],
+      ["video_upload_batches", "owner_user_id", "uuid", true, null],
+      ["video_upload_batches", "idempotency_key", "text", true, null],
+      ["video_upload_batches", "status", "text", true, "'prepared'::text"],
+      ["video_upload_batches", "error_code", "text", false, null],
+      ["video_upload_batches", "prepared_at", "timestamp with time zone", true, "now()"],
+      ["video_upload_batches", "finalized_at", "timestamp with time zone", false, null],
+      ["video_upload_batches", "expires_at", "timestamp with time zone", true, null],
+      ["video_upload_batches", "created_at", "timestamp with time zone", true, "now()"],
+      ["video_upload_batches", "updated_at", "timestamp with time zone", true, "now()"],
+      ["video_upload_items", "id", "uuid", true, "gen_random_uuid()"],
+      ["video_upload_items", "batch_id", "uuid", true, null],
+      ["video_upload_items", "owner_user_id", "uuid", true, null],
+      ["video_upload_items", "ordinal", "integer", true, null],
+      ["video_upload_items", "idempotency_key", "text", true, null],
+      ["video_upload_items", "private_path", "text", true, null],
+      ["video_upload_items", "declared_content_type", "text", true, null],
+      ["video_upload_items", "declared_byte_size", "bigint", true, null],
+      ["video_upload_items", "declared_checksum_sha256", "text", false, null],
+      ["video_upload_items", "declared_width", "integer", false, null],
+      ["video_upload_items", "declared_height", "integer", false, null],
+      ["video_upload_items", "declared_duration_ms", "bigint", false, null],
+      ["video_upload_items", "verified_content_type", "text", false, null],
+      ["video_upload_items", "verified_byte_size", "bigint", false, null],
+      ["video_upload_items", "verified_checksum_sha256", "text", false, null],
+      ["video_upload_items", "verified_width", "integer", false, null],
+      ["video_upload_items", "verified_height", "integer", false, null],
+      ["video_upload_items", "verified_duration_ms", "bigint", false, null],
+      ["video_upload_items", "status", "text", true, "'prepared'::text"],
+      ["video_upload_items", "error_code", "text", false, null],
+      ["video_upload_items", "prepared_at", "timestamp with time zone", true, "now()"],
+      ["video_upload_items", "finalized_at", "timestamp with time zone", false, null],
+      ["video_upload_items", "expires_at", "timestamp with time zone", true, null],
+      ["video_upload_items", "created_at", "timestamp with time zone", true, "now()"],
+      ["video_upload_items", "updated_at", "timestamp with time zone", true, "now()"],
+      ["media_asset_provenance", "media_kind", "text", true, "'image'::text"],
+      ["media_asset_provenance", "content_type", "text", false, null],
+      ["media_asset_provenance", "byte_size", "bigint", false, null],
+      ["media_asset_provenance", "checksum_sha256", "text", false, null],
+      ["media_asset_provenance", "width", "integer", false, null],
+      ["media_asset_provenance", "height", "integer", false, null],
+      ["media_asset_provenance", "duration_ms", "bigint", false, null],
+    ];
+    const actualColumns = await db.query(`select c.relname as table_name,a.attname,
+      format_type(a.atttypid,a.atttypmod) as type,a.attnotnull,
+      pg_get_expr(d.adbin,d.adrelid) as default_value
+      from pg_attribute a join pg_class c on c.oid=a.attrelid
+      left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+      where c.relnamespace='public'::regnamespace and c.relname in
+        ('video_upload_batches','video_upload_items','media_asset_provenance')
+        and not a.attisdropped and a.attnum>0 order by c.relname,a.attnum`);
+    for (const [table, column, type, required, defaultValue] of expectedColumns) {
+      assert(actualColumns.rows.some(row => row.table_name === table && row.attname === column
+        && row.type === type && row.attnotnull === required && row.default_value === defaultValue),
+      `schema inventory owns ${table}.${column} type/nullability/default`);
+    }
+
     const provenanceColumns = (await db.query(`select attname from pg_attribute
       where attrelid='public.media_asset_provenance'::regclass and not attisdropped`)).rows.map(row => row.attname);
     for (const column of ["media_kind", "content_type", "byte_size", "checksum_sha256", "width", "height", "duration_ms"]) {
@@ -257,6 +317,34 @@ async function collisionRejections() {
         ])).rows[0].definition;
         await db.exec(definition.replace("if p_owner_user_id is null", "if false and p_owner_user_id is null"));
       },
+    },
+    {
+      name: "batch owner nullability drift",
+      alter: db => db.exec("alter table public.video_upload_batches alter column owner_user_id drop not null"),
+    },
+    {
+      name: "provenance content type default drift",
+      alter: db => db.exec("alter table public.media_asset_provenance alter column content_type set default 'video/mp4'"),
+    },
+    {
+      name: "provenance byte size required drift",
+      alter: db => db.exec("alter table public.media_asset_provenance alter column byte_size set not null"),
+    },
+    {
+      name: "declared byte size type drift",
+      alter: db => db.exec("alter table public.video_upload_items alter column declared_byte_size type numeric"),
+    },
+    {
+      name: "same-name altered finalized facts constraint",
+      alter: db => db.exec("alter table public.video_upload_items drop constraint video_upload_items_finalized_facts_check; alter table public.video_upload_items add constraint video_upload_items_finalized_facts_check check (true)"),
+    },
+    {
+      name: "same-name altered item status constraint",
+      alter: db => db.exec("alter table public.video_upload_items drop constraint video_upload_items_status_check; alter table public.video_upload_items add constraint video_upload_items_status_check check (true)"),
+    },
+    {
+      name: "client upload privilege drift",
+      alter: db => db.exec("grant insert on public.video_upload_items to authenticated"),
     },
   ]) {
     const db = await dbWithV76();

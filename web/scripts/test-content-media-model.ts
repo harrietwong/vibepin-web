@@ -380,5 +380,35 @@ test("splitContentMedia and non-cover generation retain a video cover's poster a
   assert.equal(generated.imageUrl, "poster.jpg", "regenerating a non-cover image must leave the video cover poster alias intact");
 });
 
+test("splitContentMedia never persists or emits a binary video as a child image alias", () => {
+  resetStore();
+  const source = store.createBoardDraft({
+    imageUrl: "source.jpg",
+    media: [
+      { id: "source", kind: "image", url: "source.jpg" },
+      { id: "clip", kind: "video", url: "private://clip.mp4", posterUrl: "private://clip-poster.jpg" },
+    ],
+    source: "uploaded_image",
+  });
+  const snapshots: PinDraft[][] = [];
+  const capture = () => {
+    const serialized = mem.get(STORE_KEY);
+    if (serialized) snapshots.push(Object.values(JSON.parse(serialized).drafts) as PinDraft[]);
+  };
+  window.addEventListener("vp:pin-drafts-changed", capture);
+  const children = store.splitContentMedia(source.id, ["clip"]);
+  window.removeEventListener("vp:pin-drafts-changed", capture);
+
+  assert.equal(children.length, 1);
+  assert(snapshots.length >= 2, "the store event stream must include the child creation snapshot");
+  for (const drafts of snapshots) {
+    const child = drafts.find(draft => draft.parentDraftId === source.id);
+    if (!child) continue;
+    assert.equal(child.imageUrl, "private://clip-poster.jpg", "no persisted split child aliases imageUrl to video bytes");
+    assert.equal(contentMedia(child)[0]?.kind, "video", "the first persisted child media item is the video contract");
+    assert.equal(contentMedia(child)[0]?.url, "private://clip.mp4", "the initial child media never becomes a synthetic image");
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

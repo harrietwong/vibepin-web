@@ -11,6 +11,12 @@ declare
   v_type text;
   v_not_null boolean;
   v_default text;
+  v_table text;
+  v_definition text;
+  v_expected_type text;
+  v_expected_not_null boolean;
+  v_expected_default text;
+  v_expected_definition text;
   v_signature text;
   v_marker text;
   v_hash text;
@@ -26,71 +32,97 @@ begin
     end if;
   end loop;
 
-  if to_regclass('public.video_upload_batches') is not null then
-    select string_agg(required_column, ',' order by required_column) into v_missing
-      from (values ('id'),('owner_user_id'),('idempotency_key'),('status'),('expires_at')) required(required_column)
-     where not exists (select 1 from pg_attribute a where a.attrelid='public.video_upload_batches'::regclass
-                         and a.attname=required.required_column and not a.attisdropped);
-    if v_missing is not null then raise exception using errcode='P0001', message='v77_schema_collision'; end if;
+  -- v77 owns both ledger relations. Reapply compares an explicit catalog rather
+  -- than adopting a merely similar table, including defaults and nullability.
+  if v_installed then
+    for v_table,v_name,v_expected_type,v_expected_not_null,v_expected_default in select * from (values
+      ('video_upload_batches','id','uuid',true,'gen_random_uuid()'),('video_upload_batches','owner_user_id','uuid',true,null),
+      ('video_upload_batches','idempotency_key','text',true,null),('video_upload_batches','status','text',true,'''prepared''::text'),
+      ('video_upload_batches','error_code','text',false,null),('video_upload_batches','prepared_at','timestamp with time zone',true,'now()'),
+      ('video_upload_batches','finalized_at','timestamp with time zone',false,null),('video_upload_batches','expires_at','timestamp with time zone',true,null),
+      ('video_upload_batches','created_at','timestamp with time zone',true,'now()'),('video_upload_batches','updated_at','timestamp with time zone',true,'now()'),
+      ('video_upload_items','id','uuid',true,'gen_random_uuid()'),('video_upload_items','batch_id','uuid',true,null),
+      ('video_upload_items','owner_user_id','uuid',true,null),('video_upload_items','ordinal','integer',true,null),
+      ('video_upload_items','idempotency_key','text',true,null),('video_upload_items','private_path','text',true,null),
+      ('video_upload_items','declared_content_type','text',true,null),('video_upload_items','declared_byte_size','bigint',true,null),
+      ('video_upload_items','declared_checksum_sha256','text',false,null),('video_upload_items','declared_width','integer',false,null),
+      ('video_upload_items','declared_height','integer',false,null),('video_upload_items','declared_duration_ms','bigint',false,null),
+      ('video_upload_items','verified_content_type','text',false,null),('video_upload_items','verified_byte_size','bigint',false,null),
+      ('video_upload_items','verified_checksum_sha256','text',false,null),('video_upload_items','verified_width','integer',false,null),
+      ('video_upload_items','verified_height','integer',false,null),('video_upload_items','verified_duration_ms','bigint',false,null),
+      ('video_upload_items','status','text',true,'''prepared''::text'),('video_upload_items','error_code','text',false,null),
+      ('video_upload_items','prepared_at','timestamp with time zone',true,'now()'),('video_upload_items','finalized_at','timestamp with time zone',false,null),
+      ('video_upload_items','expires_at','timestamp with time zone',true,null),('video_upload_items','created_at','timestamp with time zone',true,'now()'),
+      ('video_upload_items','updated_at','timestamp with time zone',true,'now()')
+    ) expected(table_name,column_name,type_name,not_null,default_expr) loop
+      select format_type(a.atttypid,a.atttypmod),a.attnotnull,pg_get_expr(d.adbin,d.adrelid) into v_type,v_not_null,v_definition
+        from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+        where a.attrelid=to_regclass('public.'||v_table) and a.attname=v_name and a.attnum>0 and not a.attisdropped;
+      if not found or v_type is distinct from v_expected_type or v_not_null is distinct from v_expected_not_null
+        or v_definition is distinct from v_expected_default then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    end loop;
+    if exists (select 1 from pg_attribute a join pg_class c on c.oid=a.attrelid
+      where c.relnamespace='public'::regnamespace and c.relname in ('video_upload_batches','video_upload_items') and a.attnum>0 and not a.attisdropped
+        and not exists (select 1 from (values
+          ('video_upload_batches','id'),('video_upload_batches','owner_user_id'),('video_upload_batches','idempotency_key'),('video_upload_batches','status'),('video_upload_batches','error_code'),('video_upload_batches','prepared_at'),('video_upload_batches','finalized_at'),('video_upload_batches','expires_at'),('video_upload_batches','created_at'),('video_upload_batches','updated_at'),
+          ('video_upload_items','id'),('video_upload_items','batch_id'),('video_upload_items','owner_user_id'),('video_upload_items','ordinal'),('video_upload_items','idempotency_key'),('video_upload_items','private_path'),('video_upload_items','declared_content_type'),('video_upload_items','declared_byte_size'),('video_upload_items','declared_checksum_sha256'),('video_upload_items','declared_width'),('video_upload_items','declared_height'),('video_upload_items','declared_duration_ms'),('video_upload_items','verified_content_type'),('video_upload_items','verified_byte_size'),('video_upload_items','verified_checksum_sha256'),('video_upload_items','verified_width'),('video_upload_items','verified_height'),('video_upload_items','verified_duration_ms'),('video_upload_items','status'),('video_upload_items','error_code'),('video_upload_items','prepared_at'),('video_upload_items','finalized_at'),('video_upload_items','expires_at'),('video_upload_items','created_at'),('video_upload_items','updated_at')
+        ) expected(table_name,column_name) where expected.table_name=c.relname and expected.column_name=a.attname)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
   end if;
-  if to_regclass('public.video_upload_items') is not null then
-    select string_agg(required_column, ',' order by required_column) into v_missing
-      from (values ('batch_id'),('owner_user_id'),('ordinal'),('idempotency_key'),('private_path'),
-                   ('declared_content_type'),('declared_byte_size'),('status')) required(required_column)
-     where not exists (select 1 from pg_attribute a where a.attrelid='public.video_upload_items'::regclass
-                         and a.attname=required.required_column and not a.attisdropped);
-    if v_missing is not null then raise exception using errcode='P0001', message='v77_schema_collision'; end if;
-  end if;
-
-  -- v77's provenance extension is not an adoption point: before v77 none of
-  -- these columns exist; after v77 every one must retain its exact type/shape.
-  foreach v_name in array array['media_kind','content_type','byte_size','checksum_sha256','width','height','duration_ms'] loop
-    select a.atttypid::regtype::text,a.attnotnull,pg_get_expr(d.adbin,d.adrelid) into v_type,v_not_null,v_default
+  -- Provenance is additive: v77 owns these columns and its discriminator check,
+  -- while v75 continues to own the rest of its legacy relation.
+  for v_name,v_expected_type,v_expected_not_null,v_expected_default in select * from (values
+    ('media_kind','text',true,'''image''::text'),('content_type','text',false,null),('byte_size','bigint',false,null),
+    ('checksum_sha256','text',false,null),('width','integer',false,null),('height','integer',false,null),('duration_ms','bigint',false,null)
+  ) expected(column_name,type_name,not_null,default_expr) loop
+    select format_type(a.atttypid,a.atttypmod),a.attnotnull,pg_get_expr(d.adbin,d.adrelid) into v_type,v_not_null,v_definition
       from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
       where a.attrelid='public.media_asset_provenance'::regclass and a.attname=v_name and not a.attisdropped;
-    if found then
-      if (v_name in ('media_kind','content_type','checksum_sha256') and v_type<>'text')
-         or (v_name in ('byte_size','duration_ms') and v_type<>'bigint')
-         or (v_name in ('width','height') and v_type<>'integer')
-         or (v_name='media_kind' and (not v_not_null or v_default is distinct from '''image''::text')) then
-        raise exception using errcode='P0001',message='v77_schema_collision';
-      end if;
-    elsif v_installed then
+    if (not found and v_installed) or (found and (v_type is distinct from v_expected_type or v_not_null is distinct from v_expected_not_null or v_definition is distinct from v_expected_default)) then
       raise exception using errcode='P0001',message='v77_schema_collision';
     end if;
   end loop;
-  if not v_installed and exists (select 1 from pg_attribute a where a.attrelid='public.media_asset_provenance'::regclass
-    and a.attname in ('media_kind','content_type','byte_size','checksum_sha256','width','height','duration_ms') and not a.attisdropped) then
-    raise exception using errcode='P0001',message='v77_schema_collision';
-  end if;
+  if not v_installed and exists (select 1 from pg_attribute a where a.attrelid='public.media_asset_provenance'::regclass and a.attname in ('media_kind','content_type','byte_size','checksum_sha256','width','height','duration_ms') and not a.attisdropped) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
   if v_installed then
-    if (
-    not exists(select 1 from pg_constraint where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_ordinal_check')
-    or not exists(select 1 from pg_constraint where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_status_check')
-    or not exists(select 1 from pg_constraint where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_finalized_facts_check')
-    or not exists(select 1 from pg_constraint where conrelid='public.video_upload_batches'::regclass and conname='video_upload_batches_status_check')
-    or not exists(select 1 from pg_class where relname='video_upload_batches_owner_status_idx' and relnamespace='public'::regnamespace)
-    or not exists(select 1 from pg_class where relname='video_upload_items_owner_batch_idx' and relnamespace='public'::regnamespace)
-    or not (select relrowsecurity from pg_class where oid='public.video_upload_batches'::regclass)
-    or not (select relrowsecurity from pg_class where oid='public.video_upload_items'::regclass)
-    ) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
-    if exists(select 1 from pg_constraint where conrelid='public.video_upload_items'::regclass and conname='video_upload_items_ordinal_check'
-      and pg_get_constraintdef(oid) is distinct from 'CHECK (((ordinal >= 0) AND (ordinal <= 19)))') then
-      raise exception using errcode='P0001',message='v77_schema_collision';
-    end if;
-    select pg_get_indexdef(indexrelid) into v_default from pg_index
-      where indexrelid='public.video_upload_batches_owner_status_idx'::regclass;
-    if v_default is distinct from 'CREATE INDEX video_upload_batches_owner_status_idx ON public.video_upload_batches USING btree (owner_user_id, status, updated_at DESC)' then
-      raise exception using errcode='P0001',message='v77_schema_collision';
-    end if;
-    select pg_get_indexdef(indexrelid) into v_default from pg_index
-      where indexrelid='public.video_upload_items_owner_batch_idx'::regclass;
-    if v_default is distinct from 'CREATE INDEX video_upload_items_owner_batch_idx ON public.video_upload_items USING btree (owner_user_id, batch_id, ordinal)' then
-      raise exception using errcode='P0001',message='v77_schema_collision';
-    end if;
-    if exists(select 1 from pg_attribute where attrelid='public.video_upload_items'::regclass and attname='owner_user_id' and not attnotnull) then
-      raise exception using errcode='P0001',message='v77_schema_collision';
-    end if;
+    for v_table,v_name,v_expected_definition in select * from (values
+      ('video_upload_batches','video_upload_batches_pkey','PRIMARY KEY (id)'),
+      ('video_upload_batches','video_upload_batches_owner_user_id_idempotency_key_key','UNIQUE (owner_user_id, idempotency_key)'),
+      ('video_upload_batches','video_upload_batches_status_check','CHECK ((status = ANY (ARRAY[''prepared''::text, ''uploading''::text, ''finalizing''::text, ''finalized''::text, ''failed''::text, ''expired''::text, ''canceled''::text])))'),
+      ('video_upload_items','video_upload_items_pkey','PRIMARY KEY (id)'),('video_upload_items','video_upload_items_batch_id_fkey','FOREIGN KEY (batch_id) REFERENCES video_upload_batches(id) ON DELETE RESTRICT'),
+      ('video_upload_items','video_upload_items_batch_id_ordinal_key','UNIQUE (batch_id, ordinal)'),('video_upload_items','video_upload_items_batch_id_idempotency_key_key','UNIQUE (batch_id, idempotency_key)'),
+      ('video_upload_items','video_upload_items_ordinal_check','CHECK (((ordinal >= 0) AND (ordinal <= 19)))'),
+      ('video_upload_items','video_upload_items_declared_content_type_check','CHECK ((declared_content_type = ANY (ARRAY[''video/mp4''::text, ''video/x-m4v''::text, ''video/quicktime''::text])))'),
+      ('video_upload_items','video_upload_items_declared_byte_size_check','CHECK (((declared_byte_size >= 0) AND (declared_byte_size <= 104857600)))'),
+      ('video_upload_items','video_upload_items_verified_content_type_check','CHECK (((verified_content_type IS NULL) OR (verified_content_type = ANY (ARRAY[''video/mp4''::text, ''video/x-m4v''::text, ''video/quicktime''::text]))))'),
+      ('video_upload_items','video_upload_items_status_check','CHECK ((status = ANY (ARRAY[''prepared''::text, ''uploading''::text, ''finalizing''::text, ''finalized''::text, ''failed''::text, ''expired''::text, ''canceled''::text])))'),
+      ('video_upload_items','video_upload_items_finalized_facts_check','CHECK ((((status <> ''finalized''::text) OR ((verified_content_type = ANY (ARRAY[''video/mp4''::text, ''video/x-m4v''::text, ''video/quicktime''::text])) AND ((verified_byte_size >= 0) AND (verified_byte_size <= 104857600)) AND (NULLIF(btrim(verified_checksum_sha256), ''''::text) IS NOT NULL) AND (verified_width > 0) AND (verified_height > 0) AND (verified_duration_ms > 0))) IS TRUE))')
+    ) expected(table_name,constraint_name,constraint_definition) loop
+      select pg_get_constraintdef(p.oid) into v_default from pg_constraint p
+        where p.conrelid=to_regclass('public.'||v_table) and p.conname=v_name;
+      if not found or v_default is distinct from v_expected_definition then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    end loop;
+    if exists (select 1 from pg_constraint p where p.conrelid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass)
+      and p.contype in ('p','u','f','c') and p.conname not in ('video_upload_batches_pkey','video_upload_batches_owner_user_id_idempotency_key_key','video_upload_batches_status_check','video_upload_items_pkey','video_upload_items_batch_id_fkey','video_upload_items_batch_id_ordinal_key','video_upload_items_batch_id_idempotency_key_key','video_upload_items_ordinal_check','video_upload_items_declared_content_type_check','video_upload_items_declared_byte_size_check','video_upload_items_verified_content_type_check','video_upload_items_status_check','video_upload_items_finalized_facts_check')) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    select pg_get_constraintdef(oid) into v_default from pg_constraint where conrelid='public.media_asset_provenance'::regclass and conname='media_asset_provenance_media_kind_check';
+    if not found or v_default is distinct from 'CHECK ((media_kind = ANY (ARRAY[''image''::text, ''video''::text])))' then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    for v_name,v_expected_definition in select * from (values
+      ('video_upload_batches_owner_status_idx','CREATE INDEX video_upload_batches_owner_status_idx ON public.video_upload_batches USING btree (owner_user_id, status, updated_at DESC)'),
+      ('video_upload_items_owner_batch_idx','CREATE INDEX video_upload_items_owner_batch_idx ON public.video_upload_items USING btree (owner_user_id, batch_id, ordinal)')
+    ) expected(index_name,index_definition) loop
+      select pg_get_indexdef(indexrelid) into v_default from pg_index where indexrelid=to_regclass('public.'||v_name);
+      if not found or v_default is distinct from v_expected_definition then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    end loop;
+    if exists (select 1 from pg_index i where i.indrelid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass)
+      and not exists(select 1 from pg_constraint p where p.conindid=i.indexrelid)
+      and i.indexrelid not in ('public.video_upload_batches_owner_status_idx'::regclass,'public.video_upload_items_owner_batch_idx'::regclass)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    if exists(select 1 from pg_policy p where p.polrelid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass))
+      or exists(select 1 from pg_class c where c.oid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass) and (not c.relrowsecurity or c.relforcerowsecurity)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    foreach v_table in array array['video_upload_batches','video_upload_items'] loop
+      foreach v_name in array array['select','insert','update','delete'] loop
+        if has_table_privilege('anon',to_regclass('public.'||v_table),v_name)
+          or has_table_privilege('authenticated',to_regclass('public.'||v_table),v_name)
+          or not has_table_privilege('service_role',to_regclass('public.'||v_table),v_name) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+      end loop;
+    end loop;
   end if;
   for v_signature,v_marker,v_hash in select * from (values
     ('public.video_upload_batch_prepare(uuid,text,timestamptz)','vibepin:v77:video-upload-batch-prepare','73821871844f2b858bfc441d80919bbc'),
