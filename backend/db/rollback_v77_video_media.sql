@@ -34,7 +34,7 @@ begin
     select * into v_proc from pg_proc where oid=to_regprocedure('public.v77_video_cleanup_guard()');
     if obj_description(v_proc.oid,'pg_proc') is distinct from 'vibepin:v77:video-cleanup-guard'
        or not v_proc.prosecdef or v_proc.prorettype<>to_regtype('trigger')
-       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'5c44133337a597110e4c44a6d4c729fa' then
+       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'4024c51379966b96cc60a0d093575e19' then
       raise exception using errcode='P0001',message='v77_rollback_collision';
     end if;
   end if;

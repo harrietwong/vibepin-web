@@ -315,21 +315,25 @@ async function run() {
     assert(cleanupLease.rows[0].value.leased === true && cleanupFirstState.status === "cleaning"
       && cleanupFirstState.finalize_claim_token === null && Boolean(cleanupFirstClaim) && Boolean(cleanupFirstPrepare),
       "a cleanup lease atomically acquires deletion authority and permanently excludes reissue/claim/finalize success");
+    await db.query(`update public.video_upload_items i set
+      capability_expires_at=o.last_attempted_at-interval '19 minutes 59.999999 seconds',
+      late_upload_recheck_after=o.last_attempted_at+interval '1 microsecond'
+      from public.media_cleanup_outbox o where o.id=$1 and o.dedupe_key='video-upload:'||i.id::text`, [cleanupFirstOutbox.id]);
     await asRole(db, "service_role", () => db.query(
       "select public.publish_cleanup_settle($1,$2,'done','object_not_found')", [cleanupFirstOutbox.id, competingToken],
     ));
-    const earlyMissing = (await db.query(`select o.status,o.completed_at,o.next_attempt_at,i.late_upload_recheck_after
+    const earlyMissing = (await db.query(`select o.status,o.completed_at,o.next_attempt_at,i.late_upload_recheck_after,
+      o.last_attempted_at<i.late_upload_recheck_after as lease_before_boundary,
+      now()>=i.late_upload_recheck_after as settle_after_boundary
       from public.media_cleanup_outbox o join public.video_upload_items i on o.dedupe_key='video-upload:'||i.id::text
       where o.id=$1`, [cleanupFirstOutbox.id])).rows[0];
     assert(earlyMissing.status === "pending" && earlyMissing.completed_at === null
+      && earlyMissing.lease_before_boundary && earlyMissing.settle_after_boundary
       && Date.parse(earlyMissing.next_attempt_at) === Date.parse(earlyMissing.late_upload_recheck_after),
-      "object_not_found before the maximum in-flight tail remains a durable final-recheck responsibility");
+      "a pre-boundary Storage observation cannot terminate cleanup by settling after the boundary");
     await db.query("insert into storage.objects(id,bucket_id,name,owner_id) values(gen_random_uuid(),'generated-private',$1,$2)", [
       `${A}/uploads/${cleanupFirstBatch.batchId}/0.mp4`, A,
     ]);
-    await db.query(`update public.video_upload_items set capability_expires_at=now()-interval '20 minutes 1 second',
-      late_upload_recheck_after=now()-interval '1 second' where id=$1`, [cleanupFirstItem.itemId]);
-    await db.query("update public.media_cleanup_outbox set next_attempt_at=now()-interval '1 second' where id=$1", [cleanupFirstOutbox.id]);
     await asRole(db, "service_role", () => db.query(
       "select public.publish_cleanup_lease($1,$2,60)", [cleanupFirstOutbox.id, claimToken],
     ));

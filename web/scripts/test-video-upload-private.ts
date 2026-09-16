@@ -11,8 +11,26 @@ const MP4_FTYP = new Uint8Array([
 ]);
 
 let passed = 0;
+const EXPECTED_TESTS = 31;
+let completed = false;
+process.once("beforeExit", () => {
+  if (!completed || passed !== EXPECTED_TESTS) {
+    console.error(`Private video upload incomplete: ${passed}/${EXPECTED_TESTS}`);
+    process.exitCode = 1;
+  }
+});
 async function test(name: string, fn: () => Promise<void> | void) {
-  await fn();
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise<never>((_resolve, reject) => {
+        watchdog = setTimeout(() => reject(new Error(`test_timeout:${name}`)), 5_000);
+      }),
+    ]);
+  } finally {
+    if (watchdog !== undefined) clearTimeout(watchdog);
+  }
   passed += 1;
   console.log(`  OK ${name}`);
 }
@@ -639,6 +657,8 @@ async function main() {
     assert.equal(await sha256(source), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   });
 
+  assert.equal(passed, EXPECTED_TESTS);
+  completed = true;
   console.log(`\nPrivate video upload: ${passed} passed, 0 failed`);
 }
 

@@ -216,7 +216,7 @@ begin
     if obj_description(v_proc.oid,'pg_proc') is distinct from 'vibepin:v77:video-cleanup-guard'
        or not v_proc.prosecdef or v_proc.prorettype<>to_regtype('trigger') or v_proc.prolang<>(select oid from pg_language where lanname='plpgsql')
        or v_proc.proconfig is distinct from array['search_path=public, pg_temp']::text[]
-       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'5c44133337a597110e4c44a6d4c729fa' then
+       or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'4024c51379966b96cc60a0d093575e19' then
       raise exception using errcode='P0001',message='v77_schema_collision';
     end if;
     foreach v_grantee in array array['anon','authenticated','service_role'] loop
@@ -382,10 +382,11 @@ begin
         where id=v_item.id and (status in ('prepared','failed','expired','canceled','cleaning')
           or (status='finalizing' and finalize_claim_expires_at<=now()));
       if not found then raise exception using errcode='40001',message='cleanup_item_unavailable'; end if;
-    elsif found and v_item.status='cleaning' and now()<v_item.late_upload_recheck_after then
+    elsif found and v_item.status='cleaning'
+       and (old.last_attempted_at is null or old.last_attempted_at<v_item.late_upload_recheck_after) then
       -- A request admitted before capability expiry may still commit after an
-      -- early absence/delete result. Preserve exactly one mandatory post-tail
-      -- observation rather than letting v76 terminate the responsibility.
+      -- early absence/delete result. Settlement time is not proof of a fresh
+      -- observation: the lease itself must have been acquired after the tail.
       new.status := 'pending';
       new.completed_at := null;
       new.dead_lettered_at := null;

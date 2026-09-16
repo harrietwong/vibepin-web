@@ -7,6 +7,7 @@
 - Round-1 continuation base: `1c9f4615aa30e9b70b270b1d72b53b52e0e07a35`.
 - Round-2 remediation base: `c65e0f802fb95bb972d8515229c391a43af29f7d`.
 - Round-3 late-upload remediation base: `3b6b11239562189cae00cf7e882bad9c89ca7d4a`.
+- Round-4 observation-time remediation base: `1da8c3cd3dad5e88593bdd4a65dd5c6e05b51183`.
 - Branch/worktree: `codex/video-pin-p0-0916-final` / `D:/vp-tmp/wt-video-pin-p0-0916-final`.
 - This continuation closes the remaining review findings I3, I4, I5, I6, and I7, plus the stable-error and 100 MiB browser-digest minors. It preserves the earlier C1/I1/I2 atomic state/fact work.
 
@@ -33,6 +34,8 @@
 - Deadline expiry and caller abort are distinct stable client outcomes (`video_upload_timeout` / `video_upload_aborted`). Both attempt the finalize endpoint so the server can accelerate failure cleanup; that notification is not the cleanup root, so its own failure cannot lose the responsibility created during prepare.
 - `capability_expires_at` now records the actual two-hour provider capability boundary. The new required `late_upload_recheck_after` records capability expiry plus the 15-minute maximum request and five-minute commit-visibility/finalization tail; the batch ledger covers the complete 2h20m interval.
 - The v77 cleanup trigger now prevents every early video cleanup `done` or `failed` settlement from terminating the responsibility. It converts the result back to pending at `late_upload_recheck_after`; only a worker lease and fresh Storage observation after that boundary may settle done. An early absence followed by a late object therefore produces a second lease that removes the object before termination.
+- Round 4 makes the terminal gate depend on the authoritative lease/observation time, not the later settlement clock. `media_cleanup_outbox.last_attempted_at` must be at or after `late_upload_recheck_after`; a pre-boundary Storage observation settled after the boundary is forced back to pending and requires a new lease plus fresh Storage check.
+- The focused runner now gives every case a real five-second watchdog and requires the complete 31-test count before exit. A pending Promise can no longer let Node's empty event loop exit zero; an abort-removal mutation is detected with a non-zero timeout failure.
 - Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
 - Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
 - Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
@@ -56,6 +59,8 @@
 - RED (Round 3): focused upload-ledger coverage observed `02:05:00` instead of the required `02:20:00` terminal window.
 - RED (Round 3): v77 failed at assertion 33 because `late_upload_recheck_after` did not exist in the owned schema.
 - RED (Round 3): the production client dispatched a signed URL whose token contradicted the separately returned token instead of failing before network work.
+- RED (Round 4): v77 failed at assertion 91 when a lease acquired one microsecond before the terminal boundary settled `object_not_found` just after the boundary.
+- RED (Round 4 mutation): deleting the upload deadline's `controller.abort()` is now caught as `test_timeout:browser upload deadline...`, with 29/31 completed and exit 1; the former runner silently exited zero on the pending Promise.
 - GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 134 assertions, no failures.
 - GREEN: `test-video-upload-private.ts` reports 30 passed, 0 failed after the final production/store/cleanup tests.
 - GREEN (Round 3): `verify-v77-video-media.mjs` reports `verdict: pass`, 140 assertions, no failures.
