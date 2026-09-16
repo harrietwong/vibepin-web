@@ -37,11 +37,14 @@ function getSegmenter(locale?: string): Intl.Segmenter | null {
 export function tokenizeUnicodeWords(text: string, locale?: string): string[] {
   if (!text) return [];
   const lower = text.toLowerCase();
+  // Legacy normalizeWords removed intra-word hyphens and punctuation in ASCII/Latin words
+  // (e.g. "mid-century" -> "midcentury") instead of converting them into word boundaries.
+  const normalized = lower.replace(/([\p{Script=Latin}\p{N}])['’\-_]+(?=[\p{Script=Latin}\p{N}])/gu, "$1");
   const segmenter = getSegmenter(locale);
 
   if (segmenter) {
     const tokens: string[] = [];
-    for (const seg of segmenter.segment(lower)) {
+    for (const seg of segmenter.segment(normalized)) {
       if (!seg.isWordLike) continue;
       const s = seg.segment.trim();
       if (!s) continue;
@@ -52,8 +55,9 @@ export function tokenizeUnicodeWords(text: string, locale?: string): string[] {
         tokens.push(s);
       } else {
         // Non-CJK / ASCII words: keep only if length > 2
-        if (s.length > 2) {
-          tokens.push(s);
+        const cleaned = s.replace(/[^a-z0-9\p{Script=Latin}]/gu, "");
+        if (cleaned.length > 2) {
+          tokens.push(cleaned);
         }
       }
     }
@@ -62,7 +66,7 @@ export function tokenizeUnicodeWords(text: string, locale?: string): string[] {
 
   // Unicode regex fallback when Intl.Segmenter is unavailable
   const fallbackRegex = /[\p{Unified_Ideograph}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{L}\p{N}]+/gu;
-  const matches = lower.match(fallbackRegex) || [];
+  const matches = normalized.match(fallbackRegex) || [];
   const tokens: string[] = [];
   for (const m of matches) {
     if (CJK_REGEX.test(m)) {

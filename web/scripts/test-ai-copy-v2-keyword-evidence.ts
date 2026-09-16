@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  tokenizeUnicodeWords,
   buildKeywordEvidence,
   resolveKeywordProvenance,
 } from "../src/lib/ai-copy/v2/keywordEvidence";
@@ -621,6 +622,78 @@ test("deterministic ordering: duplicate ID reorder and duplicate phrase unknown/
   assert.equal(unk2?.status, "rejected");
   assert.equal(unk2?.rejectionCode, "unreliable_provenance");
   assert.equal(evPhraseOrder1.keywordSetId, evPhraseOrder2.keywordSetId);
+});
+
+
+// 16. Regression: official zh-CN phrase 现代客厅装饰灵感 is selected with matching context and not rejected as low_coverage
+test("regression: official zh-CN phrase 现代客厅装饰灵感 is selected with matching context and not rejected as low_coverage", () => {
+  const chineseContext: KeywordContextInput = {
+    imageSummary: "现代风格的客厅空间，配有灰色布艺沙发、茶几和落地窗。",
+    visibleObjects: ["现代客厅", "布艺沙发", "茶几"],
+    style: "现代",
+    boardName: "现代客厅",
+    category: "home-decor",
+    language: "zh",
+  };
+
+  const rows: KeywordRow[] = [
+    makeRow("现代客厅装饰灵感", {
+      id: "zh_decor_inspo_1",
+      data_quality: "official",
+      search_volume_level: "high",
+      language: "zh",
+      locale: "zh-CN",
+    }),
+  ];
+
+  const evidence = buildKeywordEvidence({
+    rows,
+    context: chineseContext,
+    targetLocale: "zh-CN",
+  });
+
+  assert.deepEqual(evidence.selectedKeywordIds, ["zh_decor_inspo_1"]);
+  const candidate = evidence.candidates.find(c => c.id === "zh_decor_inspo_1");
+  assert.ok(candidate);
+  assert.equal(candidate!.status, "accepted");
+  assert.equal(candidate!.rejectionCode, undefined);
+  assert.equal(evidence.degradedMode, "none");
+});
+
+// 17. Regression: legacy English normalization semantics for hyphenated terms and selection of relevant midcentury decor demand row
+test("regression: legacy English normalization semantics for hyphenated terms and selection of relevant midcentury decor demand row", () => {
+  // Prove legacy English normalization semantics for hyphenated terms
+  assert.deepEqual(tokenizeUnicodeWords("mid-century"), ["midcentury"]);
+  assert.deepEqual(tokenizeUnicodeWords("mid-century modern"), ["midcentury", "modern"]);
+
+  const midcenturyContext: KeywordContextInput = {
+    imageSummary: "A stylish mid-century modern living room with vintage sofa.",
+    visibleObjects: ["mid-century sofa", "coffee table"],
+    style: "mid-century",
+    boardName: "Mid-Century Living Room",
+    category: "home-decor",
+  };
+
+  const rows: KeywordRow[] = [
+    makeRow("midcentury decor", {
+      id: "kw_midcentury_decor",
+      data_quality: "official",
+      search_volume_level: "high",
+    }),
+  ];
+
+  const evidence = buildKeywordEvidence({
+    rows,
+    context: midcenturyContext,
+    targetLocale: "en-US",
+  });
+
+  assert.deepEqual(evidence.selectedKeywordIds, ["kw_midcentury_decor"]);
+  const candidate = evidence.candidates.find(c => c.id === "kw_midcentury_decor");
+  assert.ok(candidate);
+  assert.equal(candidate!.status, "accepted");
+  assert.equal(candidate!.rejectionCode, undefined);
+  assert.equal(evidence.degradedMode, "none");
 });
 
 console.log(`\nAll ${passed} keyword evidence tests passed.`);

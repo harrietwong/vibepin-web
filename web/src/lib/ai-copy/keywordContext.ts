@@ -84,21 +84,52 @@ const STOP_WORDS = new Set([
   "on", "at", "by", "is", "are", "features", "featuring", "corner", "room", // 'room' alone is weak; 'living room' is fine
 ]);
 
+// Locale-aware generic demand modifiers and stop tokens for CJK parity
+const ZH_GENERIC_WORDS = new Set([
+  "装饰", // decor / decoration
+  "灵感", // inspiration / ideas
+  "设计", // design
+  "创意", // creative / ideas
+  "家居", // home
+]);
+
+const ZH_STOP_WORDS = new Set([
+  "的", "了", "和", "是", "就", "都", "而", "及", "与", "着", "或", "之", "在", "于", "把", "被", "让", "给",
+]);
+
+function isGenericWord(word: string, locale?: string): boolean {
+  if (GENERIC_WORDS.has(word)) return true;
+  const loc = (locale ?? "").toLowerCase();
+  if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
+    return ZH_GENERIC_WORDS.has(word);
+  }
+  return false;
+}
+
+function isStopWord(word: string, locale?: string): boolean {
+  if (STOP_WORDS.has(word)) return true;
+  const loc = (locale ?? "").toLowerCase();
+  if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
+    return ZH_STOP_WORDS.has(word);
+  }
+  return false;
+}
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
 /** Containment: fraction of the keyword's words present in the context word set. */
-function containment(contextSet: Set<string>, keyword: string): number {
-  const words = tokenizeUnicodeWords(keyword);
+function containment(contextSet: Set<string>, keyword: string, locale?: string): number {
+  const words = tokenizeUnicodeWords(keyword, locale);
   if (!words.length || !contextSet.size) return 0;
   const hit = words.filter(w => contextSet.has(w)).length;
   return hit / words.length;
 }
 
 /** The keyword's distinctive words (excludes generic + stop words). */
-function specificWords(keyword: string): string[] {
-  return tokenizeUnicodeWords(keyword).filter(w => !GENERIC_WORDS.has(w) && !STOP_WORDS.has(w));
+function specificWords(keyword: string, locale?: string): string[] {
+  return tokenizeUnicodeWords(keyword, locale).filter(w => !isGenericWord(w, locale) && !isStopWord(w, locale));
 }
 
 /**
@@ -107,8 +138,8 @@ function specificWords(keyword: string): string[] {
  * "christmas decor ideas for living room") from riding in on generic overlap — the
  * distinctive word ("christmas") is absent from the context, so coverage drops.
  */
-function specificCoverage(contextSet: Set<string>, keyword: string): number {
-  const sp = specificWords(keyword);
+function specificCoverage(contextSet: Set<string>, keyword: string, locale?: string): number {
+  const sp = specificWords(keyword, locale);
   if (!sp.length) return 0;
   return sp.filter(w => contextSet.has(w)).length / sp.length;
 }
@@ -127,10 +158,10 @@ export function normalizedVolume(row: Pick<KeywordRow, "volume_score" | "volume_
 }
 
 /** True when a keyword has no specific modifier beyond generic/stop words. */
-export function isTooGeneric(keyword: string): boolean {
-  const words = tokenizeUnicodeWords(keyword);
+export function isTooGeneric(keyword: string, locale?: string): boolean {
+  const words = tokenizeUnicodeWords(keyword, locale);
   if (!words.length) return true;
-  const specific = words.filter(w => !GENERIC_WORDS.has(w) && !STOP_WORDS.has(w));
+  const specific = words.filter(w => !isGenericWord(w, locale) && !isStopWord(w, locale));
   return specific.length === 0;
 }
 
@@ -218,27 +249,29 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
  * context and returns candidates + the 5-8 recommended keywords + rejects.
  */
 export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Omit<KeywordContextResult, "queryTerms" | "poolSize"> {
+  const locale = input.language;
   // Product words are specific, high-signal relevance evidence — fold them into the
   // coverage context set (so a product-matching keyword's distinctive words are
   // "seen") AND score them again as an explicit overlap dimension below.
   const productWords = tokenizeUnicodeWords(
     [input.productTitle ?? "", input.productType ?? "", ...(input.productTags ?? [])].join(" "),
-  ).filter(w => !STOP_WORDS.has(w));
+    locale,
+  ).filter(w => !isStopWord(w, locale));
   // Direction words stay OUT of the coverage set (kept subordinate to image/product);
   // they only contribute a small explicit overlap dimension.
   const directionWords = [
-    ...tokenizeUnicodeWords(input.directionTitle ?? ""),
-    ...(input.directionTerms ?? []).flatMap(t => tokenizeUnicodeWords(t)),
-  ].filter(w => !STOP_WORDS.has(w));
+    ...tokenizeUnicodeWords(input.directionTitle ?? "", locale),
+    ...(input.directionTerms ?? []).flatMap(t => tokenizeUnicodeWords(t, locale)),
+  ].filter(w => !isStopWord(w, locale));
 
   const contextSet = new Set<string>([
-    ...tokenizeUnicodeWords(input.visibleObjects.join(" ")),
-    ...tokenizeUnicodeWords(input.style),
-    ...tokenizeUnicodeWords(input.imageSummary),
-    ...tokenizeUnicodeWords((input.category ?? "").replace(/-/g, " ")),
+    ...tokenizeUnicodeWords(input.visibleObjects.join(" "), locale),
+    ...tokenizeUnicodeWords(input.style, locale),
+    ...tokenizeUnicodeWords(input.imageSummary, locale),
+    ...tokenizeUnicodeWords((input.category ?? "").replace(/-/g, " "), locale),
     ...productWords,
   ]);
-  const boardSet = new Set<string>(tokenizeUnicodeWords(input.boardName ?? ""));
+  const boardSet = new Set<string>(tokenizeUnicodeWords(input.boardName ?? "", locale));
   const productSet = new Set<string>(productWords);
   const directionSet = new Set<string>(directionWords);
   const cat = (input.category ?? "").toLowerCase().replace(/-/g, " ").trim();
@@ -253,10 +286,11 @@ export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Om
     if (!keyword || seen.has(norm)) continue;
     seen.add(norm);
 
-    const coverage = specificCoverage(contextSet, keyword);
-    const boardOverlap = boardSet.size ? containment(boardSet, keyword) : 0;
-    const productOverlap = productSet.size ? containment(productSet, keyword) : 0;
-    const directionOverlap = directionSet.size ? containment(directionSet, keyword) : 0;
+    const rowLocale = row.locale ?? row.language ?? locale;
+    const coverage = specificCoverage(contextSet, keyword, rowLocale);
+    const boardOverlap = boardSet.size ? containment(boardSet, keyword, rowLocale) : 0;
+    const productOverlap = productSet.size ? containment(productSet, keyword, rowLocale) : 0;
+    const directionOverlap = directionSet.size ? containment(directionSet, keyword, rowLocale) : 0;
     const categoryMatch = cat && (row.category ?? "").toLowerCase().replace(/-/g, " ").trim() === cat ? 1 : 0;
     // Relevance is coverage-led: a keyword's DISTINCTIVE words must appear in the image.
     // Product overlap is weighted at least as high as the board (both 0.25); the
@@ -290,7 +324,7 @@ export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Om
   for (const c of scored) {
     if (recommended.length >= 8) break;
     // Generic terms only survive when combined with a specific modifier.
-    if (isTooGeneric(c.keyword)) {
+    if (isTooGeneric(c.keyword, locale)) {
       rejected.push({ keyword: c.keyword, reason: "too_generic" });
       continue;
     }

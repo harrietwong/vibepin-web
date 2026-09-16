@@ -419,7 +419,7 @@ export function buildKeywordEvidence(
 
   const mapRejectionReason = (reason?: string, phrase?: string): KeywordRejectionCode => {
     if (!reason) {
-      if (phrase && isTooGeneric(phrase)) return "too_generic";
+      if (phrase && isTooGeneric(phrase, targetLocale)) return "too_generic";
       return "not_selected";
     }
     if (reason === "too_generic") return "too_generic";

@@ -133,4 +133,34 @@ test("rankKeywords: a matching direction never lowers a relevant keyword's score
   assert.ok(withDir!.relevanceScore >= base!.relevanceScore, "direction overlap is a non-negative nudge");
 });
 
+
+test("rankKeywords: midcentury decor is selected with mid-century context", () => {
+  const midcenturyContext: KeywordContextInput = {
+    imageSummary: "A stylish mid-century modern living room with vintage sofa.",
+    visibleObjects: ["mid-century sofa", "coffee table"],
+    style: "mid-century",
+    boardName: "Mid-Century Living Room",
+    category: "home-decor",
+  };
+  const rows = [row("midcentury decor", { data_quality: "official", search_volume_level: "high" })];
+  const { recommended, rejected } = rankKeywords(rows, midcenturyContext);
+  assert.ok(recommended.includes("midcentury decor"));
+  assert.ok(!rejected.some(r => r.keyword === "midcentury decor"));
+});
+
+test("rankKeywords: 现代客厅装饰灵感 is recommended with matching Chinese context", () => {
+  const chineseContext: KeywordContextInput = {
+    imageSummary: "现代风格的客厅空间，配有灰色布艺沙发、茶几和落地窗。",
+    visibleObjects: ["现代客厅", "布艺沙发", "茶几"],
+    style: "现代",
+    boardName: "现代客厅",
+    category: "home-decor",
+    language: "zh",
+  };
+  const rows = [row("现代客厅装饰灵感", { data_quality: "official", search_volume_level: "high", language: "zh", locale: "zh-CN" })];
+  const { recommended, rejected } = rankKeywords(rows, chineseContext);
+  assert.ok(recommended.includes("现代客厅装饰灵感"));
+  assert.ok(!rejected.some(r => r.keyword === "现代客厅装饰灵感"));
+});
+
 console.log(`\nAll ${passed} keyword-context tests passed.`);
