@@ -230,13 +230,156 @@ await test("v79 exposes only a service-role RPC and preserves media provenance R
     select has_function_privilege('anon',p.oid,'EXECUTE') as anon,
            has_function_privilege('authenticated',p.oid,'EXECUTE') as authenticated,
            has_function_privilege('service_role',p.oid,'EXECUTE') as service,
-           c.relrowsecurity as rls
+           c.relrowsecurity as rls,
+           c.relforcerowsecurity as force_rls
       from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       cross join pg_class c
      where n.nspname='public' and p.proname='publish_asset_settle_video_item_v79'
        and c.oid='public.media_asset_provenance'::regclass
   `);
-  assert.deepEqual(result.rows, [{ anon: false, authenticated: false, service: true, rls: true }]);
+  assert.deepEqual(result.rows, [{ anon: false, authenticated: false, service: true, rls: true, force_rls: false }]);
+  await db.close();
+});
+
+await test("v79 rejects provenance owner-policy, row-security, or force-RLS drift", async () => {
+  const db = await createDb();
+  const migration = load("backend/db/migrate_v79_video_publish_provenance.sql");
+  const ownerPredicate = "owner_user_id=auth.uid() and lifecycle_state not in ('unresolved','failed')";
+  const restorePolicy = `
+    drop policy if exists vibepin_v75_media_owner_select on public.media_asset_provenance;
+    create policy vibepin_v75_media_owner_select on public.media_asset_provenance
+      as permissive for select to authenticated using (${ownerPredicate});
+    comment on policy vibepin_v75_media_owner_select on public.media_asset_provenance
+      is 'vibepin:v75:media-owner-select';
+  `;
+  const cases = [
+    {
+      name: "owner predicate",
+      mutate: "alter policy vibepin_v75_media_owner_select on public.media_asset_provenance using (true)",
+      restore: `alter policy vibepin_v75_media_owner_select on public.media_asset_provenance using (${ownerPredicate})`,
+    },
+    {
+      name: "additional permissive policy",
+      mutate: "create policy v79_unsafe_read on public.media_asset_provenance for select to authenticated using (true)",
+      restore: "drop policy v79_unsafe_read on public.media_asset_provenance",
+    },
+    {
+      name: "policy role",
+      mutate: "alter policy vibepin_v75_media_owner_select on public.media_asset_provenance to public",
+      restore: "alter policy vibepin_v75_media_owner_select on public.media_asset_provenance to authenticated",
+    },
+    {
+      name: "policy command and WITH CHECK",
+      mutate: `
+        drop policy vibepin_v75_media_owner_select on public.media_asset_provenance;
+        create policy vibepin_v75_media_owner_select on public.media_asset_provenance
+          as permissive for all to authenticated using (${ownerPredicate}) with check (${ownerPredicate});
+        comment on policy vibepin_v75_media_owner_select on public.media_asset_provenance
+          is 'vibepin:v75:media-owner-select';
+      `,
+      restore: restorePolicy,
+    },
+    {
+      name: "policy permissiveness",
+      mutate: `
+        drop policy vibepin_v75_media_owner_select on public.media_asset_provenance;
+        create policy vibepin_v75_media_owner_select on public.media_asset_provenance
+          as restrictive for select to authenticated using (${ownerPredicate});
+        comment on policy vibepin_v75_media_owner_select on public.media_asset_provenance
+          is 'vibepin:v75:media-owner-select';
+      `,
+      restore: restorePolicy,
+    },
+    {
+      name: "policy marker",
+      mutate: "comment on policy vibepin_v75_media_owner_select on public.media_asset_provenance is 'drifted'",
+      restore: "comment on policy vibepin_v75_media_owner_select on public.media_asset_provenance is 'vibepin:v75:media-owner-select'",
+    },
+    {
+      name: "row security",
+      mutate: "alter table public.media_asset_provenance disable row level security",
+      restore: "alter table public.media_asset_provenance enable row level security",
+    },
+    {
+      name: "force RLS flag",
+      mutate: "alter table public.media_asset_provenance force row level security",
+      restore: "alter table public.media_asset_provenance no force row level security",
+    },
+  ];
+  for (const item of cases) {
+    await db.exec(item.mutate);
+    await assert.rejects(db.exec(migration), /v79_v77_dependency_tamper/, item.name);
+    await db.exec("rollback");
+    await db.exec(item.restore);
+  }
+  await db.close();
+});
+
+await test("v79 rejects direct, inherited, expanded, or missing v76 dependency EXECUTE", async () => {
+  const db = await createDb();
+  const migration = load("backend/db/migrate_v79_video_publish_provenance.sql");
+  const dependency = "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)";
+  const cases = [
+    {
+      name: "authenticated",
+      mutate: `grant execute on function ${dependency} to authenticated`,
+      restore: `revoke execute on function ${dependency} from authenticated`,
+    },
+    {
+      name: "PUBLIC",
+      mutate: `grant execute on function ${dependency} to public`,
+      restore: `revoke execute on function ${dependency} from public`,
+    },
+    {
+      name: "inherited authenticated grant",
+      mutate: `create role v79_dependency_reader nologin; grant v79_dependency_reader to authenticated; grant execute on function ${dependency} to v79_dependency_reader`,
+      restore: `revoke execute on function ${dependency} from v79_dependency_reader; revoke v79_dependency_reader from authenticated; drop role v79_dependency_reader`,
+    },
+    {
+      name: "unknown direct grant",
+      mutate: `create role v79_dependency_extra nologin; grant execute on function ${dependency} to v79_dependency_extra`,
+      restore: `revoke execute on function ${dependency} from v79_dependency_extra; drop role v79_dependency_extra`,
+    },
+    {
+      name: "service grant option",
+      mutate: `grant execute on function ${dependency} to service_role with grant option`,
+      restore: `revoke grant option for execute on function ${dependency} from service_role`,
+    },
+    {
+      name: "missing service grant",
+      mutate: `revoke execute on function ${dependency} from service_role`,
+      restore: `grant execute on function ${dependency} to service_role`,
+    },
+  ];
+  for (const item of cases) {
+    await db.exec(item.mutate);
+    await assert.rejects(db.exec(migration), /v79_v76_dependency_tamper/, item.name);
+    await db.exec("rollback");
+    await db.exec(item.restore);
+  }
+  await db.close();
+});
+
+await test("v79 dependency-authorization mutation makes the safe rejection assertion turn red", async () => {
+  const migration = load("backend/db/migrate_v79_video_publish_provenance.sql");
+  const manifestPattern = /\s*-- v79:dependency-auth-manifest:start[\s\S]*?-- v79:dependency-auth-manifest:end/g;
+  const manifestBlocks = migration.match(manifestPattern);
+  assert.equal(manifestBlocks?.length, 2);
+  const mutant = migration.replace(manifestPattern, "");
+  assert.notEqual(mutant, migration);
+
+  const db = await createDb();
+  const dependency = "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)";
+  await db.exec("alter policy vibepin_v75_media_owner_select on public.media_asset_provenance using (true)");
+  await db.exec(`grant execute on function ${dependency} to authenticated`);
+  let expectedSafeAssertionTurnedRed = false;
+  try {
+    await assert.rejects(db.exec(mutant), /v79_v(76|77)_dependency_tamper/);
+  } catch (error) {
+    if (!(error instanceof assert.AssertionError)) throw error;
+    expectedSafeAssertionTurnedRed = true;
+  }
+  assert.equal(expectedSafeAssertionTurnedRed, true);
   await db.close();
 });
 

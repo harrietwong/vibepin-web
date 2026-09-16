@@ -13,6 +13,8 @@ declare
   v_default text;
   v_column_acl boolean;
   v_definition text;
+  v_policy record;
+  v_policy_count integer;
   v_grantee text;
   v_privilege text;
   v_actual boolean;
@@ -29,11 +31,43 @@ begin
      or md5(replace(replace(v_proc.prosrc,chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>'40eaf43cd16a15f2af82238ec35d32d8' then
     raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
   end if;
+  -- v79:dependency-auth-manifest:start
+  foreach v_grantee in array array['anon','authenticated','service_role'] loop
+    v_actual:=has_function_privilege(v_grantee,v_oid,'EXECUTE');
+    if v_actual is distinct from (v_grantee='service_role')
+       or has_function_privilege(v_grantee,v_oid,'EXECUTE WITH GRANT OPTION') then
+      raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
+    end if;
+  end loop;
+  if exists (select 1 from aclexplode(coalesce(v_proc.proacl,acldefault('f',v_proc.proowner))) acl
+    where acl.privilege_type<>'EXECUTE'
+       or acl.grantee not in (v_proc.proowner,(select oid from pg_roles where rolname='service_role'))
+       or (acl.grantee=(select oid from pg_roles where rolname='service_role') and acl.is_grantable)) then
+    raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
+  end if;
 
   if to_regclass('public.media_asset_provenance') is null
-     or not (select relrowsecurity from pg_class where oid='public.media_asset_provenance'::regclass) then
+     or not (select relrowsecurity and not relforcerowsecurity
+               from pg_class where oid='public.media_asset_provenance'::regclass) then
     raise exception using errcode='P0001',message='v79_v77_dependency_tamper';
   end if;
+  select count(*) into v_policy_count from pg_policy
+   where polrelid='public.media_asset_provenance'::regclass;
+  select p.*,obj_description(p.oid,'pg_policy') as marker,
+         pg_get_expr(p.polqual,p.polrelid) as qual,
+         pg_get_expr(p.polwithcheck,p.polrelid) as with_check
+    into v_policy from pg_policy p
+   where p.polrelid='public.media_asset_provenance'::regclass
+     and p.polname='vibepin_v75_media_owner_select';
+  if v_policy_count<>1 or not found
+     or not v_policy.polpermissive or v_policy.polcmd<>'r'
+     or v_policy.polroles is distinct from array[(select oid from pg_roles where rolname='authenticated')]::oid[]
+     or v_policy.qual is distinct from '((owner_user_id = auth.uid()) AND (lifecycle_state <> ALL (ARRAY[''unresolved''::text, ''failed''::text])))'
+     or v_policy.with_check is not null
+     or v_policy.marker is distinct from 'vibepin:v75:media-owner-select' then
+    raise exception using errcode='P0001',message='v79_v77_dependency_tamper';
+  end if;
+  -- v79:dependency-auth-manifest:end
   for v_expected in select * from (values
     ('owner_user_id','uuid',true,null::text),('bucket_id','text',true,null::text),
     ('object_path','text',true,null::text),('source_type','text',true,null::text),
@@ -246,8 +280,56 @@ grant execute on function public.publish_asset_settle_video_item_v79(uuid,text,t
   to service_role;
 
 do $v79_postflight$
-declare v_oid oid; v_proc pg_proc%rowtype; v_grantee text; v_actual boolean;
+declare
+  v_oid oid;
+  v_dependency_oid oid;
+  v_proc pg_proc%rowtype;
+  v_dependency_proc pg_proc%rowtype;
+  v_policy record;
+  v_policy_count integer;
+  v_grantee text;
+  v_actual boolean;
 begin
+  -- v79:dependency-auth-manifest:start
+  v_dependency_oid:=to_regprocedure('public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)');
+  if v_dependency_oid is null then
+    raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
+  end if;
+  select * into v_dependency_proc from pg_proc where oid=v_dependency_oid;
+  foreach v_grantee in array array['anon','authenticated','service_role'] loop
+    v_actual:=has_function_privilege(v_grantee,v_dependency_oid,'EXECUTE');
+    if v_actual is distinct from (v_grantee='service_role')
+       or has_function_privilege(v_grantee,v_dependency_oid,'EXECUTE WITH GRANT OPTION') then
+      raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
+    end if;
+  end loop;
+  if exists (select 1 from aclexplode(coalesce(v_dependency_proc.proacl,acldefault('f',v_dependency_proc.proowner))) acl
+    where acl.privilege_type<>'EXECUTE'
+       or acl.grantee not in (v_dependency_proc.proowner,(select oid from pg_roles where rolname='service_role'))
+       or (acl.grantee=(select oid from pg_roles where rolname='service_role') and acl.is_grantable)) then
+    raise exception using errcode='P0001',message='v79_v76_dependency_tamper';
+  end if;
+  if not (select relrowsecurity and not relforcerowsecurity
+            from pg_class where oid='public.media_asset_provenance'::regclass) then
+    raise exception using errcode='P0001',message='v79_v77_dependency_tamper';
+  end if;
+  select count(*) into v_policy_count from pg_policy
+   where polrelid='public.media_asset_provenance'::regclass;
+  select p.*,obj_description(p.oid,'pg_policy') as marker,
+         pg_get_expr(p.polqual,p.polrelid) as qual,
+         pg_get_expr(p.polwithcheck,p.polrelid) as with_check
+    into v_policy from pg_policy p
+   where p.polrelid='public.media_asset_provenance'::regclass
+     and p.polname='vibepin_v75_media_owner_select';
+  if v_policy_count<>1 or not found
+     or not v_policy.polpermissive or v_policy.polcmd<>'r'
+     or v_policy.polroles is distinct from array[(select oid from pg_roles where rolname='authenticated')]::oid[]
+     or v_policy.qual is distinct from '((owner_user_id = auth.uid()) AND (lifecycle_state <> ALL (ARRAY[''unresolved''::text, ''failed''::text])))'
+     or v_policy.with_check is not null
+     or v_policy.marker is distinct from 'vibepin:v75:media-owner-select' then
+    raise exception using errcode='P0001',message='v79_v77_dependency_tamper';
+  end if;
+  -- v79:dependency-auth-manifest:end
   if (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
        where n.nspname='public' and p.proname='publish_asset_settle_video_item_v79')<>1 then
     raise exception using errcode='P0001',message='v79_definition_tamper';
