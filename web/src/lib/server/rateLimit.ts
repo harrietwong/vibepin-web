@@ -80,7 +80,7 @@ import { createServerClient } from "@/lib/supabase";
 const TABLE = "ai_rate_limit_windows";
 
 /** Logical route keys. Limits are per-route: exhausting one must not disable another. */
-export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation" | "fetch_og";
+export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation" | "fetch_og" | "ai_copy_v2_analyze" | "ai_copy_v2_generate";
 
 export type RateLimitRule = {
   /** Maximum admitted requests per window. */
@@ -190,6 +190,19 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
    * 60/5min leaves ample room for the picker while bounding that abuse surface.
    */
   fetch_og: { limit: 60, windowSeconds: 300 },
+
+  /**
+    * POST /api/ai-copy/v2/analyze   session initialization, FactCardV1 creation,
+   * and keyword evidence retrieval.
+   * 200/5min = 40/min sustained.
+   */
+  ai_copy_v2_analyze: { limit: 200, windowSeconds: 300 },
+
+  /**
+   * POST /api/ai-copy/v2/generate   AI copy generation from trusted session.
+   * 150/5min = 30/min sustained.
+   */
+  ai_copy_v2_generate: { limit: 150, windowSeconds: 300 },
 };
 
 /**
