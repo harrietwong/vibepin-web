@@ -65,6 +65,7 @@ const TRAP_BRANDS = [
   "adidas", "rolex", "chanel", "hermes", "hermès", "cartier",
 ];
 
+type CommercialDetectedClaimType = Exclude<DetectedClaimType, "video_motion" | "video_audio" | "video_temporal">;
 const CLAIM_ISSUE_MAP: Record<DetectedClaimType, ValidationIssueCode> = {
   material: "UNSUPPORTED_MATERIAL_CLAIM",
   brand: "UNSUPPORTED_BRAND_CLAIM",
@@ -72,6 +73,9 @@ const CLAIM_ISSUE_MAP: Record<DetectedClaimType, ValidationIssueCode> = {
   availability: "UNSUPPORTED_AVAILABILITY_CLAIM",
   efficacy: "UNSUPPORTED_EFFICACY_CLAIM",
   numeric_commercial: "UNSUPPORTED_NUMERIC_CLAIM",
+  video_motion: "UNSUPPORTED_VIDEO_COVER_INFERENCE",
+  video_audio: "UNSUPPORTED_VIDEO_COVER_INFERENCE",
+  video_temporal: "UNSUPPORTED_VIDEO_COVER_INFERENCE",
 };
 
 function escapeRegex(str: string): string {
@@ -156,7 +160,7 @@ function checkConsecutiveStuffing(
   }
 }
 
-function getEligibleFacts(factCard: FactCardV1, claimType: DetectedClaimType): FactItem[] {
+function getEligibleFacts(factCard: FactCardV1, claimType: CommercialDetectedClaimType): FactItem[] {
   return factCard.facts.filter(
     f =>
       f.claimPolicy === "copy_allowed" &&
@@ -268,7 +272,7 @@ function normalizePriceClaim(value: string): NormalizedPrice | null {
  * Checks whether a commercial claim is grounded in copy-allowed facts.
  */
 function isClaimSupported(
-  type: DetectedClaimType,
+  type: CommercialDetectedClaimType,
   claimValue: string,
   factCard: FactCardV1,
 ): boolean {
@@ -519,7 +523,11 @@ export function validateCopy(input: ValidateCopyInput): ValidationReport {
   // 12. Arbitrary Provider-Detected Commercial Claims (supplied by route orchestration)
   if (detectedClaims.length) {
     for (const claim of detectedClaims) {
-      if (!isClaimSupported(claim.type, claim.value, factCard)) {
+      const videoInference = claim.type === "video_motion" || claim.type === "video_audio" || claim.type === "video_temporal";
+      const unsupported = videoInference
+        ? factCard.mediaEvidence?.mode === "video_cover"
+        : !isClaimSupported(claim.type as CommercialDetectedClaimType, claim.value, factCard);
+      if (unsupported) {
         let field = claim.field;
         if (!field) {
           const normClaimVal = claim.value.normalize("NFC").toLowerCase();

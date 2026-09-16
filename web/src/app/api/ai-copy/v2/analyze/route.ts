@@ -6,7 +6,7 @@ import { buildKeywordEvidence } from "@/lib/ai-copy/v2/keywordEvidence";
 import { getTrendKeywordLoader } from "@/lib/ai-copy/v2/trendKeywordSource";
 import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
 import { AI_COPY_V2_PROMPT_VERSION, getAI_COPY_V2ModelVersion } from "@/lib/ai-copy/v2/orchestrator";
-import { analyzeOwnedVideoCover } from "@/lib/ai-copy/v2/videoCoverEvidence";
+import { resolveOwnedMediaEvidence, type VideoCoverDeps } from "@/lib/ai-copy/v2/videoCoverEvidence";
 import type { KeywordContextInput } from "@/lib/ai-copy/keywordContext";
 
 export const runtime = "nodejs";
@@ -98,7 +98,7 @@ function keywordContext(body: AnalyzeBody, locale: string, country: string): Key
   };
 }
 
-export function createAnalyzeHandler(deps: { analyzeVideoCover?: typeof analyzeOwnedVideoCover } = {}) {
+export function createAnalyzeHandler(deps: { videoCoverDeps?: Partial<VideoCoverDeps> } = {}) {
   return async function POST(req: Request) {
   if (process.env.AI_COPY_V2_ENABLED !== "true") return NextResponse.json({ error: "not_found" }, { status: 404 });
   const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
@@ -137,12 +137,11 @@ export function createAnalyzeHandler(deps: { analyzeVideoCover?: typeof analyzeO
   }
 
   try {
-    // Never use client imageObserved for a video. The binary URL is not accepted by
-    // this branch; only an exact owner-checked private poster can produce visuals.
-    const cover = body.mediaEvidenceMode === "video_cover"
-      ? await (deps.analyzeVideoCover ?? analyzeOwnedVideoCover)({ userId, draftId: body.draftId.trim() })
-      : null;
-    const evidenceBody = cover
+    // The persisted owner-scoped media discriminator, never a client mode hint,
+    // decides whether client visual assertions are legal inputs.
+    const ownedMedia = await resolveOwnedMediaEvidence({ userId, draftId: body.draftId.trim() }, deps.videoCoverDeps);
+    const cover = ownedMedia.kind === "video" ? ownedMedia.analysis : null;
+    const evidenceBody = ownedMedia.kind === "video"
       ? { ...body, imageObserved: cover.imageObserved ?? {} }
       : body;
     const factCard = createFactCardV1({

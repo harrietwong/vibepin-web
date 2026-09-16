@@ -218,20 +218,31 @@ async function main() {
   await test("video cover analysis uses only the owner-authorized poster and persists safe evidence", async () => {
     const store = reset();
     const providerInputs: string[] = [];
-    const videoAnalyze = createAnalyzeHandler({ analyzeVideoCover: async ({ userId: owner, draftId }) => {
+    const videoAnalyze = createAnalyzeHandler({ videoCoverDeps: {
+      loadOwnedDraft: async (owner, draftId) => {
         eq(owner, "user_123", "server authenticated owner"); eq(draftId, "draft_1", "server draft id");
-        providerInputs.push("data:image/png;base64,COVER_ONLY");
-        return { mode: "video_cover" as const, degradedMode: "none" as const, imageObserved: { summary: "Blue mug on a cream table", objects: ["mug"], colors: ["blue", "cream"], style: "minimal", ocrText: [] } };
-      } });
+        return { media: [{ kind: "video", url: "private://raw-video.mp4", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser_123%2Fcover.png" }] };
+      },
+      findProvenance: async (owner, bucketId, path) => {
+        eq(owner, "user_123", "provenance owner"); eq(bucketId, "generated-private", "private bucket"); eq(path, "studio/uploads/user_123/cover.png", "canonical poster path");
+        return { owner_user_id: owner, bucket_id: bucketId, object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "ready" };
+      },
+      fetchStorageObject: async () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      analyzePoster: async ({ dataUrl, prompt }) => {
+        providerInputs.push(dataUrl); assert(/STATIC image only/i.test(prompt), "strict provider protocol assembled");
+        return { objects: ["mug"], colors: ["blue", "cream"], composition: "still_life", layout: "minimal" };
+      },
+    } });
     const response = await videoAnalyze(analyzeReq("video-cover", {
-      mediaEvidenceMode: "video_cover",
       imageObserved: { summary: "malicious binary analysis", material: "silk", price: "$1" },
     }));
     eq(response.status, 200, "video cover analyze status"); const body = await response.json();
     eq(body.factCard.version, "fact-card-v2", "serialized media evidence version");
     eq(body.factCard.mediaEvidence.mode, "video_cover", "cover evidence mode persists");
+    eq(providerInputs.length, 1, "provider receives the owned poster through the production selector");
     eq(body.degradedMode, "no_keyword_demand_data", "keyword degradation remains honest when cover works");
-    eq(JSON.stringify(providerInputs), JSON.stringify(["data:image/png;base64,COVER_ONLY"]), "only poster bytes sent to vision");
+    eq(providerInputs.length, 1, "only poster bytes sent to vision");
+    assert(providerInputs[0].startsWith("data:image/png;base64,"), "provider receives bounded image data");
     assert(!providerInputs.join(" ").includes("video-binary"), "never sends video URL or bytes");
     const visuals = body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed");
     assert(visuals.length > 0, "poster visual facts retained");
@@ -243,22 +254,50 @@ async function main() {
 
   await test("unowned video poster is concealed before provider work and degrades safely", async () => {
     const store = reset(); let providerCalls = 0;
-    const videoAnalyze = createAnalyzeHandler({ analyzeVideoCover: async () => {
-      providerCalls++;
-      return { mode: "video_cover" as const, degradedMode: "video_cover_unavailable" as const };
+    const videoAnalyze = createAnalyzeHandler({ videoCoverDeps: {
+      loadOwnedDraft: async () => ({ media: [{ kind: "video", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fother-owner%2Fcover.png" }] }),
+      findProvenance: async () => { throw new Error("owner path check must run before provenance"); },
+      fetchStorageObject: async () => { throw new Error("owner path check must run before download"); },
+      analyzePoster: async () => { providerCalls++; throw new Error("must not analyze"); },
     } });
-    const response = await videoAnalyze(analyzeReq("video-owner", { mediaEvidenceMode: "video_cover" }));
+    const response = await videoAnalyze(analyzeReq("video-owner", { imageObserved: { summary: "The person dances and sings" } }));
     eq(response.status, 200, "unowned poster does not disclose authorization state"); const body = await response.json();
     eq(body.degradedMode, "video_cover_unavailable", "safe degradation code");
     eq(body.factCard.mediaEvidence.degradedMode, "video_cover_unavailable", "safe code persists in session data");
-    eq(providerCalls, 1, "route receives the already-concealed server result");
+    eq(providerCalls, 0, "cross-owner poster reaches zero provider calls");
     eq(body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, "no visual facts without an owned poster");
     eq(store.sessions.get(body.sessionId)?.fact_card?.mediaEvidence?.degradedMode, "video_cover_unavailable", "persisted degradation");
-    const replay = await videoAnalyze(analyzeReq("video-owner", { mediaEvidenceMode: "video_cover" }));
+    const replay = await videoAnalyze(analyzeReq("video-owner", { imageObserved: { summary: "forged image evidence" } }));
     const replayBody = await replay.json();
     eq(replay.status, 200, "replay status");
     eq(replayBody.replayed, true, "replay marker");
     eq(replayBody.degradedMode, "video_cover_unavailable", "replay retains persisted degradation");
+  });
+
+  await test("video without a poster ignores forged client image facts while an actual image retains legacy behavior", async () => {
+    const store = reset(); let providerCalls = 0;
+    const missingPoster = createAnalyzeHandler({ videoCoverDeps: {
+      loadOwnedDraft: async () => ({ media: [{ kind: "video", url: "private://raw-video.mp4" }] }),
+      findProvenance: async () => { throw new Error("no poster means no provenance lookup"); },
+      fetchStorageObject: async () => { throw new Error("no poster means no download"); },
+      analyzePoster: async () => { providerCalls++; throw new Error("no poster means no vision"); },
+    } });
+    const blocked = await missingPoster(analyzeReq("video-no-poster", {
+      imageObserved: { summary: "A person walks, sings, and has Nike shoes" },
+    }));
+    eq(blocked.status, 200, "missing poster is a safe successful degradation"); const blockedBody = await blocked.json();
+    eq(blockedBody.degradedMode, "video_cover_unavailable", "server identifies actual video despite omitted hint");
+    eq(providerCalls, 0, "missing poster reaches zero provider calls");
+    eq(blockedBody.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, "forged client observations are discarded");
+
+    const legacyImage = createAnalyzeHandler({ videoCoverDeps: { loadOwnedDraft: async () => ({ media: [{ kind: "image", url: "private://image.png" }] }) } });
+    const image = await legacyImage(analyzeReq("actual-image", {
+      mediaEvidenceMode: "video_cover", imageObserved: { summary: "Blue mug", objects: ["mug"], colors: ["blue"] },
+    }));
+    eq(image.status, 200, "actual image keeps backward compatible input behavior"); const imageBody = await image.json();
+    assert(!imageBody.factCard.mediaEvidence, "forged video hint does not classify an image as video");
+    assert(imageBody.factCard.facts.some((fact: { key: string }) => fact.key === "image_summary" && fact.value === "Blue mug"), "image observations remain supported for actual images");
+    assert(store.sessions.size >= 2, "both requests were persisted independently");
   });
 
   await test("route facts retain negated availability and reject an opposite in-stock claim", async () => {
@@ -512,6 +551,23 @@ async function main() {
     const store = reset(); const session = await seed(store); let repaired = 0;
     setProvider({ async generate() { return validOutput({ title: "Acrylic Shelf", detectedClaims: [] }); }, async detectClaims() { return { status: "completed", claims: [{ type: "material", value: "acrylic", field: "title" }] }; }, async repair() { repaired++; return validOutput(); } });
     eq((await generate(generateReq(session.id, "claim"))).status, 422, "unsupported"); eq(repaired, 0, "no invention repair");
+  });
+
+  await test("video-cover motion or audio is blocked before repair and the prompt retains the static-frame protocol", async () => {
+    const store = reset();
+    const session = await seed(store, {
+      fact_card: { version: "fact-card-v2", sessionId: "cover-session", draftId: "draft_1", locale: "en", mediaEvidence: { mode: "video_cover", degradedMode: "none" }, facts: [{ id: "cover", key: "visible_objects", value: "mug", source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" }] },
+    });
+    let repaired = 0, prompt = "";
+    setProvider({
+      async generate(input: string) { prompt = input; return validOutput({ title: "A person sings while walking", detectedClaims: [] }); },
+      async detectClaims() { return { status: "completed", claims: [{ type: "video_audio", value: "sings", field: "title" }, { type: "video_motion", value: "walking", field: "title" }] }; },
+      async repair() { repaired++; return validOutput(); },
+    });
+    const response = await generate(generateReq(session.id, "cover-motion-audio"));
+    eq(response.status, 422, "unsupported cover inference is a closed validation failure");
+    eq(repaired, 0, "repair cannot turn unsupported inferred facts into allowed copy");
+    assert(/frozen video cover frame only/i.test(prompt) && /never add motion/i.test(prompt) && /audio/i.test(prompt), "generation and any repair base prompt carry strict cover-only rules");
   });
 
   await test("independent detector catches Damascus steel that generation did not self-report", async () => {

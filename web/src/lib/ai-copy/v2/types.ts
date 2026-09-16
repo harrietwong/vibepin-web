@@ -123,6 +123,7 @@ export type ValidationIssueCode =
   | "UNSUPPORTED_AVAILABILITY_CLAIM"
   | "UNSUPPORTED_BRAND_CLAIM"
   | "UNSUPPORTED_NUMERIC_CLAIM"
+  | "UNSUPPORTED_VIDEO_COVER_INFERENCE"
   | "CLAIM_DETECTION_INCOMPLETE"
   | "BLOCKED_FACT_USED"
   | "DESCRIPTIVE_ONLY_VIOLATION";
@@ -145,7 +146,10 @@ export type DetectedClaimType =
   | "price"
   | "availability"
   | "efficacy"
-  | "numeric_commercial";
+  | "numeric_commercial"
+  | "video_motion"
+  | "video_audio"
+  | "video_temporal";
 
 export interface DetectedClaim {
   type: DetectedClaimType;

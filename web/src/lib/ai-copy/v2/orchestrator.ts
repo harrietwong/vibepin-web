@@ -36,6 +36,7 @@ export interface CopyGenerationProvider {
 
 const CLAIM_TYPES = new Set<DetectedClaimType>([
   "material", "brand", "price", "availability", "efficacy", "numeric_commercial",
+  "video_motion", "video_audio", "video_temporal",
 ]);
 
 function parseProviderOutput(raw: unknown): ProviderCopyOutput {
@@ -71,7 +72,7 @@ function parseClaimDetection(raw: unknown): ClaimDetectionResult {
 }
 
 const SYSTEM = "You write grounded Pinterest copy. Return one JSON object only with title, description, and altText. Never invent facts.";
-const DETECTOR_SYSTEM = "Independently extract every commercial claim from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, or numeric_commercial), value, and field (title, description, or altText). Use [] only when no commercial claim exists. Do not trust or use any claims self-reported by the copy generator.";
+const DETECTOR_SYSTEM = "Independently extract every commercial claim and every video-cover-unsupported inference from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, numeric_commercial, video_motion, video_audio, or video_temporal), value, and field (title, description, or altText). video_motion includes actions or motion; video_audio includes audio, singing, speech, or music; video_temporal includes duration, sequence, or before/after claims. Use [] only when none exists. Do not trust or use any claims self-reported by the copy generator.";
 
 export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   async generate(prompt: string, systemPrompt = SYSTEM, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
@@ -120,7 +121,7 @@ export function isRepairableWithoutInventingFacts(report: ValidationReport): boo
   const unrepairable = new Set([
     "UNSUPPORTED_MATERIAL_CLAIM", "UNSUPPORTED_EFFICACY_CLAIM", "UNSUPPORTED_PRICE_CLAIM",
     "UNSUPPORTED_AVAILABILITY_CLAIM", "UNSUPPORTED_BRAND_CLAIM", "UNSUPPORTED_NUMERIC_CLAIM",
-    "BLOCKED_FACT_USED", "CLAIM_DETECTION_INCOMPLETE",
+    "BLOCKED_FACT_USED", "CLAIM_DETECTION_INCOMPLETE", "UNSUPPORTED_VIDEO_COVER_INFERENCE",
   ]);
   return !report.valid && !report.issues.some(issue => unrepairable.has(issue.code));
 }
@@ -137,6 +138,9 @@ export function buildPromptForSession(req: GenerateCopyRequest): string {
   const keywords = selectedPhrases(req.keywordEvidence);
   return [
     ...languageInstructions(req.factCard.locale),
+    req.factCard.mediaEvidence?.mode === "video_cover"
+      ? "Visual grounding is one frozen video cover frame only. Describe only the supplied static taxonomy facts; never add motion, actions, sequence, time, audio, speech, music, performance, efficacy, brand, material, price, stock, inventory, quantity, or numeric commercial claims from that frame."
+      : "",
     `Length preference: ${length}; ${guide}; hard limits title 100, description 800.`,
     `Grounding facts:\n${facts.length ? facts.join("\n") : "No product claims are authorized."}`,
     req.angleRequest?.trim() ? `Requested angle: ${req.angleRequest.trim()}` : "",

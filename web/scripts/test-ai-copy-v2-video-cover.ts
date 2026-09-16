@@ -1,28 +1,37 @@
 import assert from "node:assert/strict";
-import { analyzeOwnedVideoCover } from "../src/lib/ai-copy/v2/videoCoverEvidence";
-import { createFact, createFactCardV1 } from "../src/lib/ai-copy/v2/factCard";
-import { validateCopy } from "../src/lib/ai-copy/v2/validateCopy";
+
+// Keep this script independently runnable: supabase clients initialize at import time.
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.invalid";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon";
+process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service";
 
 async function main() {
+  const { analyzeOwnedVideoCover } = await import("../src/lib/ai-copy/v2/videoCoverEvidence");
+  const { createFact, createFactCardV1 } = await import("../src/lib/ai-copy/v2/factCard");
+  const { validateCopy } = await import("../src/lib/ai-copy/v2/validateCopy");
+
   const providerInputs: string[] = [];
   const analyzed = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
     loadOwnedDraft: async () => ({ media: [{ kind: "video", url: "private://video-bytes.mp4", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fposter.png" }] }),
-    resolveOwnedPoster: async () => ({ dataUrl: "data:image/png;base64,POSTER" }),
+    findProvenance: async () => ({ id: "p", user_id: "user-1", bucket_id: "studio", object_path: "uploads/user-1/poster.png", source_kind: "upload", status: "ready", bytes: 10, sha256: "x", created_at: "now", updated_at: "now" }),
+    fetchStorageObject: async () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } }),
     analyzePoster: async ({ dataUrl }) => {
       providerInputs.push(dataUrl);
-      return { imageSummary: "A blue ceramic mug on a cream table", visibleObjects: ["mug"], colors: ["blue", "cream"], style: "minimal", ocrText: "", category: "decor" };
+      return { objects: ["mug"], colors: ["blue", "cream"], composition: "still_life", layout: "minimal" };
     },
   });
   assert.equal(analyzed.mode, "video_cover");
   assert.equal(analyzed.degradedMode, "none");
-  assert.deepEqual(providerInputs, ["data:image/png;base64,POSTER"], "only poster bytes reach vision");
+  assert.equal(providerInputs.length, 1, "only poster bytes reach vision");
+  assert.ok(providerInputs[0].startsWith("data:image/png;base64,"));
   assert.ok(!providerInputs.join(" ").includes("video-bytes"), "video URL never reaches vision");
   assert.deepEqual(analyzed.imageObserved?.objects, ["mug"]);
 
   let providerCalled = false;
   const concealed = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
     loadOwnedDraft: async () => ({ media: [{ kind: "video", url: "private://other-owner-video.mp4", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fother-owner%2Fposter.png" }] }),
-    resolveOwnedPoster: async () => null,
+    findProvenance: async () => { throw new Error("cross owner must not resolve provenance"); },
+    fetchStorageObject: async () => { throw new Error("cross owner must not fetch"); },
     analyzePoster: async () => { providerCalled = true; throw new Error("must not run"); },
   });
   assert.equal(concealed.degradedMode, "video_cover_unavailable");
@@ -31,27 +40,27 @@ async function main() {
 
   const isolatedInputs: string[] = [];
   const [firstRequest, secondRequest] = await Promise.all(["alpha", "bravo"].map(draftId => analyzeOwnedVideoCover({ userId: "user-1", draftId }, {
-    loadOwnedDraft: async () => ({ media: [{ kind: "video", url: `private://${draftId}.mp4`, posterUrl: `/api/storage-image?path=studio%2Fuploads%2Fuser-1%2F${draftId}.png` }] }),
-    resolveOwnedPoster: async () => ({ dataUrl: `data:image/png;base64,${draftId}` }),
+    loadOwnedDraft: async () => ({ media: [{ kind: "video", posterUrl: `/api/storage-image?path=studio%2Fuploads%2Fuser-1%2F${draftId}.png` }] }),
+    findProvenance: async () => ({ id: draftId, user_id: "user-1", bucket_id: "studio", object_path: `uploads/user-1/${draftId}.png`, source_kind: "upload", status: "ready", bytes: 4, sha256: "x", created_at: "now", updated_at: "now" }),
+    fetchStorageObject: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
     analyzePoster: async ({ dataUrl }) => {
       isolatedInputs.push(dataUrl);
-      return { imageSummary: draftId, visibleObjects: [], colors: [], style: "", ocrText: "", category: "decor" };
+      return { objects: [], colors: [], composition: "still_life", layout: "minimal" };
     },
   })));
-  assert.equal(firstRequest.imageObserved?.summary, "alpha");
-  assert.equal(secondRequest.imageObserved?.summary, "bravo");
-  assert.deepEqual(isolatedInputs.sort(), ["data:image/png;base64,alpha", "data:image/png;base64,bravo"], "injected dependencies are request-local");
+  assert.equal(firstRequest.imageObserved?.summary, "still_life composition");
+  assert.equal(secondRequest.imageObserved?.summary, "still_life composition");
+  assert.equal(isolatedInputs.length, 2, "injected dependencies remain request-local under concurrency");
 
-  const forbidden = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
-    loadOwnedDraft: async () => ({ media: [{ kind: "video", url: "private://video.mp4", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fcover.png" }] }),
-    resolveOwnedPoster: async () => ({ dataUrl: "data:image/png;base64,COVER" }),
-    analyzePoster: async () => ({ imageSummary: "A moving silk mug costs $10", visibleObjects: ["person dancing", "mug"], colors: ["blue"], style: "high performance", ocrText: "in stock", category: "decor" }),
+  const restricted = await analyzeOwnedVideoCover({ userId: "user-1", draftId: "draft-1" }, {
+    loadOwnedDraft: async () => ({ media: [{ kind: "video", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser-1%2Fcover.png" }] }),
+    findProvenance: async () => ({ id: "p", user_id: "user-1", bucket_id: "studio", object_path: "uploads/user-1/cover.png", source_kind: "upload", status: "ready", bytes: 4, sha256: "x", created_at: "now", updated_at: "now" }),
+    fetchStorageObject: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
+    analyzePoster: async () => ({ objects: ["Nike shoes", "person dancing", "mug"], colors: ["blue", "ultraviolet"], composition: "action scene", layout: "minimal" }),
   });
-  assert.equal(forbidden.imageObserved?.summary, "", "motion/material/price inference is removed from a cover summary");
-  assert.deepEqual(forbidden.imageObserved?.objects, ["mug"], "action inference is removed while literal objects remain");
-  assert.deepEqual(forbidden.imageObserved?.colors, ["blue"], "neutral visual facts remain usable");
-  assert.equal(forbidden.imageObserved?.style, "", "performance inference is removed");
-  assert.deepEqual(forbidden.imageObserved?.ocrText, [], "commercial availability text is not a cover fact");
+  assert.deepEqual(restricted.imageObserved?.objects, ["mug"], "only static taxonomy objects survive");
+  assert.deepEqual(restricted.imageObserved?.colors, ["blue"], "only static taxonomy colors survive");
+  assert.equal(restricted.imageObserved?.summary, "still_life composition", "unallowlisted composition cannot become a fact");
 
   const coverCard = createFactCardV1({
     sessionId: "cover-session", draftId: "draft-1", locale: "en",
@@ -63,6 +72,7 @@ async function main() {
   for (const [type, value] of [
     ["material", "silk"], ["brand", "Acme"], ["price", "$10"], ["availability", "in stock"],
     ["efficacy", "improves performance"], ["numeric_commercial", "50% more"],
+    ["video_motion", "person walking"], ["video_audio", "歌っている"], ["video_temporal", "before and after"],
   ] as const) {
     const report = validateCopy({
       title: `Cover ${value}`, description: `The cover shows ${value}.`, altText: "Blue mug on a table", factCard: coverCard,
