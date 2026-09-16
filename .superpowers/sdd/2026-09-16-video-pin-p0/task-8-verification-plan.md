@@ -87,12 +87,12 @@ npm run dev:testdb
 curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" --noproxy "*" http://127.0.0.1:3000/app/studio
 ```
 
-另一个终端使用文档测试账号（`e2e-purchase-intent@vibepin.test` / `E2ePurchaseIntent!2026`），并显式绑定测试库：
+另一个终端使用 `tests/e2e/TESTING.md` 规定的测试账号，并从本机测试环境读取凭据；不要把密码写入报告或命令历史。显式绑定测试库：
 
 ```powershell
 cd web
-$env:E2E_USER_EMAIL='e2e-purchase-intent@vibepin.test'
-$env:E2E_USER_PASSWORD='E2ePurchaseIntent!2026'
+$env:E2E_USER_EMAIL='<documented-test-email>'
+$env:E2E_USER_PASSWORD='<read-from-test-environment>'
 $env:PLAYWRIGHT_TEST_BASE_URL='http://127.0.0.1:3000'
 npx playwright test --project=setup --project=authenticated --reporter=list
 ```
