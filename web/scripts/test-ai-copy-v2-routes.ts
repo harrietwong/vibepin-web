@@ -627,6 +627,11 @@ async function main() {
     assert(/alter table\s+ai_copy_v2_generations[\s\S]*add column if not exists claim_expires_at/i.test(sql), "generation lease additive alter");
     assert(sql.includes("p_claim_token"), "RPC is token-bound"); assert(sql.includes("enable row level security"), "RLS preserved");
     assert(/alter table\s+ai_copy_v2_sessions\s+alter column status set default 'pending'/i.test(sql), "old status default upgraded");
+    const rpcSignature = "complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb)";
+    for (const role of ["public", "anon", "authenticated"]) {
+      assert(new RegExp(`revoke\\s+all\\s+on\\s+function\\s+${rpcSignature.replace(/[()]/g, "\\$&")}\\s+from\\s+${role}`, "i").test(sql), `RPC explicitly revoked from ${role}`);
+    }
+    assert(new RegExp(`grant\\s+execute\\s+on\\s+function\\s+${rpcSignature.replace(/[()]/g, "\\$&")}\\s+to\\s+service_role`, "i").test(sql), "RPC executes only through service role");
   });
 
   sessionModule.__setSessionStoreForTests(null); __setTrendKeywordLoaderForTests(null); __setCopyProviderForTests(null);

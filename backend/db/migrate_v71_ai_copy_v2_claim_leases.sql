@@ -90,4 +90,6 @@ $$;
 alter table ai_copy_v2_sessions enable row level security;
 alter table ai_copy_v2_generations enable row level security;
 revoke all on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) from public;
+revoke all on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) from anon;
+revoke all on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) from authenticated;
 grant execute on function complete_ai_copy_v2_generation(uuid, uuid, text, uuid, jsonb, jsonb) to service_role;
