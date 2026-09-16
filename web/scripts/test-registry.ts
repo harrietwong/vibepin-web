@@ -260,6 +260,7 @@ export const STUDIO: string[] = [
   "test-generation-jobs",
   "test-generation-recovery",
   "test-generation-failure-media",
+  "test-video-media-rendering",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */

@@ -1,3 +1,5 @@
+import { contentMedia, type ContentMedia } from "@/lib/contentDraftModel";
+
 /**
  * pinReadiness.ts — single source of truth for "is this Pin ready to publish?"
  *
@@ -14,6 +16,8 @@ export type PinPlanStatus = "not_planned" | "needs_date" | "scheduled" | "posted
 
 export type ReadinessInput = {
   imageUrl?:        string | null;
+  media?:           ContentMedia[];
+  id?:              string;
   title?:           string | null;
   description?:     string | null;
   altText?:         string | null;
@@ -50,6 +54,12 @@ export function isPublishableImage(url: string | null | undefined): boolean {
   return true;
 }
 
+/** Video readiness relies on the discriminated protected-media URL, not imageUrl. */
+export function isPublishableContentMedia(draft: ReadinessInput): boolean {
+  const media = contentMedia({ id: draft.id ?? "readiness", imageUrl: draft.imageUrl ?? "", media: draft.media });
+  return isPublishableImage(media[0]?.url ?? draft.imageUrl);
+}
+
 // Hosts Pinterest's servers can never reach — kept in sync with the server gate in
 // server/pinterest/validatePublish.ts (validateOptionalLink). A client-side check that
 // were more lax than the server would let a Pin look schedulable, then fail at publish.
@@ -83,7 +93,7 @@ export function isValidDestinationUrl(url: string | null | undefined): boolean {
 /** Required publishing fields that are still missing, in display order. */
 export function pinMissingFields(d: ReadinessInput): RequiredField[] {
   const missing: RequiredField[] = [];
-  if (!isPublishableImage(d.imageUrl))   missing.push("image");
+  if (!isPublishableContentMedia(d))     missing.push("image");
   // Copy, alt text, Website URL, and product metadata are recommendations only.
   if (!clean(d.boardId))                 missing.push("board");
   return REQUIRED_ORDER.filter(f => missing.includes(f));

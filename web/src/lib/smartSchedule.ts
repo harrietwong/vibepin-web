@@ -5,7 +5,7 @@
 
 import type { PinDraft } from "./pinDraftStore";
 import * as pinDraftStore from "./pinDraftStore";
-import { isPublishableImage, pinFieldErrors } from "./pinReadiness";
+import { isPublishableContentMedia, pinFieldErrors } from "./pinReadiness";
 import { combineLocalPlannedAt, localDateISO, sanitizeHandoffField } from "./weeklyPlanHandoff";
 import {
   getSmartScheduleConfig,
@@ -295,7 +295,7 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
 
   // A scheduled Pin may auto-publish without another user review. Keep this gate
   // deliberately narrower than copy quality: only delivery-critical fields block.
-  if (!isPublishableImage(draft.imageUrl)) {
+  if (!isPublishableContentMedia(draft)) {
     return { ok: false, reason: "not_ready", toast: "Upload a usable image before scheduling this Pin." };
   }
   if (!sanitizeHandoffField(draft.boardId)) {

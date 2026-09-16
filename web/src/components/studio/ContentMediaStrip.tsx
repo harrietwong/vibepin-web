@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { Check, GripVertical, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { addMedia, copyMedia, removeMedia, reorderMedia, setCoverMedia } from "@/lib/pinDraftStore";
-import { contentMedia, coverMedia } from "@/lib/contentDraftModel";
+import { contentMedia, coverMedia, type ContentMedia } from "@/lib/contentDraftModel";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { BUI } from "@/components/studio/boardUI";
@@ -29,14 +30,9 @@ export function currentDragSourceDraftId(): string | null {
   return dragSourceDraftId;
 }
 
-function MediaThumbnail({ src, alt }: { src: string; alt: string }) {
-  const [failed, setFailed] = useState(false);
-  if (failed || !src.trim()) return <PinFallbackArtwork compact />;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt={alt} onError={() => setFailed(true)}
-      style={{ width: "100%", height: "100%", display: "block", objectFit: "cover", borderRadius: 6 }} />
-  );
+function MediaThumbnail({ media, alt }: { media: ContentMedia; alt: string }) {
+  return <ContentMediaRenderer media={media} alt={alt} fallback={<PinFallbackArtwork compact />}
+    style={{ width: "100%", height: "100%", display: "block", objectFit: "cover", borderRadius: 6 }} />;
 }
 
 function readPayload(event: React.DragEvent): DragPayload | null {
@@ -131,7 +127,7 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
               <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
                 onClick={() => !disabled && setCoverMedia(draft.id, item.id)}
                 style={{ width: "100%", height: "100%", padding: 0, border: 0, borderRadius: 6, overflow: "hidden", background: BUI.surface3, cursor: disabled ? "default" : "pointer" }}>
-                <MediaThumbnail src={item.url} alt={item.altText || `Media ${index + 1}`} />
+                <MediaThumbnail media={item} alt={item.altText || `Media ${index + 1}`} />
               </button>
               <span style={{ position: "absolute", top: 4, left: 4, width: 16, height: 16, display: "grid", placeItems: "center", borderRadius: 5, background: "rgba(15,23,42,.65)", color: "#fff" }}>
                 {selected ? <Check style={{ width: 10, height: 10 }} /> : <GripVertical style={{ width: 10, height: 10 }} />}

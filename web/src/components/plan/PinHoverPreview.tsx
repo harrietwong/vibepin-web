@@ -15,6 +15,8 @@ import { displayTitle, sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { toThumbUrl } from "@/lib/imageProxy";
 import { preloadImage } from "@/lib/imagePreload";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
+import { coverMedia } from "@/lib/contentDraftModel";
 
 const OPEN_DELAY_MS = 200;
 const CLOSE_DELAY_MS = 150;
@@ -185,6 +187,7 @@ function PinHoverPreviewCard({
   const domain = url ? shortDomain(url) : "";
   const hasBoard = !!(sanitizeHandoffField(draft.boardId) || sanitizeHandoffField(draft.metadataDraft?.boardId));
   const lifecycle = lifecycleLine(draft);
+  const media = coverMedia(draft);
 
   const scheduled = variant === "scheduled" && !!sanitizeHandoffField(draft.scheduledDate);
 
@@ -223,7 +226,7 @@ function PinHoverPreviewCard({
             border: "1px solid rgba(148,163,184,0.15)",
           }}
         >
-          <PinThumbnail src={toThumbUrl(draft.imageUrl)} alt={altText || title} loading="eager" dark />
+          <ContentMediaRenderer media={media} alt={altText || title} loading="eager" />
         </div>
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -611,8 +614,9 @@ export function PinHoverTarget({
   // so by the time the card opens (~200ms later) the image is decoded —no white flash.
   const warmPreview = useCallback(() => {
     if (disabled) return;
-    preloadImage(toThumbUrl(draft.imageUrl));
-  }, [disabled, draft.imageUrl]);
+    const media = coverMedia(draft);
+    if (media?.kind === "image") preloadImage(toThumbUrl(media.url));
+  }, [disabled, draft]);
 
   const handlePointerEnter = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType) pointerTypeRef.current = e.pointerType;

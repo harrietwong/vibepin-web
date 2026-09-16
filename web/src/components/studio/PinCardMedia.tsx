@@ -21,6 +21,8 @@ import { toProxyUrl } from "@/lib/imageProxy";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/failureMedia";
 import { BUI } from "@/components/studio/boardUI";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
+import { contentMedia } from "@/lib/contentDraftModel";
 
 function lookupParent(id: string): FailureMediaDraft | null {
   return pinDraftStore.getDraft(id);
@@ -103,6 +105,10 @@ export function resolveInitialFailureMediaUrl(draft: FailureMediaDraft): string 
 
 export function PinCardMedia({ draft, alt, className, style, placeholderVariant = "generationFailed", generating, hiddenByQuality }: PinCardMediaProps) {
   const { t: tr } = useLocale();
+  const primaryMedia = contentMedia(draft as Parameters<typeof contentMedia>[0])[0];
+  if (primaryMedia?.kind === "video") {
+    return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} style={{ opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
+  }
   const chain = useMemo(() => candidateChain(draft), [draft]);
   // A different draft (or an edit that changes the candidate chain) resets the walk.
   // Derived DURING RENDER instead of by setting state from an effect: the effect

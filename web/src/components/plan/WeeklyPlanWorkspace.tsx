@@ -23,6 +23,12 @@ function toProxyUrl(url: string): string {
   return toOwnedProxyUrl(url);
 }
 
+/** Image-only download UI deliberately has no binary-video fallback. */
+export function mediaDownloadUrl(draft: PinDraft): string | null {
+  const media = coverMedia(draft);
+  return media?.kind === "image" ? toProxyUrl(media.url) : null;
+}
+
 import { ACTIVE_CATEGORIES, CATEGORIES } from "@/lib/categories";
 import {
   TIER_META,
@@ -48,12 +54,14 @@ import * as pinDraftStore   from "@/lib/pinDraftStore";
 import type { PinDraft }    from "@/lib/pinDraftStore";
 import { PinHoverTarget, type PinHoverPreviewActions, setPinPreviewSuspended } from "@/components/plan/PinHoverPreview";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
+import { coverMedia } from "@/lib/contentDraftModel";
 import { PlanCardStatusBadge } from "@/components/plan/PlanCardStatusBadge";
 import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, classifyDayDropBlock, formatScheduleDateLabel } from "@/lib/smartSchedule";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
 import { displayTitle, sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
-import { isPublishableImage, pinFieldErrors } from "@/lib/pinReadiness";
+import { isPublishableContentMedia, pinFieldErrors } from "@/lib/pinReadiness";
 import { fetchPinterestBoards, seedPinterestStatusConnected, syncPinterestAccount } from "@/lib/pinterestClient";
 import { invalidateBoardsCache } from "@/lib/pinterest/boardsCache";
 import { invalidateConnectionsCache } from "@/lib/social/connectionsCache";
@@ -376,7 +384,8 @@ function ViewPinsModal({
     const arr = [...selected];
     arr.forEach((id, idx) => {
       const draft = drafts.find(d => d.id === id);
-      if (draft) setTimeout(() => downloadFile(toProxyUrl(draft.imageUrl), idx), idx * 200);
+      const url = draft ? mediaDownloadUrl(draft) : null;
+      if (url) setTimeout(() => downloadFile(url, idx), idx * 200);
     });
   }
 
@@ -501,12 +510,7 @@ function ViewPinsModal({
                       style={{ position: "relative", aspectRatio: "2/3", cursor: "pointer", overflow: "hidden", background: "var(--app-border)" }}
                       onClick={() => setPreviewSrc(draft.imageUrl)}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={toProxyUrl(draft.imageUrl)} alt=""
-                        style={{ width: "100%", height: "100%", objectFit: "cover", transition: "transform 0.2s" }}
-                        onMouseEnter={e => (e.currentTarget.style.transform = "scale(1.05)")}
-                        onMouseLeave={e => (e.currentTarget.style.transform = "scale(1)")}
-                      />
+                      <ContentMediaRenderer media={coverMedia(draft)} alt="" />
                       {/* Checkbox */}
                       <div style={{ position: "absolute", top: 6, left: 6 }}>
                         <input type="checkbox" checked={sel}
@@ -535,10 +539,10 @@ function ViewPinsModal({
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#7C3AED", fontSize: "9px", fontWeight: 600 }}>
                         {tr("plan.viewPins.edit")}
                       </button>
-                      <button type="button" onClick={() => downloadFile(toProxyUrl(draft.imageUrl), idx)}
+                      {mediaDownloadUrl(draft) && <button type="button" onClick={() => downloadFile(mediaDownloadUrl(draft)!, idx)}
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#9CA3AF", fontSize: "9px", fontWeight: 600 }}>
                         {tr("plan.viewPins.download")}
-                      </button>
+                      </button>}
                       <button type="button" onClick={() => handleRemove(draft.id)}
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#EF4444", fontSize: "9px", fontWeight: 600 }}>
                         {tr("plan.viewPins.remove")}
@@ -1069,7 +1073,7 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
         onClick={() => onEdit?.(draft)}
         style={{ aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", position: "relative", cursor: "pointer", display: "block" }}
       >
-        <PinThumbnail imgTestId="weekly-plan-pin-image" src={toProxyUrl(draft.imageUrl)} loading="eager" />
+        <ContentMediaRenderer media={coverMedia(draft)} imageTestId="weekly-plan-pin-image" loading="eager" />
         {ev.plannedTime && (
           <span data-testid="weekly-plan-pin-time" style={{
             position: "absolute", bottom: 4, left: 4,
@@ -1381,7 +1385,7 @@ function MonthDayCell({ date, inMonth, isToday, drafts, dnd, onOpenDay, select, 
                   cursor: "pointer", display: "block",
                 }}
               >
-                <PinThumbnail src={toProxyUrl(ev.imageUrl)} loading="lazy" />
+                <ContentMediaRenderer media={coverMedia(d)} loading="lazy" />
                 {/* 34x48 leaves no room for a label — icon only, with the status name on
                     title/aria-label so it is still announced and hoverable. */}
                 <PlanCardStatusBadge draft={d} compact style={{ position: "absolute", bottom: 2, right: 2 }} />
@@ -1503,7 +1507,7 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
                 <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
                   <span data-testid="day-detail-time" style={{ fontSize: 12, fontWeight: 800, color: "var(--app-text)", fontVariantNumeric: "tabular-nums" }}>{ev.plannedTime}</span>
                   <div style={{ position: "relative", width: 58, height: 78, borderRadius: 8, overflow: "hidden", background: "var(--app-surface-3, #0f172a)", border: `1px solid ${select?.isSelected(ev.draftId) ? "#C026D3" : "var(--app-border)"}` }}>
-                    <PinThumbnail src={toProxyUrl(ev.imageUrl)} loading="lazy" />
+                    <ContentMediaRenderer media={coverMedia(d)} loading="lazy" />
                     {select && <SelectCheckbox testId="day-detail-select-box" selected={!!select.isSelected(ev.draftId)} visible onToggle={() => select.toggle(ev.draftId)} />}
                   </div>
                 </div>
@@ -1655,7 +1659,7 @@ export function WeeklyPlanWorkspace() {
     // emptiness gate was retired with the WP1 fix, so the branch's copies of
     // it are not reinstated here). Mirrors the canonical implementation this
     // function was moved from (app/plan/page.tsx).
-    if (!isPublishableImage(draft.imageUrl)) return tr("plan.error.needsImage");
+    if (!isPublishableContentMedia(draft)) return tr("plan.error.needsImage");
     if (!sanitizeHandoffField(draft.boardId)) return tr("studioBoard.toast.chooseBoardToSchedule");
     const lenErrors = pinFieldErrors({ title: draft.title, description: draft.description });
     if (lenErrors.title) return lenErrors.title;
@@ -2765,7 +2769,7 @@ function AddedNeedsDateSection({ category, accountFilter, weekStart, dnd, hoverA
                   disabled={isEditing || !hoverActions}
                   style={{ position: "relative", aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", overflow: "hidden", display: "block" }}
                 >
-                  <PinThumbnail src={toProxyUrl(draft.imageUrl)} loading="lazy" />
+                  <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
                   <span style={{ position: "absolute", bottom: 5, left: 5, right: 5, textAlign: "center", fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: 8, background: `${st.color}dd`, color: "#fff" }}>
                     {st.label}
                   </span>
@@ -2919,7 +2923,7 @@ function UnscheduledDraftsSection({ category, accountFilter, dnd, hoverActions, 
                     disabled={!hoverActions}
                     style={{ position: "relative", aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", overflow: "hidden", display: "block" }}
                   >
-                    <PinThumbnail src={toProxyUrl(draft.imageUrl)} loading="lazy" />
+                    <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
                     <span data-testid="unscheduled-status-badge" style={{
                       position: "absolute", bottom: 5, left: 5, right: 5, textAlign: "center",
                       fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: 8,
@@ -3006,7 +3010,7 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
         disabled={!hoverActions}
         style={{ position: "relative", flexShrink: 0, width: 46, height: 62, borderRadius: 7, overflow: "hidden", background: "var(--app-surface-3, #0f172a)" }}
       >
-        <PinThumbnail src={toProxyUrl(draft.imageUrl)} loading="lazy" />
+        <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
         {select && <SelectCheckbox testId="rail-select-box" selected={selected} visible={checkVisible} onToggle={() => select.toggle(draft.id)} />}
       </PinHoverTarget>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>

@@ -30,7 +30,8 @@ import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
 import type { PinDraft, SocialPostRef } from "@/lib/pinDraftStore";
-import type { DestinationPublishResult } from "@/lib/contentDraftModel";
+import { coverMedia, type DestinationPublishResult } from "@/lib/contentDraftModel";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
@@ -67,7 +68,7 @@ import {
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { isPublishableImage, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
+import { isPublishableContentMedia, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
 import { PublishDestinations, type SelectedAccount } from "@/components/social/PublishDestinations";
 import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
@@ -603,6 +604,7 @@ export function PinDetailsModal({
   }, []);
 
   const publicImage = draft ? toProxyUrl(draft.imageUrl) : "";
+  const displayMedia = draft ? coverMedia(draft) : null;
   const primaryProduct = useMemo(
     () => products.find(p => p.id === primaryProductId) ?? products[0] ?? null,
     [products, primaryProductId],
@@ -1163,7 +1165,7 @@ export function PinDetailsModal({
     // ILLEGAL (non-http/https) value blocks (PRD §14.2/§14.3). Uses the same canonical
     // pinReadiness.isPublishableImage check Studio/Batch Edit use, so "publishable image"
     // means the same thing everywhere (public http(s) URL, not blob/data/localhost).
-    if (!isPublishableImage(publicImage)) {
+    if (!isPublishableContentMedia(draft)) {
       const msg = "This Pin needs an image before it can be published.";
       setPublishError(msg);
       toast.error(msg);
@@ -1498,7 +1500,7 @@ export function PinDetailsModal({
   // which bypasses the DOM maxLength) also hard-blocks; empty stays fine (never required).
   const hasBoard = !!boardId;
   const hasWhen = !!plannedDate.trim() && !!scheduledTime.trim();
-  const hasValidImage = isPublishableImage(publicImage);
+  const hasValidImage = isPublishableContentMedia(activeDraft);
   const hasValidUrl = isValidDestinationUrl(destinationUrl);
   const lenErrors = pinFieldErrors({ title, description });
   const hasValidFieldLengths = !lenErrors.title && !lenErrors.description;
@@ -1622,8 +1624,7 @@ export function PinDetailsModal({
           {/* Thumbnail + schedule summary + top action row */}
           <div style={{ display: "flex", gap: 12 }}>
             <div data-testid="draft-preview" style={{ width: 72, height: 96, borderRadius: 10, overflow: "hidden", border: `1px solid ${UI.border}`, background: UI.surface3, flexShrink: 0 }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={publicImage} alt={altText || title || t("pinDetails.pinPreviewAlt")} style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }} />
+              <ContentMediaRenderer media={displayMedia} alt={altText || title || t("pinDetails.pinPreviewAlt")} />
             </div>
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
               <div data-testid="draft-planned-summary">
