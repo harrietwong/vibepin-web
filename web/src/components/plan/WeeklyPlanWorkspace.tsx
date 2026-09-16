@@ -55,7 +55,7 @@ import type { PinDraft }    from "@/lib/pinDraftStore";
 import { PinHoverTarget, type PinHoverPreviewActions, setPinPreviewSuspended } from "@/components/plan/PinHoverPreview";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
-import { coverMedia } from "@/lib/contentDraftModel";
+import { coverMedia, type ContentMedia } from "@/lib/contentDraftModel";
 import { PlanCardStatusBadge } from "@/components/plan/PlanCardStatusBadge";
 import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, classifyDayDropBlock, formatScheduleDateLabel } from "@/lib/smartSchedule";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
@@ -99,6 +99,14 @@ import {
   shouldShowAccountPicker,
   targetAccountHandle,
 } from "@/lib/studio/publishTarget";
+
+/** Shared kind boundary, with the established Plan image thumbnail behavior intact. */
+function PlanContentMedia({ media, alt = "", loading = "lazy", imageTestId, dark = false }: {
+  media: ContentMedia | null; alt?: string; loading?: "lazy" | "eager"; imageTestId?: string; dark?: boolean;
+}) {
+  return <ContentMediaRenderer media={media} alt={alt} loading={loading} imageTestId={imageTestId}
+    renderImage={image => <PinThumbnail src={toProxyUrl(image.url)} alt={alt} loading={loading} imgTestId={imageTestId} dark={dark} />} />;
+}
 
 // ── Lazily loaded components ─────────────────────────────────────────────────
 // Heavy drawers/alternate views deferred out of the main route chunk so the
@@ -345,7 +353,7 @@ function ViewPinsModal({
   const tr = (key: MessageKey) => trBase(key);
   const [drafts,    setDrafts]    = useState<PinDraft[]>([]);
   const [selected,  setSelected]  = useState<Set<string>>(new Set());
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewMedia, setPreviewMedia] = useState<ContentMedia | null>(null);
   const [editDraft, setEditDraft] = useState<PinDraft | null>(null);
 
   useEffect(() => {
@@ -508,9 +516,9 @@ function ViewPinsModal({
                     {/* Thumbnail */}
                     <div
                       style={{ position: "relative", aspectRatio: "2/3", cursor: "pointer", overflow: "hidden", background: "var(--app-border)" }}
-                      onClick={() => setPreviewSrc(draft.imageUrl)}
+                      onClick={() => setPreviewMedia(coverMedia(draft))}
                     >
-                      <ContentMediaRenderer media={coverMedia(draft)} alt="" />
+                      <PlanContentMedia media={coverMedia(draft)} alt="" />
                       {/* Checkbox */}
                       <div style={{ position: "absolute", top: 6, left: 6 }}>
                         <input type="checkbox" checked={sel}
@@ -557,16 +565,15 @@ function ViewPinsModal({
       </div>
 
       {/* Lightbox */}
-      {previewSrc && (
+      {previewMedia && (
         <div
-          onClick={() => setPreviewSrc(null)}
+          onClick={() => setPreviewMedia(null)}
           style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={previewSrc} alt=""
-            style={{ maxHeight: "90vh", maxWidth: "min(500px,90vw)", borderRadius: 12, objectFit: "contain" }}
-            onClick={e => e.stopPropagation()} />
-          <button type="button" onClick={() => setPreviewSrc(null)}
+          <div onClick={e => e.stopPropagation()} style={{ width: "min(500px,90vw)", height: "min(90vh,760px)", borderRadius: 12, overflow: "hidden" }}>
+            <ContentMediaRenderer media={previewMedia} alt="" style={{ objectFit: "contain" }} />
+          </div>
+          <button type="button" onClick={() => setPreviewMedia(null)}
             style={{ position: "fixed", top: 16, right: 16, width: 34, height: 34, borderRadius: "50%", background: "rgba(255,255,255,0.15)", border: "none", cursor: "pointer", fontSize: 16, color: "#fff", lineHeight: 1 }}>
             ✕
           </button>
@@ -1073,7 +1080,7 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
         onClick={() => onEdit?.(draft)}
         style={{ aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", position: "relative", cursor: "pointer", display: "block" }}
       >
-        <ContentMediaRenderer media={coverMedia(draft)} imageTestId="weekly-plan-pin-image" loading="eager" />
+        <PlanContentMedia media={coverMedia(draft)} imageTestId="weekly-plan-pin-image" loading="eager" />
         {ev.plannedTime && (
           <span data-testid="weekly-plan-pin-time" style={{
             position: "absolute", bottom: 4, left: 4,
@@ -1385,7 +1392,7 @@ function MonthDayCell({ date, inMonth, isToday, drafts, dnd, onOpenDay, select, 
                   cursor: "pointer", display: "block",
                 }}
               >
-                <ContentMediaRenderer media={coverMedia(d)} loading="lazy" />
+                <PlanContentMedia media={coverMedia(d)} loading="lazy" />
                 {/* 34x48 leaves no room for a label — icon only, with the status name on
                     title/aria-label so it is still announced and hoverable. */}
                 <PlanCardStatusBadge draft={d} compact style={{ position: "absolute", bottom: 2, right: 2 }} />
@@ -1507,7 +1514,7 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
                 <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
                   <span data-testid="day-detail-time" style={{ fontSize: 12, fontWeight: 800, color: "var(--app-text)", fontVariantNumeric: "tabular-nums" }}>{ev.plannedTime}</span>
                   <div style={{ position: "relative", width: 58, height: 78, borderRadius: 8, overflow: "hidden", background: "var(--app-surface-3, #0f172a)", border: `1px solid ${select?.isSelected(ev.draftId) ? "#C026D3" : "var(--app-border)"}` }}>
-                    <ContentMediaRenderer media={coverMedia(d)} loading="lazy" />
+                    <PlanContentMedia media={coverMedia(d)} loading="lazy" />
                     {select && <SelectCheckbox testId="day-detail-select-box" selected={!!select.isSelected(ev.draftId)} visible onToggle={() => select.toggle(ev.draftId)} />}
                   </div>
                 </div>
@@ -1973,7 +1980,7 @@ export function WeeklyPlanWorkspace() {
       });
       return {
         pinId: d.id, sessionId: d.generationSessionId ?? "", groupIdx: 0, pinIdx: 0,
-        imageUrl: d.imageUrl, title: d.title, description: d.description, altText: d.altText,
+        imageUrl: d.imageUrl, media: d.media, title: d.title, description: d.description, altText: d.altText,
         destinationUrl: d.destinationUrl, plannedDate: d.scheduledDate ?? "", plannedTime: d.scheduledTime ?? "", plannedAt: d.plannedAt ?? "", postedAt: d.postedAt,
         addedToPlanAt: d.addedToPlanAt,
         planningStatus: d.planningStatus ?? (d.status === "ready" ? "ready" : "needs_review"),
@@ -2769,7 +2776,7 @@ function AddedNeedsDateSection({ category, accountFilter, weekStart, dnd, hoverA
                   disabled={isEditing || !hoverActions}
                   style={{ position: "relative", aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", overflow: "hidden", display: "block" }}
                 >
-                  <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
+                  <PlanContentMedia media={coverMedia(draft)} loading="lazy" />
                   <span style={{ position: "absolute", bottom: 5, left: 5, right: 5, textAlign: "center", fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: 8, background: `${st.color}dd`, color: "#fff" }}>
                     {st.label}
                   </span>
@@ -2923,7 +2930,7 @@ function UnscheduledDraftsSection({ category, accountFilter, dnd, hoverActions, 
                     disabled={!hoverActions}
                     style={{ position: "relative", aspectRatio: "2/3", background: "var(--app-surface-3, #0f172a)", overflow: "hidden", display: "block" }}
                   >
-                    <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
+                    <PlanContentMedia media={coverMedia(draft)} loading="lazy" />
                     <span data-testid="unscheduled-status-badge" style={{
                       position: "absolute", bottom: 5, left: 5, right: 5, textAlign: "center",
                       fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: 8,
@@ -3010,7 +3017,7 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
         disabled={!hoverActions}
         style={{ position: "relative", flexShrink: 0, width: 46, height: 62, borderRadius: 7, overflow: "hidden", background: "var(--app-surface-3, #0f172a)" }}
       >
-        <ContentMediaRenderer media={coverMedia(draft)} loading="lazy" />
+        <PlanContentMedia media={coverMedia(draft)} loading="lazy" />
         {select && <SelectCheckbox testId="rail-select-box" selected={selected} visible={checkVisible} onToggle={() => select.toggle(draft.id)} />}
       </PinHoverTarget>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>

@@ -6,7 +6,6 @@ import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelRightClose, PanelR
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { PublishProvider } from "@/lib/contentDraftModel";
 import { BUI, STUDIO_UI } from "@/components/studio/boardUI";
-import { toProxyUrl } from "@/lib/imageProxy";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";

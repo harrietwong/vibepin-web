@@ -26,7 +26,7 @@ import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
 import { isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
-import { isPinReady, isPublishableImage, pinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
+import { isPinReady, isPublishableContentMedia, pinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { getCachedConnections } from "@/lib/social/connectionsCache";
 import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
@@ -495,7 +495,7 @@ export function StudioBoard() {
     sessionId: draft.generationSessionId || "create-pins",
     groupIdx: 0,
     pinIdx: 0,
-    imageUrl: draft.imageUrl,
+    imageUrl: draft.imageUrl, media: draft.media,
     title: draft.title || "",
     description: draft.description || "",
     altText: draft.altText || "",
@@ -728,7 +728,7 @@ export function StudioBoard() {
       setPublishEntryIssues(prev => {
         if (prev[id] !== "image_unavailable") return prev;
         const cur = pinDraftStore.getDraft(id);
-        if (!cur || cur.assetError || !isPublishableImage(cur.imageUrl)) return prev;
+        if (!cur || cur.assetError || !isPublishableContentMedia(cur)) return prev;
         const remaining = { ...prev };
         delete remaining[id];
         return remaining;
@@ -781,7 +781,7 @@ export function StudioBoard() {
   // for why four divergent publish paths was the defect.
   const requestPublish = useCallback((id: string, options?: { onlyPending?: boolean }) => {
     const draft = pinDraftStore.getDraft(id); if (!draft) return;
-    if (draft.assetError || !isPublishableImage(draft.imageUrl)) {
+    if (draft.assetError || !isPublishableContentMedia(draft)) {
       setActiveId(id);
       setPublishEntryIssues(previous => ({ ...previous, [id]: "image_unavailable" }));
       toast.error(tr("studioBoard.toast.imageUnavailable"));

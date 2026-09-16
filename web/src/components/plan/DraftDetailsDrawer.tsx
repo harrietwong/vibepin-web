@@ -1165,7 +1165,7 @@ export function PinDetailsModal({
     // ILLEGAL (non-http/https) value blocks (PRD §14.2/§14.3). Uses the same canonical
     // pinReadiness.isPublishableImage check Studio/Batch Edit use, so "publishable image"
     // means the same thing everywhere (public http(s) URL, not blob/data/localhost).
-    if (!isPublishableContentMedia(draft)) {
+    if (!isPublishableContentMedia(activeDraft)) {
       const msg = "This Pin needs an image before it can be published.";
       setPublishError(msg);
       toast.error(msg);
@@ -1391,6 +1391,8 @@ export function PinDetailsModal({
   };
   const readiness = getPinReadiness({
     imageUrl: activeDraft.imageUrl,
+    media: activeDraft.media,
+    id: activeDraft.id,
     title,
     description,
     altText,

@@ -1,5 +1,6 @@
 import type { LinkedProduct, PinMetadataDraft } from "./pinMetadata";
 import { resolvePinProducts } from "./pinMetadata";
+import type { ContentMedia } from "./contentDraftModel";
 import {
   getPinReadiness as getCanonicalReadiness,
   type PinDetailsStatus as CanonicalPinDetailsStatus,
@@ -59,6 +60,8 @@ export function getPinPlanStatus(input: {
 
 export function getPinReadiness(input: {
   imageUrl?: string | null;
+  media?: ContentMedia[];
+  id?: string;
   title?: string | null;
   description?: string | null;
   altText?: string | null;

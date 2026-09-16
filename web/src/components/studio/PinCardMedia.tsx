@@ -23,6 +23,7 @@ import { resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/fai
 import { BUI } from "@/components/studio/boardUI";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { contentMedia } from "@/lib/contentDraftModel";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 function lookupParent(id: string): FailureMediaDraft | null {
   return pinDraftStore.getDraft(id);
@@ -112,7 +113,7 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
   return <ImagePinCardMedia draft={draft} alt={alt} className={className} style={style} placeholderVariant={placeholderVariant} generating={generating} hiddenByQuality={hiddenByQuality} tr={tr} />;
 }
 
-function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, tr }: PinCardMediaProps & { tr: (key: string) => string }) {
+function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, tr }: PinCardMediaProps & { tr: (key: MessageKey) => string }) {
   const chain = useMemo(() => candidateChain(draft), [draft]);
   // A different draft (or an edit that changes the candidate chain) resets the walk.
   // Derived DURING RENDER instead of by setting state from an effect: the effect

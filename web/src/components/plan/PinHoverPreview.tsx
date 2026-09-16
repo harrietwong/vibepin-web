@@ -226,7 +226,8 @@ function PinHoverPreviewCard({
             border: "1px solid rgba(148,163,184,0.15)",
           }}
         >
-          <ContentMediaRenderer media={media} alt={altText || title} loading="eager" />
+          <ContentMediaRenderer media={media} alt={altText || title} loading="eager"
+            renderImage={image => <PinThumbnail src={toThumbUrl(image.url)} alt={altText || title} loading="eager" dark />} />
         </div>
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -649,7 +650,11 @@ export function PinHoverTarget({
     scheduleClose();
   };
 
+  const isMediaControlEvent = (target: EventTarget | null) =>
+    target instanceof Element && !!target.closest("[data-content-media-controls]");
+
   const handleTriggerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isMediaControlEvent(e.target)) return;
     if (disabled) {
       onClick?.(e);
       return;
@@ -696,6 +701,7 @@ export function PinHoverTarget({
           ? { "data-fine-pointer": String(finePointer), "data-pointer-type": pointerTypeRef.current, "data-preview-open": String(open) }
           : {})}
         onKeyDown={e => {
+          if (isMediaControlEvent(e.target)) return;
           if (e.key === "Enter" || e.key === " ") {
             if (!disabled && !finePointer) {
               e.preventDefault();

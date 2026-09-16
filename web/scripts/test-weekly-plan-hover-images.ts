@@ -93,12 +93,13 @@ test("Shimmer skeleton style is defined in globals", () => {
   assert(css.includes(".pin-thumb-skeleton"), "pin-thumb-skeleton CSS missing");
 });
 
-test("All Weekly Plan surfaces render the shared PinThumbnail", () => {
-  const uses = (plan.match(/<PinThumbnail/g) ?? []).length;
-  assert(uses >= 6, `expected PinThumbnail across Week/Month/Day-detail/Unscheduled surfaces, found ${uses}`);
+test("All Weekly Plan surfaces retain PinThumbnail through the shared media boundary", () => {
+  const uses = (plan.match(/<PlanContentMedia/g) ?? []).length;
+  assert(uses >= 7, `expected PlanContentMedia across Week/Month/Day-detail/Unscheduled surfaces, found ${uses}`);
+  assert(plan.includes("renderImage={image => <PinThumbnail"), "PlanContentMedia must retain PinThumbnail for image loading and recovery");
   // First-screen Week tile eager, off-screen lazy.
-  assert(/<PinThumbnail[^>]*loading="eager"/.test(plan), "week tile should eager-load");
-  assert(/<PinThumbnail[^>]*loading="lazy"/.test(plan), "off-screen thumbnails should lazy-load");
+  assert(/<PlanContentMedia[^>]*loading="eager"/.test(plan), "week tile should eager-load");
+  assert(/<PlanContentMedia[^>]*loading="lazy"/.test(plan), "off-screen thumbnails should lazy-load");
 });
 
 test("Hover preview portal is click-through (pointer-events: none) so it never blocks the grid", () => {

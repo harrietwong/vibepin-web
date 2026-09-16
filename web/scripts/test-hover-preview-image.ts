@@ -64,8 +64,8 @@ test("3. hover preview image loads eager", () => {
 });
 
 // 4. Pointer enter preloads the preview image (same URL the card renders).
-test("4. tile pointer-enter preloads the preview image URL", () => {
-  assert(hover.includes("preloadImage(toThumbUrl(draft.imageUrl))"), "warmPreview does not preload the card image URL");
+test("4. tile pointer-enter preloads the exact preview image URL", () => {
+  assert(hover.includes("preloadImage(toThumbUrl(media.url))"), "warmPreview does not preload the rendered image-media URL");
   assert(/onPointerEnter=\{handlePointerEnter\}/.test(hover) && /warmPreview\(\)/.test(hover), "pointer enter does not warm the preview");
 });
 

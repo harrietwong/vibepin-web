@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { toProxyUrl } from "@/lib/imageProxy";
+import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
+import type { ContentMedia } from "@/lib/contentDraftModel";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import {
   normalizeProductSource,
@@ -109,6 +111,7 @@ export type BatchPinRow = {
   groupIdx:             number;
   pinIdx:               number;
   imageUrl:             string;
+  media?:               ContentMedia[];
   title:                string;
   description:          string;
   altText:              string;
@@ -209,12 +212,31 @@ function effBoard(pin: BatchPinRow, edits: Record<string, RowEdit>): { id: strin
 function pubReadinessInput(pin: BatchPinRow, edits: Record<string, RowEdit>): ReadinessInput {
   return {
     imageUrl:       pin.imageUrl,
+    media:          pin.media,
+    id:             pin.pinId,
     title:          getVal(pin, edits, "title"),
     description:    getVal(pin, edits, "description"),
     altText:        getVal(pin, edits, "altText"),
     destinationUrl: getVal(pin, edits, "destinationUrl"),
     boardId:        effBoard(pin, edits).id,
   };
+}
+
+/** Keep the media discriminant through Batch's two display projections. */
+function rowMedia(pin: BatchPinRow): ContentMedia | null {
+  const media = pin.media?.[0];
+  if (media) return media;
+  const url = pin.imageUrl.trim();
+  return url ? { id: `${pin.pinId}:legacy-media`, kind: "image", url, altText: pin.altText, source: "legacy" } : null;
+}
+
+function rowMediaLabel(pin: BatchPinRow): string {
+  const media = pin.media ?? [];
+  if (!media.length) return `${pin.mediaCount ?? 1} ${(pin.mediaCount ?? 1) === 1 ? "image" : "images"}`;
+  const videos = media.filter(item => item.kind === "video").length;
+  if (media.length === 1 && videos === 1) return "1 video";
+  if (!videos) return `${media.length} ${media.length === 1 ? "image" : "images"}`;
+  return `${media.length} media · ${videos} ${videos === 1 ? "video" : "videos"}`;
 }
 
 /** Missing required fields + over-limit title/description, as one combined label list
@@ -1683,8 +1705,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "block" }}>
                                     {/* Vertical Pin thumbnail (2:3), not a horizontal strip crop. */}
                                     <span data-testid="batch-edit-pin-thumb" style={{ width: 40, height: 54, borderRadius: 5, overflow: "hidden", background: UI.cardElev, display: "block" }}>
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                                      <img src={toProxyUrl(p.imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                      <ContentMediaRenderer media={rowMedia(p)} alt={p.altText || p.title} />
                                     </span>
                                   </button>
                                 </td>
@@ -1693,7 +1714,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                               return (
                                 <td key={c.id} style={td}>
                                   <span data-testid="batch-edit-media-count" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 42, padding: "4px 7px", borderRadius: 7, border: `1px solid ${UI.border}`, background: UI.bg2, color: UI.textSec, fontSize: 10.5, fontWeight: 750 }}>
-                                    {p.mediaCount ?? 1} {(p.mediaCount ?? 1) === 1 ? "image" : "images"}
+                                    {rowMediaLabel(p)}
                                   </span>
                                 </td>
                               );
@@ -2052,8 +2073,7 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
         {tab === "details" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ width: "100%", aspectRatio: "4/3", borderRadius: 10, overflow: "hidden", background: UI.cardElev }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={toProxyUrl(pin.imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <ContentMediaRenderer media={rowMedia(pin)} alt={pin.altText || pin.title} />
             </div>
             <div><span style={lbl}>{tr("pinDetails.title.label")}</span>
               <input data-testid="batch-edit-drawer-title" value={title} maxLength={100} onChange={e => onPatch({ title: e.target.value }, true)} onBlur={e => onPatch({ title: e.target.value })} style={field} /></div>

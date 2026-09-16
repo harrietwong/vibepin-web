@@ -35,6 +35,21 @@ function MediaThumbnail({ media, alt }: { media: ContentMedia; alt: string }) {
     style={{ width: "100%", height: "100%", display: "block", objectFit: "cover", borderRadius: 6 }} />;
 }
 
+/** Native video controls cannot live inside the cover-selection button. */
+function VideoMediaItem({ media, index, disabled, selected, onSelect }: {
+  media: ContentMedia; index: number; disabled?: boolean; selected: boolean; onSelect: () => void;
+}) {
+  return <div style={{ width: 96, height: 106, display: "flex", flexDirection: "column", gap: 2 }}>
+    <div style={{ position: "relative", height: 64, borderRadius: 6, overflow: "hidden", background: BUI.surface3 }}>
+      <MediaThumbnail media={media} alt={media.altText || `Video ${index + 1}`} />
+    </div>
+    <button type="button" aria-label={`Use video ${index + 1} as cover`} disabled={disabled} onClick={onSelect}
+      style={{ minHeight: 40, padding: "3px 5px", border: 0, borderRadius: 6, background: selected ? BUI.purple : BUI.surface3, color: "#fff", cursor: disabled ? "default" : "pointer", fontSize: 10, fontWeight: 700 }}>
+      {selected ? "Video cover" : "Use as cover"}
+    </button>
+  </div>;
+}
+
 function readPayload(event: React.DragEvent): DragPayload | null {
   try {
     const value = JSON.parse(event.dataTransfer.getData(MEDIA_DRAG_TYPE)) as DragPayload;
@@ -119,16 +134,21 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
               onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropTargetId(item.id); }}
               onDragLeave={() => setDropTargetId(id => id === item.id ? null : id)}
               onDrop={event => dropBefore(event, item.id)}
-              style={{ position: "relative", flex: "0 0 54px", height: 66, borderRadius: 9, padding: 2,
+              style={{ position: "relative", flex: `0 0 ${item.kind === "video" ? 100 : 54}px`, height: item.kind === "video" ? 110 : 66, borderRadius: 9, padding: 2,
                 // Amber wins over the cover ring: "this image blocks a platform" is more
                 // urgent than "this image leads the set", and they are rarely both true.
                 border: `2px solid ${offending ? BUI.warning : dropTargetId === item.id ? BUI.purple : selected ? BUI.purple : "transparent"}`,
                 background: BUI.surface, cursor: disabled ? "default" : "grab" }}>
-              <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
-                onClick={() => !disabled && setCoverMedia(draft.id, item.id)}
-                style={{ width: "100%", height: "100%", padding: 0, border: 0, borderRadius: 6, overflow: "hidden", background: BUI.surface3, cursor: disabled ? "default" : "pointer" }}>
-                <MediaThumbnail media={item} alt={item.altText || `Media ${index + 1}`} />
-              </button>
+              {item.kind === "video" ? (
+                <VideoMediaItem media={item} index={index} disabled={disabled} selected={selected}
+                  onSelect={() => !disabled && setCoverMedia(draft.id, item.id)} />
+              ) : (
+                <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
+                  onClick={() => !disabled && setCoverMedia(draft.id, item.id)}
+                  style={{ width: "100%", height: "100%", padding: 0, border: 0, borderRadius: 6, overflow: "hidden", background: BUI.surface3, cursor: disabled ? "default" : "pointer" }}>
+                  <MediaThumbnail media={item} alt={item.altText || `Media ${index + 1}`} />
+                </button>
+              )}
               <span style={{ position: "absolute", top: 4, left: 4, width: 16, height: 16, display: "grid", placeItems: "center", borderRadius: 5, background: "rgba(15,23,42,.65)", color: "#fff" }}>
                 {selected ? <Check style={{ width: 10, height: 10 }} /> : <GripVertical style={{ width: 10, height: 10 }} />}
               </span>

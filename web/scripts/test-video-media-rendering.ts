@@ -8,6 +8,9 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isPinReady } from "../src/lib/pinReadiness";
+import { draftReadiness } from "../src/lib/weeklyPlanStats";
+import type { PinDraft } from "../src/lib/pinDraftStore";
 
 let passed = 0;
 let failed = 0;
@@ -60,6 +63,53 @@ test("image-only operations do not receive a binary video URL", () => {
   const workspace = source("src/components/plan/WeeklyPlanWorkspace.tsx");
   assert(workspace.includes("mediaDownloadUrl"), "Plan download has no media-safe selector");
   assert(!workspace.includes("downloadFile(toProxyUrl(draft.imageUrl)"), "Plan download still treats every draft image alias as downloadable media");
+});
+
+test("Batch rows preserve discriminated media through their thumbnail, detail, and label boundaries", () => {
+  const batch = source("src/components/studio/BatchEditDrawer.tsx");
+  const studio = source("src/components/studio/StudioBoard.tsx");
+  const plan = source("src/components/plan/WeeklyPlanWorkspace.tsx");
+  assert(batch.includes("function rowMedia"), "Batch has no discriminated row-media selector");
+  assert(batch.includes("ContentMediaRenderer"), "Batch thumbnails and details bypass the shared media renderer");
+  assert(batch.includes("video"), "Batch has no video-aware media label");
+  assert(studio.includes("media: draft.media"), "Studio Batch projection drops media");
+  assert(plan.includes("media: d.media"), "Plan Batch projection drops media");
+});
+
+test("Draft Details accepts its discriminated media projection at the canonical readiness wrapper", () => {
+  const drawer = source("src/components/plan/DraftDetailsDrawer.tsx");
+  const model = source("src/lib/pinDetailsModel.ts");
+  assert(drawer.includes("media: activeDraft.media"), "Draft Details drops media before readiness");
+  assert(model.includes("media?: ContentMedia[]"), "Draft Details readiness wrapper rejects discriminated media");
+});
+
+test("video-only draft readiness survives the Weekly Plan projection", () => {
+  const videoDraft = {
+    id: "video-draft",
+    imageUrl: "",
+    boardId: "board-1",
+    media: [{ id: "video-1", kind: "video", url: "https://app.example.test/api/storage-media?id=video-1", source: "upload" }],
+  } as PinDraft;
+  assert(isPinReady(draftReadiness(videoDraft)), "Weekly Plan projection wrongly blocks a video-only draft");
+});
+
+test("Plan preserves the established image thumbnail contract while sharing video rendering", () => {
+  const plan = source("src/components/plan/WeeklyPlanWorkspace.tsx");
+  const hover = source("src/components/plan/PinHoverPreview.tsx");
+  assert(plan.includes("<PinThumbnail"), "Plan image thumbnails lost their skeleton/load recovery component");
+  assert(hover.includes("<PinThumbnail"), "Hover preview image path no longer uses PinThumbnail");
+  assert(hover.includes("preloadImage(toThumbUrl(media.url))"), "hover warmup is not keyed to the rendered image media");
+});
+
+test("video controls isolate card, hover, and lightbox activation", () => {
+  const renderer = source(rendererPath);
+  const strip = source("src/components/studio/ContentMediaStrip.tsx");
+  const hover = source("src/components/plan/PinHoverPreview.tsx");
+  const workspace = source("src/components/plan/WeeklyPlanWorkspace.tsx");
+  assert(renderer.includes("data-content-media-controls"), "video controls have no event boundary");
+  assert(strip.includes("VideoMediaItem"), "video cover selection still nests controls in a generic thumbnail button");
+  assert(hover.includes("isMediaControlEvent"), "hover trigger still handles video-control activation");
+  assert(workspace.includes("previewMedia"), "View Pins lightbox still stores an image URL instead of discriminated media");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

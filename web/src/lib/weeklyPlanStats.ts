@@ -12,6 +12,8 @@ export const ALL_CATEGORIES = "all";
 export function draftReadiness(d: PinDraft): ReadinessInput {
   return {
     imageUrl:         d.imageUrl,
+    media:            d.media,
+    id:               d.id,
     title:            d.title,
     description:      d.description,
     altText:          d.altText,

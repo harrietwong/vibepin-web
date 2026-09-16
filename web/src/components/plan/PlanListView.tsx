@@ -15,7 +15,6 @@ import { mapPlanDraftToCalendarEvent } from "@/lib/planCalendar";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
-import { toProxyUrl } from "@/lib/imageProxy";
 import { ImageOff } from "lucide-react";
 import { coverMedia } from "@/lib/contentDraftModel";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
@@ -100,12 +99,6 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
   const [statusFilter, setStatusFilter] = useState<"All" | ListStatus>(initialStatus ?? "All");
   const [cols, setCols] = useState({ board: true, url: true, product: true });
   const [colsOpen, setColsOpen] = useState(false);
-  // Ids whose thumbnail failed to decode. Tracked in state (not by mutating the
-  // <img> style) so the row re-renders into the labelled placeholder instead of
-  // leaving a faded broken image behind.
-  const [failedThumbs, setFailedThumbs] = useState<Set<string>>(new Set());
-  const markThumbFailed = (id: string) =>
-    setFailedThumbs(prev => (prev.has(id) ? prev : new Set(prev).add(id)));
 
   useEffect(() => {
     function load() { setDrafts(draftsForCategory(category)); }
@@ -262,7 +255,6 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
         const url = sanitizeHandoffField(d.destinationUrl);
         const scheduled = !!ev.plannedDate && !!ev.plannedTime;
         const posted = status === "Published";
-        const thumbFailed = failedThumbs.has(d.id);
         return (
           <div key={d.id} data-testid="plan-list-row"
             style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "10px 12px", minHeight: 84, alignItems: "center",
@@ -279,7 +271,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
                     to 0.3 opacity (the previous behaviour) left a ghost of the browser's
                     own broken-image glyph in a customer-visible row, and told the
                     merchant nothing about why. */}
-                {thumbFailed || !coverMedia(d) ? (
+                {!coverMedia(d) ? (
                   <div data-testid="plan-list-thumb-placeholder" role="img"
                     aria-label={tr("studioBoard.card.pinImageUnavailable")}
                     style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--app-surface-3, #0f172a)", color: C.muted }}>
