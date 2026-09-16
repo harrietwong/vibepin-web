@@ -33,6 +33,13 @@ export type StudioUploadHandlerDeps = {
   recordCleanup?: (input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }) => Promise<void>;
 };
 
+export type StudioUploadCleanupDeps = {
+  getUserId(req: Request): Promise<string | null>;
+  configured: boolean;
+  bucket?: string;
+  recordCleanup(input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }): Promise<void>;
+};
+
 function requestIdFrom(req: Request): string {
   return (req.headers.get("x-request-id") ?? "")
     .replace(/[^a-zA-Z0-9_-]/g, "")
@@ -109,4 +116,26 @@ export async function handleStudioUpload(req: Request, deps: StudioUploadHandler
 
   const proxyUrl = `/api/storage-image?path=${encodeURIComponent(path)}`;
   return Response.json({ ok: true, path, publicUrl: proxyUrl, proxyUrl, requestId }, { status: 201 });
+}
+
+/** Owner-bound, durable cleanup for a cover that was uploaded but never attached. */
+export async function handleStudioUploadCleanup(req: Request, deps: StudioUploadCleanupDeps): Promise<Response> {
+  const requestId = requestIdFrom(req);
+  const uid = await deps.getUserId(req);
+  if (!uid) return Response.json({ error: "Unauthorized", code: "unauthorized", requestId }, { status: 401 });
+  if (!deps.configured) return Response.json({ error: "Storage is not configured", code: "config_error", requestId }, { status: 503 });
+  let body: { path?: unknown };
+  try { body = await req.json() as { path?: unknown }; } catch { return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 }); }
+  const path = typeof body.path === "string" ? body.path : "";
+  // The browser can only request cleanup inside its own image upload prefix; never
+  // accept arbitrary bucket paths or video objects through this endpoint.
+  if (!path.startsWith(`studio/uploads/${uid}/`) || path.length > 512) {
+    return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
+  }
+  try {
+    await deps.recordCleanup({ owner_user_id: uid, bucket_id: deps.bucket ?? DEFAULT_DRAFT_BUCKET, object_path: path, reason: "unattached_video_poster" });
+  } catch {
+    return Response.json({ error: "Cleanup unavailable", code: "cleanup_unavailable", requestId }, { status: 503 });
+  }
+  return Response.json({ ok: true, requestId });
 }

@@ -50,6 +50,15 @@ async function capturePoster(video: HTMLVideoElement, file: File): Promise<File 
   }
 }
 
+/** A metadata event is not evidence that the browser can decode an actual frame. */
+async function verifyPlayableFrame(video: HTMLVideoElement): Promise<void> {
+  const target = Math.max(0, Math.min(1, video.duration - 0.05));
+  if (!Number.isFinite(target) || target <= 0) throw new VideoBrowserMediaError("video_decode_failed");
+  if (Math.abs(video.currentTime - target) <= 0.01) return;
+  video.currentTime = target;
+  await waitFor(video, "seeked");
+}
+
 /** Browser-only decode boundary. Server finalize still verifies the stored container and bytes. */
 export async function probeVideoFile(file: File): Promise<BrowserVideoProbe> {
   const contentType = normalizedVideoContentType(file);
@@ -68,6 +77,9 @@ export async function probeVideoFile(file: File): Promise<BrowserVideoProbe> {
       || video.videoWidth < 1 || video.videoHeight < 1) {
       throw new VideoBrowserMediaError("invalid_video_metadata");
     }
+    // Seeking successfully is a required decode check. The subsequent canvas/JPEG
+    // conversion is merely a convenience cover and may legitimately be unavailable.
+    await verifyPlayableFrame(video);
     const posterFile = await capturePoster(video, file);
     return { contentType, width: video.videoWidth, height: video.videoHeight, durationMs, posterFile };
   } finally {

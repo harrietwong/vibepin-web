@@ -69,3 +69,20 @@ export async function uploadPinImage(file: File): Promise<UploadedPinImage> {
     throw new UploadPinImageError(creativeRequestErrorFromThrown("upload", requestId, error));
   }
 }
+
+/** Queue removal of a private studio image that never became a draft cover. */
+export async function requestPinImageCleanup(path: string): Promise<void> {
+  const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  try {
+    const response = await fetch("/api/studio/upload/cleanup", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Request-Id": requestId, ...(await bearer()) },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error("poster_cleanup_failed");
+  } catch {
+    // The caller retains its owner-scoped recovery receipt; errors must not leak a
+    // storage path or provider body into the batch UI.
+    throw Object.assign(new Error("poster_cleanup_failed"), { code: "poster_cleanup_failed", requestId });
+  }
+}

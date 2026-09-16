@@ -29,8 +29,17 @@ export type VideoBatchItem = {
   file: File;
   state: VideoBatchItemState;
   inspection?: VideoInspection;
+  /** Browser-only cover bytes. Never serialized to recovery or rendered state. */
+  posterFile?: File;
+  posterPath?: string;
   error?: SafeVideoBatchError;
   draftIdempotencyKey?: string;
+  /** A transport attempt is deliberately separate from the durable draft key. */
+  attempt?: { id: string; batchId: string; ordinal: number; phase: "prepared" | "finalize_pending" };
+  /** A finalized private object which still needs its local board draft written. */
+  finalized?: { proxyUrl: string; requestId: string };
+  draftId?: string;
+  requestId?: string;
 };
 
 export type VideoBatchState = {
@@ -123,7 +132,10 @@ export function createVideoBatchState(clientBatchId: string, items: VideoBatchIt
 
 export type VideoBatchEvent =
   | { type: "uploading"; id: string }
-  | { type: "succeeded"; id: string; requestId?: string }
+  | { type: "attempt"; id: string; attempt: NonNullable<VideoBatchItem["attempt"]> }
+  | { type: "finalized"; id: string; finalized: NonNullable<VideoBatchItem["finalized"]> }
+  | { type: "poster"; id: string; posterUrl: string; posterPath: string }
+  | { type: "succeeded"; id: string; requestId?: string; draftId?: string }
   | { type: "failed"; id: string; error: SafeVideoBatchError }
   | { type: "cancelled"; id: string }
   | { type: "cancel-all" };
@@ -134,7 +146,12 @@ export function reduceVideoBatch(state: VideoBatchState, event: VideoBatchEvent)
     if (event.type === "cancel-all") return item.state === "queued" || item.state === "uploading" ? { ...item, state: "cancelled" as const, error: undefined } : item;
     if (item.id !== event.id || item.state === "succeeded" || item.state === "cancelled") return item;
     if (event.type === "uploading") return item.state === "queued" ? { ...item, state: "uploading" as const, error: undefined } : item;
-    if (event.type === "succeeded") return item.state === "uploading" ? { ...item, state: "succeeded" as const, error: undefined } : item;
+    if (event.type === "attempt") return item.state === "queued" || item.state === "uploading" ? { ...item, attempt: event.attempt } : item;
+    if (event.type === "finalized") return item.state === "queued" || item.state === "uploading" ? { ...item, finalized: event.finalized, attempt: undefined } : item;
+    if (event.type === "poster") return item.state === "queued" || item.state === "uploading"
+      ? { ...item, inspection: item.inspection ? { ...item.inspection, posterUrl: event.posterUrl } : item.inspection, posterPath: event.posterPath }
+      : item;
+    if (event.type === "succeeded") return item.state === "uploading" ? { ...item, state: "succeeded" as const, error: undefined, requestId: event.requestId, draftId: event.draftId } : item;
     if (event.type === "failed") return item.state === "queued" || item.state === "uploading" ? { ...item, state: "failed" as const, error: event.error } : item;
     return item.state === "queued" || item.state === "uploading" ? { ...item, state: "cancelled" as const, error: undefined } : item;
   });
@@ -143,13 +160,25 @@ export function reduceVideoBatch(state: VideoBatchState, event: VideoBatchEvent)
 }
 
 export function selectRetryableVideoItems(state: VideoBatchState): VideoBatchItem[] {
-  return state.items.filter(item => item.state === "failed");
+  // Decode/metadata failures have no proven local descriptor and cannot be made
+  // valid by replaying a remote transfer. A finalized receipt is retryable even
+  // after a reload because it only needs a local draft write.
+  return state.items.filter(item => item.state === "failed" && Boolean(item.inspection || item.finalized));
 }
 
 export function queueFailedVideoItems(state: VideoBatchState): VideoBatchState {
   const next = {
     ...state,
-    items: state.items.map(item => item.state === "failed" ? { ...item, state: "queued" as const, error: undefined } : item),
+    items: state.items.map(item => item.state === "failed" && (item.inspection || item.finalized)
+      ? {
+        ...item, state: "queued" as const, error: undefined,
+        // A non-finalized failed attempt asks the server to clean its poster. A
+        // retry must not attach that soon-to-be-deleted object to a fresh draft.
+        ...(!item.finalized && item.attempt?.phase !== "finalize_pending" && item.inspection
+          ? { inspection: { ...item.inspection, posterUrl: undefined }, posterPath: undefined, attempt: undefined }
+          : {}),
+      }
+      : item),
   };
   return { ...next, status: summarizeVideoBatch(next) };
 }
@@ -161,12 +190,12 @@ export function safeVideoBatchError(value: unknown, fallback = "video_upload_fai
   return requestId ? { code, requestId } : { code };
 }
 
-function descriptorFor(item: VideoBatchItem): VideoUploadDescriptor {
+function descriptorFor(item: VideoBatchItem, attemptNumber: number): VideoUploadDescriptor {
   const inspection = item.inspection;
   if (!inspection) throw Object.assign(new Error("video_decode_failed"), { code: "video_decode_failed" });
   // The local draft key deliberately uses readable `:` separators. The upload RPC
   // accepts only SAFE_ID, so keep a distinct, ordinal-prefixed transport key.
-  const transportKey = `upload_${item.ordinal}_${item.draftIdempotencyKey ?? item.id}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+  const transportKey = `upload_${item.ordinal}_${attemptNumber}_${item.draftIdempotencyKey ?? item.id}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
   return {
     ordinal: item.ordinal,
     idempotencyKey: transportKey,
@@ -185,9 +214,39 @@ export type VideoBatchRunDependencies = {
   prepare(descriptors: VideoUploadDescriptor[]): Promise<{ batchId: string; uploads: SignedVideoUpload[] }>;
   upload(upload: SignedVideoUpload, item: VideoBatchItem, batchId: string, signal?: AbortSignal): Promise<void>;
   finalize(batchId: string, ordinal: number): Promise<{ proxyUrl: string; requestId: string }>;
-  createDraft(item: VideoBatchItem, finalized: { proxyUrl: string; requestId: string }): Promise<void> | void;
+  /** Returns a durable acknowledgement. Undefined is retained only for old test seams. */
+  createDraft(item: VideoBatchItem, finalized: { proxyUrl: string; requestId: string }): Promise<void | { persisted?: boolean; draftId?: string }> | void | { persisted?: boolean; draftId?: string };
+  /** Persist the server transfer receipt before uploading bytes. Throwing fails closed. */
+  onAttempt?(item: VideoBatchItem, attempt: NonNullable<VideoBatchItem["attempt"]>): Promise<void> | void;
+  /** Persist the finalized recovery receipt before the local draft write. */
+  onFinalized?(item: VideoBatchItem, finalized: { proxyUrl: string; requestId: string }): Promise<void> | void;
+  /** Called only after an eligible server transfer attempt is durably recorded. */
+  preparePoster?(item: VideoBatchItem, signal?: AbortSignal): Promise<{ proxyUrl: string; path: string } | undefined>;
+  /** Persist association before transferring bytes; errors fail closed. */
+  onPoster?(item: VideoBatchItem, poster: { proxyUrl: string; path: string }): Promise<void> | void;
+  /** Best-effort immediate request; server owns durable cleanup responsibility. */
+  cleanupPoster?(item: VideoBatchItem): Promise<void> | void;
   onState?(state: VideoBatchState): void;
 };
+
+function safePreparedUpload(
+  prepared: { batchId: string; uploads: SignedVideoUpload[] },
+  descriptor: VideoUploadDescriptor,
+): SignedVideoUpload | null {
+  if (!prepared || typeof prepared.batchId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(prepared.batchId)
+    || !Array.isArray(prepared.uploads) || prepared.uploads.length !== 1) return null;
+  const upload = prepared.uploads[0];
+  if (!upload || upload.ordinal !== descriptor.ordinal || upload.contentType !== descriptor.contentType
+    || upload.upsert !== false || typeof upload.path !== "string" || typeof upload.token !== "string"
+    || typeof upload.signedUrl !== "string") return null;
+  return upload;
+}
+
+function terminalReplayError(error: unknown): boolean {
+  const code = safeVideoBatchError(error).code;
+  return code === "video_upload_not_uploadable" || code === "video_upload_expired"
+    || code === "missing_video_object" || code === "video_upload_failed";
+}
 
 /**
  * Executes only queued items. The caller supplies the private-upload boundary and the
@@ -204,33 +263,68 @@ export async function runVideoBatch(initial: VideoBatchState, deps: VideoBatchRu
     return state;
   }
 
-  let prepared: { batchId: string; uploads: SignedVideoUpload[] };
-  try {
-    prepared = await deps.prepare(pending.map(descriptorFor));
-  } catch (error) {
-    const safe = safeVideoBatchError(error, "video_upload_prepare_failed");
-    for (const item of pending) transition(deps.signal?.aborted ? { type: "cancelled", id: item.id } : { type: "failed", id: item.id, error: safe });
-    return state;
-  }
-  const byOrdinal = new Map(prepared.uploads.map(upload => [upload.ordinal, upload]));
   let cursor = 0;
   const worker = async () => {
     while (cursor < pending.length) {
-      const item = pending[cursor++];
-      if (deps.signal?.aborted) { transition({ type: "cancelled", id: item.id }); continue; }
-      const upload = byOrdinal.get(item.ordinal);
-      if (!upload) { transition({ type: "failed", id: item.id, error: { code: "video_upload_prepare_failed" } }); continue; }
-      transition({ type: "uploading", id: item.id });
+      const queued = pending[cursor++];
+      const item = () => state.items.find(current => current.id === queued.id) ?? queued;
+      if (deps.signal?.aborted) { transition({ type: "cancelled", id: item().id }); continue; }
+      transition({ type: "uploading", id: queued.id });
+      let finalized = item().finalized;
       try {
-        await deps.upload(upload, item, prepared.batchId, deps.signal);
-        if (deps.signal?.aborted) { transition({ type: "cancelled", id: item.id }); continue; }
-        const finalized = await deps.finalize(prepared.batchId, item.ordinal);
-        // Finalize is the durable boundary. If cancellation races after it, create
-        // the idempotent local draft so a ready private object never becomes orphaned.
-        await deps.createDraft(item, finalized);
-        transition({ type: "succeeded", id: item.id, requestId: finalized.requestId });
+        const previous = item().attempt;
+        if (!finalized && previous?.phase === "finalize_pending") {
+          try {
+            finalized = await deps.finalize(previous.batchId, previous.ordinal);
+          } catch (error) {
+            // A terminal server result may only be retried by making a new server
+            // batch/attempt. Unknown outcomes retain this exact receipt for replay.
+            if (!terminalReplayError(error)) throw error;
+          }
+        }
+        if (!finalized) {
+          const current = item();
+          const descriptor = descriptorFor(current, (current.attempt ? Number(current.attempt.id.split("_").at(-1)) || 0 : 0) + 1);
+          const prepared = await deps.prepare([descriptor]);
+          const upload = safePreparedUpload(prepared, descriptor);
+          if (!upload) throw Object.assign(new Error("video_upload_prepare_failed"), { code: "video_upload_prepare_failed" });
+          const attempt = { id: `attempt_${descriptor.ordinal}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, batchId: prepared.batchId, ordinal: descriptor.ordinal, phase: "prepared" as const };
+          await deps.onAttempt?.(current, attempt);
+          transition({ type: "attempt", id: current.id, attempt });
+          if (current.posterFile && !current.inspection?.posterUrl) {
+            const poster = await deps.preparePoster?.(current, deps.signal);
+            if (poster) {
+              transition({ type: "poster", id: current.id, posterUrl: poster.proxyUrl, posterPath: poster.path });
+              await deps.onPoster?.(item(), poster);
+            }
+          }
+          await deps.upload(upload, current, prepared.batchId, deps.signal);
+          if (deps.signal?.aborted) { transition({ type: "cancelled", id: current.id }); continue; }
+          try {
+            finalized = await deps.finalize(prepared.batchId, current.ordinal);
+          } catch (error) {
+            transition({ type: "attempt", id: current.id, attempt: { ...attempt, phase: "finalize_pending" } });
+            throw error;
+          }
+        }
+        if (!finalized) throw Object.assign(new Error("video_upload_failed"), { code: "video_upload_failed" });
+        await deps.onFinalized?.(item(), finalized);
+        transition({ type: "finalized", id: queued.id, finalized });
+        // Once finalized, cancellation cannot discard the durable receipt. The
+        // idempotent local draft is either durably written or remains retryable.
+        const created = await deps.createDraft(item(), finalized);
+        if (created && created.persisted === false) throw Object.assign(new Error("draft_persist_failed"), { code: "draft_persist_failed" });
+        transition({ type: "succeeded", id: queued.id, requestId: finalized.requestId, draftId: created?.draftId });
       } catch (error) {
-        transition(deps.signal?.aborted ? { type: "cancelled", id: item.id } : { type: "failed", id: item.id, error: safeVideoBatchError(error) });
+        const current = item();
+        if (!current.finalized && current.attempt?.phase !== "finalize_pending" && current.posterPath) {
+          try { await deps.cleanupPoster?.(current); } catch { /* durable receipt retries owner cleanup */ }
+        }
+        // A final result must not be reclassified as cancellation: its receipt
+        // needs a future local draft write.
+        transition(deps.signal?.aborted && !current.finalized
+          ? { type: "cancelled", id: current.id }
+          : { type: "failed", id: current.id, error: safeVideoBatchError(error) });
       }
     }
   };
