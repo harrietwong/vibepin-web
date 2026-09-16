@@ -297,7 +297,7 @@ export async function runVideoBatch(initial: VideoBatchState, deps: VideoBatchRu
           await deps.onAttempt?.(current, attempt);
           transition({ type: "attempt", id: current.id, attempt });
           if (current.posterFile && !current.inspection?.posterUrl) {
-            const poster = await deps.preparePoster?.(current, deps.signal);
+            const poster = await deps.preparePoster?.(item(), deps.signal);
             if (poster) {
               transition({ type: "poster", id: current.id, posterUrl: poster.proxyUrl, posterPath: poster.path });
               await deps.onPoster?.(item(), poster);

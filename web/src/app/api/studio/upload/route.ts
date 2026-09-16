@@ -20,6 +20,7 @@
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { createMediaProvenanceStore } from "@/lib/server/mediaProvenance";
+import { createVideoPosterOperationStore } from "@/lib/server/media/videoPosterOperationStore";
 import { DEFAULT_DRAFT_BUCKET, handleStudioUpload } from "./handler";
 
 export const runtime = "nodejs";
@@ -45,6 +46,12 @@ export async function POST(req: Request) {
       return { error: error?.message ?? null };
     },
     registerProvenance: input => createMediaProvenanceStore(client()).register(input),
+    associatePosterOperation: async input => {
+      try {
+        await createVideoPosterOperationStore(client()).associate({ ownerUserId: input.owner_user_id, batchId: input.batch_id, ordinal: input.ordinal, bucketId: input.bucket_id, objectPath: input.object_path });
+        return true;
+      } catch { return false; }
+    },
     recordCleanup: input => createMediaProvenanceStore(client()).recordCleanup(input),
     removeObject: async (bucket, path) => {
       const { error } = await client().storage.from(bucket).remove([path]);

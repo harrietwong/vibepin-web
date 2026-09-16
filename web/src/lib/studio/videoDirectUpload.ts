@@ -87,3 +87,6 @@ export async function uploadVideoToSignedStorage(upload: SignedVideoUpload, file
 export async function finalizeVideoDirectUpload(batchId: string, ordinal: number) {
   return api<{ ok: true; batchId: string; ordinal: number; proxyUrl: string; requestId: string }>("/api/studio/video-upload/finalize", { batchId, ordinal }, requestId());
 }
+export async function retainVideoPosterOperation(batchId: string, ordinal: number, path: string): Promise<void> {
+  await api<{ ok: true }>("/api/studio/upload/poster-operation", { action: "retain", batchId, ordinal, path }, requestId());
+}

@@ -46,6 +46,7 @@ function callbacks(overrides: Record<string, unknown> = {}, mutate?: (source: st
     toast: { success: () => {}, error: () => {} }, probeVideoFile: async () => inspection,
     uploadPinImage: async () => ({ proxyUrl: `/api/storage-image?path=studio%2Fuploads%2F${A.ownerUserId}%2Fcover.jpg`, path: `studio/uploads/${A.ownerUserId}/cover.jpg` }),
     requestPinImageCleanup: async () => {}, sha256: async () => inspection.checksumSha256,
+    retainVideoPosterOperation: async () => {},
     track: () => {}, processFiles: async () => {}, videoBatch: undefined, uploading: false, ...overrides,
   };
   let text = source.slice(begin, end); if (mutate) text = mutate(text);
@@ -159,7 +160,7 @@ async function main() {
     reset(); const rows: unknown[] = []; const deps = { getUserId: async () => A.ownerUserId, configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), canCleanupPoster: async () => true, recordCleanup: async (row: unknown) => { rows.push(row); } };
     const request = (owner: string) => new Request("https://app.invalid/cleanup", { method: "POST", body: JSON.stringify({ path: `studio/uploads/${owner}/cover.jpg` }) });
     assert.equal((await handleStudioUploadCleanup(request(A.ownerUserId), deps)).status, 200);
-    assert.equal((await handleStudioUploadCleanup(request(B.ownerUserId), deps)).status, 400);
+    assert.equal((await handleStudioUploadCleanup(request(B.ownerUserId), deps)).status, 403);
     assert.equal((await handleStudioUploadCleanup(request(A.ownerUserId), { ...deps, getUserId: async () => null })).status, 401);
     assert.equal(rows.length, 1);
     let cleaned = 0;

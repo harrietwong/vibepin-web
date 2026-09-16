@@ -3,8 +3,10 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { handleStudioUploadCleanup } from "../src/app/api/studio/upload/handler";
+import { handleStudioUpload } from "../src/app/api/studio/upload/handler";
 import { handleVideoUploadPrepare, type VideoUploadHandlerDeps } from "../src/lib/server/media/videoUploadHandler";
 import { listVideoRecovery, saveVideoRecovery } from "../src/lib/studio/videoBatchRecovery";
+import { createVideoPosterOperationStore } from "../src/lib/server/media/videoPosterOperationStore";
 
 const memory = new Map<string, string>();
 let quota = false;
@@ -104,9 +106,42 @@ async function main() {
     const good = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerA.ownerUserId}/cover.jpg` }) }), deps);
     assert.equal(good.status, 200); assert.equal(rows.length, 1); assert.equal(rows[0].reason, "unattached_video_poster");
     const foreign = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `studio/uploads/${ownerB.ownerUserId}/cover.jpg` }) }), deps);
-    assert.equal(foreign.status, 400); assert.equal(rows.length, 1);
+    assert.equal(foreign.status, 403); assert.equal(rows.length, 1);
     const anonymous = await handleStudioUploadCleanup(new Request("https://app.invalid/cleanup", { method: "POST", body: JSON.stringify({ path: `studio/uploads/${ownerA.ownerUserId}/cover.jpg` }) }), { ...deps, getUserId: async () => null });
     assert.equal(anonymous.status, 401);
+  });
+  await test("v80 poster cleanup is a service-owned positive authorization, not a browser lifecycle claim", async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const db = { rpc: async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return { data: name === "video_poster_cleanup_authorize" ? { allowed: false, reason: "operation_not_terminal" } : { ok: true }, error: null };
+    } };
+    const operation = createVideoPosterOperationStore(db);
+    const input = { ownerUserId: ownerA.ownerUserId, batchId: "11111111-1111-4111-8111-111111111111", ordinal: 0, bucketId: "generated-private", objectPath: `studio/uploads/${ownerA.ownerUserId}/poster.png` };
+    await operation.associate(input);
+    await operation.retain(input);
+    assert.equal(await operation.canCleanup({ ownerUserId: input.ownerUserId, bucketId: input.bucketId, objectPath: input.objectPath }), false);
+    assert.deepEqual(calls.map(call => call.name), ["video_poster_operation_associate", "video_poster_operation_retain", "video_poster_cleanup_authorize"]);
+    assert(calls.every(call => call.args.p_owner_user_id === ownerA.ownerUserId));
+    assert.equal("state" in calls[2].args, false, "the client cannot declare an operation failed/cancelled");
+  });
+  await test("v80 binds a poster during the server upload transaction and compensates an association failure", async () => {
+    const form = new FormData(); form.append("file", new File([new Uint8Array([1])], "poster.png", { type: "image/png" }));
+    form.append("videoBatchId", "11111111-1111-4111-8111-111111111111"); form.append("videoOrdinal", "0");
+    let associated = 0;
+    const okay = await handleStudioUpload(new Request("https://app.invalid/upload", { method: "POST", body: form }), {
+      getUserId: async () => ownerA.ownerUserId, configured: true, uploadObject: async () => ({ error: null }), registerProvenance: async () => true,
+      associatePosterOperation: async input => { associated++; return input.owner_user_id === ownerA.ownerUserId && input.ordinal === 0; }, removeObject: async () => {},
+    });
+    assert.equal(okay.status, 201); assert.equal(associated, 1);
+    const failed = new FormData(); failed.append("file", new File([new Uint8Array([1])], "poster.png", { type: "image/png" }));
+    failed.append("videoBatchId", "11111111-1111-4111-8111-111111111111"); failed.append("videoOrdinal", "0");
+    let removed = 0; const reasons: string[] = [];
+    const unavailable = await handleStudioUpload(new Request("https://app.invalid/upload", { method: "POST", body: failed }), {
+      getUserId: async () => ownerA.ownerUserId, configured: true, uploadObject: async () => ({ error: null }), registerProvenance: async () => true,
+      associatePosterOperation: async () => false, removeObject: async () => { removed++; throw new Error("temporary"); }, recordCleanup: async row => { reasons.push(row.reason); },
+    });
+    assert.equal(unavailable.status, 503); assert.equal(removed, 1); assert.deepEqual(reasons, ["poster_association_failed"]);
   });
   console.log(`\n${passed} video batch runtime checks passed.`);
 }

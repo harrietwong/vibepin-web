@@ -38,6 +38,7 @@ export type UploadedPinImage = {
   /** Client id joining upload UI/analytics/support evidence. */
   requestId: string;
 };
+export type VideoPosterOperation = { batchId: string; ordinal: number };
 
 export class UploadPinImageError extends Error {
   readonly detail: CreativeRequestError;
@@ -48,11 +49,15 @@ export class UploadPinImageError extends Error {
   }
 }
 
-export async function uploadPinImage(file: File): Promise<UploadedPinImage> {
+export async function uploadPinImage(file: File, posterOperation?: VideoPosterOperation): Promise<UploadedPinImage> {
   const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const fd = new FormData();
   fd.append("file", file);
   fd.append("requestId", requestId);
+  if (posterOperation) {
+    fd.append("videoBatchId", posterOperation.batchId);
+    fd.append("videoOrdinal", String(posterOperation.ordinal));
+  }
   try {
     const res = await fetch("/api/studio/upload", {
       method: "POST",

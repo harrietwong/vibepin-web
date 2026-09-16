@@ -43,7 +43,7 @@ import {
   type VideoBatchItem,
   type VideoBatchState,
 } from "@/lib/studio/videoBatchUpload";
-import { finalizeVideoDirectUpload, prepareVideoDirectUpload, sha256, uploadVideoToSignedStorage } from "@/lib/studio/videoDirectUpload";
+import { finalizeVideoDirectUpload, prepareVideoDirectUpload, retainVideoPosterOperation, sha256, uploadVideoToSignedStorage } from "@/lib/studio/videoDirectUpload";
 import { probeVideoFile } from "@/lib/studio/videoBrowserMedia";
 import {
   listVideoRecovery,
@@ -713,7 +713,8 @@ export function StudioBoard() {
         if (!item.posterFile || signal?.aborted) return undefined;
         // Server video prepare has already established a private, owner-bound upload
         // ledger before mutating image storage for the optional cover.
-        const uploaded = await uploadPinImage(item.posterFile);
+        if (!item.attempt) throw Object.assign(new Error("video_poster_operation_missing"), { code: "video_poster_operation_missing" });
+        const uploaded = await uploadPinImage(item.posterFile, { batchId: item.attempt.batchId, ordinal: item.attempt.ordinal });
         return { proxyUrl: uploaded.proxyUrl, path: uploaded.path };
       },
       onPoster: (item, poster) => {
@@ -723,11 +724,12 @@ export function StudioBoard() {
       cleanupPoster: async item => {
         if (item.posterPath && ownerIsCurrent()) await requestPinImageCleanup(item.posterPath);
       },
-      onFinalized: (item, finalized) => {
+      onFinalized: async (item, finalized) => {
         // The transfer may finalize just as the browser session changes. Store the
         // receipt in A's namespace first, then refuse B's local draft write below.
         const record = recoveryRecord(item, { finalized });
         if (!record || !saveVideoRecovery(record)) throw Object.assign(new Error("video_recovery_persist_failed"), { code: "video_recovery_persist_failed" });
+        if (item.posterPath && item.attempt) await retainVideoPosterOperation(item.attempt.batchId, item.attempt.ordinal, item.posterPath);
       },
       createDraft: (item, finalized) => {
         const inspection = item.inspection;
@@ -785,6 +787,10 @@ export function StudioBoard() {
           try {
             const finalized = await finalizeVideoDirectUpload(record.attempt.batchId, record.attempt.ordinal);
             if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+            if (record.posterPath) {
+              await retainVideoPosterOperation(record.attempt.batchId, record.attempt.ordinal, record.posterPath);
+              if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+            }
             if (!saveVideoRecovery({ ...record, finalized, attempt: undefined })) continue;
             record.finalized = finalized;
           } catch {

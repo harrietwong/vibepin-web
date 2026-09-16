@@ -29,6 +29,8 @@ export type StudioUploadHandlerDeps = {
     contentType: string;
   }): Promise<{ error: string | null }>;
   registerProvenance(input: StudioUploadProvenance): Promise<boolean>;
+  /** v80 binds a poster to the server's v77 video item before this request succeeds. */
+  associatePosterOperation?(input: { owner_user_id: string; batch_id: string; ordinal: number; bucket_id: string; object_path: string }): Promise<boolean>;
   removeObject(bucket: string, path: string): Promise<void>;
   recordCleanup?: (input: { owner_user_id: string; bucket_id: string; object_path: string; reason: string }) => Promise<void>;
 };
@@ -81,6 +83,14 @@ export async function handleStudioUpload(req: Request, deps: StudioUploadHandler
   if (file.size <= 0 || file.size > MAX_STUDIO_UPLOAD_BYTES) {
     return Response.json({ error: "Image too large (max 12MB)", code: "too_large", requestId }, { status: 413 });
   }
+  const rawBatchId = form.get("videoBatchId");
+  const rawOrdinal = form.get("videoOrdinal");
+  const hasPosterOperation = rawBatchId !== null || rawOrdinal !== null;
+  const batchId = typeof rawBatchId === "string" ? rawBatchId : "";
+  const ordinal = typeof rawOrdinal === "string" && /^\d{1,2}$/.test(rawOrdinal) ? Number(rawOrdinal) : -1;
+  if (hasPosterOperation && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(batchId) || ordinal < 0 || ordinal > 19 || !deps.associatePosterOperation)) {
+    return Response.json({ error: "Invalid request", code: "bad_request", requestId }, { status: 400 });
+  }
 
   const bucket = deps.bucket ?? DEFAULT_DRAFT_BUCKET;
   const path = (deps.pathFactory ?? defaultPath)(uid, extension);
@@ -116,6 +126,19 @@ export async function handleStudioUpload(req: Request, deps: StudioUploadHandler
     }
     return Response.json({ error: "Upload could not be secured.", code: "provenance_unavailable", requestId }, { status: 503 });
   }
+  if (hasPosterOperation) {
+    let associated = false;
+    try { associated = await deps.associatePosterOperation!({ owner_user_id: uid, batch_id: batchId, ordinal, bucket_id: bucket, object_path: path }); }
+    catch { associated = false; }
+    if (!associated) {
+      try { await deps.removeObject(bucket, path); }
+      catch {
+        try { await deps.recordCleanup?.({ owner_user_id: uid, bucket_id: bucket, object_path: path, reason: "poster_association_failed" }); }
+        catch { /* fail closed; never acknowledge an unbound poster */ }
+      }
+      return Response.json({ error: "Upload could not be secured.", code: "poster_operation_unavailable", requestId }, { status: 503 });
+    }
+  }
 
   const proxyUrl = `/api/storage-image?path=${encodeURIComponent(path)}`;
   return Response.json({ ok: true, path, publicUrl: proxyUrl, proxyUrl, requestId }, { status: 201 });
@@ -133,6 +156,10 @@ export async function handleStudioUploadCleanup(req: Request, deps: StudioUpload
   const path = typeof body.path === "string" ? body.path : "";
   // The browser can only request cleanup inside its own image upload prefix; never
   // accept arbitrary bucket paths or video objects through this endpoint.
+  const anyOwnerPath = /^studio\/uploads\/([0-9A-Fa-f-]{8,64})\//.exec(path);
+  if (anyOwnerPath && anyOwnerPath[1] !== uid) {
+    return Response.json({ error: "Forbidden", code: "forbidden", requestId }, { status: 403 });
+  }
   const escapedOwner = uid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const safePath = new RegExp(`^studio/uploads/${escapedOwner}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.(?:png|jpe?g|webp|gif)$`, "i");
   if (!safePath.test(path) || /[%\\\0]|\.\.|\/\//.test(path)) {
