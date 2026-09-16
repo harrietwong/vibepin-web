@@ -13,6 +13,7 @@ const TEST_WORKSPACE = "default";
 type VideoMockOptions = {
   failOrdinal?: number;
   hangUpload?: boolean;
+  appearanceTheme?: "dark" | "light";
 };
 
 type VideoMockState = {
@@ -22,7 +23,7 @@ type VideoMockState = {
   uploadCalls: number[];
 };
 
-function fakeSession() {
+function fakeSession(appearanceTheme: "dark" | "light" = "dark") {
   const encode = (value: Record<string, unknown>) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   const user = {
@@ -30,7 +31,7 @@ function fakeSession() {
     aud: "authenticated",
     role: "authenticated",
     email: "video-e2e@vibepin.test",
-    user_metadata: { appearanceTheme: "dark" },
+    user_metadata: { appearanceTheme },
     app_metadata: { provider: "email", providers: ["email"] },
     created_at: "2026-01-01T00:00:00.000Z",
   };
@@ -45,7 +46,17 @@ function fakeSession() {
   };
 }
 
-async function installAuthAndIsolation(page: Page) {
+async function installAuthAndIsolation(page: Page, appearanceTheme: "dark" | "light" = "dark") {
+  const baseOrigin = new URL(process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000").origin;
+  const session = fakeSession(appearanceTheme);
+  // @supabase/ssr uses chunkable base64url cookies in browser clients. Seed the
+  // real storage contract before navigation so useSessionUser can bind the
+  // owner-scoped Pin Draft store; localStorage alone only covers legacy clients.
+  await page.context().addCookies([{
+    name: "sb-127-auth-token",
+    value: `base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`,
+    url: baseOrigin,
+  }]);
   // getSession() is intentionally local-only in the app. Return a deterministic
   // test session for any Supabase storage key without creating a real auth user.
   await page.addInitScript((session) => {
@@ -55,10 +66,9 @@ async function installAuthAndIsolation(page: Page) {
       if (!value && key.includes("auth-token")) return JSON.stringify(session);
       return value;
     };
-    localStorage.setItem("vp:appearance_theme:v1", "dark");
-  }, fakeSession());
+    localStorage.setItem("vp:appearance_theme:v1", session.user.user_metadata.appearanceTheme);
+  }, session);
 
-  const baseOrigin = new URL(process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000").origin;
   // This is the last-resort network fence: any provider, CDN, Pinterest, AI, or
   // unmocked external request fails immediately and can never leave the machine.
   await page.route("**/*", async (route) => {
@@ -83,7 +93,7 @@ async function installAuthAndIsolation(page: Page) {
   await page.route("**/auth/v1/**", async (route) => {
     const request = route.request();
     if (request.url().includes("/user")) {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fakeSession().user) });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fakeSession(appearanceTheme).user) });
     } else {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
     }
@@ -99,7 +109,7 @@ async function installAuthAndIsolation(page: Page) {
 
 async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Promise<VideoMockState> {
   const state: VideoMockState = { options, prepareCalls: [], finalizeCalls: [], uploadCalls: [] };
-  await installAuthAndIsolation(page);
+  await installAuthAndIsolation(page, options.appearanceTheme);
 
   await page.route("**/api/studio/video-upload/prepare", async (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}") as { files?: Array<{ ordinal?: number }> };
@@ -149,12 +159,14 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ ok: true, batchId: `e2e_batch_${state.finalizeCalls.length}`, ordinal, proxyUrl: `/api/storage-video?path=${TEST_USER_ID}/videos/e2e/${ordinal}.mp4`, requestId: `finalize_${state.finalizeCalls.length}` }),
+      body: JSON.stringify({ ok: true, batchId: `e2e_batch_${state.finalizeCalls.length}`, ordinal, proxyUrl: `/api/storage-media?path=${TEST_USER_ID}/videos/e2e/${ordinal}.mp4`, requestId: `finalize_${state.finalizeCalls.length}` }),
     });
   });
 
   await page.route("**/api/studio/upload", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, path: `${TEST_USER_ID}/posters/e2e.jpg`, publicUrl: "/api/storage-image?path=e2e", proxyUrl: "/api/storage-image?path=e2e", requestId: "poster_upload" }) });
+    const pathName = `studio/uploads/${TEST_USER_ID}/e2e.jpg`;
+    const proxyUrl = `/api/storage-image?path=${encodeURIComponent(pathName)}`;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, path: pathName, publicUrl: proxyUrl, proxyUrl, requestId: "poster_upload" }) });
   });
   await page.route("**/api/studio/upload/poster-operation", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
@@ -162,7 +174,7 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
   await page.route("**/api/studio/upload/cleanup", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
-  await page.route("**/api/storage-video**", async (route) => {
+  await page.route("**/api/storage-media**", async (route) => {
     await route.fulfill({ status: 200, contentType: "video/mp4", body: VIDEO });
   });
   await page.route("**/api/storage-image**", async (route) => {
@@ -173,8 +185,16 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
 
 async function gotoStudio(page: Page) {
   await page.goto("/app/studio", { waitUntil: "domcontentloaded", timeout: 45_000 });
-  await expect(page.getByTestId("studio-interactive")).toBeAttached({ timeout: 20_000 });
-  await expect(page.getByTestId("board-upload-input")).toBeAttached({ timeout: 20_000 });
+  // The upload input is the actual interaction boundary. The page-level
+  // `studio-interactive` marker is a dev-only post-effect signal and can lag behind
+  // hydration while webpack is compiling the very large Studio bundle.
+  await expect(page.getByTestId("board-upload-input")).toBeAttached({ timeout: 45_000 });
+  // Video upload is owner-scoped. Wait for the authenticated app shell to bind the
+  // Pin Draft store; seeing the SSR upload input alone is not sufficient.
+  await expect.poll(
+    () => page.evaluate(() => localStorage.getItem("vp:pin_drafts:v2:legacy_migrated")),
+    { timeout: 20_000 },
+  ).toBe("1");
 }
 
 async function requireVideoFlag(page: Page) {
@@ -196,8 +216,10 @@ test.describe("video batch upload (fully mocked)", () => {
     await page.getByTestId("board-upload-input").setInputFiles([video("alpha.mp4"), video("beta.mp4")]);
 
     await expect(page.getByTestId("video-upload-batch")).toContainText("completed", { timeout: 30_000 });
-    await expect(page.getByTestId("pin-board-card")).toHaveCount(2, { timeout: 20_000 });
-    await expect(page.getByTestId("content-media-video")).toHaveCount(2);
+    const cards = page.getByTestId("pin-board-card");
+    await expect(cards).toHaveCount(2, { timeout: 20_000 });
+    await expect(cards.nth(0).getByTestId("content-media-video").first()).toBeVisible();
+    await expect(cards.nth(1).getByTestId("content-media-video").first()).toBeVisible();
     const drafts = await page.evaluate(() => {
       const entries = Object.entries(localStorage);
       const values = entries.filter(([key]) => key.includes("pin_drafts") || key.includes("pin-drafts"));
@@ -245,7 +267,8 @@ test.describe("video batch upload (fully mocked)", () => {
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.evaluate(({ userId, workspace }) => {
-      localStorage.setItem("vibepin:video-batch-recovery:v1", JSON.stringify([{
+      const scopeKey = `${userId}:${workspace}`;
+      localStorage.setItem("vibepin:video-batch-recovery:v1", JSON.stringify({ [scopeKey]: [{
         version: 1,
         logicalId: "recovery-batch:0",
         draftIdempotencyKey: "video:recovery-batch:0",
@@ -255,12 +278,16 @@ test.describe("video batch upload (fully mocked)", () => {
         inspection: { width: 320, height: 240, durationMs: 1000 },
         attempt: { id: "attempt_0_1", batchId: "e2e_recovery_batch", ordinal: 0, phase: "finalize_pending" },
         createdAt: new Date().toISOString(),
-      }]));
+      }] }));
     }, { userId: TEST_USER_ID, workspace: TEST_WORKSPACE });
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(1, { timeout: 30_000 });
-    await expect(page.getByTestId("content-media-video")).toHaveCount(1);
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("vibepin:video-batch-recovery:v1"))).toBe("[]");
+    await expect(page.getByTestId("pin-board-card").getByTestId("content-media-video").first()).toBeVisible();
+    await expect.poll(() => page.evaluate(({ userId, workspace }) => {
+      const raw = localStorage.getItem("vibepin:video-batch-recovery:v1");
+      const value = raw ? JSON.parse(raw) : {};
+      return value[`${userId}:${workspace}`] ?? null;
+    }, { userId: TEST_USER_ID, workspace: TEST_WORKSPACE })).toEqual([]);
   });
 
   test("desktop dark theme smoke keeps the upload control usable", async ({ page }) => {
@@ -288,8 +315,7 @@ test.describe("video batch upload — mobile light smoke", () => {
   test.use({ viewport: { width: 390, height: 844 }, colorScheme: "light" });
 
   test("keeps the upload control usable", async ({ page }) => {
-    await installVideoMocks(page);
-    await page.addInitScript(() => localStorage.setItem("vp:appearance_theme:v1", "light"));
+    await installVideoMocks(page, { appearanceTheme: "light" });
     await gotoStudio(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect(page.getByTestId("board-upload-input")).toBeAttached();
