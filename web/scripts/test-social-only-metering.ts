@@ -30,6 +30,24 @@ import Module from "node:module";
 const OWNER = "user-social-meter-1";
 let passed = 0, failed = 0;
 
+function fakeReceipt(body: Record<string, unknown>, requestedIds: string[]) {
+  const draftId = typeof body.postId === "string" ? body.postId.trim() : "";
+  const destinations = requestedIds.length ? requestedIds.map(id => {
+    const [provider, socialConnectionId] = id.split(":", 2);
+    return { id, provider, socialConnectionId: socialConnectionId ?? "" };
+  }) : [{ id: "", provider: "pinterest", socialConnectionId: "", boardId: String(body.boardId ?? "b") }];
+  return {
+    intentId: `publish:${draftId || "anonymous"}:meter-test`, priorIntentId: null,
+    fingerprint: "f".repeat(64), draftId, contentId: draftId,
+    sourceUpdatedAt: "2026-09-16T12:00:00.000Z", title: "t", description: "c",
+    altText: undefined, destinationUrl: undefined,
+    media: [{ id: "image-1", kind: "image", url: "https://example.com/img.png", source: "upload" }],
+    mode: { kind: "now" }, destinations, publishableDestinations: destinations,
+    dispatchDestinationIds: requestedIds, blockers: [], onlyPending: false,
+    confirmedAt: "2026-09-16T12:00:01.000Z",
+  };
+}
+
 type RpcCall = { fn: string; args: Record<string, unknown> };
 const rpcCalls: RpcCall[] = [];
 type RpcResult = { data: unknown; error: { message: string; code?: string } | null };
@@ -106,6 +124,63 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
       getUserIdFromBearerOrCookies: async () => OWNER,
     };
   }
+  if (request === "@/lib/server/publish/confirmationReceipt" || request.endsWith("/server/publish/confirmationReceipt")) {
+    return {
+      validateImmediatePublishReceipt: (_raw: unknown, body: Record<string, unknown>, requestedIds: string[]) => {
+        const receipt = fakeReceipt(body, requestedIds);
+        return { ok: true, receipt, destinations: receipt.destinations };
+      },
+      isConfirmedSocialDestinationSelection: () => true,
+      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId: null }),
+    };
+  }
+  if (request === "@/lib/server/publish/publishIntentLedger" || request.endsWith("/server/publish/publishIntentLedger")) {
+    class FakePublishIntentLedgerError extends Error { constructor(public readonly code: string, message: string) { super(message); } }
+    return {
+      PublishIntentLedgerError: FakePublishIntentLedgerError,
+      claimPublishIntentDestination: async (_db: unknown, _uid: string, _receipt: unknown, destination: Record<string, unknown>) => ({
+        claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: "destination-job-1",
+        claimToken: "claim-token-1", status: "claimed", attempt: 1, retryAllowed: false,
+        providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {}, destination,
+      }),
+      claimPublishIntentDestinations: async (_db: unknown, _uid: string, _receipt: unknown, destinations: Record<string, unknown>[]) => destinations.map((destination, index) => ({
+        destination,
+        claim: { claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: `destination-job-${index}`,
+          claimToken: `claim-token-${index}`, status: "claimed", attempt: 1, retryAllowed: false,
+          providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {} },
+      })),
+      claimPublishRetryDestinations: async (_db: unknown, _uid: string, _receipt: unknown, destinations: Record<string, unknown>[]) => destinations.map((destination, index) => ({
+        destination, claim: { claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: `destination-job-${index}`,
+          claimToken: `claim-token-${index}`, status: "claimed", attempt: 1, retryAllowed: false,
+          providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {} },
+      })),
+      settlePublishIntentDestination: async () => undefined,
+    };
+  }
+  if (request === "@/lib/social/server/socialConnectionStore" || request.endsWith("/social/server/socialConnectionStore")) {
+    const facebook = { id: "conn-fb-1", provider: "facebook", authProvider: "official", connectionStatus: "connected", accountName: "Test Page" };
+    return {
+      findConnection: async () => facebook,
+      summarizeConnections: async () => [{ provider: "facebook", accounts: [facebook] }],
+    };
+  }
+  if (request === "@/lib/social/destinationCapability" || request.endsWith("/social/destinationCapability")) {
+    return { resolveDestinationCapability: (input: { connectionId?: string }) => ({
+      connectionId: input.connectionId ?? "conn-fb-1", providerAccountId: input.connectionId ?? "account-1",
+      displayIdentity: "Test Page", publishNow: true,
+    }) };
+  }
+  if (request === "@/lib/social/publishFanout" || request.endsWith("/social/publishFanout")) {
+    return {
+      createPublishJob: async () => "job-1",
+      recordOutcomes: async () => true,
+    };
+  }
+  if (request === "@/lib/social/providers" || request.endsWith("/social/providers")) {
+    return { getSocialProviderById: () => ({
+      publishPost: async () => ({ ok: true, status: "published", externalPostId: "fb-1", externalPostUrl: "https://facebook/1" }),
+    }) };
+  }
   // /api/pinterest/pins delegates the actual Pinterest call to publishPinForUser --
   // faked here to a deterministic success so the cross-route key-parity check below
   // never makes a real network call and never depends on Pinterest credentials.
@@ -143,7 +218,7 @@ async function test(name: string, fn: () => Promise<void>) {
 }
 
 function req(body: unknown): Request {
-  return { json: async () => body } as unknown as Request;
+  return { url: "https://app.example.com/api/test", json: async () => body } as unknown as Request;
 }
 
 function consumeCalls(): RpcCall[] {
@@ -178,15 +253,12 @@ function consumeCalls(): RpcCall[] {
     assert.equal(calls[0].args.p_quantity, 1);
   });
 
-  await test("a publish that ALSO targets Pinterest still makes exactly ONE consume call from this route, keyed identically to the pins route (the shared idempotency key — not a client-trusted destination flag — is what prevents a double charge)", async () => {
-    const draftId = "pd_with_pinterest_1";
+  await test("a social publish with a supported destination makes exactly ONE consume call (Pinterest remains owned by its dedicated route)", async () => {
+    const draftId = "pd_with_social_1";
     await POST(req({
       postId: draftId,
       post: { imageUrls: ["https://example.com/img2.png"] },
-      destinations: [
-        { provider: "pinterest", socialConnectionId: "conn-pin-1" },
-        { provider: "facebook", socialConnectionId: "conn-fb-1" },
-      ],
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
     }));
     const calls = consumeCalls();
     assert.equal(calls.length, 1, "this route must always attempt a consume when postId is present, regardless of destinations");
@@ -199,10 +271,7 @@ function consumeCalls(): RpcCall[] {
     const res = await POST(req({
       postId: draftId,
       post: { imageUrls: ["https://example.com/img5.png"] },
-      destinations: [
-        { provider: "pinterest", socialConnectionId: "conn-pin-1" },
-        { provider: "facebook", socialConnectionId: "conn-fb-1" },
-      ],
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
     }));
     assert.equal(res.status, 200, "a replayed consume must never fail the publish");
     assert.equal(consumeCalls().length, 1, "the route still attempts exactly one consume call");

@@ -81,6 +81,7 @@ let providerCallCount = 0;
  */
 let summarizeBehaviour: () => Promise<unknown> = async () => [
   { provider: "facebook", accounts: [CONNECTED_FB] },
+  { provider: "instagram", accounts: [{ ...CONNECTED_FB, id: "conn-ig-1", provider: "instagram" }] },
 ];
 let createPublishJobBehaviour: () => Promise<unknown> = async () => "job-1";
 
@@ -119,6 +120,44 @@ const CONNECTED_FB = {
   accountName: "Test Page",
 };
 
+/** The routes now require a merchant-confirmed receipt and a durable intent claim
+ * before they meter. These tests exercise metering/refund mapping, so keep those
+ * owner-scoped boundaries deterministic and in-memory. */
+function confirmationDestination(id: string, provider: string, connectionId: string, boardId?: string) {
+  return { id, provider, socialConnectionId: connectionId, ...(boardId ? { boardId } : {}) };
+}
+
+function fakeImmediateReceipt(body: Record<string, unknown>, requestedIds: string[]) {
+  const postId = typeof body.postId === "string" ? body.postId.trim() :
+    (typeof body.draftId === "string" ? body.draftId.trim() : "");
+  const destinations = requestedIds.length
+    ? requestedIds.map(id => {
+      const [provider, connectionId] = id.split(":", 2);
+      return confirmationDestination(id, provider, connectionId ?? "", provider === "pinterest" ? String(body.boardId ?? "b1") : undefined);
+    })
+    : [confirmationDestination("", "pinterest", typeof body.connectionId === "string" ? body.connectionId : "", String(body.boardId ?? "b1"))];
+  return {
+    intentId: `publish:${postId || "anonymous"}:test`,
+    priorIntentId: null,
+    fingerprint: "f".repeat(64),
+    draftId: postId,
+    contentId: postId,
+    sourceUpdatedAt: "2026-09-16T12:00:00.000Z",
+    title: typeof body.title === "string" ? body.title : undefined,
+    description: typeof body.description === "string" ? body.description : undefined,
+    altText: typeof body.altText === "string" ? body.altText : undefined,
+    destinationUrl: typeof body.link === "string" ? body.link : undefined,
+    media: [{ id: "image-1", kind: "image", url: String((Array.isArray(body.imageUrls) ? body.imageUrls[0] : body.imageUrl) ?? "https://example.com/a.png"), source: "upload" }],
+    mode: { kind: "now" },
+    destinations,
+    publishableDestinations: destinations,
+    dispatchDestinationIds: destinations.map(destination => destination.id),
+    blockers: [],
+    onlyPending: false,
+    confirmedAt: "2026-09-16T12:00:01.000Z",
+  };
+}
+
 const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown })._load;
 (Module as unknown as { _load: (...a: unknown[]) => unknown })._load = function (
   this: unknown, request: string, parent: unknown, isMain: boolean,
@@ -131,6 +170,47 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
       getUserIdFromBearer: async () => OWNER,
       getUserIdFromCookies: async () => null,
       getUserIdFromBearerOrCookies: async () => OWNER,
+    };
+  }
+  if (request === "@/lib/server/publish/confirmationReceipt" || request.endsWith("/server/publish/confirmationReceipt")) {
+    return {
+      validateImmediatePublishReceipt: (raw: unknown, body: Record<string, unknown>, requestedIds: string[]) => {
+        const receipt = fakeImmediateReceipt(body, requestedIds);
+        return { ok: true, receipt, destinations: receipt.destinations };
+      },
+      isConfirmedSocialDestinationSelection: () => true,
+      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId: null }),
+    };
+  }
+  if (request === "@/lib/server/publish/publishIntentLedger" || request.endsWith("/server/publish/publishIntentLedger")) {
+    class FakePublishIntentLedgerError extends Error { constructor(public readonly code: string, message: string) { super(message); } }
+    return {
+      PublishIntentLedgerError: FakePublishIntentLedgerError,
+      claimPublishIntentDestination: async (_db: unknown, _uid: string, _receipt: unknown, destination: Record<string, unknown>) => ({
+        claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: "destination-job-1",
+        claimToken: "claim-token-1", status: "claimed", attempt: 1, retryAllowed: false,
+        providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {}, destination,
+      }),
+      claimPublishIntentDestinations: async (_db: unknown, _uid: string, _receipt: unknown, destinations: Record<string, unknown>[]) => destinations.map((destination, index) => ({
+        destination,
+        claim: { claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: `destination-job-${index}`,
+          claimToken: `claim-token-${index}`, status: "claimed", attempt: 1, retryAllowed: false,
+          providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {} },
+      })),
+      claimPublishRetryDestinations: async (_db: unknown, _uid: string, _receipt: unknown, destinations: Record<string, unknown>[]) => destinations.map((destination, index) => ({
+        destination, claim: { claimed: true, replayed: false, intentJobId: "intent-job-1", destinationJobId: `destination-job-${index}`,
+          claimToken: `claim-token-${index}`, status: "claimed", attempt: 1, retryAllowed: false,
+          providerJobId: null, remoteId: null, remoteUrl: null, providerStatus: null, evidence: {} },
+      })),
+      settlePublishIntentDestination: async () => undefined,
+    };
+  }
+  if (request === "@/lib/social/destinationCapability" || request.endsWith("/social/destinationCapability")) {
+    return {
+      resolveDestinationCapability: (input: { provider?: string; connectionId?: string; providerAccountId?: string }) => ({
+        connectionId: input.connectionId ?? "conn-pin-1", providerAccountId: input.providerAccountId ?? input.connectionId ?? "account-1",
+        displayIdentity: "Test account", publishNow: true,
+      }),
     };
   }
   if (request === "@/lib/server/pinterest/publishPin" || request.endsWith("/lib/server/pinterest/publishPin")) {
@@ -152,7 +232,9 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
   // driven from `socialPublishBehaviour` below.
   if (request === "@/lib/social/server/socialConnectionStore" || request.endsWith("/social/server/socialConnectionStore")) {
     return {
-      findConnection: async () => CONNECTED_FB,
+      findConnection: async (_uid: string, connectionId: string) => connectionId === "conn-ig-1"
+        ? { ...CONNECTED_FB, id: "conn-ig-1", provider: "instagram" }
+        : CONNECTED_FB,
       summarizeConnections: async () => summarizeBehaviour(),
     };
   }
@@ -165,7 +247,7 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
     return {
       ...real,
       createPublishJob: async () => createPublishJobBehaviour(),
-      recordOutcomes: async () => {},
+      recordOutcomes: async () => true,
     };
   }
   // The provider registry — the ONLY place a real network call could originate.
@@ -200,7 +282,10 @@ async function test(name: string, fn: () => Promise<void>) {
   socialPublishBehaviour = async () => ({
     ok: true, status: "published", externalPostId: "fb-1", externalPostUrl: "https://facebook/1",
   });
-  summarizeBehaviour = async () => [{ provider: "facebook", accounts: [CONNECTED_FB] }];
+  summarizeBehaviour = async () => [
+    { provider: "facebook", accounts: [CONNECTED_FB] },
+    { provider: "instagram", accounts: [{ ...CONNECTED_FB, id: "conn-ig-1", provider: "instagram" }] },
+  ];
   createPublishJobBehaviour = async () => "job-1";
   process.env.USAGE_METERING_MODE = "shadow";
   delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
@@ -209,7 +294,7 @@ async function test(name: string, fn: () => Promise<void>) {
 }
 
 function req(body: unknown): Request {
-  return { json: async () => body } as unknown as Request;
+  return { url: "https://app.example.com/api/test", json: async () => body } as unknown as Request;
 }
 
 function consumeCalls(): RpcCall[] {
@@ -1003,24 +1088,21 @@ function ledgerConsumeKeys(): string[] {
    * cannot prove the post was not created, so the charge stands as delivery_unknown).
    */
 
-  await test("social / pre-dispatch: summarizeConnections THROWS after a fresh consume → refund not_sent", async () => {
+  await test("social / preflight: summarizeConnections THROWS before metering → 503, no charge or refund", async () => {
     summarizeBehaviour = async () => { throw new Error("supabase unavailable"); };
-    await assert.rejects(
-      () => socialPOST(socialReq("pd_s_sumthrow")),
-      /supabase unavailable/,
-      "the original error must propagate unchanged — the refund is a side effect, not a swallow",
-    );
-    assert.equal(consumeCalls().length, 1, "the unit was charged before the throw");
+    const res = await socialPOST(socialReq("pd_s_sumthrow"));
+    assert.equal(res.status, 503, "destination preflight failures are mapped before metering");
+    assert.equal((await res.json() as { code?: string }).code, "capability_unavailable");
+    assert.equal(consumeCalls().length, 0, "preflight runs before the unit can be charged");
     assert.equal(providerCallCount, 0, "no provider may be reached on this path");
-    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_s_sumthrow"));
+    assertNotReleased();
   });
 
   await test("social / pre-dispatch: createPublishJob THROWS after a fresh consume → refund not_sent", async () => {
     createPublishJobBehaviour = async () => { throw new Error("publish_jobs missing"); };
-    await assert.rejects(
-      () => socialPOST(socialReq("pd_s_jobthrow")),
-      /publish_jobs missing/,
-    );
+    const res = await socialPOST(socialReq("pd_s_jobthrow"));
+    assert.equal(res.status, 503, "a job-creation throw is mapped after the fresh consume");
+    assert.equal((await res.json() as { code?: string }).code, "publish_not_started");
     assert.equal(providerCallCount, 0, "no provider may be reached on this path");
     assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_s_jobthrow"));
   });
@@ -1033,12 +1115,16 @@ function ledgerConsumeKeys(): string[] {
       ? { data: { ok: true, replayed: true }, error: null }
       : { data: { ok: true, replayed: false }, error: null };
     summarizeBehaviour = async () => { throw new Error("supabase unavailable"); };
-    await assert.rejects(() => socialPOST(socialReq("pd_s_replay_sum")), /supabase unavailable/);
+    const sumResponse = await socialPOST(socialReq("pd_s_replay_sum"));
+    assert.equal(sumResponse.status, 503);
+    assert.equal(consumeCalls().length, 0, "destination preflight still happens before metering");
     assertNotReleased();
 
     createPublishJobBehaviour = async () => { throw new Error("publish_jobs missing"); };
     summarizeBehaviour = async () => [{ provider: "facebook", accounts: [CONNECTED_FB] }];
-    await assert.rejects(() => socialPOST(socialReq("pd_s_replay_job")), /publish_jobs missing/);
+    const jobResponse = await socialPOST(socialReq("pd_s_replay_job"));
+    assert.equal(jobResponse.status, 503);
+    assert.equal(consumeCalls().length, 1, "the replayed consume is attempted before job creation");
     assertNotReleased();
   });
 
