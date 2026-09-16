@@ -321,5 +321,24 @@ test("media ids do not collide across a remove-then-add cycle", () => {
   assert.equal(new Set(ids).size, ids.length, "every media id in one Content must be unique");
 });
 
+// ── 7. Video media contract ─────────────────────────────────────────────────
+
+test("contentMedia preserves an explicit video item while legacy image JSON stays unchanged", () => {
+  resetStore();
+  const legacy = {
+    id: "legacy-image", imageUrl: "legacy.jpg", altText: "Legacy alt", source: "uploaded_image",
+  } as PinDraft;
+  assert.deepEqual(contentMedia(legacy), [{
+    id: "legacy-image:media:0", kind: "image", url: "legacy.jpg", altText: "Legacy alt", source: "upload",
+  }], "the synthesized legacy image must retain its historical JSON shape");
+
+  const video: ContentMedia = {
+    id: "clip-1", kind: "video", url: "private://clip.mp4", source: "upload",
+    width: 1080, height: 1920, durationMs: 15_000,
+  };
+  const draft = draftRow({ id: "video-content", imageUrl: "poster.jpg", media: [video] });
+  assert.deepEqual(contentMedia(draft), [video], "an explicit video must remain discriminated as video");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -9,7 +9,8 @@
     "test:v71-generation-intent": "node verify-v71-generation-intent.mjs",
     "test:v74-security": "node verify-v74-security-invoker-rls.mjs",
     "test:v75-media-provenance": "node verify-v75-media-provenance.mjs",
-    "test:v76-publish-assets": "node verify-v76-publish-assets.mjs"
+    "test:v76-publish-assets": "node verify-v76-publish-assets.mjs",
+    "test:v77-video-media": "node verify-v77-video-media.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8"

@@ -20,18 +20,30 @@ import { resolveScheduledDestinations } from "./social/scheduledDestinations";
 
 export type { MediaCheckResult, MediaCheckFailureCode, PublishMediaItem } from "@/lib/publish/mediaRules";
 
-export type ContentMediaKind = "image";
+export type ContentMediaKind = "image" | "video";
 export type ContentMediaSource = "upload" | "ai" | "product" | "legacy";
 
-export interface ContentMedia {
+interface ContentMediaBase {
   id: string;
-  kind: ContentMediaKind;
   url: string;
   altText?: string;
   source?: ContentMediaSource;
   width?: number;
   height?: number;
 }
+
+/** A still image. Its serialized fields intentionally remain unchanged. */
+export interface ContentImageMedia extends ContentMediaBase {
+  kind: "image";
+}
+
+/** A video clip, distinguished from images without changing legacy image JSON. */
+export interface ContentVideoMedia extends ContentMediaBase {
+  kind: "video";
+  durationMs?: number;
+}
+
+export type ContentMedia = ContentImageMedia | ContentVideoMedia;
 
 export type PublishProvider = "pinterest" | "instagram" | "facebook";
 
