@@ -44,7 +44,7 @@ function VideoMediaItem({ media, index, disabled, selected, onSelect }: {
       <MediaThumbnail media={media} alt={media.altText || `Video ${index + 1}`} />
     </div>
     <button type="button" aria-label={`Use video ${index + 1} as cover`} disabled={disabled} onClick={onSelect}
-      style={{ minHeight: 40, padding: "3px 5px", border: 0, borderRadius: 6, background: selected ? BUI.purple : BUI.surface3, color: "#fff", cursor: disabled ? "default" : "pointer", fontSize: 10, fontWeight: 700 }}>
+      style={{ minHeight: 40, padding: "3px 5px", border: 0, borderRadius: 6, background: selected ? BUI.purple : BUI.surface3, color: "#fff", cursor: disabled ? "default" : "pointer", fontSize: 12, fontWeight: 700 }}>
       {selected ? "Video cover" : "Use as cover"}
     </button>
   </div>;

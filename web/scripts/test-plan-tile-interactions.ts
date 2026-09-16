@@ -134,23 +134,24 @@ test("PinThumbnail uses async decode + configurable lazy/eager loading", () => {
 });
 
 // Shared component actually used across the required surfaces.
-test("PinThumbnail is used in Week / Month / Unscheduled / Day-detail / hover card", () => {
+test("PlanContentMedia retains PinThumbnail in Week / Month / Unscheduled / Day-detail", () => {
+  assert(plan.includes("renderImage={image => <PinThumbnail"), "PlanContentMedia must retain PinThumbnail behavior for images");
   const weekIdx = plan.indexOf("function DraggablePinCard");
-  assert(plan.slice(weekIdx, weekIdx + 2600).includes("<PinThumbnail"), "Week tile not using PinThumbnail");
+  assert(plan.slice(weekIdx, weekIdx + 2600).includes("<PlanContentMedia"), "Week tile not using PlanContentMedia");
   const monthIdx = plan.indexOf("function MonthDayCell");
-  assert(plan.slice(monthIdx, monthIdx + 5000).includes("<PinThumbnail"), "Month cell not using PinThumbnail");
+  assert(plan.slice(monthIdx, monthIdx + 5000).includes("<PlanContentMedia"), "Month cell not using PlanContentMedia");
   assert(plan.includes('testId="rail-select-box"') &&
-    /<PinThumbnail[\s\S]{0,200}testId="rail-select-box"/.test(plan), "Unscheduled rail not using PinThumbnail");
-  assert(/<PinThumbnail[\s\S]{0,160}day-detail-select-box/.test(plan), "Day detail not using PinThumbnail");
+    /<PlanContentMedia[\s\S]{0,200}testId="rail-select-box"/.test(plan), "Unscheduled rail not using PlanContentMedia");
+  assert(/<PlanContentMedia[\s\S]{0,160}day-detail-select-box/.test(plan), "Day detail not using PlanContentMedia");
   assert(hover.includes("<PinThumbnail"), "Hover card not using PinThumbnail");
 });
 
 // Week tile uses eager (first-screen); below-the-fold thumbnails lazy.
 test("First-screen Week tile loads eager; Month/Unscheduled lazy", () => {
   const weekIdx = plan.indexOf("function DraggablePinCard");
-  assert(/<PinThumbnail[^>]*loading="eager"/.test(plan.slice(weekIdx, weekIdx + 2600)), "Week tile should be eager");
+  assert(/<PlanContentMedia[^>]*loading="eager"/.test(plan.slice(weekIdx, weekIdx + 2600)), "Week tile should be eager");
   const monthIdx = plan.indexOf("function MonthDayCell");
-  assert(/<PinThumbnail[^>]*loading="lazy"/.test(plan.slice(monthIdx, monthIdx + 5000)), "Month thumbnail should be lazy");
+  assert(/<PlanContentMedia[^>]*loading="lazy"/.test(plan.slice(monthIdx, monthIdx + 5000)), "Month thumbnail should be lazy");
 });
 
 // 13. Week/Month Batch Edit selection still works (regression guard).

@@ -189,7 +189,7 @@ test("providers are empty when there is no destination signal at all", () => {
   assert.deepEqual(itemProviders(draft({ id: "bare" })), []);
 });
 
-test("cover prefers the Content's first media over the legacy image", () => {
+test("cover preserves the Content media discriminant over the legacy image alias", () => {
   const withMedia = draft({
     id: "m",
     plannedAt: "2026-08-25T09:00",
@@ -200,10 +200,10 @@ test("cover prefers the Content's first media over the legacy image", () => {
     ],
   });
   const days = buildWeek([withMedia], MONDAY, WEDNESDAY_NOON);
-  assert.equal(days[1].items[0].cover, "https://cdn/first.jpg");
+  assert.deepEqual(days[1].items[0].cover, { id: "m0", kind: "image", url: "https://cdn/first.jpg" });
 
   const legacy = buildWeek([draft({ id: "l", plannedAt: "2026-08-25T09:00", imageUrl: "https://cdn/legacy.jpg" })], MONDAY, WEDNESDAY_NOON);
-  assert.equal(legacy[1].items[0].cover, "https://cdn/legacy.jpg");
+  assert.deepEqual(legacy[1].items[0].cover, { id: "l:media:0", kind: "image", url: "https://cdn/legacy.jpg", source: "legacy", altText: undefined });
 });
 
 // ── header counts ─────────────────────────────────────────────────────────────

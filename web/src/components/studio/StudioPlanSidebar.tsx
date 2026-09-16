@@ -471,7 +471,7 @@ function PlanItem({ item, highlighted, tr }: {
         border: `1px solid ${item.state === "failed" ? "rgba(217,119,6,0.45)" : BUI.border}`,
         filter: muted ? "grayscale(0.35)" : "none",
       }}>
-        <ContentMediaRenderer media={item.cover} alt="" />
+        <ContentMediaRenderer media={item.cover} alt="" videoControls={false} />
         {item.providers.length > 0 && (
           <span style={{
             position: "absolute", left: 1, bottom: 1, display: "flex", gap: 1,

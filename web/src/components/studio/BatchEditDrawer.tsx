@@ -1705,7 +1705,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "block" }}>
                                     {/* Vertical Pin thumbnail (2:3), not a horizontal strip crop. */}
                                     <span data-testid="batch-edit-pin-thumb" style={{ width: 40, height: 54, borderRadius: 5, overflow: "hidden", background: UI.cardElev, display: "block" }}>
-                                      <ContentMediaRenderer media={rowMedia(p)} alt={p.altText || p.title} />
+                                      <ContentMediaRenderer media={rowMedia(p)} alt={p.altText || p.title} videoControls={false} />
                                     </span>
                                   </button>
                                 </td>
