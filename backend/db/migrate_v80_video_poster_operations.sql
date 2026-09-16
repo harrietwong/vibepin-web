@@ -178,12 +178,14 @@ grant execute on function public.video_poster_operation_associate(uuid,uuid,inte
 grant execute on function public.video_poster_operation_retain(uuid,uuid,integer,text,text) to service_role;
 grant execute on function public.video_poster_cleanup_authorize(uuid,text,text) to service_role;
 do $v80_postflight$
-declare v_name text; v_actual text; v_role text; v_priv text; v_allowed boolean;
+declare v_name text; v_actual text; v_role text; v_priv text; v_allowed boolean; v_count integer;
 begin
-  select pg_get_constraintdef(oid) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_state_check';
-  if not found or position('associated' in v_actual)=0 or position('retained' in v_actual)=0 then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
-  select pg_get_constraintdef(oid) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_path_check';
-  if not found or position('studio/uploads' in v_actual)=0 or position('png|jpg|jpeg|webp|gif' in v_actual)=0 then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  select pg_get_constraintdef(oid,true) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_state_check';
+  if not found or regexp_replace(v_actual,'\s+','','g') <> regexp_replace($v80_state$CHECK (state = ANY (ARRAY['associated'::text, 'retained'::text]))$v80_state$,'\s+','','g') then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  select pg_get_constraintdef(oid,true) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_path_check';
+  if not found or regexp_replace(v_actual,'\s+','','g') <> regexp_replace($v80_path$CHECK (object_path ~ '^studio/uploads/[0-9A-Fa-f-]{8,64}/[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.(png|jpg|jpeg|webp|gif)$'::text)$v80_path$,'\s+','','g') then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  select count(*)::int into v_count from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_bucket_id_object_path_key' and contype='u' and convalidated;
+  if v_count<>1 or exists(select 1 from pg_attribute where attrelid='public.video_poster_operations'::regclass and attname in ('video_item_id','owner_user_id','bucket_id','object_path','state','created_at','updated_at') and not attnotnull) then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
   if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname in ('video_poster_operation_associate','video_poster_operation_retain','video_poster_cleanup_authorize')
       and p.oid not in (to_regprocedure('public.video_poster_operation_associate(uuid,uuid,integer,text,text)'),to_regprocedure('public.video_poster_operation_retain(uuid,uuid,integer,text,text)'),to_regprocedure('public.video_poster_cleanup_authorize(uuid,text,text)')))

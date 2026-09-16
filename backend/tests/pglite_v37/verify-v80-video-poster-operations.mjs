@@ -91,7 +91,8 @@ async function run() {
       has_function_privilege('authenticated','public.video_poster_cleanup_authorize(uuid,text,text)','execute') as auth_exec,
       has_table_privilege('service_role','public.video_poster_operations','insert') as service_insert`)).rows[0];
     assert(privileges.auth_select === false && privileges.auth_exec === false && privileges.service_insert === true, 'no client table/RPC write and service-only access');
-    const constraint = (await db.query("select pg_get_constraintdef(oid) as definition from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_path_check'")).rows[0]?.definition ?? '';
+    const constraintRows = (await db.query("select conname,pg_get_constraintdef(oid,true) as definition from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname in ('video_poster_operations_state_check','video_poster_operations_path_check') order by conname")).rows;
+    const constraint = constraintRows.find(row => row.conname === 'video_poster_operations_path_check')?.definition ?? '';
     assert(constraint.includes('studio/uploads'), 'canonical path constraint exists');
     const live = await db.query("select count(*)::int as count from public.video_poster_operations");
     await db.exec(rollback);
@@ -99,6 +100,8 @@ async function run() {
     await db.exec(v80);
     assert((await db.query("select count(*)::int as count from public.video_poster_operations")).rows[0].count === 0, 'rollback/reapply is clean and does not adopt rows');
     assert(live.rows[0].count === 2, 'two server-owned associations were materialized before rollback');
+    await db.exec("alter table public.video_poster_operations drop constraint video_poster_operations_path_check; alter table public.video_poster_operations add constraint video_poster_operations_path_check check (object_path like '%studio/uploads%' or true)");
+    assert(Boolean(await rejected(() => db.exec(v80))), 'reapply rejects a same-keyword tautological path constraint');
     console.log(`v80 video poster operations: ${assertions} assertions passed`);
   } finally { await db.close(); }
 }
