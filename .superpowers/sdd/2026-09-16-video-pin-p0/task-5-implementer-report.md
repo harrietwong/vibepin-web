@@ -18,6 +18,7 @@
 - A draft read is now tri-state: only an explicitly persisted `image` is treated as an image. Not-found, loader failure, malformed payload, and unknown media fail closed as `video_cover_unavailable` and discard client visual assertions.
 - Empty, malformed, and fully rejected static-frame provider observations also degrade without invented composition/layout facts. Partially valid literal taxonomy fields are retained without defaults.
 - A production-boundary test executes the default owner/draft/deleted selector and default provider-message construction with only DB, Storage, and provider transport I/O faked; it asserts the bounded poster data URL, strict protocol, and owner cost context.
+- Existing image compatibility includes the persisted legacy `imageUrl`-only shape used by `contentMedia`. It is accepted only when the `media` field is absent; an explicit video (or malformed/unknown media field) always takes the safer video/unknown path, even if an `imageUrl` is also present.
 - The shared evidence panel displays `Based on the video cover frame` and a clear unavailable-cover state. Existing image and flag-off paths remain in the regression suite.
 
 ## RED / GREEN Evidence
@@ -30,6 +31,7 @@
 - `tsc --noEmit --incremental false`, scoped ESLint, `git diff --cached --check`, and `git diff --check` exited cleanly.
 - Round 2 RED: hardening first failed because a loader exception resolved as `kind: "image"`. It now proves loader errors/null/malformed payloads are `unknown`, invalid/null/all-rejected provider observations are unavailable, and partial observations do not invent missing composition/layout.
 - Round 2 GREEN: cover, hardening, production-boundary, facts, UI, language (11/11), metering (15/15), routes (46/46), registry (241 tracked / 233 runnable), scoped ESLint, independent typecheck, and diff checks passed.
+- Round 3 RED/GREEN: the new route regression first showed `imageUrl`-only legacy drafts as video-cover unavailable; the route suite is now 47/47 and covers legacy imageUrl-only, explicit video with/without poster, null/throw, and a conflicting imageUrl plus video media entry.
 
 ## Risks / Handoff
 

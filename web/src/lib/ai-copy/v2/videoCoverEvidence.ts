@@ -46,8 +46,18 @@ function parseStaticObservation(raw: unknown): StaticCoverObservation | null {
 }
 
 function videoPosterFromDraft(raw: unknown): { kind: "image" } | { kind: "video"; posterUrl: string | null } | { kind: "unknown" } {
-  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { media?: unknown }).media)) return { kind: "unknown" };
-  const cover = (raw as { media: unknown[] }).media[0];
+  if (!raw || typeof raw !== "object") return { kind: "unknown" };
+  const draft = raw as { media?: unknown; imageUrl?: unknown };
+  // `contentMedia` intentionally synthesizes a legacy image only when there is
+  // no media[] field at all. Preserve that established persisted shape, but do
+  // not allow an explicit/malformed media field to bypass video classification.
+  if (!("media" in draft)) {
+    return typeof draft.imageUrl === "string" && draft.imageUrl.trim()
+      ? { kind: "image" }
+      : { kind: "unknown" };
+  }
+  if (!Array.isArray(draft.media)) return { kind: "unknown" };
+  const cover = draft.media[0];
   if (!cover || typeof cover !== "object") return { kind: "unknown" };
   if ((cover as { kind?: unknown }).kind === "image") return { kind: "image" };
   if ((cover as { kind?: unknown }).kind !== "video") return { kind: "unknown" };

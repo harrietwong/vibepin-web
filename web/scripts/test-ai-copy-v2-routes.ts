@@ -323,6 +323,39 @@ async function main() {
     }
   });
 
+  await test("legacy imageUrl-only drafts retain image evidence while explicit video media always wins", async () => {
+    const makeHandler = (loadOwnedDraft: () => Promise<unknown | null>) => createAnalyzeHandler({ videoCoverDeps: {
+      loadOwnedDraft,
+      findProvenance: async (owner, bucketId, path) => ({ owner_user_id: owner, bucket_id: bucketId, object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "ready" }),
+      fetchStorageObject: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
+      analyzePoster: async () => ({ objects: ["mug"], colors: ["blue"], composition: "still_life", layout: "centered" }),
+    } });
+    const imageObserved = { summary: "Blue mug", objects: ["mug"], colors: ["blue"] };
+
+    const legacy = await makeHandler(async () => ({ id: "legacy-image", imageUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser_123%2Fimage.png", source: "uploaded_image", altText: "Blue mug" }))(analyzeReq("legacy-image-only", { imageObserved }));
+    eq(legacy.status, 200, "legacy imageUrl-only draft remains a supported image"); const legacyBody = await legacy.json();
+    assert(!legacyBody.factCard.mediaEvidence, "legacy image is not mislabeled as video cover evidence");
+    assert(legacyBody.factCard.facts.some((fact: { key: string; value: string }) => fact.key === "image_summary" && fact.value === "Blue mug"), "legacy image observations remain available");
+
+    const videoWithPoster = await makeHandler(async () => ({ imageUrl: "private://attacker-image.png", media: [{ kind: "video", posterUrl: "/api/storage-image?path=studio%2Fuploads%2Fuser_123%2Fcover.png" }] }))(analyzeReq("explicit-video-poster", { imageObserved: { summary: "forged image" } }));
+    eq(videoWithPoster.status, 200, "explicit video with poster analyzes safely"); const posterBody = await videoWithPoster.json();
+    eq(posterBody.factCard.mediaEvidence?.mode, "video_cover", "explicit video wins over imageUrl conflict");
+    assert(posterBody.factCard.facts.some((fact: { key: string; value: string }) => fact.key === "image_summary" && fact.value === "still_life composition"), "only server cover facts survive");
+    assert(!posterBody.factCard.facts.some((fact: { value: string }) => fact.value === "forged image"), "conflicting client evidence is discarded");
+
+    const noPoster = await makeHandler(async () => ({ imageUrl: "private://attacker-image.png", media: [{ kind: "video" }] }))(analyzeReq("explicit-video-no-poster", { imageObserved }));
+    eq(noPoster.status, 200, "explicit video without poster degrades safely"); const noPosterBody = await noPoster.json();
+    eq(noPosterBody.degradedMode, "video_cover_unavailable", "video without poster does not fall back to imageUrl");
+    eq(noPosterBody.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, "video conflict has no client visual facts");
+
+    for (const [key, loadOwnedDraft] of [["legacy-null", async () => null], ["legacy-throw", async () => { throw new Error("db unavailable"); }]] as const) {
+      const response = await makeHandler(loadOwnedDraft)(analyzeReq(key, { imageObserved }));
+      const body = await response.json();
+      eq(body.degradedMode, "video_cover_unavailable", `${key} stays fail-closed`);
+      eq(body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, `${key} cannot use client observations`);
+    }
+  });
+
   await test("route facts retain negated availability and reject an opposite in-stock claim", async () => {
     const store = reset();
     const analyzed = await analyze(analyzeReq("availability-negated", { productContext: { availability: "not in stock" } }));
