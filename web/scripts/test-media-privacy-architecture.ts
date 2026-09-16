@@ -20,9 +20,11 @@ function uploadRequest(file?: File): Request {
 }
 
 async function main() {
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||= "https://example.supabase.co";
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "test-anon-key";
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role";
+  // This test asserts exact canonical URLs, so its configured origin must not
+  // inherit whichever isolated Supabase stub the parent test runner uses.
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
 
   const { toProxyUrl } = await import("../src/lib/imageProxy");
   const { handleStorageImageGet } = await import("../src/lib/server/storageImageHandler");

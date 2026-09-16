@@ -395,7 +395,7 @@ async function main() {
       "async def fail_provider(*_args, **_kwargs):",
       "    raise RuntimeError('api_server_error::' + os.environ['VP_PROVIDER_SENTINEL'])",
       "generator._call_api = fail_provider",
-      "payload = {'keyword': os.environ['VP_KEYWORD_SENTINEL'], 'prompt': os.environ['VP_PROMPT_SENTINEL'], 'providerMode': 'real', 'model_key': 'gemini_image', 'count': 1}",
+      "payload = {'keyword': os.environ['VP_KEYWORD_SENTINEL'], 'prompt': os.environ['VP_PROMPT_SENTINEL'], 'providerMode': 'real', 'model_key': 'gemini_image', 'count': 1, '_trustedGenerationOwnerId': '11111111-1111-4111-8111-111111111111'}",
       "result = asyncio.run(generator.generate_from_payload(payload))",
       "print(json.dumps(result))",
     ].join("\n");

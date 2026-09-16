@@ -209,7 +209,7 @@ test("6c. persistDraft (the single write path) still writes scheduledDate/schedu
 test("6d. persisting a manually-chosen custom time updates the draft's updatedAt (via pinDraftStore.updateDraft)", () => {
   const storeSource = readFileSync(join(root, "src/lib/pinDraftStore.ts"), "utf8");
   assert.ok(
-    storeSource.includes("const updated: PinDraft = { ...draft, ...patch, updatedAt: new Date().toISOString() };"),
+    /(?:const|let) updated: PinDraft = \{ \.\.\.draft, \.\.\.patch, updatedAt: new Date\(\)\.toISOString\(\) \};/.test(storeSource),
     "updateDraft must stamp updatedAt on every patch, including custom-time schedules routed through persistDraft",
   );
 });

@@ -296,7 +296,7 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
   // A scheduled Pin may auto-publish without another user review. Keep this gate
   // deliberately narrower than copy quality: only delivery-critical fields block.
   if (!isPublishableContentMedia(draft)) {
-    return { ok: false, reason: "not_ready", toast: "Upload a usable image before scheduling this Pin." };
+    return { ok: false, reason: "not_ready", toast: "Upload a usable image or video before scheduling this Pin." };
   }
   if (!sanitizeHandoffField(draft.boardId)) {
     return { ok: false, reason: "not_ready", toast: "Choose a Pinterest board before scheduling this Pin." };

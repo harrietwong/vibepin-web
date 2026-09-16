@@ -84,7 +84,7 @@ async function main() {
   });
   await test("4b. ensureScheduledPlanTime blocks on a non-publishable image", () => {
     const src = readFileSync(join(root, "src/lib/smartSchedule.ts"), "utf8");
-    assert.match(src, /if \(!isPublishableImage\(draft\.imageUrl\)\) \{\s*\n\s*return \{ ok: false, reason: "not_ready", toast: "Upload a usable image/);
+    assert.match(src, /if \(!isPublishableContentMedia\(draft\)\) \{\s*\n\s*return \{ ok: false, reason: "not_ready", toast: "Upload a usable image or video/);
   });
 
   // ── 5 / 6. Edit-then-immediately-Schedule/Publish uses the LATEST fields ─────
@@ -368,8 +368,8 @@ async function main() {
     const end = src.indexOf("\n  }", start);
     assert.ok(start > -1 && end > start, "minimumPlanContentError not found");
     const body = src.slice(start, end);
-    // Blocks: missing/non-public image, missing board, over-limit title/description.
-    assert.match(body, /isPublishableImage\(draft\.imageUrl\)/, "image gate must use the canonical isPublishableImage check");
+    // Blocks: missing/non-public media, missing board, over-limit title/description.
+    assert.match(body, /isPublishableContentMedia\(draft\)/, "media gate must use the canonical image-or-video check");
     assert.match(body, /sanitizeHandoffField\(draft\.boardId\)/, "board gate must mirror ensureScheduledPlanTime");
     assert.match(body, /pinFieldErrors\(\{ title: draft\.title, description: draft\.description \}\)/, "over-limit gate must use the shared pinFieldErrors");
     // Never blocks: EMPTY title/description (the old needsTitle/needsDescription gate).
