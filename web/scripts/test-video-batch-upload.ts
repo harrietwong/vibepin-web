@@ -123,7 +123,7 @@ async function main() {
 
   await test("cancel aborts in-flight work and marks queued work cancelled without deleting success", async () => {
     const controller = new AbortController();
-    const state = createVideoBatchState("batch-e", [item("1", "succeeded"), item("2"), item("3")]);
+    const state = createVideoBatchState("batch-e", [item("1", "succeeded"), item("2"), item("3"), item("4")]);
     const pending = runVideoBatch(state, {
       signal: controller.signal,
       prepare: async descriptors => ({ batchId: "server-e", uploads: descriptors.map(descriptor => ({ ordinal: descriptor.ordinal, path: `owner/${descriptor.ordinal}.mp4`, token: "redacted", signedUrl: `https://storage.test/object/upload/sign/generated-private/owner/${descriptor.ordinal}.mp4?token=redacted`, contentType: descriptor.contentType, upsert: false as const })) }),
@@ -136,6 +136,7 @@ async function main() {
     assert.equal(resolved.items[0].state, "succeeded");
     assert.equal(resolved.items[1].state, "cancelled");
     assert.equal(resolved.items[2].state, "cancelled");
+    assert.equal(resolved.items[3].state, "cancelled", "queued work must not start after cancellation");
     assert.equal(summarizeVideoBatch(resolved), "cancelled");
   });
 
