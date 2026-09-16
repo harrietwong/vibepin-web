@@ -39,7 +39,7 @@ export function tokenizeUnicodeWords(text: string, locale?: string): string[] {
   const lower = text.toLowerCase();
   // Legacy normalizeWords removed intra-word hyphens and punctuation in ASCII/Latin words
   // (e.g. "mid-century" -> "midcentury") instead of converting them into word boundaries.
-  const normalized = lower.replace(/([\p{Script=Latin}\p{N}])['’\-_]+(?=[\p{Script=Latin}\p{N}])/gu, "$1");
+  const normalized = lower.replace(/([\p{Script=Latin}\p{N}])[\p{P}\p{S}]+(?=[\p{Script=Latin}\p{N}])/gu, "$1");
   const segmenter = getSegmenter(locale);
 
   if (segmenter) {

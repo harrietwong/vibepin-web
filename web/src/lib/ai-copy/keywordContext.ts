@@ -97,11 +97,33 @@ const ZH_STOP_WORDS = new Set([
   "的", "了", "和", "是", "就", "都", "而", "及", "与", "着", "或", "之", "在", "于", "把", "被", "让", "给",
 ]);
 
+const JA_GENERIC_WORDS = new Set([
+  "インテリア", "アイデア", "デザイン", "スタイル", "装飾", "ホーム", "家", "着想",
+]);
+
+const JA_STOP_WORDS = new Set([
+  "は", "が", "を", "に", "で", "と", "の", "へ", "も", "や", "から", "まで", "より",
+]);
+
+const KO_GENERIC_WORDS = new Set([
+  "인테리어", "아이디어", "디자인", "스타일", "장식", "홈", "집", "영감",
+]);
+
+const KO_STOP_WORDS = new Set([
+  "은", "는", "이", "가", "을", "를", "에", "에서", "와", "과", "의", "로", "으로", "도",
+]);
+
 function isGenericWord(word: string, locale?: string): boolean {
   if (GENERIC_WORDS.has(word)) return true;
   const loc = (locale ?? "").toLowerCase();
   if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
     return ZH_GENERIC_WORDS.has(word);
+  }
+  if (loc.startsWith("ja") || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) {
+    return JA_GENERIC_WORDS.has(word);
+  }
+  if (loc.startsWith("ko") || /[\p{Script=Hangul}]/u.test(word)) {
+    return KO_GENERIC_WORDS.has(word);
   }
   return false;
 }
@@ -111,6 +133,12 @@ function isStopWord(word: string, locale?: string): boolean {
   const loc = (locale ?? "").toLowerCase();
   if (loc.startsWith("zh") || /[\p{Script=Han}]/u.test(word)) {
     return ZH_STOP_WORDS.has(word);
+  }
+  if (loc.startsWith("ja") || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word)) {
+    return JA_STOP_WORDS.has(word);
+  }
+  if (loc.startsWith("ko") || /[\p{Script=Hangul}]/u.test(word)) {
+    return KO_STOP_WORDS.has(word);
   }
   return false;
 }

@@ -696,4 +696,31 @@ test("regression: legacy English normalization semantics for hyphenated terms an
   assert.equal(evidence.degradedMode, "none");
 });
 
+test("regression: typographic dashes normalize like ASCII punctuation", () => {
+  assert.deepEqual(tokenizeUnicodeWords("mid‑century mid–century mid—century"), [
+    "midcentury", "midcentury", "midcentury",
+  ]);
+});
+
+test("regression: official ko-KR phrase keeps only distinctive words for coverage", () => {
+  const context: KeywordContextInput = {
+    imageSummary: "모던 거실에 소파와 테이블이 있는 공간",
+    visibleObjects: ["모던 거실", "소파", "테이블"],
+    style: "모던",
+    boardName: "거실 아이디어",
+    category: "home-decor",
+    language: "ko-KR",
+  };
+  const rows = [makeRow("모던 거실 인테리어 아이디어", {
+    id: "ko_modern_living_room",
+    data_quality: "official",
+    search_volume_level: "high",
+    language: "ko",
+    locale: "ko-KR",
+  })];
+  const evidence = buildKeywordEvidence({ rows, context, targetLocale: "ko-KR" });
+  assert.deepEqual(evidence.selectedKeywordIds, ["ko_modern_living_room"]);
+  assert.equal(evidence.degradedMode, "none");
+});
+
 console.log(`\nAll ${passed} keyword evidence tests passed.`);

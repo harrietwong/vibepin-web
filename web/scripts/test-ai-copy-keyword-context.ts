@@ -148,6 +148,40 @@ test("rankKeywords: midcentury decor is selected with mid-century context", () =
   assert.ok(!rejected.some(r => r.keyword === "midcentury decor"));
 });
 
+test("rankKeywords: typographic dashes retain legacy midcentury matching", () => {
+  for (const style of ["mid‑century", "mid–century", "mid—century"]) {
+    const context: KeywordContextInput = {
+      imageSummary: `A stylish ${style} modern living room with vintage sofa.`,
+      visibleObjects: [`${style} sofa`, "coffee table"],
+      style,
+      boardName: `${style} Living Room`,
+      category: "home-decor",
+    };
+    const rows = [row("midcentury decor", { data_quality: "official", search_volume_level: "high" })];
+    assert.ok(rankKeywords(rows, context).recommended.includes("midcentury decor"), style);
+  }
+});
+
+test("rankKeywords: Korean demand modifiers do not dilute distinctive-word coverage", () => {
+  const koreanContext: KeywordContextInput = {
+    imageSummary: "모던 거실에 소파와 테이블이 있는 공간",
+    visibleObjects: ["모던 거실", "소파", "테이블"],
+    style: "모던",
+    boardName: "거실 아이디어",
+    category: "home-decor",
+    language: "ko-KR",
+  };
+  const rows = [row("모던 거실 인테리어 아이디어", {
+    data_quality: "official",
+    search_volume_level: "high",
+    language: "ko",
+    locale: "ko-KR",
+  })];
+  const { recommended, rejected } = rankKeywords(rows, koreanContext);
+  assert.ok(recommended.includes("모던 거실 인테리어 아이디어"));
+  assert.ok(!rejected.some(r => r.keyword === "모던 거실 인테리어 아이디어"));
+});
+
 test("rankKeywords: 现代客厅装饰灵感 is recommended with matching Chinese context", () => {
   const chineseContext: KeywordContextInput = {
     imageSummary: "现代风格的客厅空间，配有灰色布艺沙发、茶几和落地窗。",
