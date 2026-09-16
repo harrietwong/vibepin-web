@@ -2,13 +2,7 @@ import assert from "node:assert/strict";
 import {
   buildKeywordEvidence,
   resolveKeywordProvenance,
-  type KeywordEvidenceAdapterInput,
 } from "../src/lib/ai-copy/v2/keywordEvidence";
-import type {
-  KeywordEvidence,
-  KeywordCandidate,
-  KeywordProvenance,
-} from "../src/lib/ai-copy/v2/types";
 import type {
   KeywordRow,
   KeywordContextInput,
@@ -426,6 +420,207 @@ test("keywordSetId: deterministic derivation and explicit override", () => {
   });
   assert.ok(derived1.keywordSetId.startsWith("kwset_"));
   assert.equal(derived1.keywordSetId, derived2.keywordSetId, "derived keywordSetId must be deterministic");
+});
+
+// 11. Regression: unknown provenance rows do not pollute ranking / consume recommended slots
+test("regression: unknown provenance rows do not consume recommended slots and crowd out official rows", () => {
+  const unknownRows = [
+    makeRow("modern living room design", { id: "unk_1", data_quality: "unknown" as any, search_volume_level: null, priority_score: 100 }),
+    makeRow("minimalist living room ideas", { id: "unk_2", data_quality: "unknown" as any, search_volume_level: null, priority_score: 95 }),
+    makeRow("yellow armchair living room", { id: "unk_3", data_quality: "unknown" as any, search_volume_level: null, priority_score: 90 }),
+    makeRow("area rug living room modern", { id: "unk_4", data_quality: "unknown" as any, search_volume_level: null, priority_score: 85 }),
+    makeRow("side table living room decor", { id: "unk_5", data_quality: "unknown" as any, search_volume_level: null, priority_score: 80 }),
+    makeRow("floor lamp living room modern", { id: "unk_6", data_quality: "unknown" as any, search_volume_level: null, priority_score: 75 }),
+    makeRow("abstract wall art living room", { id: "unk_7", data_quality: "unknown" as any, search_volume_level: null, priority_score: 70 }),
+    makeRow("modern armchair styling", { id: "unk_8", data_quality: "unknown" as any, search_volume_level: null, priority_score: 65 }),
+  ];
+  const officialRow = makeRow("living room decor ideas", {
+    id: "off_1",
+    data_quality: "official",
+    search_volume_level: "high",
+  });
+
+  const evidence = buildKeywordEvidence({
+    rows: [...unknownRows, officialRow],
+    context: livingRoomContext,
+  });
+
+  assert.deepEqual(evidence.selectedKeywordIds, ["off_1"]);
+  const officialCandidate = evidence.candidates.find(c => c.id === "off_1");
+  assert.ok(officialCandidate);
+  assert.equal(officialCandidate!.status, "accepted");
+
+  for (const unk of unknownRows) {
+    const c = evidence.candidates.find(item => item.id === unk.id);
+    assert.ok(c);
+    assert.equal(c!.status, "rejected");
+    assert.equal(c!.rejectionCode, "unreliable_provenance");
+  }
+});
+
+// 12. Regression: duplicate phrase with unknown first then official
+test("regression: duplicate phrase with unknown first then official selects official row and keeps unknown rejected", () => {
+  const rows = [
+    makeRow("living room decor ideas", {
+      id: "unk_same_phrase",
+      data_quality: "unknown" as any,
+      search_volume_level: null,
+      priority_score: null,
+    }),
+    makeRow("living room decor ideas", {
+      id: "off_same_phrase",
+      data_quality: "official",
+      search_volume_level: "high",
+    }),
+  ];
+
+  const evidence = buildKeywordEvidence({
+    rows,
+    context: livingRoomContext,
+  });
+
+  assert.deepEqual(evidence.selectedKeywordIds, ["off_same_phrase"]);
+  const offCand = evidence.candidates.find(c => c.id === "off_same_phrase");
+  assert.ok(offCand);
+  assert.equal(offCand!.status, "accepted");
+
+  const unkCand = evidence.candidates.find(c => c.id === "unk_same_phrase");
+  assert.ok(unkCand);
+  assert.equal(unkCand!.status, "rejected");
+  assert.equal(unkCand!.rejectionCode, "unreliable_provenance");
+});
+
+// 13. Unicode non-English rows: zh-CN official row selected, unlabelled English rejected
+test("unicode non-English: zh-CN official row with matching Chinese context is selected; unlabelled English is rejected", () => {
+  const chineseContext: KeywordContextInput = {
+    imageSummary: "现代简约风格的客厅角落，摆放着明黄色的单人扶手椅、落地灯和茶几。",
+    visibleObjects: ["客厅装修", "黄色扶手椅", "金色落地灯", "茶几"],
+    style: "现代简约",
+    boardName: "客厅装修设计",
+    category: "home-decor",
+    language: "zh",
+  };
+
+  const rows: KeywordRow[] = [
+    makeRow("living room decor ideas", {
+      id: "en_unlabelled",
+      data_quality: "official",
+      search_volume_level: "high",
+      language: undefined,
+      locale: undefined,
+    }),
+    makeRow("客厅装修设计 扶手椅", {
+      id: "zh_official_1",
+      data_quality: "official",
+      search_volume_level: "high",
+      language: "zh",
+      locale: "zh-CN",
+    }),
+  ];
+
+  const evidence = buildKeywordEvidence({
+    rows,
+    context: chineseContext,
+    targetLocale: "zh-CN",
+  });
+
+  assert.deepEqual(evidence.selectedKeywordIds, ["zh_official_1"]);
+  const zhCandidate = evidence.candidates.find(c => c.id === "zh_official_1");
+  assert.ok(zhCandidate);
+  assert.equal(zhCandidate!.status, "accepted");
+  assert.equal(evidence.degradedMode, "none");
+
+  const sources = zhCandidate!.relevanceEvidence.map(e => e.source);
+  assert.ok(sources.includes("board_context") || sources.includes("image_observed"));
+
+  const enCandidate = evidence.candidates.find(c => c.id === "en_unlabelled");
+  assert.ok(enCandidate);
+  assert.equal(enCandidate!.status, "rejected");
+  assert.equal(enCandidate!.rejectionCode, "locale_mismatch");
+});
+
+// 14. Empty and whitespace source IDs are skipped rather than fabricating synthetic IDs
+test("source IDs: empty and whitespace source IDs are skipped, never synthetic kw_<slug>", () => {
+  const rows: KeywordRow[] = [
+    makeRow("living room decor ideas", { id: "", data_quality: "official" }),
+    makeRow("modern living room design", { id: "   ", data_quality: "official" }),
+    makeRow("minimalist living room ideas", { id: undefined as any, data_quality: "official" }),
+    makeRow("yellow armchair living room", { id: "valid_id_1", data_quality: "official" }),
+  ];
+
+  const evidence = buildKeywordEvidence({
+    rows,
+    context: livingRoomContext,
+  });
+
+  assert.equal(evidence.candidates.length, 1);
+  assert.equal(evidence.candidates[0].id, "valid_id_1");
+  assert.ok(!evidence.candidates.some(c => c.id.startsWith("kw_living_room")));
+  assert.ok(!evidence.candidates.some(c => c.id.startsWith("kw_modern")));
+  assert.deepEqual(evidence.selectedKeywordIds, ["valid_id_1"]);
+});
+
+// 15. Deterministic ordering: duplicate ID reorder and duplicate phrase unknown/official reorder
+test("deterministic ordering: duplicate ID reorder and duplicate phrase unknown/official reorder produce stable selection and keywordSetId", () => {
+  const dupIdRowUnk = makeRow("living room decor ideas", {
+    id: "dup_id_shared",
+    data_quality: "unknown" as any,
+    search_volume_level: null,
+  });
+  const dupIdRowOff = makeRow("living room decor ideas", {
+    id: "dup_id_shared",
+    data_quality: "official",
+    search_volume_level: "high",
+  });
+
+  const evDupOrder1 = buildKeywordEvidence({
+    rows: [dupIdRowUnk, dupIdRowOff],
+    context: livingRoomContext,
+  });
+  const evDupOrder2 = buildKeywordEvidence({
+    rows: [dupIdRowOff, dupIdRowUnk],
+    context: livingRoomContext,
+  });
+
+  assert.equal(evDupOrder1.candidates.length, 1);
+  assert.equal(evDupOrder2.candidates.length, 1);
+  assert.equal(evDupOrder1.candidates[0].id, "dup_id_shared");
+  assert.equal(evDupOrder2.candidates[0].id, "dup_id_shared");
+  assert.equal(evDupOrder1.candidates[0].provenance, "official");
+  assert.equal(evDupOrder2.candidates[0].provenance, "official");
+  assert.deepEqual(evDupOrder1.selectedKeywordIds, ["dup_id_shared"]);
+  assert.deepEqual(evDupOrder2.selectedKeywordIds, ["dup_id_shared"]);
+  assert.equal(evDupOrder1.keywordSetId, evDupOrder2.keywordSetId);
+
+  const rowUnkId = makeRow("living room decor ideas", {
+    id: "phrase_unk_id",
+    data_quality: "unknown" as any,
+    search_volume_level: null,
+  });
+  const rowOffId = makeRow("living room decor ideas", {
+    id: "phrase_off_id",
+    data_quality: "official",
+    search_volume_level: "high",
+  });
+
+  const evPhraseOrder1 = buildKeywordEvidence({
+    rows: [rowUnkId, rowOffId],
+    context: livingRoomContext,
+  });
+  const evPhraseOrder2 = buildKeywordEvidence({
+    rows: [rowOffId, rowUnkId],
+    context: livingRoomContext,
+  });
+
+  assert.deepEqual(evPhraseOrder1.selectedKeywordIds, ["phrase_off_id"]);
+  assert.deepEqual(evPhraseOrder2.selectedKeywordIds, ["phrase_off_id"]);
+  const unk1 = evPhraseOrder1.candidates.find(c => c.id === "phrase_unk_id");
+  const unk2 = evPhraseOrder2.candidates.find(c => c.id === "phrase_unk_id");
+  assert.equal(unk1?.status, "rejected");
+  assert.equal(unk1?.rejectionCode, "unreliable_provenance");
+  assert.equal(unk2?.status, "rejected");
+  assert.equal(unk2?.rejectionCode, "unreliable_provenance");
+  assert.equal(evPhraseOrder1.keywordSetId, evPhraseOrder2.keywordSetId);
 });
 
 console.log(`\nAll ${passed} keyword evidence tests passed.`);

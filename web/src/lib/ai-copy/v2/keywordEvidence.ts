@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { normalizeWords } from "@/lib/keyword-data/mapTrendKeywordRow";
+import { tokenizeUnicodeWords } from "./unicodeTokenizer";
 import {
   rankKeywords,
   isTooGeneric,
@@ -30,6 +30,8 @@ import type {
   RelevanceEvidenceSource,
   DegradedMode,
 } from "./types";
+
+export { tokenizeUnicodeWords } from "./unicodeTokenizer";
 
 export type KeywordRejectionCode =
   | "locale_mismatch"
@@ -131,15 +133,17 @@ function extractRelevanceEvidence(
   options?: {
     userInput?: string;
     pageMetadata?: { title?: string; description?: string };
+    targetLocale?: string;
   }
 ): RelevanceEvidenceEntry[] {
   const entries: RelevanceEvidenceEntry[] = [];
-  const phraseWords = normalizeWords(phrase);
+  const loc = options?.targetLocale ?? context.language;
+  const phraseWords = tokenizeUnicodeWords(phrase, loc);
   if (!phraseWords.length) return entries;
 
   const checkSource = (source: RelevanceEvidenceSource, text: string) => {
     if (!text.trim()) return;
-    const sourceWordSet = new Set(normalizeWords(text));
+    const sourceWordSet = new Set(tokenizeUnicodeWords(text, loc));
     if (!sourceWordSet.size) return;
     const matched = phraseWords.filter(w => sourceWordSet.has(w));
     if (matched.length > 0) {
@@ -187,19 +191,50 @@ function extractRelevanceEvidence(
   return entries;
 }
 
+const PROVENANCE_RANK: Record<KeywordProvenance, number> = {
+  official: 3,
+  estimated: 2,
+  unknown: 1,
+};
+
+function compareRowsLexical(a: KeywordRow, b: KeywordRow): number {
+  const kDiff = (a.keyword ?? "").localeCompare(b.keyword ?? "");
+  if (kDiff !== 0) return kDiff;
+  const qDiff = (a.data_quality ?? "").localeCompare(b.data_quality ?? "");
+  if (qDiff !== 0) return qDiff;
+  const lDiff = (a.locale ?? a.language ?? "").localeCompare(b.locale ?? b.language ?? "");
+  if (lDiff !== 0) return lDiff;
+  const vDiff = (a.search_volume_level ?? "").localeCompare(b.search_volume_level ?? "");
+  if (vDiff !== 0) return vDiff;
+  return JSON.stringify(a).localeCompare(JSON.stringify(b));
+}
+
+function compareRowPriority(a: KeywordRow, b: KeywordRow): number {
+  const rankA = PROVENANCE_RANK[resolveKeywordProvenance(a)];
+  const rankB = PROVENANCE_RANK[resolveKeywordProvenance(b)];
+  if (rankA !== rankB) {
+    return rankB - rankA;
+  }
+  return compareRowsLexical(a, b);
+}
+
 function deriveDeterministicKeywordSetId(
   input: KeywordEvidenceAdapterInput,
+  candidateIds: string[],
   selectedKeywordIds: string[]
 ): string {
   if (input.keywordSetId) {
     return input.keywordSetId;
   }
+  const sortedCandidateIds = [...candidateIds].sort();
+  const sortedSelectedIds = [...selectedKeywordIds].sort();
   const payload = [
     input.draftId ?? "",
     input.sessionId ?? "",
     input.context.imageSummary ?? "",
     input.context.boardName ?? "",
-    ...selectedKeywordIds,
+    sortedCandidateIds.join(","),
+    sortedSelectedIds.join(","),
   ].join("|");
   const hash = createHash("sha256").update(payload).digest("hex").slice(0, 16);
   return `kwset_${hash}`;
@@ -243,7 +278,7 @@ export function buildKeywordEvidence(
   // Fast path for empty rows
   if (!rows || rows.length === 0) {
     return {
-      keywordSetId: deriveDeterministicKeywordSetId(adapterInput, []),
+      keywordSetId: deriveDeterministicKeywordSetId(adapterInput, [], []),
       ...(adapterInput.sessionId ? { sessionId: adapterInput.sessionId } : {}),
       ...(adapterInput.draftId ? { draftId: adapterInput.draftId } : {}),
       candidates: [],
@@ -252,7 +287,58 @@ export function buildKeywordEvidence(
     };
   }
 
-  // Pre-process candidates from input rows (preserving stable row IDs)
+  // Coalesce duplicate source IDs deterministically without changing the ID.
+  // Require non-empty original trend_keywords IDs; skip invalid empty-ID rows.
+  const rowsById = new Map<string, KeywordRow>();
+
+  for (const row of rows) {
+    const rawId = typeof row.id === "string" ? row.id.trim() : "";
+    if (!rawId) {
+      // Skip invalid empty-ID rows rather than fabricating provenance or synthetic IDs
+      continue;
+    }
+    const phrase = typeof row.keyword === "string" ? row.keyword.trim() : "";
+    if (!phrase) {
+      continue;
+    }
+
+    const existing = rowsById.get(rawId);
+    if (!existing) {
+      rowsById.set(rawId, row);
+    } else {
+      // Deterministically coalesce duplicate source IDs:
+      // prefer official > estimated > unknown, then deterministic lexical tie-break
+      if (compareRowPriority(existing, row) > 0) {
+        rowsById.set(rawId, row);
+      }
+    }
+  }
+
+  const coalescedRows = Array.from(rowsById.values());
+  if (coalescedRows.length === 0) {
+    return {
+      keywordSetId: deriveDeterministicKeywordSetId(adapterInput, [], []),
+      ...(adapterInput.sessionId ? { sessionId: adapterInput.sessionId } : {}),
+      ...(adapterInput.draftId ? { draftId: adapterInput.draftId } : {}),
+      candidates: [],
+      selectedKeywordIds: [],
+      degradedMode: "no_keyword_demand_data",
+    };
+  }
+
+  // Deterministically order rows before ranking.
+  // For duplicate phrases across IDs, reliable/official must win over unknown regardless of input order.
+  coalescedRows.sort((a, b) => {
+    // 1. Provenance: official > estimated > unknown
+    const pDiff = PROVENANCE_RANK[resolveKeywordProvenance(b)] - PROVENANCE_RANK[resolveKeywordProvenance(a)];
+    if (pDiff !== 0) return pDiff;
+    // 2. Normalized phrase
+    const phraseDiff = (a.keyword ?? "").trim().toLowerCase().localeCompare((b.keyword ?? "").trim().toLowerCase());
+    if (phraseDiff !== 0) return phraseDiff;
+    // 3. Deterministic tie-break by ID
+    return a.id.trim().localeCompare(b.id.trim());
+  });
+
   interface CandidateState {
     candidate: KeywordCandidate;
     row: KeywordRow;
@@ -260,37 +346,22 @@ export function buildKeywordEvidence(
     normPhrase: string;
   }
 
-  const seenIds = new Set<string>();
   const states: CandidateState[] = [];
-  const eligibleRows: KeywordRow[] = [];
 
-  for (const row of rows) {
-    const phrase = (row.keyword ?? "").trim();
-    if (!phrase) continue;
-
-    let candidateId = row.id?.trim();
-    if (!candidateId) {
-      const slug = normalizeWords(phrase).join("_");
-      candidateId = `kw_${slug}`;
-    }
-    // Ensure candidate IDs are unique in the collection
-    let uniqueId = candidateId;
-    let dupCounter = 1;
-    while (seenIds.has(uniqueId)) {
-      uniqueId = `${candidateId}_${dupCounter++}`;
-    }
-    seenIds.add(uniqueId);
-
+  for (const row of coalescedRows) {
+    const phrase = row.keyword.trim();
+    const candidateId = row.id.trim();
     const provenance = resolveKeywordProvenance(row);
     const relevanceEvidence = extractRelevanceEvidence(phrase, context, {
       userInput: adapterInput.userInput,
       pageMetadata: adapterInput.pageMetadata,
+      targetLocale,
     });
 
     const localeCheck = isLocaleEligible(row, targetLocale);
 
     const candidate: KeywordCandidate = {
-      id: uniqueId,
+      id: candidateId,
       phrase,
       ...(row.locale || row.language ? { locale: row.locale ?? row.language ?? undefined } : {}),
       ...(row.country || row.region ? { country: row.country ?? row.region ?? undefined } : {}),
@@ -300,34 +371,45 @@ export function buildKeywordEvidence(
       ...(localeCheck.rejectionCode ? { rejectionCode: localeCheck.rejectionCode } : {}),
     };
 
-    const normPhrase = phrase.toLowerCase();
     states.push({
       candidate,
       row,
       localeEligible: localeCheck.eligible,
-      normPhrase,
+      normPhrase: phrase.toLowerCase(),
     });
-
-    if (localeCheck.eligible) {
-      eligibleRows.push(row);
-    }
   }
 
-  // If no locale-eligible rows exist, return early in degraded mode
-  if (eligibleRows.length === 0) {
-    const candidates = states.map(s => s.candidate);
+  const allCandidateIds = states.map(s => s.candidate.id);
+
+  // Filter unknown provenance BEFORE it can consume rankKeywords recommended slots
+  const rankEligibleRows = coalescedRows.filter(
+    row => isLocaleEligible(row, targetLocale).eligible && resolveKeywordProvenance(row) !== "unknown"
+  );
+
+  // If no reliable demand rows are eligible, return early in degraded mode
+  if (rankEligibleRows.length === 0) {
+    for (const s of states) {
+      if (!s.localeEligible) {
+        s.candidate.rejectionCode = "locale_mismatch";
+      } else if (s.candidate.provenance === "unknown") {
+        s.candidate.rejectionCode = "unreliable_provenance";
+      } else {
+        s.candidate.rejectionCode = "not_selected";
+      }
+    }
+
     return {
-      keywordSetId: deriveDeterministicKeywordSetId(adapterInput, []),
+      keywordSetId: deriveDeterministicKeywordSetId(adapterInput, allCandidateIds, []),
       ...(adapterInput.sessionId ? { sessionId: adapterInput.sessionId } : {}),
       ...(adapterInput.draftId ? { draftId: adapterInput.draftId } : {}),
-      candidates,
+      candidates: states.map(s => s.candidate),
       selectedKeywordIds: [],
       degradedMode: "no_keyword_demand_data",
     };
   }
 
-  // Execute existing versioned ranking heuristics on eligible rows
-  const rankResult = rankKeywords(eligibleRows, context);
+  // Execute ranking heuristics ONLY on reliable demand rows
+  const rankResult = rankKeywords(rankEligibleRows, context);
 
   // Map raw rejection reasons from rankKeywords
   const rankRejectedMap = new Map<string, string>();
@@ -348,7 +430,8 @@ export function buildKeywordEvidence(
     return "low_relevance";
   };
 
-  // Select at most 5 keywords from recommended
+  // Select at most 5 keywords from recommended.
+  // When matching a recommendation, only select a reliable candidate.
   const selectedKeywordIds: string[] = [];
   const acceptedCandidateIds = new Set<string>();
 
@@ -356,16 +439,12 @@ export function buildKeywordEvidence(
     if (selectedKeywordIds.length >= 5) break;
     const norm = recKeyword.toLowerCase();
     const matchingState = states.find(
-      s => s.localeEligible && s.normPhrase === norm && !acceptedCandidateIds.has(s.candidate.id)
+      s => s.localeEligible &&
+           s.normPhrase === norm &&
+           s.candidate.provenance !== "unknown" &&
+           !acceptedCandidateIds.has(s.candidate.id)
     );
     if (!matchingState) continue;
-
-    // Provenance honesty: only reliable demand keywords (official or estimated) may be selected
-    if (matchingState.candidate.provenance === "unknown") {
-      matchingState.candidate.status = "rejected";
-      matchingState.candidate.rejectionCode = "unreliable_provenance";
-      continue;
-    }
 
     matchingState.candidate.status = "accepted";
     matchingState.candidate.rejectionCode = undefined;
@@ -384,17 +463,7 @@ export function buildKeywordEvidence(
     }
 
     if (s.candidate.provenance === "unknown") {
-      // If it failed relevance first, preserve low_relevance
-      const rawReason = rankRejectedMap.get(s.normPhrase);
-      if (rawReason && (rawReason.startsWith("low_relevance") || rawReason.startsWith("below_recommend_floor"))) {
-        s.candidate.rejectionCode = "low_relevance";
-      } else if (rawReason && rawReason.startsWith("low_coverage")) {
-        s.candidate.rejectionCode = "low_coverage";
-      } else if (rawReason === "too_generic" || isTooGeneric(s.candidate.phrase)) {
-        s.candidate.rejectionCode = "too_generic";
-      } else {
-        s.candidate.rejectionCode = "unreliable_provenance";
-      }
+      s.candidate.rejectionCode = "unreliable_provenance";
       continue;
     }
 
@@ -402,7 +471,7 @@ export function buildKeywordEvidence(
     if (rawReason) {
       s.candidate.rejectionCode = mapRejectionReason(rawReason, s.candidate.phrase);
     } else {
-      // Scored / evaluated but either capped out of top 5 or not selected
+      // Scored / evaluated by ranking but capped out of top 5 or not selected
       s.candidate.rejectionCode = "not_selected";
     }
   }
@@ -410,7 +479,7 @@ export function buildKeywordEvidence(
   const degradedMode: DegradedMode =
     selectedKeywordIds.length === 0 ? "no_keyword_demand_data" : "none";
 
-  const keywordSetId = deriveDeterministicKeywordSetId(adapterInput, selectedKeywordIds);
+  const keywordSetId = deriveDeterministicKeywordSetId(adapterInput, allCandidateIds, selectedKeywordIds);
 
   return {
     keywordSetId,

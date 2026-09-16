@@ -11,7 +11,7 @@
  * keywords are rejected.
  */
 
-import { normalizeWords } from "@/lib/keyword-data/mapTrendKeywordRow";
+import { tokenizeUnicodeWords } from "./v2/unicodeTokenizer";
 
 export type KeywordRow = {
   id: string;
@@ -90,7 +90,7 @@ function clamp01(n: number): number {
 
 /** Containment: fraction of the keyword's words present in the context word set. */
 function containment(contextSet: Set<string>, keyword: string): number {
-  const words = normalizeWords(keyword);
+  const words = tokenizeUnicodeWords(keyword);
   if (!words.length || !contextSet.size) return 0;
   const hit = words.filter(w => contextSet.has(w)).length;
   return hit / words.length;
@@ -98,7 +98,7 @@ function containment(contextSet: Set<string>, keyword: string): number {
 
 /** The keyword's distinctive words (excludes generic + stop words). */
 function specificWords(keyword: string): string[] {
-  return normalizeWords(keyword).filter(w => !GENERIC_WORDS.has(w) && !STOP_WORDS.has(w));
+  return tokenizeUnicodeWords(keyword).filter(w => !GENERIC_WORDS.has(w) && !STOP_WORDS.has(w));
 }
 
 /**
@@ -128,7 +128,7 @@ export function normalizedVolume(row: Pick<KeywordRow, "volume_score" | "volume_
 
 /** True when a keyword has no specific modifier beyond generic/stop words. */
 export function isTooGeneric(keyword: string): boolean {
-  const words = normalizeWords(keyword);
+  const words = tokenizeUnicodeWords(keyword);
   if (!words.length) return true;
   const specific = words.filter(w => !GENERIC_WORDS.has(w) && !STOP_WORDS.has(w));
   return specific.length === 0;
@@ -153,7 +153,7 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
     if (t.length > 2) tiers[tier].push(t);
   };
 
-  const boardWords = normalizeWords(input.boardName ?? "");
+  const boardWords = tokenizeUnicodeWords(input.boardName ?? "");
   // Tier 0 (strongest): board phrase minus generic words (e.g. "living room") + style.
   const boardPhrase = boardWords.filter(w => !GENERIC_WORDS.has(w)).join(" ").trim();
   if (boardPhrase.includes(" ")) add(0, boardPhrase);
@@ -163,10 +163,10 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
   // "ceramic mug"), as query-worthy as the board phrase.
   if (input.productType) add(0, input.productType);
   // Tier 1: product title 2-word tail + tag tails (canonical phrase shape).
-  const productTitleWords = normalizeWords(input.productTitle ?? "").filter(w => !STOP_WORDS.has(w));
+  const productTitleWords = tokenizeUnicodeWords(input.productTitle ?? "").filter(w => !STOP_WORDS.has(w));
   if (productTitleWords.length >= 2) add(1, productTitleWords.slice(-2).join(" "));
   for (const tag of input.productTags ?? []) {
-    const tw = normalizeWords(tag).filter(w => !STOP_WORDS.has(w));
+    const tw = tokenizeUnicodeWords(tag).filter(w => !STOP_WORDS.has(w));
     if (tw.length >= 2) add(1, tw.slice(-2).join(" "));
     else if (tw.length === 1 && tw[0].length > 3 && !GENERIC_WORDS.has(tw[0])) add(2, tw[0]);
   }
@@ -177,7 +177,7 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
 
   // Tier 1: 2-word tails of visible objects (canonical phrase shape).
   for (const obj of input.visibleObjects) {
-    const words = normalizeWords(obj).filter(w => !STOP_WORDS.has(w));
+    const words = tokenizeUnicodeWords(obj).filter(w => !STOP_WORDS.has(w));
     if (words.length >= 2) add(1, words.slice(-2).join(" "));
   }
 
@@ -186,20 +186,20 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
     if (!GENERIC_WORDS.has(w) && !STOP_WORDS.has(w) && w.length > 3) add(2, w);
   }
   for (const obj of input.visibleObjects) {
-    const head = normalizeWords(obj).filter(w => !STOP_WORDS.has(w)).pop();
+    const head = tokenizeUnicodeWords(obj).filter(w => !STOP_WORDS.has(w)).pop();
     if (head && head.length > 2) add(2, head);
   }
 
   // Tier 3 (fallback): category + salient summary nouns + creative-direction words.
   if (input.category) add(3, input.category.replace(/-/g, " "));
   const directionWords = [
-    ...normalizeWords(input.directionTitle ?? ""),
-    ...(input.directionTerms ?? []).flatMap(t => normalizeWords(t)),
+    ...tokenizeUnicodeWords(input.directionTitle ?? ""),
+    ...(input.directionTerms ?? []).flatMap(t => tokenizeUnicodeWords(t)),
   ];
   for (const w of directionWords) {
     if (!GENERIC_WORDS.has(w) && !STOP_WORDS.has(w) && w.length > 3) add(3, w);
   }
-  for (const w of normalizeWords(input.imageSummary)) {
+  for (const w of tokenizeUnicodeWords(input.imageSummary)) {
     if (!GENERIC_WORDS.has(w) && !STOP_WORDS.has(w) && w.length > 4) add(3, w);
   }
 
@@ -221,24 +221,24 @@ export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Om
   // Product words are specific, high-signal relevance evidence — fold them into the
   // coverage context set (so a product-matching keyword's distinctive words are
   // "seen") AND score them again as an explicit overlap dimension below.
-  const productWords = normalizeWords(
+  const productWords = tokenizeUnicodeWords(
     [input.productTitle ?? "", input.productType ?? "", ...(input.productTags ?? [])].join(" "),
   ).filter(w => !STOP_WORDS.has(w));
   // Direction words stay OUT of the coverage set (kept subordinate to image/product);
   // they only contribute a small explicit overlap dimension.
   const directionWords = [
-    ...normalizeWords(input.directionTitle ?? ""),
-    ...(input.directionTerms ?? []).flatMap(t => normalizeWords(t)),
+    ...tokenizeUnicodeWords(input.directionTitle ?? ""),
+    ...(input.directionTerms ?? []).flatMap(t => tokenizeUnicodeWords(t)),
   ].filter(w => !STOP_WORDS.has(w));
 
   const contextSet = new Set<string>([
-    ...normalizeWords(input.visibleObjects.join(" ")),
-    ...normalizeWords(input.style),
-    ...normalizeWords(input.imageSummary),
-    ...normalizeWords((input.category ?? "").replace(/-/g, " ")),
+    ...tokenizeUnicodeWords(input.visibleObjects.join(" ")),
+    ...tokenizeUnicodeWords(input.style),
+    ...tokenizeUnicodeWords(input.imageSummary),
+    ...tokenizeUnicodeWords((input.category ?? "").replace(/-/g, " ")),
     ...productWords,
   ]);
-  const boardSet = new Set<string>(normalizeWords(input.boardName ?? ""));
+  const boardSet = new Set<string>(tokenizeUnicodeWords(input.boardName ?? ""));
   const productSet = new Set<string>(productWords);
   const directionSet = new Set<string>(directionWords);
   const cat = (input.category ?? "").toLowerCase().replace(/-/g, " ").trim();
