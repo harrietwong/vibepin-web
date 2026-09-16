@@ -241,10 +241,28 @@ async function run() {
       'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p)
     ) as state`);
     await db.exec(rollback); await db.exec(rollback);
+    const rollbackTableWrite = await asRole(db, "service_role", () => rejected(() => db.query(
+      "insert into public.video_upload_batches(owner_user_id,idempotency_key,expires_at) values($1,'rollback-write',now()+interval '1 hour')", [A],
+    )));
+    const rollbackRpc = await asRole(db, "service_role", () => rejected(() => db.query(
+      "select public.video_upload_batch_prepare($1,'rollback-rpc',now()+interval '1 hour')", [A],
+    )));
+    assert(rollbackTableWrite && rollbackRpc, "rollback leaves service_role read-only and removes every v77 RPC execute grant");
     const v76Restored = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
       "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",
     ])).rows[0].definition;
     await db.exec(migration);
+    const activePrivileges = await db.query(`select
+      has_table_privilege('service_role','public.video_upload_items','select') as service_select,
+      has_table_privilege('service_role','public.video_upload_items','insert') as service_insert,
+      has_table_privilege('service_role','public.video_upload_items','truncate') as service_truncate,
+      has_table_privilege('authenticated','public.video_upload_items','select') as authenticated_select,
+      has_function_privilege('service_role',to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint)'),'execute') as service_finalize,
+      has_function_privilege('authenticated',to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint)'),'execute') as authenticated_finalize`);
+    assert(activePrivileges.rows[0].service_select && activePrivileges.rows[0].service_insert
+      && !activePrivileges.rows[0].service_truncate && !activePrivileges.rows[0].authenticated_select
+      && activePrivileges.rows[0].service_finalize && !activePrivileges.rows[0].authenticated_finalize,
+    "ordered rollback/reapply restores exactly the active service-only privilege manifest");
     const afterReapply = await db.query(`select jsonb_build_object(
       'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
       'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
@@ -345,6 +363,22 @@ async function collisionRejections() {
     {
       name: "client upload privilege drift",
       alter: db => db.exec("grant insert on public.video_upload_items to authenticated"),
+    },
+    {
+      name: "authenticated truncate privilege drift",
+      alter: db => db.exec("grant truncate on public.video_upload_items to authenticated"),
+    },
+    {
+      name: "authenticated column update privilege drift",
+      alter: db => db.exec("grant update(verified_content_type) on public.video_upload_items to authenticated"),
+    },
+    {
+      name: "authenticated upload finalize execute drift",
+      alter: db => db.exec("grant execute on function public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint) to authenticated"),
+    },
+    {
+      name: "service grant option drift",
+      alter: db => db.exec("grant select on public.video_upload_items to service_role with grant option"),
     },
   ]) {
     const db = await dbWithV76();

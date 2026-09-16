@@ -17,6 +17,10 @@ declare
   v_expected_not_null boolean;
   v_expected_default text;
   v_expected_definition text;
+  v_active_privileges boolean := true;
+  v_rollback_privileges boolean := true;
+  v_grantee text;
+  v_actual boolean;
   v_signature text;
   v_marker text;
   v_hash text;
@@ -116,13 +120,28 @@ begin
       and i.indexrelid not in ('public.video_upload_batches_owner_status_idx'::regclass,'public.video_upload_items_owner_batch_idx'::regclass)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
     if exists(select 1 from pg_policy p where p.polrelid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass))
       or exists(select 1 from pg_class c where c.oid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass) and (not c.relrowsecurity or c.relforcerowsecurity)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+    -- Both states are intentional: active v77 permits only service DML; its
+    -- nondestructive rollback preserves service read evidence and no RPC writes.
+    -- Anything mixed is drift, and must fail before this migration restores grants.
     foreach v_table in array array['video_upload_batches','video_upload_items'] loop
-      foreach v_name in array array['select','insert','update','delete'] loop
-        if has_table_privilege('anon',to_regclass('public.'||v_table),v_name)
-          or has_table_privilege('authenticated',to_regclass('public.'||v_table),v_name)
-          or not has_table_privilege('service_role',to_regclass('public.'||v_table),v_name) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+      foreach v_grantee in array array['anon','authenticated','service_role'] loop
+        foreach v_name in array array['select','insert','update','delete','truncate','references','trigger'] loop
+          v_actual := has_table_privilege(v_grantee,to_regclass('public.'||v_table),v_name);
+          if v_actual is distinct from (v_grantee='service_role' and v_name in ('select','insert','update','delete')) then v_active_privileges := false; end if;
+          if v_actual is distinct from (v_grantee='service_role' and v_name='select') then v_rollback_privileges := false; end if;
+        end loop;
       end loop;
+      -- Table grants are effective on every column; attacl records only direct
+      -- column grants and so exposes a grant that a later REVOKE would otherwise hide.
+      if exists(select 1 from pg_attribute a where a.attrelid=to_regclass('public.'||v_table) and a.attnum>0 and not a.attisdropped and a.attacl is not null) then
+        v_active_privileges := false; v_rollback_privileges := false;
+      end if;
     end loop;
+    if exists(select 1 from pg_class c cross join lateral aclexplode(c.relacl) acl
+      where c.oid in ('public.video_upload_batches'::regclass,'public.video_upload_items'::regclass) and acl.is_grantable
+        and (acl.grantee=0 or acl.grantee in (select oid from pg_roles where rolname in ('anon','authenticated','service_role')))) then
+      v_active_privileges := false; v_rollback_privileges := false;
+    end if;
   end if;
   for v_signature,v_marker,v_hash in select * from (values
     ('public.video_upload_batch_prepare(uuid,text,timestamptz)','vibepin:v77:video-upload-batch-prepare','73821871844f2b858bfc441d80919bbc'),
@@ -143,6 +162,28 @@ begin
       end if;
     elsif v_installed then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
   end loop;
+  if v_installed then
+    for v_signature in select signature from (values
+      ('public.video_upload_batch_prepare(uuid,text,timestamptz)'),
+      ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)'),
+      ('public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint)')
+    ) expected(signature) loop
+      foreach v_grantee in array array['anon','authenticated','service_role'] loop
+        v_actual := has_function_privilege(v_grantee,to_regprocedure(v_signature),'execute');
+        if v_actual is distinct from (v_grantee='service_role') then v_active_privileges := false; end if;
+        if v_actual then v_rollback_privileges := false; end if;
+      end loop;
+    end loop;
+    if exists(select 1 from pg_proc p cross join lateral aclexplode(p.proacl) acl
+      where p.oid in (
+        to_regprocedure('public.video_upload_batch_prepare(uuid,text,timestamptz)'),
+        to_regprocedure('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)'),
+        to_regprocedure('public.video_upload_item_finalize(uuid,uuid,integer,text,bigint,text,integer,integer,bigint)')
+      ) and acl.is_grantable and (acl.grantee=0 or acl.grantee in (select oid from pg_roles where rolname in ('anon','authenticated','service_role')))) then
+      v_active_privileges := false; v_rollback_privileges := false;
+    end if;
+    if not v_active_privileges and not v_rollback_privileges then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
+  end if;
 end $v77_preflight$;
 
 create table if not exists public.video_upload_batches (
