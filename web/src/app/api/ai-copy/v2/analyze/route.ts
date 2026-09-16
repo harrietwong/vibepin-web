@@ -6,6 +6,7 @@ import { buildKeywordEvidence } from "@/lib/ai-copy/v2/keywordEvidence";
 import { getTrendKeywordLoader } from "@/lib/ai-copy/v2/trendKeywordSource";
 import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
 import { AI_COPY_V2_PROMPT_VERSION, getAI_COPY_V2ModelVersion } from "@/lib/ai-copy/v2/orchestrator";
+import { analyzeOwnedVideoCover } from "@/lib/ai-copy/v2/videoCoverEvidence";
 import type { KeywordContextInput } from "@/lib/ai-copy/keywordContext";
 
 export const runtime = "nodejs";
@@ -15,6 +16,8 @@ interface AnalyzeBody {
   draftId: string; idempotencyKey: string; locale?: string; country?: string;
   productContext?: Context; pageContext?: Context; imageObserved?: Context; boardContext?: Context;
   userKeywords?: string[];
+  /** A client hint only. The server independently loads the owned draft and poster. */
+  mediaEvidenceMode?: "video_cover";
 }
 
 const text = (value: unknown, max = 2000): string | undefined =>
@@ -95,7 +98,8 @@ function keywordContext(body: AnalyzeBody, locale: string, country: string): Key
   };
 }
 
-export async function POST(req: Request) {
+export function createAnalyzeHandler(deps: { analyzeVideoCover?: typeof analyzeOwnedVideoCover } = {}) {
+  return async function POST(req: Request) {
   if (process.env.AI_COPY_V2_ENABLED !== "true") return NextResponse.json({ error: "not_found" }, { status: 404 });
   const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!userId) return NextResponse.json({ ok: false, error: "unauthorized", message: "Authentication required" }, { status: 401 });
@@ -104,7 +108,7 @@ export async function POST(req: Request) {
 
   let body: AnalyzeBody;
   try { body = await req.json() as AnalyzeBody; } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
-  if (!body || typeof body !== "object" || badKey(body.draftId) || badKey(body.idempotencyKey) || (body.userKeywords != null && !Array.isArray(body.userKeywords))) {
+  if (!body || typeof body !== "object" || badKey(body.draftId) || badKey(body.idempotencyKey) || (body.userKeywords != null && !Array.isArray(body.userKeywords)) || (body.mediaEvidenceMode != null && body.mediaEvidenceMode !== "video_cover")) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
   }
   const locale = body.locale == null ? "en" : text(body.locale, 35);
@@ -126,12 +130,26 @@ export async function POST(req: Request) {
   if (claim.state === "completed") {
     if (claim.row.expires_at <= new Date().toISOString()) return NextResponse.json({ ok: false, error: "session_expired" }, { status: 404 });
     if (!claim.row.fact_card || !claim.row.keyword_evidence) return NextResponse.json({ ok: false, error: "analysis_failed" }, { status: 502 });
-    return NextResponse.json({ ok: true, sessionId: claim.row.id, draftId: claim.row.draft_id, factCard: claim.row.fact_card, keywordEvidence: claim.row.keyword_evidence, degradedMode: claim.row.keyword_evidence.degradedMode, replayed: true });
+    const degradedMode = claim.row.fact_card.mediaEvidence?.degradedMode === "video_cover_unavailable"
+      ? "video_cover_unavailable"
+      : claim.row.keyword_evidence.degradedMode;
+    return NextResponse.json({ ok: true, sessionId: claim.row.id, draftId: claim.row.draft_id, factCard: claim.row.fact_card, keywordEvidence: claim.row.keyword_evidence, degradedMode, replayed: true });
   }
 
   try {
-    const factCard = createFactCardV1({ sessionId: claim.row.id, draftId: body.draftId.trim(), locale, facts: buildFacts(body) });
-    const context = keywordContext(body, locale, country);
+    // Never use client imageObserved for a video. The binary URL is not accepted by
+    // this branch; only an exact owner-checked private poster can produce visuals.
+    const cover = body.mediaEvidenceMode === "video_cover"
+      ? await (deps.analyzeVideoCover ?? analyzeOwnedVideoCover)({ userId, draftId: body.draftId.trim() })
+      : null;
+    const evidenceBody = cover
+      ? { ...body, imageObserved: cover.imageObserved ?? {} }
+      : body;
+    const factCard = createFactCardV1({
+      sessionId: claim.row.id, draftId: body.draftId.trim(), locale, facts: buildFacts(evidenceBody),
+      ...(cover ? { mediaEvidence: { mode: cover.mode, degradedMode: cover.degradedMode } } : {}),
+    });
+    const context = keywordContext(evidenceBody, locale, country);
     const rows = await getTrendKeywordLoader()(context).catch(() => []);
     const keywordEvidence = buildKeywordEvidence(rows, context, {
       sessionId: claim.row.id, draftId: body.draftId.trim(), targetLocale: locale,
@@ -139,9 +157,14 @@ export async function POST(req: Request) {
       pageMetadata: { title: text(body.pageContext?.title), description: text(body.pageContext?.description) },
     });
     const completed = await store.completeSession({ sessionId: claim.row.id, userId, claimToken: claim.row.claim_token, factCard, keywordEvidence });
-    return NextResponse.json({ ok: true, sessionId: completed.id, draftId: completed.draft_id, factCard, keywordEvidence, degradedMode: keywordEvidence.degradedMode, replayed: false });
+    const degradedMode = cover?.degradedMode === "video_cover_unavailable" ? "video_cover_unavailable" : keywordEvidence.degradedMode;
+    return NextResponse.json({ ok: true, sessionId: completed.id, draftId: completed.draft_id, factCard, keywordEvidence, degradedMode, replayed: false });
   } catch {
     await store.releaseSessionClaim(claim.row.id, userId, claim.row.claim_token).catch(() => undefined);
     return NextResponse.json({ ok: false, error: "analysis_failed", message: "Unable to analyze right now" }, { status: 502 });
   }
 }
+
+}
+
+export const POST = createAnalyzeHandler();

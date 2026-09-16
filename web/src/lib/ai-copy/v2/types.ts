@@ -59,11 +59,16 @@ export interface FactItem {
 }
 
 export interface FactCardV1 {
-  version: "fact-card-v1";
+  /** v2 is emitted only when serialized media-evidence metadata is present. */
+  version: "fact-card-v1" | "fact-card-v2";
   sessionId: string;
   draftId: string;
   locale: string;
   facts: FactItem[];
+  mediaEvidence?: {
+    mode: "image" | "video_cover";
+    degradedMode: "none" | "video_cover_unavailable";
+  };
 }
 
 export type KeywordProvenance = "official" | "estimated" | "unknown";
@@ -92,7 +97,7 @@ export interface KeywordCandidate {
   rejectionCode?: string;
 }
 
-export type DegradedMode = "none" | "no_keyword_demand_data";
+export type DegradedMode = "none" | "no_keyword_demand_data" | "video_cover_unavailable";
 
 export interface KeywordEvidence {
   keywordSetId: string;

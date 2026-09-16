@@ -377,6 +377,9 @@ function AICopyV2EvidenceBlock({ evidence }: { evidence: AICopyV2Evidence }) {
       : tr("pinForm.v2DataUnknown");
   return (
     <div data-testid="ai-copy-v2-evidence" style={{ display: "flex", flexDirection: "column", gap: 7, padding: "8px 9px", borderRadius: 8, border: `1px solid ${P.border}`, background: P.surface }}>
+      {evidence.mediaEvidenceMode === "video_cover" && (
+        <p data-testid="ai-copy-v2-video-cover" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>Based on the video cover frame</p>
+      )}
       <div>
         <div style={sectionLabel}>{tr("pinForm.v2FactBasis")}</div>
         {evidence.facts.length > 0 ? (
@@ -402,6 +405,9 @@ function AICopyV2EvidenceBlock({ evidence }: { evidence: AICopyV2Evidence }) {
       </div>
       {evidence.degradedMode === "no_keyword_demand_data" && (
         <p data-testid="ai-copy-v2-degraded" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>{tr("pinForm.v2DemandUnavailable")}</p>
+      )}
+      {evidence.degradedMode === "video_cover_unavailable" && (
+        <p data-testid="ai-copy-v2-video-cover-unavailable" style={{ margin: 0, fontSize: 10.5, color: P.textSec }}>Video cover frame unavailable; visual facts were not used.</p>
       )}
       <p data-testid="ai-copy-v2-validation" style={{ margin: 0, fontSize: 10.5, fontWeight: 700, color: evidence.validationReport.valid ? P.text : P.error }}>
         {evidence.validationReport.valid ? tr("pinForm.v2ValidationPassed") : tr("pinForm.v2ValidationFailed")}

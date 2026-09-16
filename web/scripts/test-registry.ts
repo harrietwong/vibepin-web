@@ -78,6 +78,7 @@ export const CORE: string[] = [
   "test-ai-copy-v2-keyword-evidence",
   "test-ai-copy-v2-routes",
   "test-ai-copy-v2-ui",
+  "test-ai-copy-v2-video-cover",
   "test-creative-direction-v2",
   "test-creative-controls",
   "test-creative-intelligence",

@@ -2,6 +2,7 @@ import { applyDraftToPinFields, generatePinMetadataDraft } from "@/lib/pinMetada
 import { parseLimitReached } from "@/lib/usage/limitReached";
 import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
+import { coverMedia } from "@/lib/contentDraftModel";
 import { track, trackLatency } from "@/lib/analytics";
 import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 import { readPinterestRegionFromStorage } from "@/lib/i18n/config";
@@ -213,6 +214,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   const cacheHit = !!cachedAnalysis;
 
   const productContext = inferProductContext(input, storeDraft);
+  const isVideoCover = storeDraft ? coverMedia(storeDraft)?.kind === "video" : false;
   const directionContext = resolveDirectionContext(storeDraft);
   const board = input.boards?.find(b => b.id === input.boardId);
   const boardContext = {
@@ -228,8 +230,9 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       country,
       length: input.length,
       product: productContext,
-      image: cachedAnalysis,
-      imageUrl: input.imageUrl,
+      image: isVideoCover ? null : cachedAnalysis,
+      imageUrl: isVideoCover ? undefined : input.imageUrl,
+      ...(isVideoCover ? { mediaEvidenceMode: "video_cover" as const } : {}),
       board: boardContext,
       userKeywords: [input.keyword, directionContext?.title, ...(directionContext?.terms ?? [])].filter((value): value is string => Boolean(value?.trim())),
       onStage: input.onStage,
@@ -247,7 +250,9 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     });
     const baseFields = applyDraftToPinFields(metadataDraft);
     const timingsMs = { regenerationAttempt: attempt, perceivedTotal: Math.round(performance.now() - started) };
-    const contextSummary = v2.evidence.degradedMode === "no_keyword_demand_data"
+    const contextSummary = v2.evidence.degradedMode === "video_cover_unavailable"
+      ? `Generated from ${v2.evidence.facts.length} grounded facts; the video cover frame was unavailable.`
+      : v2.evidence.degradedMode === "no_keyword_demand_data"
       ? `Generated from ${v2.evidence.facts.length} grounded facts; keyword demand data was unavailable.`
       : `Generated from ${v2.evidence.facts.length} grounded facts and ${selectedKeywords.length} demand-backed keyword${selectedKeywords.length === 1 ? "" : "s"}.`;
     const enhancedDraft = {

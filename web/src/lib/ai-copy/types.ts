@@ -8,7 +8,8 @@ export type AICopyV2Evidence = {
   facts: FactSummaryItem[];
   primaryKeyword?: { id: string; phrase: string; provenance: KeywordProvenance; label: string };
   selectedKeywords: Array<{ id: string; phrase: string; provenance: KeywordProvenance; label: string }>;
-  degradedMode: "none" | "no_keyword_demand_data";
+  degradedMode: "none" | "no_keyword_demand_data" | "video_cover_unavailable";
+  mediaEvidenceMode?: "image" | "video_cover";
   validationReport: ValidationReport;
 };
 

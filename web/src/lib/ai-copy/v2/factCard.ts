@@ -109,13 +109,15 @@ export function createFactCardV1(input: {
   draftId: string;
   locale: string;
   facts: FactItem[];
+  mediaEvidence?: FactCardV1["mediaEvidence"];
 }): FactCardV1 {
   return {
-    version: "fact-card-v1",
+    version: input.mediaEvidence ? "fact-card-v2" : "fact-card-v1",
     sessionId: input.sessionId,
     draftId: input.draftId,
     locale: input.locale,
     facts: input.facts.map(fact => createFact({ ...fact, claimPolicy: fact.claimPolicy })),
+    ...(input.mediaEvidence ? { mediaEvidence: input.mediaEvidence } : {}),
   };
 }
 

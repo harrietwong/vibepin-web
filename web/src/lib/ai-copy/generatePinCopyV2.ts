@@ -15,6 +15,7 @@ export type AICopyV2AnalyzePayload = {
   imageObserved?: Record<string, unknown>;
   boardContext?: Record<string, unknown>;
   userKeywords?: string[];
+  mediaEvidenceMode?: "video_cover";
 };
 
 export type BuildAnalyzePayloadInput = {
@@ -96,6 +97,8 @@ export type GeneratePinterestPinCopyV2Input = Omit<BuildAnalyzePayloadInput, "id
   fetcher?: typeof fetch;
   createId?: () => string;
   onStage?: (stage: "analyzing" | "generating" | "checking") => void;
+  /** Hint only; the v2 route reloads the authenticated owner's draft before work. */
+  mediaEvidenceMode?: "video_cover";
 };
 
 export type GeneratePinterestPinCopyV2Result = {
@@ -142,7 +145,9 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
   const createId = input.createId ?? (() => globalThis.crypto.randomUUID());
   input.onStage?.("analyzing");
   let image = input.image;
-  if (!image && input.imageUrl) {
+  // The existing image analyser must never receive a video URL. Video cover
+  // analysis starts at the owner-checked v2 route instead.
+  if (!image && input.imageUrl && input.mediaEvidenceMode !== "video_cover") {
     const visionResponse = await fetcher("/api/ai-copy/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -167,7 +172,10 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
-    body: JSON.stringify(buildAICopyV2AnalyzePayload({ ...input, image, idempotencyKey: createId() })),
+    body: JSON.stringify({
+      ...buildAICopyV2AnalyzePayload({ ...input, image, idempotencyKey: createId() }),
+      ...(input.mediaEvidenceMode === "video_cover" ? { mediaEvidenceMode: "video_cover" } : {}),
+    }),
   });
   const analyzed = await readJson<AnalyzeResponse>(analyzeResponse);
   if (!analyzeResponse.ok || !analyzed.ok || !analyzed.sessionId || !analyzed.factCard || !analyzed.keywordEvidence) {
@@ -213,6 +221,7 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
       primaryKeyword: selectedKeywords[0],
       selectedKeywords,
       degradedMode: result.degradedMode,
+      mediaEvidenceMode: analyzed.factCard.mediaEvidence?.mode,
       validationReport: result.validationReport,
     },
   };

@@ -122,6 +122,30 @@ async function main() {
   assert.equal(degraded.evidence.primaryKeyword, undefined);
   assert.equal(degraded.evidence.degradedMode, "no_keyword_demand_data");
 
+  const videoCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const videoFetch: typeof fetch = async (input, init) => {
+    const url = String(input); const body = JSON.parse(String(init?.body ?? "{}")); videoCalls.push({ url, body });
+    if (url.endsWith("/analyze")) return new Response(JSON.stringify({
+      ok: true, sessionId: "video-session", degradedMode: "video_cover_unavailable",
+      factCard: { version: "fact-card-v2", sessionId: "video-session", draftId: "video-draft", locale: "en", facts: [], mediaEvidence: { mode: "video_cover", degradedMode: "video_cover_unavailable" } },
+      keywordEvidence: { keywordSetId: "video-ks", candidates: [], selectedKeywordIds: [], degradedMode: "no_keyword_demand_data" },
+    }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, result: {
+      generationId: "video-gen", sessionId: "video-session", draftId: "video-draft", angleId: "default", keywordSetId: "video-ks",
+      title: "Blue Mug", description: "A blue mug on a cream table.", altText: "Blue mug on a cream table", usedKeywordIds: [], factSummary: [],
+      degradedMode: "video_cover_unavailable", validationReport: { valid: true, issues: [] },
+    } }), { status: 200 });
+  };
+  const video = await generatePinterestPinCopyV2({
+    draftId: "video-draft", locale: "en", image: null, imageUrl: "private://never-send-video.mp4", mediaEvidenceMode: "video_cover",
+    fetcher: videoFetch, createId: (() => { const ids = ["video-analyze", "video-generate"]; return () => ids.shift()!; })(),
+  });
+  assert.deepEqual(videoCalls.map(call => call.url), ["/api/ai-copy/v2/analyze", "/api/ai-copy/v2/generate"], "video skips legacy image analysis entirely");
+  assert.equal(videoCalls[0].body.mediaEvidenceMode, "video_cover", "v2 receives only the evidence-mode hint");
+  assert.equal(JSON.stringify(videoCalls[0].body).includes("never-send-video.mp4"), false, "video URL is never sent from the client");
+  assert.equal(video.evidence.mediaEvidenceMode, "video_cover");
+  assert.equal(video.evidence.degradedMode, "video_cover_unavailable");
+
   const failedFetch: typeof fetch = async () => new Response(JSON.stringify({ ok: false }), { status: 502 });
   await assert.rejects(
     generatePinterestPinCopyV2({ draftId: "draft-3", locale: "en", image: null, fetcher: failedFetch, createId: () => "idem" }),
@@ -161,6 +185,8 @@ async function main() {
 
   const panel = readFileSync(resolve(process.cwd(), "src/components/pins/PinAICopyPanel.tsx"), "utf8");
   assert.match(panel, /data-testid="ai-copy-v2-evidence"/);
+  assert.match(panel, /Based on the video cover frame/);
+  assert.match(panel, /data-testid="ai-copy-v2-video-cover-unavailable"/);
   assert.match(panel, /confirmedReplace/);
   const layout = readFileSync(resolve(process.cwd(), "src/app/app/layout.tsx"), "utf8");
   assert.match(layout, /NEXT_PUBLIC_HIDE_LEGACY_DISCOVERY/);

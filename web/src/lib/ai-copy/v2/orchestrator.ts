@@ -183,6 +183,9 @@ export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promi
     angleId: req.angleId ?? "default", keywordSetId: req.keywordEvidence.keywordSetId,
     title: output.title, description: output.description, altText: output.altText,
     usedKeywordIds, factSummary: summarizeFacts(req.factCard),
-    degradedMode: req.keywordEvidence.degradedMode, validationReport: report,
+    degradedMode: req.factCard.mediaEvidence?.degradedMode === "video_cover_unavailable"
+      ? "video_cover_unavailable"
+      : req.keywordEvidence.degradedMode,
+    validationReport: report,
   };
 }

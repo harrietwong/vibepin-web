@@ -149,7 +149,7 @@ async function main() {
   const sessionModule = await import("../src/lib/ai-copy/v2/sessionStore");
   const { __setCopyProviderForTests, orchestrateCopyGeneration, buildPromptForSession } = await import("../src/lib/ai-copy/v2/orchestrator");
   const { __setTrendKeywordLoaderForTests, TREND_KEYWORD_SELECT_FIELDS } = await import("../src/lib/ai-copy/v2/trendKeywordSource");
-  const { POST: analyze } = await import("../src/app/api/ai-copy/v2/analyze/route");
+  const { POST: analyze, createAnalyzeHandler } = await import("../src/app/api/ai-copy/v2/analyze/route");
   const { POST: generate } = await import("../src/app/api/ai-copy/v2/generate/route");
   const setProvider = (provider: Record<string, unknown>) => {
     const generated = provider.generate as ((...args: unknown[]) => Promise<ProviderCopyOutput>) | undefined;
@@ -213,6 +213,52 @@ async function main() {
     }
     assert(!json.factCard.facts.some((f: { key: string }) => f.key === "user_keywords"), "keywords are relevance only");
     eq(store.sessionClaims, 1, "one claim");
+  });
+
+  await test("video cover analysis uses only the owner-authorized poster and persists safe evidence", async () => {
+    const store = reset();
+    const providerInputs: string[] = [];
+    const videoAnalyze = createAnalyzeHandler({ analyzeVideoCover: async ({ userId: owner, draftId }) => {
+        eq(owner, "user_123", "server authenticated owner"); eq(draftId, "draft_1", "server draft id");
+        providerInputs.push("data:image/png;base64,COVER_ONLY");
+        return { mode: "video_cover" as const, degradedMode: "none" as const, imageObserved: { summary: "Blue mug on a cream table", objects: ["mug"], colors: ["blue", "cream"], style: "minimal", ocrText: [] } };
+      } });
+    const response = await videoAnalyze(analyzeReq("video-cover", {
+      mediaEvidenceMode: "video_cover",
+      imageObserved: { summary: "malicious binary analysis", material: "silk", price: "$1" },
+    }));
+    eq(response.status, 200, "video cover analyze status"); const body = await response.json();
+    eq(body.factCard.version, "fact-card-v2", "serialized media evidence version");
+    eq(body.factCard.mediaEvidence.mode, "video_cover", "cover evidence mode persists");
+    eq(body.degradedMode, "no_keyword_demand_data", "keyword degradation remains honest when cover works");
+    eq(JSON.stringify(providerInputs), JSON.stringify(["data:image/png;base64,COVER_ONLY"]), "only poster bytes sent to vision");
+    assert(!providerInputs.join(" ").includes("video-binary"), "never sends video URL or bytes");
+    const visuals = body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed");
+    assert(visuals.length > 0, "poster visual facts retained");
+    assert(visuals.every((fact: { trustLevel: string; claimPolicy: string }) => fact.trustLevel === "observed" && fact.claimPolicy === "descriptive_only"), "cover visuals are descriptive observations only");
+    assert(!body.factCard.facts.some((fact: { key: string }) => /material|brand|price|availability|quantity|efficacy/i.test(fact.key)), "client visual commercial claims are ignored for video");
+    const persisted = store.sessions.get(body.sessionId)!;
+    eq(persisted.fact_card?.mediaEvidence?.mode, "video_cover", "session persists evidence mode");
+  });
+
+  await test("unowned video poster is concealed before provider work and degrades safely", async () => {
+    const store = reset(); let providerCalls = 0;
+    const videoAnalyze = createAnalyzeHandler({ analyzeVideoCover: async () => {
+      providerCalls++;
+      return { mode: "video_cover" as const, degradedMode: "video_cover_unavailable" as const };
+    } });
+    const response = await videoAnalyze(analyzeReq("video-owner", { mediaEvidenceMode: "video_cover" }));
+    eq(response.status, 200, "unowned poster does not disclose authorization state"); const body = await response.json();
+    eq(body.degradedMode, "video_cover_unavailable", "safe degradation code");
+    eq(body.factCard.mediaEvidence.degradedMode, "video_cover_unavailable", "safe code persists in session data");
+    eq(providerCalls, 1, "route receives the already-concealed server result");
+    eq(body.factCard.facts.filter((fact: { source: string }) => fact.source === "image_observed").length, 0, "no visual facts without an owned poster");
+    eq(store.sessions.get(body.sessionId)?.fact_card?.mediaEvidence?.degradedMode, "video_cover_unavailable", "persisted degradation");
+    const replay = await videoAnalyze(analyzeReq("video-owner", { mediaEvidenceMode: "video_cover" }));
+    const replayBody = await replay.json();
+    eq(replay.status, 200, "replay status");
+    eq(replayBody.replayed, true, "replay marker");
+    eq(replayBody.degradedMode, "video_cover_unavailable", "replay retains persisted degradation");
   });
 
   await test("route facts retain negated availability and reject an opposite in-stock claim", async () => {
