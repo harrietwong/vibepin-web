@@ -1,246 +1,112 @@
-/**
- * POST /api/ai-copy/v2/analyze
- *
- * Rules:
- *  - Route order: flag -> auth -> rate limit -> body/provider.
- *  - Literal AI_COPY_V2_ENABLED=true only; otherwise 404.
- *  - Authenticated via getUserIdFromBearerOrCookies. 401 if unauthenticated.
- *  - Rate limit: ai_copy_v2_analyze (200/300s). Returns 429 before body parsing.
- *  - Input: draftId, idempotencyKey, locale/country, image/product/page/board context, user keywords.
- *  - No arbitrary URL fetching.
- *  - Builds FactCardV1 and KeywordEvidence.
- *  - Idempotency claimed before work; duplicate idempotencyKey returns original stored session.
- *  - Concurrency-safe against double-spending.
- */
-
 import { NextResponse } from "next/server";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
-import { createFactCardV1 } from "@/lib/ai-copy/v2/factCard";
+import { createFact, createFactCardV1, type CreateFactInput } from "@/lib/ai-copy/v2/factCard";
 import { buildKeywordEvidence } from "@/lib/ai-copy/v2/keywordEvidence";
-import { retrievePinterestKeywords } from "@/lib/ai-copy/keywordContext";
+import { getTrendKeywordLoader } from "@/lib/ai-copy/v2/trendKeywordSource";
 import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
-import {
-  AI_COPY_V2_MODEL_VERSION,
-  AI_COPY_V2_PROMPT_VERSION,
-} from "@/lib/ai-copy/v2/orchestrator";
-import type { CreateFactInput } from "@/lib/ai-copy/v2/factCard";
+import { AI_COPY_V2_PROMPT_VERSION, getAI_COPY_V2ModelVersion } from "@/lib/ai-copy/v2/orchestrator";
+import type { KeywordContextInput } from "@/lib/ai-copy/keywordContext";
 
 export const runtime = "nodejs";
 
-export interface AnalyzeRequestBody {
-  draftId: string;
-  idempotencyKey: string;
-  locale?: string;
-  country?: string;
-  productContext?: {
-    title?: string;
-    description?: string;
-    vendor?: string;
-    productType?: string;
-    tags?: string[];
-    price?: string;
-  };
-  pageContext?: {
-    title?: string;
-    description?: string;
-  };
-  imageObserved?: {
-    summary?: string;
-    objects?: string[];
-    colors?: string[];
-    style?: string;
-    ocrText?: string[];
-  };
-  boardContext?: {
-    name?: string;
-    description?: string;
-  };
+type Context = Record<string, unknown>;
+interface AnalyzeBody {
+  draftId: string; idempotencyKey: string; locale?: string; country?: string;
+  productContext?: Context; pageContext?: Context; imageObserved?: Context; boardContext?: Context;
   userKeywords?: string[];
 }
 
-export async function POST(req: Request) {
-  // 1. Literal Feature Flag Check
-  if (process.env.AI_COPY_V2_ENABLED !== "true") {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
+const text = (value: unknown, max = 2000): string | undefined =>
+  typeof value === "string" && value.trim() && value.length <= max ? value.trim() : undefined;
+const texts = (value: unknown, maxItems = 30): string[] =>
+  Array.isArray(value) ? value.slice(0, maxItems).map(v => text(v, 200)).filter((v): v is string => Boolean(v)) : [];
+const badKey = (value: unknown) => !text(value, 200);
 
-  // 2. Verified Authentication
-  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
-  if (!userId) {
-    return NextResponse.json(
-      { ok: false, error: "unauthorized", message: "Authentication required" },
-      { status: 401 },
-    );
-  }
-
-  // 3. Durable Rate Limiter (BEFORE body parsing / work)
-  const rl = await consumeRateLimit(userId, "ai_copy_v2_analyze");
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { ok: false, error: RATE_LIMITED_ERROR, message: RATE_LIMITED_MESSAGE },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rl.retryAfterSeconds) },
-      },
-    );
-  }
-
-  // 4. Body parsing and validation
-  let body: AnalyzeRequestBody;
-  try {
-    body = (await req.json()) as AnalyzeRequestBody;
-  } catch {
-    return NextResponse.json(
-      { ok: false, error: "invalid_json", message: "Malformed JSON request body" },
-      { status: 400 },
-    );
-  }
-
-  if (!body.draftId || typeof body.draftId !== "string" || !body.draftId.trim()) {
-    return NextResponse.json(
-      { ok: false, error: "invalid_request", message: "draftId is required" },
-      { status: 400 },
-    );
-  }
-
-  if (!body.idempotencyKey || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim()) {
-    return NextResponse.json(
-      { ok: false, error: "invalid_request", message: "idempotencyKey is required" },
-      { status: 400 },
-    );
-  }
-
-  const sessionStore = getSessionStore();
-
-  // 5. Check if session already exists for this idempotency key (idempotent replay)
-  const existing = await sessionStore.findSessionByAnalyzeKey(userId, body.idempotencyKey);
-  if (existing) {
-    return NextResponse.json({
-      ok: true,
-      sessionId: existing.id,
-      draftId: existing.draft_id,
-      factCard: existing.fact_card,
-      keywordEvidence: existing.keyword_evidence,
-      degradedMode: existing.keyword_evidence.degradedMode,
-      replayed: true,
-    });
-  }
-
-  const locale = body.locale || "en";
-  const country = body.country || "US";
-
-  // 6. Build FactCardV1 from semantic contexts (no arbitrary URL fetch)
+function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
   const facts: CreateFactInput[] = [];
-
-  if (body.productContext) {
-    const pc = body.productContext;
-    if (pc.title) facts.push({ key: "product_title", value: pc.title, source: "product_catalog", trustLevel: "verified", category: "general" });
-    if (pc.description) facts.push({ key: "product_description", value: pc.description, source: "product_catalog", trustLevel: "verified", category: "general" });
-    if (pc.vendor) facts.push({ key: "product_vendor", value: pc.vendor, source: "product_catalog", trustLevel: "verified", category: "brand" });
-    if (pc.productType) facts.push({ key: "product_type", value: pc.productType, source: "product_catalog", trustLevel: "verified", category: "general" });
-    if (pc.price) facts.push({ key: "product_price", value: pc.price, source: "product_catalog", trustLevel: "verified", category: "price" });
-    if (pc.tags && pc.tags.length) facts.push({ key: "product_tags", value: pc.tags.join(", "), source: "product_catalog", trustLevel: "verified", category: "general" });
-  }
-
-  if (body.pageContext) {
-    const pg = body.pageContext;
-    if (pg.title) facts.push({ key: "page_title", value: pg.title, source: "page_metadata", trustLevel: "asserted", category: "general" });
-    if (pg.description) facts.push({ key: "page_description", value: pg.description, source: "page_metadata", trustLevel: "asserted", category: "general" });
-  }
-
-  if (body.imageObserved) {
-    const io = body.imageObserved;
-    if (io.summary) facts.push({ key: "image_summary", value: io.summary, source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" });
-    if (io.objects?.length) facts.push({ key: "visible_objects", value: io.objects.join(", "), source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" });
-    if (io.colors?.length) facts.push({ key: "colors", value: io.colors.join(", "), source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" });
-    if (io.style) facts.push({ key: "visual_style", value: io.style, source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" });
-    if (io.ocrText?.length) facts.push({ key: "ocr_text", value: io.ocrText.join(" "), source: "image_observed", trustLevel: "observed", category: "visual_description", claimPolicy: "descriptive_only" });
-  }
-
-  if (body.boardContext) {
-    const bc = body.boardContext;
-    if (bc.name) facts.push({ key: "board_name", value: bc.name, source: "board_context", trustLevel: "asserted", category: "general" });
-    if (bc.description) facts.push({ key: "board_description", value: bc.description, source: "board_context", trustLevel: "asserted", category: "general" });
-  }
-
-  if (body.userKeywords?.length) {
-    facts.push({
-      key: "user_keywords",
-      value: body.userKeywords.join(", "),
-      source: "user_input",
-      trustLevel: "asserted",
-      category: "general",
-    });
-  }
-
-  const factCard = createFactCardV1({
-    sessionId: "pending",
-    draftId: body.draftId,
-    locale,
-    facts,
-  });
-
-  // 7. Keyword Evidence Retrieval via trend_keywords (sole demand source)
-  const kwResult = await retrievePinterestKeywords({
-    imageSummary: body.imageObserved?.summary,
-    ocrText: body.imageObserved?.ocrText,
-    category: body.productContext?.productType,
-    boardName: body.boardContext?.name,
-    productTitle: body.productContext?.title,
-    productDescription: body.productContext?.description,
-    productTags: body.productContext?.tags,
-    locale,
-    country,
-  }).catch(() => null);
-
-  const kwContext = {
-    imageSummary: body.imageObserved?.summary,
-    ocrText: body.imageObserved?.ocrText,
-    category: body.productContext?.productType,
-    boardName: body.boardContext?.name,
-    language: locale,
-    country,
+  let index = 0;
+  const add = (key: string, value: unknown, category: CreateFactInput["category"] = "general") => {
+    const normalized = text(value);
+    if (!normalized) return;
+    facts.push({ id: `fact_${++index}`, key, value: normalized, source: "user_input", trustLevel: "asserted", category });
   };
+  const product = body.productContext ?? {};
+  add("product_title", product.title);
+  add("product_description", product.description);
+  add("product_vendor", product.vendor, "brand");
+  add("product_type", product.productType);
+  add("product_price", product.price, "price");
+  const tags = texts(product.tags); if (tags.length) add("product_tags", tags.join(", "));
+  const page = body.pageContext ?? {}; add("page_title", page.title); add("page_description", page.description);
+  const image = body.imageObserved ?? {}; add("image_summary", image.summary); add("visual_style", image.style);
+  const objects = texts(image.objects); if (objects.length) add("visible_objects", objects.join(", "));
+  const colors = texts(image.colors); if (colors.length) add("colors", colors.join(", "));
+  const ocr = texts(image.ocrText); if (ocr.length) add("ocr_text", ocr.join(" "));
+  const board = body.boardContext ?? {}; add("board_name", board.name); add("board_description", board.description);
+  return facts.map(createFact);
+}
 
-  const candidateRows = (kwResult?.recommended ?? []).map((r) => ({
-    id: `kw_${r.keyword.toLowerCase().replace(/\s+/g, "_")}`,
-    keyword: r.keyword,
-    category: body.productContext?.productType || "general",
-    data_quality: "official" as const,
+function keywordContext(body: AnalyzeBody, locale: string, country: string): KeywordContextInput {
+  const product = body.productContext ?? {}, image = body.imageObserved ?? {}, board = body.boardContext ?? {};
+  return {
+    imageSummary: text(image.summary) ?? "",
+    visibleObjects: texts(image.objects),
+    style: text(image.style, 200) ?? "",
+    boardName: text(board.name, 200),
+    category: text(product.productType, 200),
     language: locale,
-    country,
-  }));
+    region: country,
+    productTitle: text(product.title),
+    productType: text(product.productType, 200),
+    productTags: texts(product.tags),
+    directionTerms: texts(body.userKeywords),
+  };
+}
 
-  const keywordEvidence = buildKeywordEvidence(candidateRows, kwContext, {
-    draftId: body.draftId,
-    targetLocale: locale,
-    userInput: body.userKeywords?.join(", "),
-    pageMetadata: body.pageContext,
-  });
+export async function POST(req: Request) {
+  if (process.env.AI_COPY_V2_ENABLED !== "true") return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) return NextResponse.json({ ok: false, error: "unauthorized", message: "Authentication required" }, { status: 401 });
+  const limit = await consumeRateLimit(userId, "ai_copy_v2_analyze");
+  if (!limit.allowed) return NextResponse.json({ ok: false, error: RATE_LIMITED_ERROR, message: RATE_LIMITED_MESSAGE }, { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } });
 
-  // 8. Persist session atomically
-  const { session } = await sessionStore.createSession({
-    userId,
-    draftId: body.draftId,
-    analyzeIdempotencyKey: body.idempotencyKey,
-    factCard,
-    keywordEvidence,
-    modelVersion: AI_COPY_V2_MODEL_VERSION,
-    promptVersion: AI_COPY_V2_PROMPT_VERSION,
-  });
+  let body: AnalyzeBody;
+  try { body = await req.json() as AnalyzeBody; } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
+  if (!body || typeof body !== "object" || badKey(body.draftId) || badKey(body.idempotencyKey) || (body.userKeywords != null && !Array.isArray(body.userKeywords))) {
+    return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
+  }
+  const locale = text(body.locale, 35) ?? "en";
+  const country = text(body.country, 10) ?? "US";
+  const store = getSessionStore();
+  let claim;
+  try {
+    claim = await store.claimSession({
+      userId, workspaceId: userId, draftId: body.draftId.trim(), analyzeIdempotencyKey: body.idempotencyKey.trim(),
+      modelVersion: getAI_COPY_V2ModelVersion(), promptVersion: AI_COPY_V2_PROMPT_VERSION,
+    });
+  } catch {
+    return NextResponse.json({ ok: false, error: "analysis_failed", message: "Unable to analyze right now" }, { status: 502 });
+  }
+  if (claim.state === "pending") return NextResponse.json({ ok: false, error: "request_in_progress" }, { status: 409 });
+  if (claim.state === "completed") {
+    if (!claim.row.fact_card || !claim.row.keyword_evidence) return NextResponse.json({ ok: false, error: "analysis_failed" }, { status: 502 });
+    return NextResponse.json({ ok: true, sessionId: claim.row.id, draftId: claim.row.draft_id, factCard: claim.row.fact_card, keywordEvidence: claim.row.keyword_evidence, degradedMode: claim.row.keyword_evidence.degradedMode, replayed: true });
+  }
 
-  // Update factCard's sessionId to the assigned UUID
-  session.fact_card.sessionId = session.id;
-  session.keyword_evidence.sessionId = session.id;
-
-  return NextResponse.json({
-    ok: true,
-    sessionId: session.id,
-    draftId: session.draft_id,
-    factCard: session.fact_card,
-    keywordEvidence: session.keyword_evidence,
-    degradedMode: session.keyword_evidence.degradedMode,
-    replayed: false,
-  });
+  try {
+    const factCard = createFactCardV1({ sessionId: claim.row.id, draftId: body.draftId.trim(), locale, facts: buildFacts(body) });
+    const context = keywordContext(body, locale, country);
+    const rows = await getTrendKeywordLoader()(context).catch(() => []);
+    const keywordEvidence = buildKeywordEvidence(rows, context, {
+      sessionId: claim.row.id, draftId: body.draftId.trim(), targetLocale: locale,
+      userInput: texts(body.userKeywords).join(" "),
+      pageMetadata: { title: text(body.pageContext?.title), description: text(body.pageContext?.description) },
+    });
+    const completed = await store.completeSession({ sessionId: claim.row.id, userId, factCard, keywordEvidence });
+    return NextResponse.json({ ok: true, sessionId: completed.id, draftId: completed.draft_id, factCard, keywordEvidence, degradedMode: keywordEvidence.degradedMode, replayed: false });
+  } catch {
+    await store.releaseSessionClaim(claim.row.id, userId).catch(() => undefined);
+    return NextResponse.json({ ok: false, error: "analysis_failed", message: "Unable to analyze right now" }, { status: 502 });
+  }
 }

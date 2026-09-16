@@ -1,39 +1,21 @@
-/**
- * sessionStore.ts   AI Copy v2 Session and Generation Ledger Store (SERVER-ONLY).
- *
- * Requirements:
- *  - Stores user/workspace ownership, draft ID, analyze idempotency key,
- *    FactCardV1, KeywordEvidence, last output, validation report, model/prompt versions,
- *    last generation idempotency key, generation count, status, expiry (24h default), timestamps.
- *  - Unique analyze idempotency within owning user. Repeated request returns original stored result.
- *  - Unique generate idempotency within owning session/user (supporting A -> B -> retry A).
- *  - Concurrency-safe unique idempotency claims before work to prevent double-spend.
- *  - Owner + expiry filtered together: foreign or expired session both return null (handled as 404).
- *  - Injected test seam (__setSessionStoreForTests) for hermetic testing.
- */
-
+/** Server-only durable claims for AI Copy v2. */
 import { createServerClient } from "@/lib/supabase";
-import type {
-  CopyResultV2,
-  FactCardV1,
-  KeywordEvidence,
-  ValidationReport,
-} from "./types";
+import type { CopyResultV2, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
 
 export interface SessionRow {
   id: string;
   vibepin_user_id: string;
-  workspace_id?: string | null;
+  workspace_id: string;
   draft_id: string;
   analyze_idempotency_key: string;
-  status: "active" | "completed" | "expired";
-  fact_card: FactCardV1;
-  keyword_evidence: KeywordEvidence;
-  last_output?: CopyResultV2 | null;
-  validation_report?: ValidationReport | null;
+  status: "pending" | "completed" | "expired";
+  fact_card: FactCardV1 | null;
+  keyword_evidence: KeywordEvidence | null;
+  last_output: CopyResultV2 | null;
+  validation_report: ValidationReport | null;
   model_version: string;
   prompt_version: string;
-  last_generation_idempotency_key?: string | null;
+  last_generation_idempotency_key: string | null;
   generation_count: number;
   expires_at: string;
   created_at: string;
@@ -45,179 +27,175 @@ export interface GenerationLedgerRow {
   session_id: string;
   vibepin_user_id: string;
   idempotency_key: string;
-  angle_id?: string | null;
-  output: CopyResultV2;
-  validation_report: ValidationReport;
+  status: "pending" | "completed";
+  angle_id: string | null;
+  output: CopyResultV2 | null;
+  validation_report: ValidationReport | null;
   created_at: string;
+  updated_at: string;
 }
 
-export interface CreateSessionParams {
+export interface ClaimSessionParams {
   userId: string;
-  workspaceId?: string | null;
+  workspaceId: string;
   draftId: string;
   analyzeIdempotencyKey: string;
-  factCard: FactCardV1;
-  keywordEvidence: KeywordEvidence;
   modelVersion: string;
   promptVersion: string;
   expiresAtIso?: string;
 }
 
-export interface RecordGenerationParams {
+export interface CompleteSessionParams {
+  sessionId: string;
+  userId: string;
+  factCard: FactCardV1;
+  keywordEvidence: KeywordEvidence;
+}
+
+export interface ClaimGenerationParams {
   sessionId: string;
   userId: string;
   idempotencyKey: string;
   angleId?: string | null;
-  output: CopyResultV2;
-  validationReport: ValidationReport;
 }
+
+export type ClaimResult<T> =
+  | { state: "claimed"; row: T }
+  | { state: "pending"; row: T }
+  | { state: "completed"; row: T };
 
 export interface SessionStore {
-  findSessionByAnalyzeKey(userId: string, analyzeIdempotencyKey: string): Promise<SessionRow | null>;
-  createSession(params: CreateSessionParams): Promise<{ session: SessionRow; created: boolean }>;
+  claimSession(params: ClaimSessionParams): Promise<ClaimResult<SessionRow>>;
+  completeSession(params: CompleteSessionParams): Promise<SessionRow>;
+  releaseSessionClaim(sessionId: string, userId: string): Promise<void>;
   getValidSession(sessionId: string, userId: string, nowIso?: string): Promise<SessionRow | null>;
-  findGeneration(sessionId: string, idempotencyKey: string): Promise<GenerationLedgerRow | null>;
-  recordGeneration(params: RecordGenerationParams): Promise<{ generation: GenerationLedgerRow; created: boolean }>;
+  claimGeneration(params: ClaimGenerationParams): Promise<ClaimResult<GenerationLedgerRow>>;
+  completeGeneration(params: {
+    generationId: string;
+    sessionId: string;
+    userId: string;
+    output: CopyResultV2;
+    validationReport: ValidationReport;
+  }): Promise<GenerationLedgerRow>;
+  releaseGenerationClaim(generationId: string, sessionId: string, userId: string): Promise<void>;
 }
 
-function defaultExpiryIso(nowMs: number = Date.now()): string {
-  return new Date(nowMs + 24 * 60 * 60 * 1000).toISOString();
+const expiry = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+function stateFor<T extends { status: "pending" | "completed" }>(row: T): ClaimResult<T> {
+  return row.status === "completed"
+    ? { state: "completed", row }
+    : { state: "pending", row };
 }
 
 function supabaseSessionStore(): SessionStore {
   const db = () => createServerClient();
+  const findSession = async (userId: string, key: string): Promise<SessionRow | null> => {
+    const { data, error } = await db().from("ai_copy_v2_sessions").select("*")
+      .eq("vibepin_user_id", userId).eq("analyze_idempotency_key", key).maybeSingle();
+    if (error) throw new Error("session_read_failed");
+    return (data as SessionRow | null) ?? null;
+  };
+  const findGeneration = async (sessionId: string, userId: string, key: string): Promise<GenerationLedgerRow | null> => {
+    const { data, error } = await db().from("ai_copy_v2_generations").select("*")
+      .eq("session_id", sessionId).eq("vibepin_user_id", userId)
+      .eq("idempotency_key", key).maybeSingle();
+    if (error) throw new Error("generation_read_failed");
+    return (data as GenerationLedgerRow | null) ?? null;
+  };
 
   return {
-    async findSessionByAnalyzeKey(userId, analyzeIdempotencyKey) {
-      const { data, error } = await db()
-        .from("ai_copy_v2_sessions")
-        .select("*")
-        .eq("vibepin_user_id", userId)
-        .eq("analyze_idempotency_key", analyzeIdempotencyKey)
-        .maybeSingle();
-
-      if (error) throw new Error(`session_read_by_analyze_key_failed: ${error.message}`);
-      return (data as SessionRow | null) ?? null;
-    },
-
-    async createSession(params) {
-      const nowIso = new Date().toISOString();
-      const expiresAt = params.expiresAtIso ?? defaultExpiryIso();
-
-      const newRow = {
+    async claimSession(params) {
+      const now = new Date().toISOString();
+      const { data, error } = await db().from("ai_copy_v2_sessions").insert({
         vibepin_user_id: params.userId,
-        workspace_id: params.workspaceId ?? null,
+        workspace_id: params.workspaceId,
         draft_id: params.draftId,
         analyze_idempotency_key: params.analyzeIdempotencyKey,
-        status: "active",
-        fact_card: params.factCard,
-        keyword_evidence: params.keywordEvidence,
-        last_output: null,
-        validation_report: null,
+        status: "pending",
         model_version: params.modelVersion,
         prompt_version: params.promptVersion,
-        last_generation_idempotency_key: null,
-        generation_count: 0,
-        expires_at: expiresAt,
-        created_at: nowIso,
-        updated_at: nowIso,
-      };
-
-      const { data, error } = await db()
-        .from("ai_copy_v2_sessions")
-        .insert(newRow)
-        .select("*")
-        .single();
-
-      if (!error && data) {
-        return { session: data as SessionRow, created: true };
-      }
-
+        expires_at: params.expiresAtIso ?? expiry(),
+        created_at: now,
+        updated_at: now,
+      }).select("*").single();
+      if (!error && data) return { state: "claimed", row: data as SessionRow };
       if (error?.code === "23505") {
-        // Lost creation race or duplicate analyze request -> re-read
-        const existing = await this.findSessionByAnalyzeKey(params.userId, params.analyzeIdempotencyKey);
-        if (existing) return { session: existing, created: false };
+        const existing = await findSession(params.userId, params.analyzeIdempotencyKey);
+        if (existing) return existing.status === "completed"
+          ? { state: "completed", row: existing }
+          : { state: "pending", row: existing };
       }
+      throw new Error("session_claim_failed");
+    },
 
-      throw new Error(`session_create_failed: ${error?.message ?? "unknown"}`);
+    async completeSession(params) {
+      const { data, error } = await db().from("ai_copy_v2_sessions").update({
+        status: "completed",
+        fact_card: params.factCard,
+        keyword_evidence: params.keywordEvidence,
+        updated_at: new Date().toISOString(),
+      }).eq("id", params.sessionId).eq("vibepin_user_id", params.userId)
+        .eq("status", "pending").select("*").single();
+      if (error || !data) throw new Error("session_finalize_failed");
+      return data as SessionRow;
+    },
+
+    async releaseSessionClaim(sessionId, userId) {
+      const { error } = await db().from("ai_copy_v2_sessions").delete()
+        .eq("id", sessionId).eq("vibepin_user_id", userId).eq("status", "pending");
+      if (error) throw new Error("session_release_failed");
     },
 
     async getValidSession(sessionId, userId, nowIso = new Date().toISOString()) {
-      // Owner + expiry filtered together in single query
-      const { data, error } = await db()
-        .from("ai_copy_v2_sessions")
-        .select("*")
-        .eq("id", sessionId)
-        .eq("vibepin_user_id", userId)
-        .gt("expires_at", nowIso)
-        .maybeSingle();
-
-      if (error) throw new Error(`session_get_valid_failed: ${error.message}`);
+      const { data, error } = await db().from("ai_copy_v2_sessions").select("*")
+        .eq("id", sessionId).eq("vibepin_user_id", userId)
+        .eq("status", "completed").gt("expires_at", nowIso).maybeSingle();
+      if (error) throw new Error("session_get_valid_failed");
       return (data as SessionRow | null) ?? null;
     },
 
-    async findGeneration(sessionId, idempotencyKey) {
-      const { data, error } = await db()
-        .from("ai_copy_v2_generations")
-        .select("*")
-        .eq("session_id", sessionId)
-        .eq("idempotency_key", idempotencyKey)
-        .maybeSingle();
-
-      if (error) throw new Error(`generation_find_failed: ${error.message}`);
-      return (data as GenerationLedgerRow | null) ?? null;
-    },
-
-    async recordGeneration(params) {
-      const nowIso = new Date().toISOString();
-      const insertData = {
+    async claimGeneration(params) {
+      const now = new Date().toISOString();
+      const { data, error } = await db().from("ai_copy_v2_generations").insert({
         session_id: params.sessionId,
         vibepin_user_id: params.userId,
         idempotency_key: params.idempotencyKey,
+        status: "pending",
         angle_id: params.angleId ?? null,
-        output: params.output,
-        validation_report: params.validationReport,
-        created_at: nowIso,
-      };
-
-      const { data, error } = await db()
-        .from("ai_copy_v2_generations")
-        .insert(insertData)
-        .select("*")
-        .single();
-
-      if (!error && data) {
-        // Update session's last_output, last_generation_idempotency_key, and bump generation_count
-        const { error: sessionUpdateErr } = await db().rpc("noop").catch(() => ({ error: null })); // fallback safe
-        await db()
-          .from("ai_copy_v2_sessions")
-          .update({
-            last_output: params.output,
-            validation_report: params.validationReport,
-            last_generation_idempotency_key: params.idempotencyKey,
-            updated_at: nowIso,
-          })
-          .eq("id", params.sessionId);
-
-        return { generation: data as GenerationLedgerRow, created: true };
-      }
-
+        created_at: now,
+        updated_at: now,
+      }).select("*").single();
+      if (!error && data) return { state: "claimed", row: data as GenerationLedgerRow };
       if (error?.code === "23505") {
-        const existing = await this.findGeneration(params.sessionId, params.idempotencyKey);
-        if (existing) return { generation: existing, created: false };
+        const existing = await findGeneration(params.sessionId, params.userId, params.idempotencyKey);
+        if (existing) return stateFor(existing);
       }
+      throw new Error("generation_claim_failed");
+    },
 
-      throw new Error(`generation_record_failed: ${error?.message ?? "unknown"}`);
+    async completeGeneration(params) {
+      const { data, error } = await db().rpc("complete_ai_copy_v2_generation", {
+        p_generation_id: params.generationId,
+        p_session_id: params.sessionId,
+        p_user_id: params.userId,
+        p_output: params.output,
+        p_validation_report: params.validationReport,
+      });
+      const row = Array.isArray(data) ? data[0] : data;
+      if (error || !row) throw new Error("generation_finalize_failed");
+      return row as GenerationLedgerRow;
+    },
+
+    async releaseGenerationClaim(generationId, sessionId, userId) {
+      const { error } = await db().from("ai_copy_v2_generations").delete()
+        .eq("id", generationId).eq("session_id", sessionId)
+        .eq("vibepin_user_id", userId).eq("status", "pending");
+      if (error) throw new Error("generation_release_failed");
     },
   };
 }
 
-let sessionStoreOverride: SessionStore | null = null;
-
-export function __setSessionStoreForTests(store: SessionStore | null): void {
-  sessionStoreOverride = store;
-}
-
-export function getSessionStore(): SessionStore {
-  return sessionStoreOverride ?? supabaseSessionStore();
-}
+let override: SessionStore | null = null;
+export function __setSessionStoreForTests(store: SessionStore | null): void { override = store; }
+export function getSessionStore(): SessionStore { return override ?? supabaseSessionStore(); }

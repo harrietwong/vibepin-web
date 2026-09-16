@@ -57,7 +57,7 @@ const STOPWORDS = new Set<string>([
 const TRAP_MATERIALS = [
   "sterling silver", "925 silver", "mulberry silk", "pure silk", "silk",
   "cashmere", "leather", "linen", "wool", "gold", "diamond", "diamonds",
-  "platinum", "titanium", "velvet", "satin",
+  "platinum", "titanium", "velvet", "satin", "acrylic", "carbon fiber",
 ];
 
 const TRAP_BRANDS = [
@@ -294,6 +294,16 @@ export function validateCopy(input: ValidateCopyInput): ValidationReport {
     });
   }
 
+  if (!title.trim()) {
+    issues.push({ code: "TITLE_REQUIRED", field: "title", message: "Title is required" });
+  }
+  if (!description.trim()) {
+    issues.push({ code: "DESCRIPTION_REQUIRED", field: "description", message: "Description is required" });
+  }
+  if (!altText?.trim()) {
+    issues.push({ code: "ALT_TEXT_REQUIRED", field: "altText", message: "Alt text is required" });
+  }
+
   // 1. Hard Platform Character Limits
   if (title.length > 100) {
     issues.push({
@@ -439,7 +449,7 @@ export function validateCopy(input: ValidateCopyInput): ValidationReport {
     },
     {
       type: "numeric_commercial",
-      regex: /\b\d+[ -]pack\b|\b\d+[ -](?:year|month|day)\s+(?:warranty|guarantee)\b|\bholds up to \d+\s*(?:lbs|pounds|kg|oz|g)\b|\b\d+[ -]day money[ -]back\b/gi,
+      regex: /\b\d+[ -]pack\b|\b(?:lifetime|\d+[ -](?:year|month|day))\s+(?:warranty|guarantee)\b|\bholds up to \d+\s*(?:lbs|pounds|kg|oz|g)\b|\b\d+[ -]day money[ -]back\b/gi,
       code: "UNSUPPORTED_NUMERIC_CLAIM",
     },
   ];

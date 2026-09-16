@@ -104,6 +104,9 @@ export interface KeywordEvidence {
 }
 
 export type ValidationIssueCode =
+  | "TITLE_REQUIRED"
+  | "DESCRIPTION_REQUIRED"
+  | "ALT_TEXT_REQUIRED"
   | "TITLE_TOO_LONG"
   | "DESCRIPTION_TOO_LONG"
   | "KEYWORD_FREQUENCY_TITLE"
