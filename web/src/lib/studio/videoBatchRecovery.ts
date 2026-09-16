@@ -66,7 +66,8 @@ function validRecord(value: unknown, scope: VideoRecoveryScope): value is VideoR
     try {
       const url = new URL(r.inspection.posterUrl, "https://app.invalid"); const path = url.searchParams.get("path");
       if (url.origin !== "https://app.invalid" || url.pathname !== "/api/storage-image" || url.searchParams.size !== 1 || !path
-        || !path.startsWith(`studio/uploads/${scope.ownerUserId}/`) || /[\\\0]|\.\.|\/\//.test(path)) return false;
+        || !path.startsWith(`studio/uploads/${scope.ownerUserId}/`) || /[\\\0]|\.\.|\/\//.test(path)
+        || !r.posterPath || path !== r.posterPath) return false;
     } catch { return false; }
   }
   if (r.posterPath && (typeof r.posterPath !== "string" || !r.posterPath.startsWith(`studio/uploads/${scope.ownerUserId}/`) || /[\\\0]|\.\.|\/\//.test(r.posterPath))) return false;

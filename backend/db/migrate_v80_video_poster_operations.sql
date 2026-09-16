@@ -160,7 +160,7 @@ begin
   -- pin_drafts is the server-side content authority.  A matching live payload
   -- (raw or URL-encoded storage path) blocks deletion even if the operation was
   -- later marked failed by a duplicate/late browser request.
-  v_encoded_path := replace(p_object_path, '/', '%2f');
+  v_encoded_path := lower(replace(p_object_path, '/', '%2f'));
   if exists (
     select 1 from public.pin_drafts d
     where d.vibepin_user_id=p_owner_user_id and d.deleted_at is null

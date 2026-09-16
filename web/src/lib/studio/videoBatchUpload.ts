@@ -153,7 +153,11 @@ export function reduceVideoBatch(state: VideoBatchState, event: VideoBatchEvent)
     if (item.id !== event.id || item.state === "succeeded" || item.state === "cancelled") return item;
     if (event.type === "uploading") return item.state === "queued" ? { ...item, state: "uploading" as const, error: undefined } : item;
     if (event.type === "attempt") return item.state === "queued" || item.state === "uploading" ? { ...item, attempt: event.attempt } : item;
-    if (event.type === "finalized") return item.state === "queued" || item.state === "uploading" ? { ...item, finalized: event.finalized, attempt: undefined } : item;
+    // A poster's v80 retain capability is keyed by this exact attempt. Keep it
+    // with a finalized-but-not-yet-persisted local draft so same-page retry and
+    // reload can revalidate retain; video-only items still shed it immediately.
+    if (event.type === "finalized") return item.state === "queued" || item.state === "uploading"
+      ? { ...item, finalized: event.finalized, ...(item.posterPath ? {} : { attempt: undefined }) } : item;
     if (event.type === "poster") return item.state === "queued" || item.state === "uploading"
       ? { ...item, inspection: item.inspection ? { ...item.inspection, posterUrl: event.posterUrl } : item.inspection, posterPath: event.posterPath }
       : item;

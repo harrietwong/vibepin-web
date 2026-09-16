@@ -76,12 +76,12 @@ async function main() {
     const source = readFileSync("src/app/api/studio/upload/handler.ts", "utf8");
     const needle = '!provenance || provenance.source_type !== "upload" || provenance.lifecycle_state !== "draft"';
     assert(source.includes(needle));
-    const module = { exports: {} as typeof cleanup };
+    const compiledModule = { exports: {} as typeof cleanup };
     const compiled = ts.transpileModule(source.replace(needle, "false /* MUTANT */"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-    new Function("exports", "module", compiled)(module.exports, module);
+    new Function("exports", "module", compiled)(compiledModule.exports, compiledModule);
     const send = (handler: typeof cleanup.handleStudioUploadCleanup) => handler(new Request("https://app.invalid/cleanup", { method: "POST", body: JSON.stringify({ path: `studio/uploads/${h.A.ownerUserId}/cover.jpg` }) }), { getUserId: async () => h.A.ownerUserId, configured: true, findProvenance: async () => null, recordCleanup: async () => {} });
     assert.equal((await send(cleanup.handleStudioUploadCleanup)).status, 400);
-    const mutant = await send(module.exports.handleStudioUploadCleanup);
+    const mutant = await send(compiledModule.exports.handleStudioUploadCleanup);
     assert.throws(() => assert.equal(mutant.status, 400));
   });
   console.log(`${passed} passed, ${failed} failed`);
