@@ -22,10 +22,15 @@ export type PrivateVideoProvenance = {
   mediaKind: string;
   contentType: string;
   byteSize: number;
-  checksumSha256: string;
+  checksumSha256: string | null;
   width: number | null;
   height: number | null;
   durationMs: number | null;
+  contentTypeSource: string | null;
+  byteSizeSource: string | null;
+  checksumSource: string | null;
+  dimensionsSource: string | null;
+  durationSource: string | null;
   lifecycleState: string;
 };
 
@@ -141,6 +146,9 @@ export async function materializePrivateVideoSources(
     if (sourcePath.split("/", 1)[0] !== input.uid) throw new Error("video_source_owner_mismatch");
 
     const provenance = await boundary.findProvenance(input.uid, PRIVATE_BUCKET, sourcePath);
+    const checksumProvenanceReady = provenance?.checksumSource === "storage_digest_verified"
+      ? typeof provenance.checksumSha256 === "string" && /^[0-9a-f]{64}$/.test(provenance.checksumSha256)
+      : provenance?.checksumSource === "unavailable" && provenance.checksumSha256 === null;
     if (!provenance
         || provenance.ownerUserId !== input.uid
         || provenance.bucketId !== PRIVATE_BUCKET
@@ -148,8 +156,16 @@ export async function materializePrivateVideoSources(
         || provenance.mediaKind !== "video"
         || !VIDEO_TYPES.has(provenance.contentType)
         || !Number.isSafeInteger(provenance.byteSize)
-        || provenance.byteSize <= 0
-        || !/^[0-9a-f]{64}$/.test(provenance.checksumSha256)
+        || provenance.byteSize <= 0 || provenance.byteSize > 100 * 1024 * 1024
+        || !checksumProvenanceReady
+        || !Number.isSafeInteger(provenance.width) || (provenance.width ?? 0) <= 0
+        || !Number.isSafeInteger(provenance.height) || (provenance.height ?? 0) <= 0
+        || !Number.isSafeInteger(provenance.durationMs)
+        || (provenance.durationMs ?? 0) < 4_000 || (provenance.durationMs ?? 0) > 300_000
+        || provenance.contentTypeSource !== "storage_head_verified"
+        || provenance.byteSizeSource !== "storage_head_verified"
+        || provenance.dimensionsSource !== "browser_declared"
+        || provenance.durationSource !== "browser_declared"
         || (media.width !== undefined && provenance.width !== media.width)
         || (media.height !== undefined && provenance.height !== media.height)
         || (media.durationMs !== undefined && provenance.durationMs !== media.durationMs)
@@ -158,9 +174,11 @@ export async function materializePrivateVideoSources(
     }
 
     const file = await boundary.download(PRIVATE_BUCKET, sourcePath);
+    const serverChecksumSha256 = await sha256(await file.arrayBuffer());
     if (file.size !== provenance.byteSize
         || (file.type && file.type !== provenance.contentType)
-        || await sha256(await file.arrayBuffer()) !== provenance.checksumSha256) {
+        || (provenance.checksumSource === "storage_digest_verified"
+          && serverChecksumSha256 !== provenance.checksumSha256)) {
       throw new Error("video_source_bytes_conflict");
     }
     const sourceIdentity = videoPublishSourceIdentityFingerprint(input.receipt);
@@ -176,7 +194,7 @@ export async function materializePrivateVideoSources(
       targetPath,
       contentType: provenance.contentType as MaterializedVideoSource["contentType"],
       byteSize: provenance.byteSize,
-      checksumSha256: provenance.checksumSha256,
+      checksumSha256: serverChecksumSha256,
       width: provenance.width,
       height: provenance.height,
       durationMs: provenance.durationMs,
@@ -186,10 +204,11 @@ export async function materializePrivateVideoSources(
       mediaId: media.id,
       ordinal,
       bucketId: PRIVATE_BUCKET,
+      sourceObjectPath: sourcePath,
       objectPath: targetPath,
       contentType: provenance.contentType as MaterializedVideoSource["contentType"],
       byteSize: provenance.byteSize,
-      checksumSha256: provenance.checksumSha256,
+      checksumSha256: serverChecksumSha256,
       fileName: targetPath.slice(targetPath.lastIndexOf("/") + 1),
       file,
     });
@@ -241,6 +260,7 @@ export async function loadReadyPrivateVideoSources(
       mediaId: media.id,
       ordinal,
       bucketId: PRIVATE_BUCKET,
+      sourceObjectPath: null,
       objectPath,
       contentType: contentType as MaterializedVideoSource["contentType"],
       byteSize,
@@ -371,7 +391,7 @@ export function createSupabasePrivateVideoMaterializationBoundary(
     async findProvenance(uid, bucket, objectPath) {
       const { data, error } = await db
         .from("media_asset_provenance")
-        .select("owner_user_id,bucket_id,object_path,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms,lifecycle_state")
+        .select("owner_user_id,bucket_id,object_path,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms,content_type_source,byte_size_source,checksum_source,dimensions_source,duration_source,lifecycle_state")
         .eq("owner_user_id", uid)
         .eq("bucket_id", bucket)
         .eq("object_path", objectPath)
@@ -386,10 +406,15 @@ export function createSupabasePrivateVideoMaterializationBoundary(
         mediaKind: String(row.media_kind),
         contentType: String(row.content_type),
         byteSize: Number(row.byte_size),
-        checksumSha256: String(row.checksum_sha256),
+        checksumSha256: typeof row.checksum_sha256 === "string" ? row.checksum_sha256 : null,
         width: typeof row.width === "number" ? row.width : null,
         height: typeof row.height === "number" ? row.height : null,
         durationMs: typeof row.duration_ms === "number" ? row.duration_ms : null,
+        contentTypeSource: typeof row.content_type_source === "string" ? row.content_type_source : null,
+        byteSizeSource: typeof row.byte_size_source === "string" ? row.byte_size_source : null,
+        checksumSource: typeof row.checksum_source === "string" ? row.checksum_source : null,
+        dimensionsSource: typeof row.dimensions_source === "string" ? row.dimensions_source : null,
+        durationSource: typeof row.duration_source === "string" ? row.duration_source : null,
         lifecycleState: String(row.lifecycle_state),
       };
     },
@@ -414,23 +439,9 @@ export function createSupabasePrivateVideoMaterializationBoundary(
           throw dbError(uploaded.error, "video_publish_copy_failed");
         }
       }
-      const { error } = await db.from("media_asset_provenance").upsert({
-        owner_user_id: copy.uid,
-        bucket_id: PRIVATE_BUCKET,
-        object_path: copy.targetPath,
-        source_type: "publish_copy",
-        intent_id: copy.intentId,
-        lifecycle_state: "publish_pending",
-        media_kind: "video",
-        content_type: copy.contentType,
-        byte_size: copy.byteSize,
-        checksum_sha256: copy.checksumSha256,
-        width: copy.width,
-        height: copy.height,
-        duration_ms: copy.durationMs,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "bucket_id,object_path" });
-      if (error) throw dbError(error, "video_publish_copy_provenance_failed");
+      // The v79 settlement RPC derives facts from the owner-authorized source
+      // row. Its only added fact is the digest computed above from this private
+      // server download; browser-supplied metadata never becomes authority.
     },
   };
 }

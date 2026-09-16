@@ -22,6 +22,8 @@ export type MaterializedVideoSource = {
   mediaId: string;
   ordinal: number;
   bucketId: "generated-private";
+  /** Original owner-authorized upload locator; null only when replaying an already-ready copy. */
+  sourceObjectPath: string | null;
   objectPath: string;
   contentType: "video/mp4" | "video/x-m4v" | "video/quicktime";
   byteSize: number;
@@ -173,18 +175,19 @@ export function createV76RpcVideoPublishDependencies(
     materializeSources: boundary.materializeSources,
     loadReadySources: boundary.loadReadySources,
     async settleItem(input, lease, source) {
-      const value = record(await boundary.rpc("publish_asset_settle_item", {
+      const sourceObjectPath = requiredText(source.sourceObjectPath, "video_source_locator_missing");
+      const value = record(await boundary.rpc("publish_asset_settle_video_item_v79", {
         p_user_id: input.uid,
         p_intent_id: input.receipt.intentId,
         p_destination_id: input.destination.id,
         p_lease_token: lease.leaseToken,
         p_source_media_key: source.mediaId,
         p_media_ordinal: source.ordinal,
-        p_bucket_id: source.bucketId,
-        p_object_path: source.objectPath,
-        p_content_type: source.contentType,
-        p_byte_size: source.byteSize,
-        p_checksum_sha256: source.checksumSha256,
+        p_source_bucket_id: source.bucketId,
+        p_source_object_path: sourceObjectPath,
+        p_target_bucket_id: source.bucketId,
+        p_target_object_path: source.objectPath,
+        p_server_checksum_sha256: source.checksumSha256,
       }));
       return { deliveryReady: value.deliveryReady === true };
     },

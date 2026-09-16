@@ -41,6 +41,8 @@ const receipt = {
     kind: "video" as const,
     url: "/api/storage-media?path=owner-1%2Fuploads%2Fvideo.mp4",
     source: "upload" as const,
+    width: 1080,
+    height: 1920,
     durationMs: 8_000,
   }],
   mode: { kind: "now" as const },
@@ -66,6 +68,7 @@ const source: MaterializedVideoSource = {
   mediaId: "video-1",
   ordinal: 0,
   bucketId: "generated-private",
+  sourceObjectPath: "owner-1/uploads/video.mp4",
   objectPath: "owner-1/publish/content-1/video-1.mp4",
   contentType: "video/mp4",
   byteSize: 11,
@@ -248,8 +251,9 @@ await test("orders confirm, materialization, ready claim, durable attempt, provi
   ]);
 });
 
-await test("the production RPC adapter uses additive v78 recovery RPCs over the v76 ledger", async () => {
+await test("the production RPC adapter uses additive v78 recovery and v79 provenance RPCs over the v76 ledger", async () => {
   const rpcNames: string[] = [];
+  let settlementArgs: Record<string, unknown> | null = null;
   const deps = createV76RpcVideoPublishDependencies({
     inspect: async () => ({ kind: "missing" }),
     materializeSources: async () => [source],
@@ -258,12 +262,13 @@ await test("the production RPC adapter uses additive v78 recovery RPCs over the 
       outcome: "succeeded",
       evidence: { stage: "created", classification: "succeeded", pinId: "12345", pinUrl: "https://www.pinterest.com/pin/12345/" },
     }),
-    rpc: async (name) => {
+    rpc: async (name, args) => {
       rpcNames.push(name);
+      if (name === "publish_asset_settle_video_item_v79") settlementArgs = args;
       const values: Record<string, unknown> = {
         publish_intent_confirm_prepare_v78: { prepared: true },
         publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
-        publish_asset_settle_item: { deliveryReady: true },
+        publish_asset_settle_video_item_v79: { deliveryReady: true },
         publish_asset_claim_ready_v78: { claimToken: "claim-1" },
         publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
         publish_provider_attempt_settle_v78: { settled: true },
@@ -275,11 +280,24 @@ await test("the production RPC adapter uses additive v78 recovery RPCs over the 
   assert.deepEqual(rpcNames, [
     "publish_intent_confirm_prepare_v78",
     "publish_asset_lease_materialization",
-    "publish_asset_settle_item",
+    "publish_asset_settle_video_item_v79",
     "publish_asset_claim_ready_v78",
     "publish_provider_attempt_start",
     "publish_provider_attempt_settle_v78",
   ]);
+  assert.deepEqual(settlementArgs, {
+    p_user_id: "owner-1",
+    p_intent_id: receipt.intentId,
+    p_destination_id: receipt.destinations[0].id,
+    p_lease_token: "lease-1",
+    p_source_media_key: "video-1",
+    p_media_ordinal: 0,
+    p_source_bucket_id: "generated-private",
+    p_source_object_path: "owner-1/uploads/video.mp4",
+    p_target_bucket_id: "generated-private",
+    p_target_object_path: "owner-1/publish/content-1/video-1.mp4",
+    p_server_checksum_sha256: "b".repeat(64),
+  });
 });
 
 await test("private materialization freezes the owner source revision and rejects owner/path tampering before copy", async () => {
@@ -297,9 +315,14 @@ await test("private materialization freezes the owner source revision and reject
       contentType: "video/mp4",
       byteSize: 10,
       checksumSha256: "3e66ede228ae2f3f6cf3c95cb1fba47226b630fa25b4da48f3438fcb7c9d6376",
-      width: null,
-      height: null,
+      width: 1080,
+      height: 1920,
       durationMs: 8_000,
+      contentTypeSource: "storage_head_verified",
+      byteSizeSource: "storage_head_verified",
+      checksumSource: "storage_digest_verified",
+      dimensionsSource: "browser_declared",
+      durationSource: "browser_declared",
       lifecycleState: "draft",
     }),
     download: async () => new Blob(["video-data"], { type: "video/mp4" }),
@@ -307,6 +330,7 @@ await test("private materialization freezes the owner source revision and reject
   };
   const exact = await materializePrivateVideoSources(input(), { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary);
   assert.equal(exact.length, 1);
+  assert.equal(exact[0].sourceObjectPath, "owner-1/uploads/video.mp4");
   assert.equal(exact[0].objectPath.startsWith("owner-1/publish/"), true);
   assert.equal(copied.length, 1);
 
@@ -323,6 +347,18 @@ await test("private materialization freezes the owner source revision and reject
   assert.equal(copied.length, 1);
   copied.length = 0;
 
+  const verifiedProvenance = boundary.findProvenance;
+  boundary.findProvenance = async (...args) => ({
+    ...(await verifiedProvenance(...args))!,
+    checksumSha256: "c".repeat(64),
+  });
+  await assert.rejects(
+    materializePrivateVideoSources(input(), { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary),
+    /video_source_bytes_conflict/,
+  );
+  assert.equal(copied.length, 0);
+  boundary.findProvenance = verifiedProvenance;
+
   const tampered = input({
     receipt: {
       ...receipt,
@@ -335,6 +371,58 @@ await test("private materialization freezes the owner source revision and reject
     /video_source_owner_mismatch/,
   );
   assert.equal(copied.length, 0);
+});
+
+await test("private materialization rejects incomplete fact provenance before uploading a copy", async () => {
+  let copied = false;
+  const boundary: PrivateVideoMaterializationBoundary = {
+    loadDraft: async () => ({
+      updatedAt: receipt.sourceUpdatedAt,
+      payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: receipt.media },
+    }),
+    findProvenance: async (_uid, _bucket, objectPath) => ({
+      ownerUserId: "owner-1", bucketId: "generated-private", objectPath,
+      mediaKind: "video", contentType: "video/mp4", byteSize: 10,
+      checksumSha256: "3e66ede228ae2f3f6cf3c95cb1fba47226b630fa25b4da48f3438fcb7c9d6376",
+      width: 1080, height: 1920, durationMs: 8_000,
+      contentTypeSource: "storage_head_verified", byteSizeSource: "storage_head_verified",
+      checksumSource: "storage_digest_verified", dimensionsSource: "browser_declared",
+      durationSource: null, lifecycleState: "draft",
+    }),
+    download: async () => new Blob(["video-data"], { type: "video/mp4" }),
+    storePublishCopy: async () => { copied = true; },
+  };
+  await assert.rejects(
+    materializePrivateVideoSources(input(), { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary),
+    /video_source_provenance_invalid/,
+  );
+  assert.equal(copied, false);
+});
+
+await test("private materialization promotes an unavailable source digest only from server-read bytes", async () => {
+  const boundary: PrivateVideoMaterializationBoundary = {
+    loadDraft: async () => ({
+      updatedAt: receipt.sourceUpdatedAt,
+      payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: receipt.media },
+    }),
+    findProvenance: async (_uid, _bucket, objectPath) => ({
+      ownerUserId: "owner-1", bucketId: "generated-private", objectPath,
+      mediaKind: "video", contentType: "video/mp4", byteSize: 10,
+      checksumSha256: null,
+      width: 1080, height: 1920, durationMs: 8_000,
+      contentTypeSource: "storage_head_verified", byteSizeSource: "storage_head_verified",
+      checksumSource: "unavailable", dimensionsSource: "browser_declared",
+      durationSource: "browser_declared", lifecycleState: "draft",
+    }),
+    download: async () => new Blob(["video-data"], { type: "video/mp4" }),
+    storePublishCopy: async () => undefined,
+  };
+  const [materialized] = await materializePrivateVideoSources(
+    input(),
+    { leaseToken: "lease-1", deliveryId: "delivery-1" },
+    boundary,
+  );
+  assert.equal(materialized.checksumSha256, "3e66ede228ae2f3f6cf3c95cb1fba47226b630fa25b4da48f3438fcb7c9d6376");
 });
 
 await test("future schedules and out-of-window runs do not prepare, claim, or call Pinterest", async () => {

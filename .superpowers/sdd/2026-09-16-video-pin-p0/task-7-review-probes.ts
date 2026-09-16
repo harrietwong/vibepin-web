@@ -17,7 +17,7 @@ const C2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
 const ds = [C1,C2].map((id, i) => ({id:`pinterest:${id}`,provider:'pinterest',socialConnectionId:id,boardId:`board-${i}`}));
 const revision = '2026-09-16T12:00:00.000Z';
 const file = new Blob(['video-data'], {type:'video/mp4'});
-const media = [{id:'video-1',kind:'video',url:`/api/storage-media?path=${encodeURIComponent(`${A}/uploads/video.mp4`)}`,source:'upload',durationMs:8000}];
+const media = [{id:'video-1',kind:'video',url:`/api/storage-media?path=${encodeURIComponent(`${A}/uploads/video.mp4`)}`,source:'upload',width:1080,height:1920,durationMs:8000}];
 
 async function main() {
  const db = new PGlite();
@@ -34,11 +34,12 @@ async function main() {
  'backend/db/migrate_v32_social_connections.sql','backend/db/migrate_v59_social_pinterest_unify.sql',
  'backend/db/migrate_v72_publish_intent_idempotency.sql','backend/db/migrate_v73_publish_intent_retry_lineage.sql',
  'backend/db/migrate_v75_media_provenance.sql','backend/db/migrate_v76_publish_asset_materializer.sql','backend/db/migrate_v77_video_media.sql',
- 'backend/db/migrate_v78_video_publish_recovery.sql']) {
+ 'backend/db/migrate_v78_video_publish_recovery.sql','backend/db/migrate_v79_video_publish_provenance.sql']) {
   await db.exec(load(path).replace(/create extension if not exists "uuid-ossp";?/gi,''));
  }
  await db.query(`insert into social_connections(id,user_id,provider,provider_account_id,connection_status,auth_provider) values ($1,$3,'pinterest','a1','connected','official'),($2,$3,'pinterest','a2','connected','official')`,[C1,C2,A]);
  await db.query(`insert into storage.buckets values('generated-private','generated-private',false) on conflict(id) do nothing`);
+ await db.query(`insert into media_asset_provenance(owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms,content_type_source,byte_size_source,checksum_source,dimensions_source,duration_source) values($1,'generated-private',$2,'upload',null,'draft','video','video/mp4',10,null,1080,1920,8000,'storage_head_verified','storage_head_verified','unavailable','browser_declared','browser_declared')`,[A,`${A}/uploads/video.mp4`]);
  const readDb:any = {from(table:string) {
    let columns='*'; const filters:any[]=[]; let order=''; let limit='';
    const q:any={select(v:string){columns=v;return q;},eq(k:string,v:any){filters.push([k,v]);return q;},order(k:string,o:any){order=` order by ${k} ${o.ascending?'asc':'desc'}`;return q;},limit(n:number){limit=` limit ${n}`;return q;},async maybeSingle(){
@@ -51,9 +52,9 @@ async function main() {
  let calls=0;
  const materializer:any={
   loadDraft:async()=>({updatedAt:currentRevision,payload:{title:currentTitle,description:'',altText:'',destinationUrl:'',media:currentMedia}}),
-  findProvenance:async(_uid:any,bucket:any,path:any)=>({ownerUserId:A,bucketId:bucket,objectPath:path,mediaKind:'video',contentType:'video/mp4',byteSize:10,checksumSha256:sha256Hex('video-data'),width:null,height:null,durationMs:8000,lifecycleState:'draft'}),
+  findProvenance:async(_uid:any,bucket:any,path:any)=>({ownerUserId:A,bucketId:bucket,objectPath:path,mediaKind:'video',contentType:'video/mp4',byteSize:10,checksumSha256:null,width:1080,height:1920,durationMs:8000,contentTypeSource:'storage_head_verified',byteSizeSource:'storage_head_verified',checksumSource:'unavailable',dimensionsSource:'browser_declared',durationSource:'browser_declared',lifecycleState:'draft'}),
   download:async()=>file,
- storePublishCopy:async(c:any)=>{await db.query(`insert into media_asset_provenance(owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256) values($1,'generated-private',$2,'publish_copy',$3,'publish_pending','video','video/mp4',10,$4) on conflict(bucket_id,object_path) do nothing`,[A,c.targetPath,c.intentId,c.checksumSha256]);}
+ storePublishCopy:async()=>{}
  };
  const recoveryDb:any={rpc:async(name:string,args:any)=>{try{const entries=Object.entries(args);const r=await db.query(`select public.${name}(${entries.map(([key],i)=>`${key} => $${i+1}`).join(',')}) as value`,entries.map(([,v])=>v));return {data:(r.rows[0] as {value:unknown}).value,error:null};}catch(error){return {data:null,error:{message:error instanceof Error?error.message:String(error)}};}}};
  const makeReceipt=(name:string,destinations=ds.slice(0,1))=>({...buildDueVideoReceipt({draftId:name,updatedAt:revision,scheduledAt:revision,payload:{contentId:name,title:'Video',media,imageUrl:media[0].url,scheduledDestinations:destinations}})});
