@@ -40,6 +40,8 @@ export interface ContentImageMedia extends ContentMediaBase {
 /** A video clip, distinguished from images without changing legacy image JSON. */
 export interface ContentVideoMedia extends ContentMediaBase {
   kind: "video";
+  /** Private poster image used by legacy image-only consumers; never the binary URL. */
+  posterUrl?: string;
   durationMs?: number;
 }
 

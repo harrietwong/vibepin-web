@@ -75,6 +75,12 @@ async function prepareItem(db, owner, batchId, ordinal, key, mime = "video/mp4",
 async function run() {
   const db = await dbWithV76();
   try {
+    await db.query(`insert into public.media_asset_provenance(
+      owner_user_id,bucket_id,object_path,source_type,lifecycle_state)
+      values($1,'generated-private','${A}/legacy.png','legacy','draft')`, [A]);
+    const v76Before = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
+      "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",
+    ])).rows[0].definition;
     await db.exec(migration);
     await db.exec(migration);
     const schema = await db.query(`select
@@ -90,9 +96,6 @@ async function run() {
     for (const column of ["media_kind", "content_type", "byte_size", "checksum_sha256", "width", "height", "duration_ms"]) {
       assert(provenanceColumns.includes(column), `v77 adds provenance ${column}`);
     }
-    await db.query(`insert into public.media_asset_provenance(
-      owner_user_id,bucket_id,object_path,source_type,lifecycle_state)
-      values($1,'generated-private','${A}/legacy.png','legacy','draft')`, [A]);
     const legacy = await db.query("select media_kind,content_type,byte_size,duration_ms from public.media_asset_provenance where object_path=$1", [`${A}/legacy.png`]);
     assert(JSON.stringify(legacy.rows[0]) === JSON.stringify({ media_kind: "image", content_type: null, byte_size: null, duration_ms: null }),
       "old provenance rows remain valid images without historical data loss");
@@ -107,6 +110,24 @@ async function run() {
     const finalized = await asRole(db, "service_role", async () => (await db.query(`select public.video_upload_item_finalize(
       $1,$2,$3,$4,$5,$6,$7,$8,$9) as value`, [A, one.batchId, 0, "video/mp4", 1024, "a".repeat(64), 1080, 1920, 15_000])).rows[0].value);
     assert(finalized.status === "finalized" && finalized.batchStatus === "finalized", "finalize records verified facts and advances the batch lifecycle");
+    const changedFinalize = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_finalize(
+      $1,$2,$3,$4,$5,$6,$7,$8,$9)`, [A, one.batchId, 0, "video/mp4", 1024, "a".repeat(64), 720, 1280, 10_000])));
+    assert(changedFinalize?.message === "video_upload_finalize_conflict", "finalize replay binds dimensions and duration as immutable verified facts");
+    const replayAfterProgress = await asRole(db, "service_role", () => prepareItem(db, A, one.batchId, 0, "item-key"));
+    assert(replayAfterProgress.itemId === item.itemId && replayAfterProgress.status === "finalized", "matching prepare replay remains idempotent after terminal progress");
+    const nullVerified = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_finalize(
+      $1,$2,$3,$4,$5,$6,$7,$8,$9)`, [A, otherOwner.batchId, 0, null, 1, "b".repeat(64), 1, 1, 1])));
+    assert(nullVerified?.message === "invalid_video_content_type", "finalization explicitly rejects missing verified MIME");
+    const terminalBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "terminal-batch"));
+    await asRole(db, "service_role", () => prepareItem(db, A, terminalBatch.batchId, 0, "terminal-item"));
+    await db.query("update public.video_upload_batches set status='canceled' where id=$1", [terminalBatch.batchId]);
+    const canceledFinalize = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_finalize(
+      $1,$2,$3,$4,$5,$6,$7,$8,$9)`, [A, terminalBatch.batchId, 0, "video/mp4", 1, "c".repeat(64), 1, 1, 1])));
+    assert(canceledFinalize?.message === "video_upload_batch_not_finalizable", "finalize cannot revive a canceled batch");
+    const changedPrepare = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_prepare(
+      $1,$2,0,'item-key',$3,'video/mp4',1024,$4,720,1280,10_000)`,
+      [A, one.batchId, `${A}/uploads/${one.batchId}/0.mp4`, "d".repeat(64)])));
+    assert(changedPrepare?.message === "video_upload_item_idempotency_conflict", "replay conflicts whenever immutable declared facts differ");
 
     const crossOwner = await asRole(db, "service_role", () => rejected(() => prepareItem(db, B, one.batchId, 1, "foreign-item")));
     assert(crossOwner?.message === "video_upload_batch_not_found", "a service parent cannot write another owner's batch");
@@ -147,13 +168,99 @@ async function run() {
     )));
     assert(materializationRejected?.message === "invalid_content_type", "the legacy single-item settlement rejects unapproved video MIME before the lease check");
 
-    const beforeRollback = await db.query("select count(*)::int as batches,(select count(*)::int from public.video_upload_items) as items from public.video_upload_batches");
-    await db.exec(rollback); await db.exec(rollback); await db.exec(migration);
-    const afterReapply = await db.query("select count(*)::int as batches,(select count(*)::int from public.video_upload_items) as items from public.video_upload_batches");
-    assert(JSON.stringify(beforeRollback.rows) === JSON.stringify(afterReapply.rows), "rollback/reapply preserves all batch and item evidence");
+    const beforeRollback = await db.query(`select jsonb_build_object(
+      'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
+      'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
+      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p)
+    ) as state`);
+    await db.exec(rollback); await db.exec(rollback);
+    const v76Restored = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
+      "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",
+    ])).rows[0].definition;
+    await db.exec(migration);
+    const afterReapply = await db.query(`select jsonb_build_object(
+      'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
+      'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
+      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p)
+    ) as state`);
+    const v76After = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
+      "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",
+    ])).rows[0].definition;
+    assert(JSON.stringify(beforeRollback.rows) === JSON.stringify(afterReapply.rows) && v76Restored === v76Before && v76After !== v76Before,
+      "rollback exactly restores v76 and reapply preserves complete evidence with the v77 video guard");
   } finally { await db.close(); }
 }
-try { await run(); }
+async function collisionRejections() {
+  const cases = [
+    {
+      name: "wrong provenance type",
+      setup: db => db.exec("alter table public.media_asset_provenance add column content_type integer"),
+      apply: db => db.exec(migration),
+      expected: "v77_schema_collision",
+    },
+    {
+      name: "unmarked v77 RPC",
+      setup: db => db.exec(`create function public.video_upload_batch_prepare(uuid,text,timestamptz)
+        returns jsonb language sql as $$ select '{}'::jsonb $$`),
+      apply: db => db.exec(migration),
+      expected: "v77_schema_collision",
+    },
+  ];
+  for (const scenario of cases) {
+    const db = await dbWithV76();
+    try {
+      await scenario.setup(db);
+      const before = (await db.query("select count(*)::int as rows from public.media_asset_provenance")).rows[0];
+      const error = await rejected(() => scenario.apply(db));
+      await db.exec("rollback");
+      const after = (await db.query("select count(*)::int as rows from public.media_asset_provenance")).rows[0];
+      assert(error?.message === scenario.expected && JSON.stringify(before) === JSON.stringify(after), `${scenario.name} is rejected without data mutation`);
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
+      await db.exec("alter table public.video_upload_items drop constraint video_upload_items_ordinal_check");
+      const before = (await db.query("select count(*)::int as rows from public.video_upload_items")).rows[0];
+      const error = await rejected(() => db.exec(migration));
+      await db.exec("rollback");
+      const after = (await db.query("select count(*)::int as rows from public.video_upload_items")).rows[0];
+      assert(error?.message === "v77_schema_collision" && JSON.stringify(before) === JSON.stringify(after), "dropped owned ordinal constraint rejects reapply without row mutation");
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      const signature = "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)";
+      const original = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
+      await db.exec(original.replace("if coalesce(p_content_type,'') not in", "if false and coalesce(p_content_type,'') not in"));
+      const tampered = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
+      const error = await rejected(() => db.exec(migration));
+      await db.exec("rollback");
+      const after = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
+      assert(error?.message === "v77_v76_function_collision" && tampered === after,
+        "a body-tampered but still marked v76 function is never adopted or overwritten");
+    } finally { await db.close(); }
+  }
+  {
+    const db = await dbWithV76();
+    try {
+      await db.exec(migration);
+      const signature = "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)";
+      const before = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
+      await db.exec(`comment on function ${signature} is null`);
+      const migrateError = await rejected(() => db.exec(migration));
+      await db.exec("rollback");
+      const rollbackError = await rejected(() => db.exec(rollback));
+      await db.exec("rollback");
+      const after = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [signature])).rows[0].definition;
+      assert(migrateError?.message === "v77_v76_function_collision" && rollbackError?.message === "v77_rollback_collision" && before === after,
+        "unmarked/modified v76 settlement function is rejected by both paths without body overwrite");
+    } finally { await db.close(); }
+  }
+}
+try { await run(); await collisionRejections(); }
 catch (error) { failures.push(String(error?.stack ?? error)); }
 console.log(JSON.stringify({ verdict: failures.length ? "fail" : "pass", assertions, failures }, null, 2));
 if (failures.length) process.exitCode = 1;

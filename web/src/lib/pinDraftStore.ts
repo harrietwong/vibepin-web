@@ -508,17 +508,25 @@ function normalizeDraftMedia(draft: PinDraft): PinDraft | null {
     next = [media[coverIndex], ...media.filter((_, i) => i !== coverIndex)];
   }
   const cover = next[0];
+  const imageAlias = legacyImageAlias(cover, draft.imageUrl);
   const orderChanged = next !== media;
   const idChanged = draft.coverMediaId !== cover.id;
-  const urlChanged = draft.imageUrl !== cover.url;
+  const urlChanged = draft.imageUrl !== imageAlias;
   if (!orderChanged && !idChanged && !urlChanged) return null;
   return {
     ...draft,
     media: next,
     coverMediaId: cover.id,
-    imageUrl: cover.url,
+    imageUrl: imageAlias,
     updatedAt: new Date().toISOString(),
   };
+}
+
+/** Legacy consumers may receive only an image URL. A video can supply its poster,
+ * but its binary URL must never be smuggled into that historical field. */
+function legacyImageAlias(media: ContentMedia, previous: string): string {
+  if (media.kind === "image") return media.url;
+  return media.posterUrl?.trim() || previous;
 }
 
 function load(): StoreData {
@@ -825,7 +833,7 @@ export function createBoardDraft(input: {
   const draft: PinDraft = {
     id,
     contentId:           id,
-    imageUrl:            cover?.url ?? input.imageUrl,
+    imageUrl:            cover ? legacyImageAlias(cover, input.imageUrl) : input.imageUrl,
     media:               initialMedia,
     coverMediaId:        cover?.id,
     keyword:             input.keyword ?? "",
@@ -941,7 +949,7 @@ function writeMedia(id: string, draft: PinDraft, media: ContentMedia[]): PinDraf
     ...draft,
     media,
     coverMediaId: cover.id,
-    imageUrl: cover.url,
+    imageUrl: legacyImageAlias(cover, draft.imageUrl),
     updatedAt: new Date().toISOString(),
   };
   data.drafts[id] = updated;
@@ -1032,7 +1040,7 @@ export function removeMedia(id: string, mediaItemId: string): PinDraft | null {
 export function replaceMedia(
   id: string,
   mediaItemId: string,
-  patch: { url: string; width?: number; height?: number; source?: ContentMedia["source"]; altText?: string },
+  patch: { url: string; posterUrl?: string; width?: number; height?: number; source?: ContentMedia["source"]; altText?: string },
 ): PinDraft | null {
   const draft = getDraft(id);
   if (!draft) return null;
@@ -1048,6 +1056,7 @@ export function replaceMedia(
     // ratio check lie. `undefined` (unmeasured) is honest, a stale number is not.
     width: patch.width,
     height: patch.height,
+    ...(current[index].kind === "video" && patch.posterUrl !== undefined ? { posterUrl: patch.posterUrl } : {}),
     ...(patch.source ? { source: patch.source } : {}),
     ...(patch.altText !== undefined ? { altText: patch.altText } : {}),
   };

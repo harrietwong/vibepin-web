@@ -340,5 +340,19 @@ test("contentMedia preserves an explicit video item while legacy image JSON stay
   assert.deepEqual(contentMedia(draft), [video], "an explicit video must remain discriminated as video");
 });
 
+test("video media preserves its poster-only legacy image alias through store writes and reload", () => {
+  resetStore();
+  const video: ContentMedia = {
+    id: "video-1", kind: "video", url: "private://binary.mp4", posterUrl: "private://poster.jpg", source: "upload",
+  };
+  const created = store.createBoardDraft({ imageUrl: "private://poster.jpg", media: [video], source: "uploaded_image" });
+  assert.equal(created.imageUrl, "private://poster.jpg", "create never aliases imageUrl to a video binary");
+  store.__resetMemoryCacheForTests();
+  const loaded = store.getDraft(created.id)!;
+  assert.equal(loaded.imageUrl, "private://poster.jpg", "load normalization preserves the poster alias");
+  const replaced = store.replaceMedia(created.id, "video-1", { url: "private://new-binary.mp4", posterUrl: "private://new-poster.jpg" })!;
+  assert.equal(replaced.imageUrl, "private://new-poster.jpg", "media mutation keeps imageUrl on the video poster");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

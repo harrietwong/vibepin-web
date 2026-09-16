@@ -12,14 +12,24 @@ begin
   end loop;
 end $v77_rollback_preflight$;
 do $v77_restore_v76_mime$
-declare v_signature text; v_definition text; v_old text := '(''image/png'',''image/jpeg'',''image/webp'',''video/mp4'',''video/x-m4v'',''video/quicktime'')'; v_new text := '(''image/png'',''image/jpeg'',''image/webp'')';
+declare v_signature text; v_definition text; v_marker text; v_hash text; v_proc pg_proc%rowtype; v_old text := '(''image/png'',''image/jpeg'',''image/webp'',''video/mp4'',''video/x-m4v'',''video/quicktime'')'; v_new text := '(''image/png'',''image/jpeg'',''image/webp'')';
 begin
-  foreach v_signature in array array[
-    'public.publish_asset_settle_materialization(uuid,text,text,uuid,text,text,text,text,bigint,text,text)',
-    'public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)'
-  ] loop
+  for v_signature,v_marker,v_hash in select * from (values
+    ('public.publish_asset_settle_materialization(uuid,text,text,uuid,text,text,text,text,bigint,text,text)','vibepin:v76:publish-asset-settle-materialization','05aeaf68837a95a5cdc6177383ee6092'),
+    ('public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)','vibepin:v76:publish-asset-settle-item','a05aef6619c3ec795b6ceee080e04843')
+  ) expected(signature,marker,body_hash) loop
+    if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname=split_part(replace(v_signature,'public.',''),'(',1)
+        and p.oid is distinct from to_regprocedure(v_signature)) then raise exception using errcode='P0001',message='v77_rollback_collision'; end if;
+    select * into v_proc from pg_proc where oid=to_regprocedure(v_signature);
     select pg_get_functiondef(to_regprocedure(v_signature)) into v_definition;
-    if v_definition is null or obj_description(to_regprocedure(v_signature),'pg_proc') !~ '^vibepin:v76:' then raise exception using errcode='P0001',message='v77_rollback_collision'; end if;
+    if v_definition is null or obj_description(to_regprocedure(v_signature),'pg_proc') is distinct from v_marker
+       or not v_proc.prosecdef or v_proc.prokind<>'f' or v_proc.prorettype<>to_regtype('jsonb')
+       or v_proc.proretset or v_proc.provariadic<>0 or v_proc.prolang<>(select oid from pg_language where lanname='plpgsql')
+       or v_proc.proconfig is distinct from array['search_path=public, pg_temp']::text[]
+       or md5(replace(replace(replace(v_proc.prosrc,v_old,v_new),chr(13)||chr(10),chr(10)),chr(13),chr(10)))<>v_hash then
+      raise exception using errcode='P0001',message='v77_rollback_collision';
+    end if;
     if position(v_old in v_definition)>0 then execute replace(v_definition,v_old,v_new);
     elsif position(v_new in v_definition)=0 then raise exception using errcode='P0001',message='v77_rollback_collision'; end if;
   end loop;
