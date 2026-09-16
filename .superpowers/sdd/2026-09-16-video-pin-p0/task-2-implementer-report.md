@@ -1,11 +1,12 @@
-# Task 2 Implementer Report — Atomic Finalization Remediation
+# Task 2 Implementer Report — Atomic Finalization And Review Remediation
 
 ## Scope And Base
 
 - Review baseline: `5f5fe502968f96effb7fc9be9b9fd372d6520512`.
 - Atomic-state/fact-contract implementation commit: `d47f6bcddd9164b680fbdffae286adec387fda04`.
+- Round-1 continuation base: `1c9f4615aa30e9b70b270b1d72b53b52e0e07a35`.
 - Branch/worktree: `codex/video-pin-p0-0916-final` / `D:/vp-tmp/wt-video-pin-p0-0916-final`.
-- This remediation closes review findings C1, I1, and I2. It also retains the earlier terminal prepare replay guard from I4 and adds production store/Storage adapter coverage relevant to I7.
+- This continuation closes the remaining review findings I3, I4, I5, I6, and I7, plus the stable-error and 100 MiB browser-digest minors. It preserves the earlier C1/I1/I2 atomic state/fact work.
 
 ## Implemented Contract
 
@@ -18,6 +19,13 @@
 - The production Supabase adapter ignores uploader-controlled `x-amz-meta-sha256`. It exposes no verified checksum until a genuinely trusted digest source exists.
 - Shared TypeScript limits enforce duration from 4,000 through 300,000 ms; v77 independently enforces the same database boundary.
 - Batch lifecycle supports partial outcomes: a failed item does not block an independently claimed sibling from finalizing; the batch settles to failed only after no prepared/finalizing items remain.
+- `/api/storage-media` now uses the existing verified bearer-or-cookie identity helper. Every private response, including errors and 416, varies on `Cookie, Authorization, Range`.
+- Playback validates the Storage response status, normalized MIME, exact `Content-Range` start/end/total, declared byte total, and body length. A no-Range client request may accept a full 200 only with no `Content-Range` and an exact `Content-Length`; short or oversized streams error closed.
+- Finalize requires a real 206 initial range whose status, MIME, `Content-Range`, total, and actual bytes match the request. ISO-BMFF validation now parses a complete `ftyp` box, including a present minor-version field and an allowed major/compatible brand; offset-four magic alone is rejected.
+- Supabase's fixed two-hour upload capability is reflected in the shared server ledger TTL. Before every capability issue/reissue, `video_upload_item_prepare` atomically extends `capability_expires_at` and upserts a delayed, deduplicated `media_cleanup_outbox` responsibility. Failure preserves that pending responsibility in the same transaction before granting cleanup authority; finalize atomically settles it `done`. Immediate deletion is best-effort and cannot erase delayed recheck responsibility.
+- Stable database conflict/expiry/state errors map to stable HTTP codes instead of collapsing to a provider 502.
+- Browser SHA-256 now consumes `Blob.stream()` with an incremental constant-memory implementation; it no longer allocates an entire 100 MiB `ArrayBuffer`.
+- Focused tests import the production route, store, Supabase Storage adapter, and browser upload client, and assert verified auth wiring, owner propagation, token/path/bucket preservation, and `upsert: false`. PGlite owns lifecycle, rollback, and privilege coverage.
 
 ## TDD Evidence
 
@@ -26,28 +34,29 @@
 - RED: an item failure immediately blocked a sibling claim with `video_upload_batch_not_finalizable` (73 assertions reached).
 - RED: handler claim-before-Storage test returned 503 instead of 200.
 - RED: production Storage adapter exposed uploader-controlled SHA metadata (`true !== false`).
-- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 112 assertions, no failures.
-- GREEN: `test-video-upload-private.ts` reports 18 passed, 0 failed on two final runs.
+- RED: prepare ledger expired at 15 minutes instead of the provider capability's two hours.
+- RED: v77 had no `capability_expires_at` column or durable capability cleanup row.
+- RED: a stable item-idempotency conflict returned 502 instead of 409.
+- RED: bearer-only production route wiring, incorrect `Vary`, malformed/truncated/fake-brand `ftyp`, upstream 500/wrong range, playback MIME/range/total lies, and short streams were accepted by the prior focused contract.
+- RED: browser SHA-256 invoked the test Blob's forbidden whole-file `arrayBuffer()`.
+- GREEN: `verify-v77-video-media.mjs` reports `verdict: pass`, 115 assertions, no failures.
+- GREEN: `test-video-upload-private.ts` reports 27 passed, 0 failed after the final production/client/cleanup tests.
 
 ## Verification
 
-- v77 PGlite: 112/112, pass; covers apply twice, owner isolation, active claim competition, lease takeover, stale-owner denial, partial sibling completion, atomic provenance rollback, fact labels, replay completeness, rollback/reapply, and active/rollback privilege manifests.
+- v77 PGlite: 115/115, pass; additionally covers durable capability cleanup creation, delayed scheduling, atomic successful settlement, failure preservation, and cleanup evidence across rollback/reapply.
 - v76 PGlite: 280/280 across two rounds, pass.
 - v75 PGlite: 65 assertions with no failures; expected pre-existing `deployment_blocked` result remains for the legacy broad Storage policy.
 - Media privacy architecture: 16/16, pass.
-- Focused private video upload: 18/18, pass twice after final production changes.
+- Pinterest video adapter: 16/16, pass.
+- Focused private video upload: 27/27, pass after final production changes.
 - Test registry: 239 tracked, 231 run by `npm test`, 8 documented exclusions.
 - `npm run typecheck`: exit 0.
 - `git diff --check`: exit 0 before the implementation commit; the follow-up report-only diff is also clean.
 
 ## Remaining Review Items
 
-- I3 remains: the production `/api/storage-media` route still authenticates bearer-only, so native cookie-authenticated `<video>` playback needs route wiring and tests.
-- I4 remains partially open: terminal/expired replay no longer re-signs, but signed-capability lifetime reconciliation, delayed cleanup after successful removal, and the delete-plus-outbox double-failure contract still need design/implementation.
-- I5 remains: initial Range status/Content-Range and a structurally valid ISO-BMFF `ftyp` box/brand still need stricter validation and fixtures.
-- I6 remains: playback proxy must validate upstream MIME/status/Content-Range/total and detect short streams.
-- I7 is improved through production store/Storage adapter tests and PGlite lifecycle tests, but production route wiring tests are still required with I3/I5/I6.
-- Client-side full-file hashing/memory behavior remains a non-blocking follow-up.
+- None from the supplied C1/I1-I7 and Minor review list. The known v75 deployment blocker remains external to Task 2: a pre-existing broad permissive `storage.objects` policy must be audited before deployment.
 
 ## External-Call Attestation
 

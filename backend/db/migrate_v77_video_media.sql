@@ -55,6 +55,7 @@ begin
       ('video_upload_items','verified_checksum_sha256','text',false,null),('video_upload_items','verified_width','integer',false,null),
       ('video_upload_items','verified_height','integer',false,null),('video_upload_items','verified_duration_ms','bigint',false,null),
       ('video_upload_items','finalize_claim_token','uuid',false,null),('video_upload_items','finalize_claim_expires_at','timestamp with time zone',false,null),
+      ('video_upload_items','capability_expires_at','timestamp with time zone',true,null),
       ('video_upload_items','status','text',true,'''prepared''::text'),('video_upload_items','error_code','text',false,null),
       ('video_upload_items','prepared_at','timestamp with time zone',true,'now()'),('video_upload_items','finalized_at','timestamp with time zone',false,null),
       ('video_upload_items','expires_at','timestamp with time zone',true,null),('video_upload_items','created_at','timestamp with time zone',true,'now()'),
@@ -70,7 +71,7 @@ begin
       where c.relnamespace='public'::regnamespace and c.relname in ('video_upload_batches','video_upload_items') and a.attnum>0 and not a.attisdropped
         and not exists (select 1 from (values
           ('video_upload_batches','id'),('video_upload_batches','owner_user_id'),('video_upload_batches','idempotency_key'),('video_upload_batches','status'),('video_upload_batches','error_code'),('video_upload_batches','prepared_at'),('video_upload_batches','finalized_at'),('video_upload_batches','expires_at'),('video_upload_batches','created_at'),('video_upload_batches','updated_at'),
-          ('video_upload_items','id'),('video_upload_items','batch_id'),('video_upload_items','owner_user_id'),('video_upload_items','ordinal'),('video_upload_items','idempotency_key'),('video_upload_items','private_path'),('video_upload_items','declared_content_type'),('video_upload_items','declared_byte_size'),('video_upload_items','declared_checksum_sha256'),('video_upload_items','declared_width'),('video_upload_items','declared_height'),('video_upload_items','declared_duration_ms'),('video_upload_items','verified_content_type'),('video_upload_items','verified_byte_size'),('video_upload_items','verified_checksum_sha256'),('video_upload_items','verified_width'),('video_upload_items','verified_height'),('video_upload_items','verified_duration_ms'),('video_upload_items','finalize_claim_token'),('video_upload_items','finalize_claim_expires_at'),('video_upload_items','status'),('video_upload_items','error_code'),('video_upload_items','prepared_at'),('video_upload_items','finalized_at'),('video_upload_items','expires_at'),('video_upload_items','created_at'),('video_upload_items','updated_at')
+          ('video_upload_items','id'),('video_upload_items','batch_id'),('video_upload_items','owner_user_id'),('video_upload_items','ordinal'),('video_upload_items','idempotency_key'),('video_upload_items','private_path'),('video_upload_items','declared_content_type'),('video_upload_items','declared_byte_size'),('video_upload_items','declared_checksum_sha256'),('video_upload_items','declared_width'),('video_upload_items','declared_height'),('video_upload_items','declared_duration_ms'),('video_upload_items','verified_content_type'),('video_upload_items','verified_byte_size'),('video_upload_items','verified_checksum_sha256'),('video_upload_items','verified_width'),('video_upload_items','verified_height'),('video_upload_items','verified_duration_ms'),('video_upload_items','finalize_claim_token'),('video_upload_items','finalize_claim_expires_at'),('video_upload_items','capability_expires_at'),('video_upload_items','status'),('video_upload_items','error_code'),('video_upload_items','prepared_at'),('video_upload_items','finalized_at'),('video_upload_items','expires_at'),('video_upload_items','created_at'),('video_upload_items','updated_at')
         ) expected(table_name,column_name) where expected.table_name=c.relname and expected.column_name=a.attname)) then raise exception using errcode='P0001',message='v77_schema_collision'; end if;
   end if;
   -- Provenance is additive: v77 owns these columns and its discriminator check,
@@ -154,10 +155,10 @@ begin
   end if;
   for v_signature,v_marker,v_hash in select * from (values
     ('public.video_upload_batch_prepare(uuid,text,timestamptz)','vibepin:v77:video-upload-batch-prepare','73821871844f2b858bfc441d80919bbc'),
-    ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-prepare','348eb8743210ca2047318ba0fdb4080e'),
+    ('public.video_upload_item_prepare(uuid,uuid,integer,text,text,text,bigint,text,integer,integer,bigint)','vibepin:v77:video-upload-item-prepare','2ba41a1ad29086bdca6cfce6e25cafad'),
     ('public.video_upload_item_claim(uuid,uuid,integer,uuid,timestamptz)','vibepin:v77:video-upload-item-claim','1e7a9a9f8cda0fecf9b121e83caec3e1'),
-    ('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)','vibepin:v77:video-upload-item-finalize','e00d87af79fd4ef919f13379e4e064b6'),
-    ('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)','vibepin:v77:video-upload-item-fail','7a3bcd67a9bdf7539ceb89fe4f3ed166')
+    ('public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text)','vibepin:v77:video-upload-item-finalize','02f3e0537c0e882230e159243cb92bae'),
+    ('public.video_upload_item_fail(uuid,uuid,integer,uuid,text)','vibepin:v77:video-upload-item-fail','71955fb29596ec65c0b9b8f4f2894f84')
   ) expected(signature,marker,body_hash) loop
     if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='public' and p.proname=split_part(replace(v_signature,'public.',''),'(',1)
@@ -244,6 +245,7 @@ create table if not exists public.video_upload_items (
   verified_duration_ms bigint,
   finalize_claim_token uuid,
   finalize_claim_expires_at timestamptz,
+  capability_expires_at timestamptz not null,
   status text not null default 'prepared'
     constraint video_upload_items_status_check check (status in ('prepared','uploading','finalizing','finalized','failed','expired','canceled')),
   constraint video_upload_items_claim_shape_check check (
@@ -352,6 +354,7 @@ create or replace function public.video_upload_item_prepare(
 ) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $fn$
 -- vibepin:v77:video-upload-item-prepare
 declare v_batch public.video_upload_batches%rowtype; v_item public.video_upload_items%rowtype;
+  v_capability_expires_at timestamptz := now()+interval '2 hours';
 begin
   if p_owner_user_id is null or p_batch_id is null or p_ordinal is null or p_ordinal<0 or p_ordinal>=20
      or nullif(btrim(p_idempotency_key),'') is null or nullif(btrim(p_private_path),'') is null
@@ -385,20 +388,34 @@ begin
        or v_item.declared_duration_ms is distinct from p_declared_duration_ms then
       raise exception using errcode='23505',message='video_upload_item_idempotency_conflict';
     end if;
-    return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'batchId',v_batch.id);
+    update public.video_upload_items set capability_expires_at=v_capability_expires_at,updated_at=now()
+      where id=v_item.id returning * into v_item;
+    insert into public.media_cleanup_outbox(owner_user_id,bucket_id,object_path,reason,dedupe_key,next_attempt_at)
+      values(p_owner_user_id,'generated-private',v_item.private_path,'video_upload_capability_expired','video-upload:'||v_item.id::text,v_capability_expires_at)
+      on conflict(dedupe_key) where dedupe_key is not null do update set
+        owner_user_id=excluded.owner_user_id,bucket_id=excluded.bucket_id,object_path=excluded.object_path,
+        reason=excluded.reason,status='pending',lease_token=null,lease_expires_at=null,
+        next_attempt_at=excluded.next_attempt_at,last_error_code=null,dead_lettered_at=null,completed_at=null,updated_at=now();
+    return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'batchId',v_batch.id,'capabilityExpiresAt',v_item.capability_expires_at);
   end if;
   if exists (select 1 from public.video_upload_items where batch_id=v_batch.id and idempotency_key=btrim(p_idempotency_key)) then
     raise exception using errcode='23505',message='video_upload_item_idempotency_conflict';
   end if;
   insert into public.video_upload_items(
     batch_id,owner_user_id,ordinal,idempotency_key,private_path,declared_content_type,declared_byte_size,
-    declared_checksum_sha256,declared_width,declared_height,declared_duration_ms,expires_at
+    declared_checksum_sha256,declared_width,declared_height,declared_duration_ms,capability_expires_at,expires_at
   ) values (
     v_batch.id,p_owner_user_id,p_ordinal,btrim(p_idempotency_key),btrim(p_private_path),p_declared_content_type,p_declared_byte_size,
-    nullif(btrim(coalesce(p_declared_checksum_sha256,'')),''),p_declared_width,p_declared_height,p_declared_duration_ms,v_batch.expires_at
+    nullif(btrim(coalesce(p_declared_checksum_sha256,'')),''),p_declared_width,p_declared_height,p_declared_duration_ms,v_capability_expires_at,v_batch.expires_at
   ) returning * into v_item;
+  insert into public.media_cleanup_outbox(owner_user_id,bucket_id,object_path,reason,dedupe_key,next_attempt_at)
+    values(p_owner_user_id,'generated-private',v_item.private_path,'video_upload_capability_expired','video-upload:'||v_item.id::text,v_capability_expires_at)
+    on conflict(dedupe_key) where dedupe_key is not null do update set
+      owner_user_id=excluded.owner_user_id,bucket_id=excluded.bucket_id,object_path=excluded.object_path,
+      reason=excluded.reason,status='pending',lease_token=null,lease_expires_at=null,
+      next_attempt_at=excluded.next_attempt_at,last_error_code=null,dead_lettered_at=null,completed_at=null,updated_at=now();
   update public.video_upload_batches set status='uploading',updated_at=now() where id=v_batch.id;
-  return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'batchId',v_batch.id);
+  return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'batchId',v_batch.id,'capabilityExpiresAt',v_item.capability_expires_at);
 exception when others then
   raise exception using errcode=sqlstate,message=case sqlerrm
     when 'video_upload_batch_limit_exceeded' then 'video_upload_batch_limit_exceeded'
@@ -522,6 +539,10 @@ begin
     verified_width=null,verified_height=null,verified_duration_ms=null,status='finalized',finalized_at=now(),
     finalize_claim_token=null,finalize_claim_expires_at=null,updated_at=now()
     where id=v_item.id returning * into v_item;
+  update public.media_cleanup_outbox set status='done',completed_at=now(),lease_token=null,lease_expires_at=null,
+    next_attempt_at=null,last_error_code=null,dead_lettered_at=null,updated_at=now()
+    where dedupe_key='video-upload:'||v_item.id::text;
+  if not found then raise exception using errcode='55000',message='video_cleanup_schedule_missing'; end if;
   select not exists(select 1 from public.video_upload_items where batch_id=v_batch.id and status in ('prepared','finalizing')),
     exists(select 1 from public.video_upload_items where batch_id=v_batch.id and status<>'finalized')
     into v_done,v_has_nonfinal;
@@ -539,6 +560,7 @@ exception when others then
     when 'video_upload_item_not_found' then 'video_upload_item_not_found'
     when 'video_upload_claim_lost' then 'video_upload_claim_lost'
     when 'video_provenance_conflict' then 'video_provenance_conflict'
+    when 'video_cleanup_schedule_missing' then 'video_cleanup_schedule_missing'
     else 'v77_video_upload_error' end;
 end $fn$;
 comment on function public.video_upload_item_finalize(uuid,uuid,integer,uuid,text,text,bigint,text) is 'vibepin:v77:video-upload-item-finalize';
@@ -561,10 +583,17 @@ begin
   update public.video_upload_items set status='failed',error_code=btrim(p_error_code),
     finalize_claim_token=null,finalize_claim_expires_at=null,updated_at=now()
     where id=v_item.id returning * into v_item;
+  insert into public.media_cleanup_outbox(owner_user_id,bucket_id,object_path,reason,dedupe_key,next_attempt_at)
+    values(p_owner_user_id,'generated-private',v_item.private_path,btrim(p_error_code),'video-upload:'||v_item.id::text,v_item.capability_expires_at)
+    on conflict(dedupe_key) where dedupe_key is not null do update set
+      owner_user_id=excluded.owner_user_id,bucket_id=excluded.bucket_id,object_path=excluded.object_path,
+      reason=excluded.reason,status='pending',lease_token=null,lease_expires_at=null,
+      next_attempt_at=greatest(public.media_cleanup_outbox.next_attempt_at,excluded.next_attempt_at),
+      last_error_code=null,dead_lettered_at=null,completed_at=null,updated_at=now();
   select not exists(select 1 from public.video_upload_items where batch_id=v_batch.id and status in ('prepared','finalizing')) into v_done;
   update public.video_upload_batches set status=case when v_done then 'failed' else 'finalizing' end,
     error_code=case when v_done then btrim(p_error_code) else null end,updated_at=now() where id=v_batch.id;
-  return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'cleanupAllowed',true,'privatePath',v_item.private_path);
+  return jsonb_build_object('itemId',v_item.id,'status',v_item.status,'cleanupAllowed',true,'cleanupScheduled',true,'privatePath',v_item.private_path);
 exception when others then
   raise exception using errcode=sqlstate,message=case sqlerrm
     when 'invalid_video_upload_failure' then 'invalid_video_upload_failure'

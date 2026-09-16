@@ -141,6 +141,7 @@ async function run() {
       ["video_upload_items", "verified_duration_ms", "bigint", false, null],
       ["video_upload_items", "finalize_claim_token", "uuid", false, null],
       ["video_upload_items", "finalize_claim_expires_at", "timestamp with time zone", false, null],
+      ["video_upload_items", "capability_expires_at", "timestamp with time zone", true, null],
       ["video_upload_items", "status", "text", true, "'prepared'::text"],
       ["video_upload_items", "error_code", "text", false, null],
       ["video_upload_items", "prepared_at", "timestamp with time zone", true, "now()"],
@@ -192,6 +193,12 @@ async function run() {
     const item = await asRole(db, "service_role", () => prepareItem(db, A, one.batchId, 0, "item-key"));
     const itemAgain = await asRole(db, "service_role", () => prepareItem(db, A, one.batchId, 0, "item-key"));
     assert(item.itemId === itemAgain.itemId && item.status === "prepared", "item prepare is idempotent and starts prepared");
+    const capabilityGuard = (await db.query(`select i.capability_expires_at,o.status,o.next_attempt_at,o.dedupe_key
+      from public.video_upload_items i join public.media_cleanup_outbox o
+        on o.dedupe_key='video-upload:'||i.id::text where i.id=$1`, [item.itemId])).rows[0];
+    assert(capabilityGuard?.status === "pending" && capabilityGuard.dedupe_key === `video-upload:${item.itemId}`
+      && Date.parse(capabilityGuard.next_attempt_at) >= Date.parse(capabilityGuard.capability_expires_at),
+      "prepare atomically persists delayed cleanup through the signed capability lifetime");
     const changedPrepare = await asRole(db, "service_role", () => rejected(() => db.query(`select public.video_upload_item_prepare(
       $1,$2,0,'item-key',$3,'video/mp4',1024,$4,720,1280,10_000)`,
       [A, one.batchId, `${A}/uploads/${one.batchId}/0.mp4`, "d".repeat(64)])));
@@ -222,6 +229,9 @@ async function run() {
       checksum_sha256: null, width: 1080, height: 1920, duration_ms: 15_000, content_type_source: "storage_head_verified",
       byte_size_source: "storage_head_verified", checksum_source: "unavailable", dimensions_source: "browser_declared", duration_source: "browser_declared" }),
       "the same transaction registers provenance with explicit source/trust labels for observed facts");
+    const finalizedCleanup = (await db.query("select status,completed_at from public.media_cleanup_outbox where dedupe_key=$1", [`video-upload:${item.itemId}`])).rows[0];
+    assert(finalizedCleanup.status === "done" && finalizedCleanup.completed_at,
+      "atomic finalization cancels the delayed capability cleanup responsibility");
 
     await db.query("delete from public.media_asset_provenance where bucket_id='generated-private' and object_path=$1", [`${A}/uploads/${one.batchId}/0.mp4`]);
     const incompleteReplay = await asRole(db, "service_role", () => rejected(() => claimItem(db, A, one.batchId, 0, competingToken)));
@@ -246,8 +256,13 @@ async function run() {
     await asRole(db, "service_role", () => claimItem(db, A, failureBatch.batchId, 0, claimToken));
     const failed = await asRole(db, "service_role", () => failItem(db, A, failureBatch.batchId, 0, claimToken));
     const failedState = (await db.query("select status,finalize_claim_token from public.video_upload_items where id=$1", [failureItem.itemId])).rows[0];
-    assert(failed.cleanupAllowed === true && failed.status === "failed" && failedState.status === "failed" && failedState.finalize_claim_token === null,
-      "only the current claim owner receives cleanup authority after atomically recording failure");
+    const failedCleanup = (await db.query(`select o.status,o.next_attempt_at,i.capability_expires_at
+      from public.video_upload_items i join public.media_cleanup_outbox o on o.dedupe_key='video-upload:'||i.id::text
+      where i.id=$1`, [failureItem.itemId])).rows[0];
+    assert(failed.cleanupAllowed === true && failed.cleanupScheduled === true && failed.status === "failed"
+      && failedState.status === "failed" && failedState.finalize_claim_token === null
+      && failedCleanup.status === "pending" && Date.parse(failedCleanup.next_attempt_at) >= Date.parse(failedCleanup.capability_expires_at),
+      "only the current claim owner receives cleanup authority after atomically preserving delayed cleanup");
 
     const partialBatch = await asRole(db, "service_role", () => prepareBatch(db, A, "partial-batch"));
     const partialFailed = await asRole(db, "service_role", () => prepareItem(db, A, partialBatch.batchId, 0, "partial-failed"));
@@ -338,7 +353,8 @@ async function run() {
     const beforeRollback = await db.query(`select jsonb_build_object(
       'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
       'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
-      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p)
+      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p),
+      'cleanup',(select coalesce(jsonb_agg(to_jsonb(o) order by o.id),'[]'::jsonb) from public.media_cleanup_outbox o)
     ) as state`);
     await db.exec(rollback); await db.exec(rollback);
     const rollbackTableWrite = await asRole(db, "service_role", () => rejected(() => db.query(
@@ -376,7 +392,8 @@ async function run() {
     const afterReapply = await db.query(`select jsonb_build_object(
       'batches',(select coalesce(jsonb_agg(to_jsonb(b) order by b.id),'[]'::jsonb) from public.video_upload_batches b),
       'items',(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) from public.video_upload_items i),
-      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p)
+      'provenance',(select coalesce(jsonb_agg(to_jsonb(p) order by p.object_path),'[]'::jsonb) from public.media_asset_provenance p),
+      'cleanup',(select coalesce(jsonb_agg(to_jsonb(o) order by o.id),'[]'::jsonb) from public.media_cleanup_outbox o)
     ) as state`);
     const v76After = (await db.query("select pg_get_functiondef(to_regprocedure($1)) as definition", [
       "public.publish_asset_settle_item(uuid,text,text,uuid,text,integer,text,text,text,bigint,text)",

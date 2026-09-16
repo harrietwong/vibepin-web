@@ -12,7 +12,8 @@ function pathStatus(owner: string, path: string | null): 0 | 400 | 403 {
   if (!path || path.startsWith("/") || path.includes("\\") || path.includes("..") || path.includes("//")) return 400;
   return path.split("/")[0] === owner ? 0 : 403;
 }
-function empty(status: number) { return new Response(null, { status }); }
+const PRIVATE_VARY = "Cookie, Authorization, Range";
+function empty(status: number, headers: HeadersInit = {}) { return new Response(null, { status, headers: { Vary: PRIVATE_VARY, ...headers } }); }
 function range(value: string | null, size: number): { start: number; end: number; partial: boolean } | null {
   if (!value) return { start: 0, end: size - 1, partial: false };
   if (value.includes(",") || !value.startsWith("bytes=")) return null;
@@ -24,18 +25,29 @@ function range(value: string | null, size: number): { start: number; end: number
 }
 
 /** Reject a misbehaving upstream rather than streaming bytes past the authorized range. */
-function boundedRangeBody(body: ReadableStream<Uint8Array>, maximum: number): ReadableStream<Uint8Array> {
+function boundedRangeBody(body: ReadableStream<Uint8Array>, expected: number): ReadableStream<Uint8Array> {
   let received = 0;
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       received += chunk.byteLength;
-      if (received > maximum) {
+      if (received > expected) {
         controller.error(new Error("range body exceeded"));
         return;
       }
       controller.enqueue(chunk);
     },
+    flush(controller) {
+      if (received !== expected) controller.error(new Error("range body incomplete"));
+    },
   }));
+}
+
+function normalizedType(value: string | null) { return value?.split(";", 1)[0]?.trim().toLowerCase() ?? ""; }
+function contentRange(value: string | null) {
+  const match = value && /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value);
+  if (!match) return null;
+  const parsed = match.slice(1).map(Number);
+  return parsed.every(Number.isSafeInteger) ? { start: parsed[0], end: parsed[1], total: parsed[2] } : null;
 }
 
 export async function handleStorageMediaGet(req: Request, deps: StorageMediaDeps): Promise<Response> {
@@ -46,17 +58,23 @@ export async function handleStorageMediaGet(req: Request, deps: StorageMediaDeps
   const bucket = deps.bucket ?? VIDEO_UPLOAD_BUCKET;
   const provenance = await deps.findProvenance(owner, bucket, path!).catch(() => null);
   if (!provenance || provenance.owner_user_id !== owner || provenance.bucket_id !== bucket || provenance.object_path !== path || provenance.media_kind !== "video" || !ALLOWED_VIDEO_LIFECYCLES.has(provenance.lifecycle_state) || !ALLOWED_VIDEO_TYPES.has(provenance.content_type ?? "") || !Number.isSafeInteger(provenance.byte_size) || provenance.byte_size! < 1 || provenance.byte_size! > MAX_VIDEO_UPLOAD_BYTES) return empty(403);
-  const requested = range(req.headers.get("range"), provenance.byte_size!); if (!requested) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${provenance.byte_size}` } });
+  const requested = range(req.headers.get("range"), provenance.byte_size!); if (!requested) return empty(416, { "Content-Range": `bytes */${provenance.byte_size}` });
   try {
     const upstream = await deps.readRange({ bucket, path: path!, start: requested.start, end: requested.end });
     const expected = requested.end - requested.start + 1;
     const contentLength = upstream.headers.get("content-length");
     const length = contentLength === null ? null : Number(contentLength);
-    if (!upstream.ok || !upstream.body || (length !== null && (!Number.isSafeInteger(length) || length !== expected))) { await upstream.body?.cancel(); return empty(502); }
+    const upstreamType = normalizedType(upstream.headers.get("content-type"));
+    const upstreamRange = contentRange(upstream.headers.get("content-range"));
+    const exactPartial = upstream.status === 206 && upstreamRange?.start === requested.start
+      && upstreamRange.end === requested.end && upstreamRange.total === provenance.byte_size;
+    const exactFull200 = !requested.partial && upstream.status === 200 && !upstreamRange && length === expected;
+    if (!upstream.body || upstreamType !== provenance.content_type || (!exactPartial && !exactFull200)
+      || (length !== null && (!Number.isSafeInteger(length) || length !== expected))) { await upstream.body?.cancel(); return empty(502); }
     return new Response(boundedRangeBody(upstream.body, expected), { status: requested.partial ? 206 : 200, headers: {
       "Content-Type": provenance.content_type!, "Content-Length": String(expected),
       ...(requested.partial ? { "Content-Range": `bytes ${requested.start}-${requested.end}/${provenance.byte_size}` } : {}),
-      "Accept-Ranges": "bytes", "Cache-Control": "private, max-age=300", Vary: "Authorization, Range", "X-Content-Type-Options": "nosniff",
+      "Accept-Ranges": "bytes", "Cache-Control": "private, max-age=300", Vary: PRIVATE_VARY, "X-Content-Type-Options": "nosniff",
     } });
   } catch { return empty(502); }
 }

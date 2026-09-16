@@ -11,6 +11,8 @@ function rpcData(value: unknown): Record<string, unknown> | null {
 const STABLE_STORE_CODES = new Set([
   "video_upload_item_claimed", "video_upload_claim_lost", "video_upload_provenance_incomplete",
   "video_upload_batch_expired", "video_upload_item_not_finalizable", "video_upload_batch_not_finalizable",
+  "video_upload_item_idempotency_conflict", "video_upload_batch_not_found", "video_upload_item_not_found",
+  "video_upload_batch_not_preparable", "video_upload_batch_limit_exceeded", "video_upload_too_large",
 ]);
 function storeFailure(value: unknown) {
   const message = value && typeof value === "object" && "message" in value ? String((value as { message: unknown }).message) : "";
@@ -69,7 +71,8 @@ export function createVideoUploadStore(db: Db): VideoUploadStore {
         p_owner_user_id: input.ownerUserId, p_batch_id: input.batchId, p_ordinal: input.ordinal,
         p_claim_token: input.claimToken, p_error_code: input.code,
       });
-      return must(result, data => ({ status: String(data.status ?? ""), cleanupAllowed: data.cleanupAllowed === true }));
+      return must(result, data => ({ status: String(data.status ?? ""), cleanupAllowed: data.cleanupAllowed === true,
+        cleanupScheduled: data.cleanupScheduled === true }));
     },
   };
 }

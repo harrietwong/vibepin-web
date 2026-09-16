@@ -4,6 +4,7 @@ import {
   MAX_VIDEO_UPLOAD_ITEMS,
   MIN_VIDEO_DURATION_MS,
   VIDEO_FINALIZE_CLAIM_MS,
+  VIDEO_SIGNED_UPLOAD_CAPABILITY_MS,
 } from "@/lib/videoUploadLimits";
 
 export const VIDEO_UPLOAD_BUCKET = "generated-private";
@@ -22,7 +23,7 @@ export type VideoUploadStore = {
   findItem(ownerUserId: string, batchId: string, ordinal: number): Promise<PreparedItem | null>;
   claimItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; claimExpiresAt: string }): Promise<{ status: string; claimToken?: string | null; provenanceReady?: boolean }>;
   finalizeItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; bucketId: string; contentType: string; byteSize: number; checksumSha256: string | null }): Promise<{ status: string; provenanceReady: boolean }>;
-  failItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; code: string }): Promise<{ status: string; cleanupAllowed: boolean }>;
+  failItem(input: { ownerUserId: string; batchId: string; ordinal: number; claimToken: string; code: string }): Promise<{ status: string; cleanupAllowed: boolean; cleanupScheduled: boolean }>;
 };
 
 export type VideoObjectStorage = {
@@ -89,8 +90,13 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
   const bucket = deps.bucket ?? VIDEO_UPLOAD_BUCKET;
   const now = deps.now?.() ?? new Date();
   let batch: { batchId: string };
-  try { batch = await deps.store.prepareBatch({ ownerUserId: owner, idempotencyKey: body.idempotencyKey, expiresAt: new Date(now.getTime() + (deps.expiresInMs ?? 15 * 60_000)).toISOString() }); }
-  catch { return error("video_upload_unavailable", id, 503); }
+  try { batch = await deps.store.prepareBatch({ ownerUserId: owner, idempotencyKey: body.idempotencyKey, expiresAt: new Date(now.getTime() + (deps.expiresInMs ?? VIDEO_SIGNED_UPLOAD_CAPABILITY_MS)).toISOString() }); }
+  catch (cause) {
+    const code = storeErrorCode(cause);
+    if (code === "video_upload_batch_expired") return error("video_upload_expired", id, 422);
+    if (code === "video_upload_batch_not_preparable") return error("video_upload_not_uploadable", id, 409);
+    return error("video_upload_unavailable", id, 503);
+  }
   const uploads: Array<{ ordinal: number; path: string; token: string; signedUrl: string; contentType: string; upsert: false }> = [];
   for (const file of descriptors) {
     // A batch replay must use the original random path. The exact item lookup is
@@ -108,7 +114,13 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
       const signed = await deps.createSignedUpload({ bucket, path, contentType: file.contentType, upsert: false });
       if (!signed.token || !signed.signedUrl) throw new Error("capability unavailable");
       uploads.push({ ordinal: file.ordinal, path, token: signed.token, signedUrl: signed.signedUrl, contentType: file.contentType, upsert: false });
-    } catch { return error("video_upload_capability_unavailable", id, 502); }
+    } catch (cause) {
+      const code = storeErrorCode(cause);
+      if (code === "video_upload_item_idempotency_conflict") return error("video_upload_conflict", id, 409);
+      if (code === "video_upload_batch_expired") return error("video_upload_expired", id, 422);
+      if (code === "video_upload_batch_not_preparable") return error("video_upload_not_uploadable", id, 409);
+      return error("video_upload_capability_unavailable", id, 502);
+    }
   }
   return Response.json({ ok: true, batchId: batch.batchId, uploads, requestId: id });
 }
@@ -120,13 +132,40 @@ async function readBounded(response: Response, maximum = 64 * 1024): Promise<Uin
   finally { reader.releaseLock(); }
   const result = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; } return result;
 }
-function hasFtyp(bytes: Uint8Array | null) { return Boolean(bytes && bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70); }
+const ALLOWED_FTYP_BRANDS = new Set(["isom", "iso2", "avc1", "mp41", "mp42", "M4V ", "qt  "]);
+function brand(bytes: Uint8Array, offset: number) { return String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]); }
+function hasFtyp(bytes: Uint8Array | null) {
+  if (!bytes || bytes.length < 16 || brand(bytes, 4) !== "ftyp") return false;
+  const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+  if (size < 16 || size > bytes.length || (size - 16) % 4 !== 0) return false;
+  // Bytes 12..15 are the mandatory minor_version uint32. A permitted major or
+  // compatible brand is required; offset-four magic alone is not a container.
+  if (ALLOWED_FTYP_BRANDS.has(brand(bytes, 8))) return true;
+  for (let offset = 16; offset + 4 <= size; offset += 4) if (ALLOWED_FTYP_BRANDS.has(brand(bytes, offset))) return true;
+  return false;
+}
+async function readInitialRange(response: Response, end: number, total: number, contentType: string) {
+  const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("content-range") ?? "");
+  const responseType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  const expected = end + 1;
+  const length = response.headers.get("content-length");
+  if (response.status !== 206 || responseType !== contentType || !match
+    || Number(match[1]) !== 0 || Number(match[2]) !== end || Number(match[3]) !== total
+    || (length !== null && Number(length) !== expected)) {
+    await response.body?.cancel();
+    return null;
+  }
+  const bytes = await readBounded(response, expected);
+  return bytes?.byteLength === expected ? bytes : null;
+}
 function safeResult(item: PreparedItem, id: string) { return { ok: true, batchId: item.batchId, ordinal: item.ordinal, proxyUrl: `/api/storage-media?path=${encodeURIComponent(item.privatePath)}`, requestId: id }; }
 function storeErrorCode(value: unknown) {
   const message = value instanceof Error ? value.message : "";
   return new Set([
     "video_upload_item_claimed", "video_upload_claim_lost", "video_upload_provenance_incomplete",
     "video_upload_batch_expired", "video_upload_item_not_finalizable", "video_upload_batch_not_finalizable",
+    "video_upload_item_idempotency_conflict", "video_upload_batch_not_found", "video_upload_item_not_found",
+    "video_upload_batch_not_preparable", "video_upload_batch_limit_exceeded", "video_upload_too_large",
   ]).has(message) ? message : null;
 }
 
@@ -166,8 +205,12 @@ export async function handleVideoUploadFinalize(req: Request, deps: VideoUploadH
       return error(lost ? "video_upload_in_progress" : "video_upload_unavailable", id, lost ? 409 : 503);
     }
     if (!failure.cleanupAllowed || failure.status !== "failed") return error("video_upload_in_progress", id, 409);
+    if (!failure.cleanupScheduled) return error("cleanup_not_scheduled", id, 503);
+    // The fail RPC already persisted a delayed recheck beyond the capability's
+    // lifetime. Immediate deletion is best-effort; a still-valid token can write
+    // again, so successful deletion must not settle that durable responsibility.
     try { await deps.storage!.remove({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item!.privatePath }); }
-    catch { try { await deps.recordCleanup?.({ owner_user_id: owner, bucket_id: deps.bucket ?? VIDEO_UPLOAD_BUCKET, object_path: item!.privatePath, reason: code }); } catch { /* safe failure response below */ } }
+    catch { /* delayed cleanup is already durable */ }
     return error(code, id, code === "missing_video_object" ? 404 : code === "video_upload_unavailable" ? 503 : 422);
   };
   if (Date.parse(item.expiresAt) <= now.getTime()) return cleanup("video_upload_expired");
@@ -178,7 +221,9 @@ export async function handleVideoUploadFinalize(req: Request, deps: VideoUploadH
   if (stat.contentType !== item.declaredContentType || !ALLOWED_VIDEO_TYPES.has(stat.contentType)) return cleanup("video_content_type_mismatch");
   if (stat.byteSize !== item.declaredByteSize || (stat.verifiedChecksumSha256 && stat.verifiedChecksumSha256.toLowerCase() !== item.declaredChecksumSha256)) return cleanup("video_facts_mismatch");
   let header: Uint8Array | null;
-  try { header = await readBounded(await deps.storage.readRange({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item.privatePath, start: 0, end: Math.min(63, stat.byteSize - 1) })); } catch { return cleanup("video_upload_unavailable"); }
+  const headerEnd = Math.min(63, stat.byteSize - 1);
+  try { header = await readInitialRange(await deps.storage.readRange({ bucket: deps.bucket ?? VIDEO_UPLOAD_BUCKET, path: item.privatePath, start: 0, end: headerEnd }), headerEnd, stat.byteSize, stat.contentType); } catch { return cleanup("video_upload_unavailable"); }
+  if (!header) return cleanup("video_upload_unavailable");
   if (!hasFtyp(header)) return cleanup("invalid_video_container");
   try {
     const finalized = await deps.store.finalizeItem({ ownerUserId: owner, batchId: item.batchId, ordinal: item.ordinal, claimToken,

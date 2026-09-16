@@ -3,3 +3,5 @@ export const MAX_VIDEO_UPLOAD_ITEMS = 20;
 export const MIN_VIDEO_DURATION_MS = 4_000;
 export const MAX_VIDEO_DURATION_MS = 5 * 60_000;
 export const VIDEO_FINALIZE_CLAIM_MS = 2 * 60_000;
+/** Supabase signed-upload capabilities are fixed at two hours by the provider. */
+export const VIDEO_SIGNED_UPLOAD_CAPABILITY_MS = 2 * 60 * 60_000;

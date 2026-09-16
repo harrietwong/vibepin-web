@@ -1,4 +1,4 @@
-import { getUserIdFromBearer } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { createMediaProvenanceStore } from "@/lib/server/mediaProvenance";
 import { createSupabaseVideoStorage } from "@/lib/server/media/supabaseVideoStorage";
 import { handleStorageMediaGet } from "@/lib/server/media/storageMediaHandler";
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
   const storage = createSupabaseVideoStorage({ supabaseUrl: url, serviceRoleKey: key });
   return handleStorageMediaGet(req, {
-    getUserId: getUserIdFromBearer, configured: Boolean(url && key), bucket,
+    getUserId: getUserIdFromBearerOrCookies, configured: Boolean(url && key), bucket,
     findProvenance: (owner, activeBucket, path) => createMediaProvenanceStore().findExact(owner, activeBucket, path),
     readRange: storage.readRange,
   });
