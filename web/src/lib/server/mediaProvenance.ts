@@ -7,6 +7,14 @@ export type MediaProvenance = {
   source_type: string;
   intent_id: string | null;
   lifecycle_state: string;
+  /** v77 fields are optional so existing image rows retain their serialization. */
+  media_kind?: "image" | "video" | string;
+  content_type?: string | null;
+  byte_size?: number | null;
+  checksum_sha256?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration_ms?: number | null;
 };
 
 export type MediaProvenanceStore = {
@@ -21,7 +29,7 @@ export function createMediaProvenanceStore(db = createServerClient()): MediaProv
     async findExact(ownerUserId, bucketId, objectPath) {
       const { data, error } = await db
         .from("media_asset_provenance")
-        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state")
+        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms")
         .eq("owner_user_id", ownerUserId)
         .eq("bucket_id", bucketId)
         .eq("object_path", objectPath)
@@ -33,7 +41,7 @@ export function createMediaProvenanceStore(db = createServerClient()): MediaProv
       if (!objectPaths.length) return [];
       const { data, error } = await db
         .from("media_asset_provenance")
-        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state")
+        .select("owner_user_id,bucket_id,object_path,source_type,intent_id,lifecycle_state,media_kind,content_type,byte_size,checksum_sha256,width,height,duration_ms")
         .eq("owner_user_id", ownerUserId)
         .eq("bucket_id", bucketId)
         .in("object_path", [...new Set(objectPaths)]);
