@@ -124,7 +124,10 @@ begin
     and i.status='finalized' and o.state='associated';
   get diagnostics v_updated = row_count;
   if v_updated=1 then return jsonb_build_object('ok',true,'state','retained'); end if;
-  if exists(select 1 from public.video_poster_operations o where o.owner_user_id=p_owner_user_id and o.bucket_id=p_bucket_id and o.object_path=p_object_path and o.state='retained') then
+  if exists(select 1 from public.video_poster_operations o join public.video_upload_items i on i.id=o.video_item_id
+    where o.owner_user_id=p_owner_user_id and i.owner_user_id=p_owner_user_id
+      and i.batch_id=p_batch_id and i.ordinal=p_ordinal
+      and o.bucket_id=p_bucket_id and o.object_path=p_object_path and o.state='retained') then
     return jsonb_build_object('ok',true,'state','retained');
   end if;
   raise exception using errcode='P0001', message='v80_poster_operation_not_retainable';
@@ -157,11 +160,12 @@ begin
   -- pin_drafts is the server-side content authority.  A matching live payload
   -- (raw or URL-encoded storage path) blocks deletion even if the operation was
   -- later marked failed by a duplicate/late browser request.
-  v_encoded_path := replace(p_object_path, '/', '%2F');
+  v_encoded_path := replace(p_object_path, '/', '%2f');
   if exists (
     select 1 from public.pin_drafts d
     where d.vibepin_user_id=p_owner_user_id and d.deleted_at is null
-      and (d.payload::text like '%' || p_object_path || '%' or d.payload::text like '%' || v_encoded_path || '%')
+      and (strpos(lower(d.payload::text), lower(p_object_path)) > 0
+        or strpos(lower(d.payload::text), v_encoded_path) > 0)
   ) then return jsonb_build_object('allowed',false,'reason','attached'); end if;
   return jsonb_build_object('allowed',true,'reason','failed_or_cancelled_unreferenced');
 end $v80_cleanup$;
@@ -173,5 +177,28 @@ revoke all on function public.video_poster_cleanup_authorize(uuid,text,text) fro
 grant execute on function public.video_poster_operation_associate(uuid,uuid,integer,text,text) to service_role;
 grant execute on function public.video_poster_operation_retain(uuid,uuid,integer,text,text) to service_role;
 grant execute on function public.video_poster_cleanup_authorize(uuid,text,text) to service_role;
+do $v80_postflight$
+declare v_name text; v_actual text; v_role text; v_priv text; v_allowed boolean;
+begin
+  select pg_get_constraintdef(oid) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_state_check';
+  if not found or position('associated' in v_actual)=0 or position('retained' in v_actual)=0 then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  select pg_get_constraintdef(oid) into v_actual from pg_constraint where conrelid='public.video_poster_operations'::regclass and conname='video_poster_operations_path_check';
+  if not found or position('studio/uploads' in v_actual)=0 or position('png|jpg|jpeg|webp|gif' in v_actual)=0 then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname in ('video_poster_operation_associate','video_poster_operation_retain','video_poster_cleanup_authorize')
+      and p.oid not in (to_regprocedure('public.video_poster_operation_associate(uuid,uuid,integer,text,text)'),to_regprocedure('public.video_poster_operation_retain(uuid,uuid,integer,text,text)'),to_regprocedure('public.video_poster_cleanup_authorize(uuid,text,text)')))
+    or (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('video_poster_operation_associate','video_poster_operation_retain','video_poster_cleanup_authorize')) <> 3 then
+    raise exception using errcode='P0001',message='v80_schema_collision';
+  end if;
+  foreach v_role in array array['anon','authenticated','service_role'] loop
+    foreach v_priv in array array['select','insert','update','delete','truncate','references','trigger'] loop
+      v_allowed := has_table_privilege(v_role,'public.video_poster_operations',v_priv);
+      if v_allowed is distinct from (v_role='service_role' and v_priv in ('select','insert','update','delete')) then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+    end loop;
+  end loop;
+  foreach v_name in array array['public.video_poster_operation_associate(uuid,uuid,integer,text,text)','public.video_poster_operation_retain(uuid,uuid,integer,text,text)','public.video_poster_cleanup_authorize(uuid,text,text)'] loop
+    if has_function_privilege('anon',v_name,'execute') or has_function_privilege('authenticated',v_name,'execute') or not has_function_privilege('service_role',v_name,'execute') then raise exception using errcode='P0001',message='v80_schema_collision'; end if;
+  end loop;
+end $v80_postflight$;
 notify pgrst,'reload schema';
 commit;

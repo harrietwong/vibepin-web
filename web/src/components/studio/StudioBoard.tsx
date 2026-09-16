@@ -726,10 +726,11 @@ export function StudioBoard() {
       },
       onFinalized: async (item, finalized) => {
         // The transfer may finalize just as the browser session changes. Store the
-        // receipt in A's namespace first, then refuse B's local draft write below.
+        // receipt only after v80 has made the cover non-cleanable. A persisted
+        // finalized receipt is attachable, so it must never precede retain.
+        if (item.posterPath && item.attempt) await retainVideoPosterOperation(item.attempt.batchId, item.attempt.ordinal, item.posterPath);
         const record = recoveryRecord(item, { finalized });
         if (!record || !saveVideoRecovery(record)) throw Object.assign(new Error("video_recovery_persist_failed"), { code: "video_recovery_persist_failed" });
-        if (item.posterPath && item.attempt) await retainVideoPosterOperation(item.attempt.batchId, item.attempt.ordinal, item.posterPath);
       },
       createDraft: (item, finalized) => {
         const inspection = item.inspection;
@@ -791,7 +792,7 @@ export function StudioBoard() {
               await retainVideoPosterOperation(record.attempt.batchId, record.attempt.ordinal, record.posterPath);
               if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
             }
-            if (!saveVideoRecovery({ ...record, finalized, attempt: undefined })) continue;
+            if (!saveVideoRecovery({ ...record, finalized })) continue;
             record.finalized = finalized;
           } catch {
             // Unknown/in-progress remains durable for the original owner; no poster cleanup.
@@ -804,6 +805,15 @@ export function StudioBoard() {
             removeVideoRecovery(scope, record.logicalId);
           } catch { /* retain the receipt for the returning owner to retry cleanup */ }
           continue;
+        }
+        if (record.finalized && record.posterPath) {
+          // Reloaded receipts are not trusted merely because they were once
+          // written: re-establish the server retained state before attaching.
+          if (!record.attempt) continue;
+          try {
+            await retainVideoPosterOperation(record.attempt.batchId, record.attempt.ordinal, record.posterPath);
+            if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+          } catch { continue; }
         }
         if (!record.finalized) continue;
         if (disposed || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;

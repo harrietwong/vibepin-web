@@ -140,6 +140,7 @@ export type VideoBatchEvent =
   | { type: "attempt"; id: string; attempt: NonNullable<VideoBatchItem["attempt"]> }
   | { type: "finalized"; id: string; finalized: NonNullable<VideoBatchItem["finalized"]> }
   | { type: "poster"; id: string; posterUrl: string; posterPath: string }
+  | { type: "clear-poster"; id: string }
   | { type: "succeeded"; id: string; requestId?: string; draftId?: string }
   | { type: "failed"; id: string; error: SafeVideoBatchError }
   | { type: "cancelled"; id: string }
@@ -155,6 +156,9 @@ export function reduceVideoBatch(state: VideoBatchState, event: VideoBatchEvent)
     if (event.type === "finalized") return item.state === "queued" || item.state === "uploading" ? { ...item, finalized: event.finalized, attempt: undefined } : item;
     if (event.type === "poster") return item.state === "queued" || item.state === "uploading"
       ? { ...item, inspection: item.inspection ? { ...item.inspection, posterUrl: event.posterUrl } : item.inspection, posterPath: event.posterPath }
+      : item;
+    if (event.type === "clear-poster") return item.state === "queued" || item.state === "uploading"
+      ? { ...item, inspection: item.inspection ? { ...item.inspection, posterUrl: undefined } : item.inspection, posterPath: undefined }
       : item;
     if (event.type === "succeeded") return item.state === "uploading" ? { ...item, state: "succeeded" as const, error: undefined, requestId: event.requestId, draftId: event.draftId } : item;
     if (event.type === "failed") return item.state === "queued" || item.state === "uploading" ? { ...item, state: "failed" as const, error: event.error } : item;
@@ -285,6 +289,13 @@ export async function runVideoBatch(initial: VideoBatchState, deps: VideoBatchRu
             // A terminal server result may only be retried by making a new server
             // batch/attempt. Unknown outcomes retain this exact receipt for replay.
             if (!terminalReplayError(error)) throw error;
+            // A terminal v77 outcome belongs to the old operation.  Its cover
+            // capability must be consumed by cleanup before a new attempt may
+            // prepare fresh bytes; never carry a poster URL across attempts.
+            if (item().posterPath) {
+              await deps.cleanupPoster?.(item());
+              transition({ type: "clear-poster", id: queued.id });
+            }
           }
         }
         if (!finalized) {

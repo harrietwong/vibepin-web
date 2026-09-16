@@ -231,6 +231,20 @@ async function main() {
     }), { getUserId: async () => "owner-a", configured: true, findProvenance: async () => ({ source_type: "upload", lifecycle_state: "draft" }), canCleanupPoster: async () => true, recordCleanup: async entry => { recorded.push(entry); } });
     assert.equal(rejected.status, 400);
   });
+  await test("terminal finalize replay cleans the old poster and makes a fresh attempt upload a new one", async () => {
+    const oldPath = "studio/uploads/owner-a/old.png"; const newPath = "studio/uploads/owner-a/new.png";
+    const base = item("fresh", "failed");
+    const state = createVideoBatchState("fresh-poster", [{ ...base, posterFile: image("cover.png") as File, posterPath: oldPath,
+      inspection: { ...base.inspection!, posterUrl: `/api/storage-image?path=${encodeURIComponent(oldPath)}` }, attempt: { id: "old", batchId: "old", ordinal: 0, phase: "finalize_pending" } }]);
+    let cleaned = 0; let preparedPoster = 0;
+    const output = await runVideoBatch(queueFailedVideoItems(state), {
+      prepare: async descriptors => ({ batchId: "new", uploads: [{ ordinal: descriptors[0].ordinal, path: "owner-a/new.mp4", token: "new", signedUrl: "https://storage.test/object/upload/sign/generated-private/owner-a/new.mp4?token=new", contentType: "video/mp4", upsert: false as const }] }), upload: async () => {},
+      finalize: async (batchId) => { if (batchId === "old") throw Object.assign(new Error("terminal"), { code: "video_upload_not_finalizable" }); return { proxyUrl: "/api/storage-media?path=owner-a%2Fnew.mp4", requestId: "new" }; },
+      preparePoster: async () => { preparedPoster++; return { path: newPath, proxyUrl: `/api/storage-image?path=${encodeURIComponent(newPath)}` }; },
+      cleanupPoster: async candidate => { assert.equal(candidate.posterPath, oldPath); cleaned++; }, createDraft: () => ({ persisted: true, draftId: "fresh" }),
+    });
+    assert.equal(cleaned, 1); assert.equal(preparedPoster, 1); assert.equal(output.items[0].posterPath, newPath);
+  });
 
   console.log(`\n${passed} video batch upload checks passed.\n`);
 }
