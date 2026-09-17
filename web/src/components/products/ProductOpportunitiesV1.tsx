@@ -10,10 +10,15 @@ import { toast } from "sonner";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchProductOpportunity, fetchProductOpportunities, fetchSavedProductOpportunities,
-  productOpportunityErrorInfo, setProductOpportunitySaved, type ProductOpportunityErrorInfo,
+  productOpportunityErrorInfo, productOpportunityViewState, setProductOpportunitySaved,
+  type ProductOpportunityErrorInfo, type ProductOpportunityResponseEvidence,
 } from "@/lib/productOpportunitiesClient";
 import { track } from "@/lib/analytics";
-import type { ProductOpportunityItem, SavedProductOpportunity } from "@/lib/server/productOpportunities";
+import type {
+  ProductOpportunityItem,
+  ProductOpportunityViewState,
+  SavedProductOpportunity,
+} from "@/lib/server/productOpportunities";
 import { buildPrefillFromProductOpportunity, openCreatePinsWithDraft } from "@/lib/createPinsPrefill";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
 import styles from "./ProductOpportunitiesV1.module.css";
@@ -228,13 +233,18 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<ProductOpportunityErrorInfo | null>(null);
+  const [dataState, setDataState] = useState<ProductOpportunityViewState>("syncing");
+  const [lastEvidence, setLastEvidence] = useState<ProductOpportunityResponseEvidence | null>(null);
   const [accessibleCount, setAccessibleCount] = useState(0);
   const [hasLockedCatalog, setHasLockedCatalog] = useState(false);
   const [planAccess, setPlanAccess] = useState<"preview" | "full">("preview");
 
   const loadCatalog = useCallback(async (append = false) => {
     const requestId = ++requestSequence.current;
-    append ? setLoadingMore(true) : setLoading(true); setError(null);
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    setError(null);
+    setDataState("syncing");
     try {
       const result = await fetchProductOpportunities({
         limit: PAGE_SIZE,
@@ -250,6 +260,8 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       if (requestId !== requestSequence.current) return;
       setItems((current) => append ? [...current, ...result.items] : result.items);
       setAccessibleCount(result.accessibleCount); setHasLockedCatalog(result.hasLockedCatalog); setPlanAccess(result.planAccess); setMetricControls(result.metricControls);
+      setLastEvidence(result.evidence);
+      setDataState(productOpportunityViewState(result, null, result.items.length > 0));
       if (!append && !catalogViewTracked.current) {
         catalogViewTracked.current = true;
         track("product_opportunities_viewed", {
@@ -259,24 +271,34 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         });
       }
     } catch (reason) {
-      if (requestId === requestSequence.current) setError(productOpportunityErrorInfo(reason));
+      if (requestId === requestSequence.current) {
+        const info = productOpportunityErrorInfo(reason);
+        setError(info);
+        setDataState(productOpportunityViewState(null, info, items.length > 0));
+      }
     } finally {
       if (requestId === requestSequence.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [family, filters, items.length, sort]);
 
   const loadSaved = useCallback(async () => {
-    setLoading(true); setSavedState("loading"); setError(null);
+    setLoading(true); setSavedState("loading"); setError(null); setDataState("syncing");
     try {
       const records = await fetchSavedProductOpportunities();
       setSavedRecords(records); setSavedIds(new Set(records.map((record) => record.productOpportunityId)));
       setSavedState("ready");
+      setDataState(records.length > 0 ? "ready" : "catalog-empty");
       if (!savedViewTracked.current) {
         savedViewTracked.current = true;
         track("saved_products_viewed", { savedCount: records.length });
       }
     }
-    catch (reason) { setSavedState("error"); setError(productOpportunityErrorInfo(reason)); }
+    catch (reason) {
+      setSavedState("error");
+      const info = productOpportunityErrorInfo(reason);
+      setError(info);
+      setDataState(productOpportunityViewState(null, info, false));
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -292,6 +314,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     }
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- effects initiate the external catalog request. */
   useEffect(() => { if (mode === "saved") void loadSaved(); }, [loadSaved, mode]);
   useEffect(() => {
     if (mode !== "catalog") return;
@@ -300,6 +323,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     // loadCatalog owns reloads when the family changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [family, filters, loadCatalogSavedState, mode, sort]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const visibleSaved = useMemo(() => savedRecords.filter((record) => family === "all" || (record.item ?? record.historyItem)?.productFamily === family), [family, savedRecords]);
   const platformSuggestions = useMemo(() => [...new Set(items.map((item) => item.domain).filter((value): value is string => !!value))].sort(), [items]);
@@ -308,7 +332,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     if (savingIds.has(item.id) || savedState !== "ready") return;
     const next = !savedIds.has(item.id);
     setSavingIds((current) => new Set(current).add(item.id));
-    setSavedIds((current) => { const updated = new Set(current); next ? updated.add(item.id) : updated.delete(item.id); return updated; });
+    setSavedIds((current) => {
+      const updated = new Set(current);
+      if (next) updated.add(item.id);
+      else updated.delete(item.id);
+      return updated;
+    });
     try {
       await setProductOpportunitySaved(item.id, next);
       const analyticsPayload = {
@@ -322,7 +351,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       if (mode === "saved") await loadSaved();
     }
     catch (reason) {
-      setSavedIds((current) => { const updated = new Set(current); next ? updated.delete(item.id) : updated.add(item.id); return updated; });
+      setSavedIds((current) => {
+        const updated = new Set(current);
+        if (next) updated.delete(item.id);
+        else updated.add(item.id);
+        return updated;
+      });
       setError(productOpportunityErrorInfo(reason));
     } finally { setSavingIds((current) => { const updated = new Set(current); updated.delete(item.id); return updated; }); }
   }, [loadSaved, mode, savedIds, savedState, savingIds]);
@@ -421,6 +455,8 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     && family !== "all"
     && savedRecords.length > 0
     && visibleSaved.length === 0;
+  const dataRequestFailed = dataState === "api-error" || dataState === "auth-required";
+  const showStatusNotice = dataState === "partial" || dataState === "stale" || (dataState === "syncing" && catalogRows.length > 0);
 
   return (
     <main className={styles.page}>
@@ -428,8 +464,8 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <div><p className={styles.eyebrow}>{mode === "saved" ? "Your shortlist" : "Daily product tracking"}</p><h1>{mode === "saved" ? "Saved Products" : "Product Opportunities"}</h1><p className={styles.subtitle}>{mode === "saved" ? "Return to products you want to compare or turn into a Pin." : "Real products with merchant images, Pinterest interest, and daily trend tracking."}</p></div>
         <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? "Browse opportunities" : "Saved Products"}</Link>
       </header>
-      <div className={styles.toolbar} role="group" aria-label="Product type">{(["all", "physical", "digital"] as const).map((value) => <button key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? "All products" : value === "physical" ? "Physical" : "Digital"}</button>)}</div>
       {mode === "catalog" ? <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
+        <div className={styles.familyFilter} role="group" aria-label="Product type"><span>Product type</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? "All products" : value === "physical" ? "Physical" : "Digital"}</button>)}</div></div>
         <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder="Search products, merchants, or categories" aria-label="Search Product Opportunities" /></label>
         <label><span>Category</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">All categories</option>{Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label><span>Platform</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder="All platforms" /></label>
@@ -439,11 +475,13 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <label><span>Sort</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">Most Saved</option><option value="newest">Newest Discovered</option>{metricControls.available ? <option value="fastest_growing">Fastest Growing</option> : null}</select></label>
         <button type="submit">Apply</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>Clear</button> : null}
-      </form> : null}
+      </form> : <div className={styles.filters} role="group" aria-label="Product type"><div className={styles.familyFilter}><span>Product type</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? "All products" : value === "physical" ? "Physical" : "Digital"}</button>)}</div></div></div>}
       {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>Try again</button></div> : null}
       {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">Your saved products could not be checked. Save buttons are paused so existing records are not shown incorrectly.<button onClick={() => void loadCatalogSavedState()}>Try again</button></div> : null}
+      {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? "Refreshing verified products…" : dataState === "stale" ? "Showing the last verified products while the catalog reconnects." : dataState === "partial" ? "Some verified products are available; the catalog is still syncing." : ""}{lastEvidence ? <small>request {lastEvidence.requestId} · {lastEvidence.occurredAt}</small> : null}</div> : null}
       {loading ? <div className={styles.loading}><Loader2 className={styles.spin} aria-hidden="true" /><span>Loading product opportunities…</span></div>
-        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : hasCatalogFilters ? "No products match these filters" : "No products to show yet"}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : hasCatalogFilters ? "Try changing or clearing your filters." : "New qualified products will appear after product discovery and review."}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>Show all saved products</button> : <Link href="/app/products">Browse Product Opportunities</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>Clear filters</button> : null}</div>
+        : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? "Sign in to view Product Opportunities" : "Product data could not be loaded"}</h2><p>{dataState === "auth-required" ? "Sign in to continue to the verified product catalog." : "The catalog service returned an error. Your verified products were not replaced with an empty result."}</p></div>
+        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : dataState === "filtered-empty" || hasCatalogFilters ? "No products match these filters" : "No products to show yet"}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : dataState === "filtered-empty" || hasCatalogFilters ? "Try changing or clearing your filters." : "New qualified products will appear after product discovery and review."}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>Show all saved products</button> : <Link href="/app/products">Browse Product Opportunities</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>Clear filters</button> : null}</div>
         : <><section className={styles.grid} aria-label={mode === "saved" ? "Saved products" : "Product opportunities"}>{catalogRows.map((item) => <ProductCard key={item.id} item={item} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)} savedState={savedState} mode={mode} onOpen={() => void openDetails(item)} onSave={() => void toggleSaved(item)} onCreate={() => createPin(item)} />)}</section>{mode === "saved" ? visibleSaved.filter((record) => !record.item).map((record) => <SavedPlaceholder key={record.productOpportunityId} record={record} removing={savingIds.has(record.productOpportunityId)} onRemove={() => void removeSavedHistory(record.productOpportunityId)} />) : null}</>}
       {hasLockedCatalog && mode === "catalog" ? <aside className={styles.upgradePanel}><div><Heart aria-hidden="true" /><span>Free includes 10 complete Product Opportunities</span></div><p>Paid plans unlock the full catalog while keeping the same real product and trend data.</p><Link href="/pricing">View plans <ArrowRight aria-hidden="true" /></Link></aside> : null}
       {canLoadMore ? <button className={styles.loadMore} onClick={() => void loadCatalog(true)} disabled={loadingMore}>{loadingMore ? <Loader2 className={styles.spin} aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}{loadingMore ? "Loading…" : "Load more"}</button> : null}

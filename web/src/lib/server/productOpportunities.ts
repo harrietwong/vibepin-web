@@ -40,6 +40,24 @@ export type ProductOpportunityItem = {
   momentumPercent: number | null;
 };
 
+/**
+ * States are deliberately split at the data boundary.  An empty result is
+ * only safe to render as an empty catalog after the request succeeded; an API
+ * or database failure belongs to the error/stale path in the browser.
+ */
+export type ProductOpportunityCatalogState =
+  | "ready"
+  | "partial"
+  | "catalog-empty"
+  | "filtered-empty";
+
+export type ProductOpportunityViewState =
+  | ProductOpportunityCatalogState
+  | "syncing"
+  | "stale"
+  | "api-error"
+  | "auth-required";
+
 type OpportunityRow = ProductOpportunityAccessRow & {
   id: string;
   product_name: string | null;
@@ -157,7 +175,24 @@ export type ProductOpportunityListResult = {
   accessibleCount: number;
   hasLockedCatalog: boolean;
   metricControls: ProductMetricControls;
+  state: ProductOpportunityCatalogState;
 };
+
+export function classifyProductOpportunityState({
+  itemCount,
+  filtered,
+  totalCount,
+}: {
+  itemCount: number;
+  filtered: boolean;
+  totalCount: number | null;
+}): ProductOpportunityCatalogState {
+  if (itemCount === 0) return filtered ? "filtered-empty" : "catalog-empty";
+  // A successful query with no exact count is usable but incomplete evidence.
+  // Keep it visibly partial instead of claiming a complete catalog.
+  if (totalCount === null) return "partial";
+  return "ready";
+}
 
 function publicItem(
   opportunity: OpportunityRow,
@@ -435,6 +470,7 @@ export async function listProductOpportunities(
       accessibleCount: scope.limit ?? 0,
       hasLockedCatalog: await hasLockedCatalogPromise,
       metricControls,
+      state: "ready",
     };
   }
 
@@ -480,11 +516,16 @@ export async function listProductOpportunities(
   if (error) throw new Error(`product opportunity query failed: ${error.message}`);
   const rows = (data ?? []) as unknown as CatalogRow[];
   const calibrations = await approvedCalibrationMap();
+  const filtered = Boolean(
+    options.family || options.search || options.category || options.platform
+      || options.demand || options.trend,
+  );
   return {
     items: rows.map((row) => catalogItem(row, calibrations)),
     accessibleCount: count ?? rows.length,
     hasLockedCatalog: await hasLockedCatalogPromise,
     metricControls,
+    state: classifyProductOpportunityState({ itemCount: rows.length, filtered, totalCount: count }),
   };
 }
 

@@ -3,10 +3,22 @@
 import { freshAccessToken } from "./supabaseBrowser";
 import type {
   ProductOpportunityItem,
+  ProductOpportunityCatalogState,
   ProductOpportunityListResult,
+  ProductOpportunityViewState,
   SavedProductOpportunity,
 } from "./server/productOpportunities";
 import type { ProductOpportunityApiErrorCode } from "./server/productOpportunityApiResponse";
+
+export type ProductOpportunityResponseEvidence = {
+  method: string;
+  path: string;
+  status: number;
+  requestId: string;
+  occurredAt: string;
+  runtime: string | null;
+  deployment: string | null;
+};
 
 export type ProductOpportunityErrorInfo = {
   message: string;
@@ -18,6 +30,7 @@ export type ProductOpportunityErrorInfo = {
   occurredAt: string;
   runtime: string | null;
   deployment: string | null;
+  evidence?: ProductOpportunityResponseEvidence;
 };
 
 export class ProductOpportunityClientError extends Error {
@@ -38,12 +51,14 @@ function clientError(
   requestId: string | null = null,
   method = "GET",
   environment: Partial<Pick<ProductOpportunityErrorInfo, "occurredAt" | "runtime" | "deployment">> = {},
+  evidence?: ProductOpportunityResponseEvidence,
 ): ProductOpportunityClientError {
   return new ProductOpportunityClientError({
     message, method, path, status, code, requestId,
     occurredAt: environment.occurredAt ?? new Date().toISOString(),
     runtime: environment.runtime ?? null,
     deployment: environment.deployment ?? null,
+    evidence,
   });
 }
 
@@ -105,6 +120,9 @@ async function requireOk(response: Response, path: string, method = "GET"): Prom
         runtime: typeof payload.runtime === "string" ? payload.runtime : null,
         deployment: typeof payload.deployment === "string" ? payload.deployment : null,
       },
+      payload.evidence && typeof payload.evidence === "object"
+        ? payload.evidence as ProductOpportunityResponseEvidence
+        : undefined,
     );
   }
   return payload;
@@ -116,7 +134,22 @@ export type ProductOpportunityListResponse = {
   hasLockedCatalog: boolean;
   metricControls: ProductOpportunityListResult["metricControls"];
   planAccess: "preview" | "full";
+  state: ProductOpportunityCatalogState;
+  evidence: ProductOpportunityResponseEvidence;
 };
+
+export function productOpportunityViewState(
+  result: ProductOpportunityListResponse | null,
+  error: ProductOpportunityErrorInfo | null,
+  hasExistingItems: boolean,
+  syncing = false,
+): ProductOpportunityViewState {
+  if (syncing) return "syncing";
+  if (error) return error.code === "AUTH_REQUIRED"
+    ? "auth-required"
+    : hasExistingItems ? "stale" : "api-error";
+  return result?.state ?? (hasExistingItems ? "ready" : "catalog-empty");
+}
 
 export async function fetchProductOpportunities(options: {
   limit?: number;

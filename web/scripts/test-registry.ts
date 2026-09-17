@@ -117,6 +117,7 @@ export const CORE: string[] = [
   "test-product-opportunity-access",
   "test-product-opportunity-metric-controls",
   "test-product-opportunity-v37-contract",
+  "test-product-opportunities-ui-contract",
   "test-product-picker-prd-0901",
   "test-product-name-honesty",
   "test-product-marketing-truth",
