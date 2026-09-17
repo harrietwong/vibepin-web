@@ -22,6 +22,11 @@ import type {
 import { buildPrefillFromProductOpportunity, openCreatePinsWithDraft } from "@/lib/createPinsPrefill";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import {
+  productFamilyKeyboardTarget,
+  productFamilyTabIndex,
+  type ProductOpportunityFamily,
+} from "@/lib/productOpportunityAccessibility";
 import styles from "./ProductOpportunitiesV1.module.css";
 import { ProductImageSurface } from "./ProductImageSurface";
 
@@ -47,6 +52,54 @@ function productDetailsLabel(item: ProductOpportunityItem, tr: Translator): stri
   return name
     ? `${tr("products.opportunities.productDetails")}: ${name}`
     : `${tr("products.opportunities.productDetailsFrom")} ${item.merchant || item.domain || tr("products.opportunities.merchantSite")}`;
+}
+
+function ProductFamilyRadioGroup({
+  family,
+  onChange,
+  groupLabel,
+  label,
+}: {
+  family: Family;
+  onChange: (value: Family) => void;
+  groupLabel: string;
+  label: (value: Family) => string;
+}) {
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const values: Family[] = ["all", "physical", "digital"];
+  return (
+    <div className={styles.familyFilter} role="radiogroup" aria-label={groupLabel}>
+      <span>{groupLabel}</span>
+      <div>
+        {values.map((value, index) => {
+          const optionLabel = label(value);
+          return (
+            <button
+              key={value}
+              ref={(element) => { buttonRefs.current[index] = element; }}
+              type="button"
+              role="radio"
+              aria-label={optionLabel}
+              aria-checked={family === value}
+              tabIndex={productFamilyTabIndex(family, value)}
+              className={family === value ? styles.activeFilter : ""}
+              onClick={() => onChange(value)}
+              onKeyDown={(event) => {
+                const target = productFamilyKeyboardTarget(family as ProductOpportunityFamily, event.key);
+                if (!target) return;
+                event.preventDefault();
+                onChange(target);
+                const targetIndex = values.indexOf(target);
+                window.requestAnimationFrame(() => buttonRefs.current[targetIndex]?.focus());
+              }}
+            >
+              {optionLabel}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const CATEGORY_LABEL_KEYS: Record<string, Parameters<Translator>[0]> = {
@@ -87,7 +140,7 @@ function ProductImage({ item, large = false }: { item: ProductOpportunityItem; l
 }
 
 function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
-  const { t: tr } = useLocale();
+  const { t: tr, preferences } = useLocale();
   const notReported = tr("products.opportunities.notReported");
   const safeMessage = error.code === "AUTH_REQUIRED"
     ? tr("products.opportunities.authRequiredBody")
@@ -103,7 +156,7 @@ function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
       <span>{safeMessage}</span>
       <small data-testid="product-error-evidence">
         {`${tr("products.opportunities.evidenceMethod")} ${error.method} · ${tr("products.opportunities.evidencePath")} ${error.path} · ${tr("products.opportunities.evidenceStatus")} ${error.status ?? notReported} · ${tr("products.opportunities.evidenceCode")} ${error.code}`}
-        {` · ${tr("products.opportunities.evidenceRequest")} ${error.requestId ?? notReported} · ${tr("products.opportunities.evidenceTime")} ${error.occurredAt}`}
+        {` · ${tr("products.opportunities.evidenceRequest")} ${error.requestId ?? notReported} · ${tr("products.opportunities.evidenceTime")} ${dateTime(error.occurredAt, preferences.appLanguage)}`}
         {` · ${tr("products.opportunities.evidenceRuntime")} ${error.runtime ?? notReported} · ${tr("products.opportunities.evidenceDeployment")} ${error.deployment ?? notReported}`}
       </small>
     </div>
@@ -226,7 +279,7 @@ function SavedPlaceholder({ record, removing, onRemove }: {
 }
 
 export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
-  const { t: tr } = useLocale();
+  const { t: tr, preferences } = useLocale();
   const router = useRouter();
   const requestSequence = useRef(0);
   const detailRequestSequence = useRef(0);
@@ -380,6 +433,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         return updated;
       });
       setError(productOpportunityErrorInfo(reason));
+      toast.error(tr("products.opportunities.saveError"));
     } finally { setSavingIds((current) => { const updated = new Set(current); updated.delete(item.id); return updated; }); }
   }, [loadSaved, mode, savedIds, savedState, savingIds, tr]);
 
@@ -487,7 +541,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? tr("products.opportunities.browse") : tr("products.opportunities.savedTitle")}</Link>
       </header>
       {mode === "catalog" ? <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
-        <div className={styles.familyFilter} role="radiogroup" aria-label={tr("products.opportunities.filterProductType")}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" role="radio" aria-checked={family === value} key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div>
+        <ProductFamilyRadioGroup family={family} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} />
         <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder={tr("products.opportunities.searchPlaceholder")} aria-label={tr("products.opportunities.searchLabel")} /></label>
         <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABEL_KEYS).map(([value, key]) => <option key={value} value={value}>{tr(key)}</option>)}</select></label>
         <label><span>{tr("products.opportunities.platform")}</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder={tr("products.opportunities.allPlatforms")} /></label>
@@ -497,10 +551,10 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <label><span>{tr("products.opportunities.sort")}</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
         <button type="submit">{tr("products.opportunities.apply")}</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}
-      </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><div className={styles.familyFilter} role="radiogroup"><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" role="radio" aria-checked={family === value} key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div></div>}
+      </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><ProductFamilyRadioGroup family={family} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} /></div>}
       {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>{tr("products.opportunities.retry")}</button></div> : null}
       {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">{tr("products.opportunities.savedCheckError")}<button onClick={() => void loadCatalogSavedState()}>{tr("products.opportunities.retry")}</button></div> : null}
-      {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : dataState === "stale" ? tr("products.opportunities.stateStale") : dataState === "partial" ? tr("products.opportunities.statePartial") : ""}{lastEvidence ? <small>{tr("products.opportunities.evidenceRequest")} {lastEvidence.requestId} · {tr("products.opportunities.evidenceTime")} {lastEvidence.occurredAt}</small> : null}</div> : null}
+      {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : dataState === "stale" ? tr("products.opportunities.stateStale") : dataState === "partial" ? tr("products.opportunities.statePartial") : ""}{lastEvidence ? <small>{tr("products.opportunities.evidenceRequest")} {lastEvidence.requestId} · {tr("products.opportunities.evidenceTime")} {dateTime(lastEvidence.occurredAt, preferences.appLanguage)}</small> : null}</div> : null}
       {loading ? <div className={styles.loading} data-testid={`product-state-${dataState}`} aria-live="polite"><Loader2 className={styles.spin} aria-hidden="true" /><span>{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : tr("products.opportunities.stateLoading")}</span></div>
         : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? tr("products.opportunities.authRequiredTitle") : tr("products.opportunities.apiErrorTitle")}</h2><p>{dataState === "auth-required" ? tr("products.opportunities.authRequiredBody") : tr("products.opportunities.apiErrorBody")}</p></div>
         : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyTitle") : tr("products.opportunities.savedEmptyTitle") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyBody") : tr("products.opportunities.savedEmptyBody") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>

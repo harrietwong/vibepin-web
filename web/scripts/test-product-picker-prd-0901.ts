@@ -26,6 +26,10 @@ test("PO90-01 uses one neutral fallback for missing, decode, tiny, and unsupport
   assert.match(image, /naturalWidth < minEdge \|\| image\.naturalHeight < minEdge/);
   assert.match(image, /image\.decode\(\)/);
   assert.match(image, /10_000/);
+  assert.match(image, /products\.image\.loading/);
+  assert.match(image, /products\.image\.unavailable/);
+  assert.doesNotMatch(image, /Loading product image/);
+  assert.doesNotMatch(image, /Product image unavailable/);
   assert.match(picker, /ProductImageSurface/);
   assert.match(catalog, /ProductImageSurface/);
   assert.doesNotMatch(picker, /currentTarget\.style\.opacity = "0\.3"/);
@@ -81,10 +85,10 @@ test("PO90-06 API errors use stable codes and request IDs", () => {
 });
 
 test("PO90-07 catalog, saved, and picker expose the same provenance language", () => {
-  assert.match(catalog, /VibePin product opportunity/);
-  assert.match(catalog, /Product Pin evidence/);
-  assert.match(catalog, /Source Pin evidence/);
-  assert.match(catalog, /Updated/);
+  assert.match(catalog, /products\.opportunities\.provenanceOpportunity/);
+  assert.match(catalog, /products\.opportunities\.productPinEvidence/);
+  assert.match(catalog, /products\.opportunities\.sourcePinEvidence/);
+  assert.match(catalog, /products\.opportunities\.updated/);
   assert.match(picker, /VibePin product opportunity/);
 });
 

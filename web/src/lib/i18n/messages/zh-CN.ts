@@ -2945,6 +2945,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "publishResults.recoveryHint": "暂时不要再次发布。请先核对原发布任务，避免生成重复帖子。",
 
   "products.opportunities.title": "产品机会",
+  "products.image.loading": "正在加载商品图片",
+  "products.image.unavailable": "商品图片不可用",
   "products.opportunities.subtitle": "真实商品、商家图片、Pinterest 兴趣与每日趋势追踪。",
   "products.opportunities.savedTitle": "已保存商品",
   "products.opportunities.savedSubtitle": "返回比较商品，或将它们转换为 Pin。",
@@ -2991,6 +2993,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "products.opportunities.timeoutError": "商品请求超时。",
   "products.opportunities.invalidResponseError": "商品服务返回了无效响应。",
   "products.opportunities.savedCheckError": "无法检查已保存商品。为避免错误显示现有记录，保存按钮已暂停。",
+  "products.opportunities.saveError": "无法确认已保存商品的变更，已恢复之前的状态。",
   "products.opportunities.showAllSaved": "显示全部已保存商品",
   "products.opportunities.evidenceMethod": "方法",
   "products.opportunities.evidencePath": "路径",

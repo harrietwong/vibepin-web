@@ -250,6 +250,8 @@ export const productsMessages = {
 
   // ── Product Opportunities route truth states and filters ──
   "products.opportunities.title": "Product Opportunities",
+  "products.image.loading": "Loading product image",
+  "products.image.unavailable": "Product image unavailable",
   "products.opportunities.subtitle": "Real products with merchant images, Pinterest interest, and daily trend tracking.",
   "products.opportunities.savedTitle": "Saved Products",
   "products.opportunities.savedSubtitle": "Return to products you want to compare or turn into a Pin.",
@@ -296,6 +298,7 @@ export const productsMessages = {
   "products.opportunities.timeoutError": "The product request timed out.",
   "products.opportunities.invalidResponseError": "The product service returned an invalid response.",
   "products.opportunities.savedCheckError": "Your saved products could not be checked. Save buttons are paused so existing records are not shown incorrectly.",
+  "products.opportunities.saveError": "Your saved-product change could not be confirmed. The previous state was restored.",
   "products.opportunities.showAllSaved": "Show all saved products",
   "products.opportunities.evidenceMethod": "method",
   "products.opportunities.evidencePath": "path",

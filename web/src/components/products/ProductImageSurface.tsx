@@ -2,6 +2,7 @@
 
 import { ImageOff, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export type ProductImageState =
   | "loading"
@@ -46,11 +47,13 @@ function ProductImageForSource({
   src,
   alt,
   className,
-  fallbackLabel = "Product image unavailable",
+  fallbackLabel,
   minEdge = MIN_PRODUCT_IMAGE_EDGE,
 }: ProductImageSurfaceProps) {
+  const { t: tr } = useLocale();
   const [state, setState] = useState<ProductImageState>(() => initialProductImageState(src));
   const loadSequence = useRef(0);
+  const resolvedFallbackLabel = fallbackLabel ?? tr("products.image.unavailable");
 
   useEffect(() => {
     if (state !== "loading") return;
@@ -79,14 +82,14 @@ function ProductImageForSource({
       }}
     >
       {state === "loading" ? (
-        <span aria-label="Loading product image" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+        <span aria-label={tr("products.image.loading")} style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
           <Loader2 aria-hidden="true" style={{ width: 20, height: 20 }} />
         </span>
       ) : null}
       {failed ? (
-        <span role="img" aria-label={fallbackLabel} style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 7, padding: 12, textAlign: "center", fontSize: 11, lineHeight: 1.4 }}>
+        <span role="img" aria-label={resolvedFallbackLabel} style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 7, padding: 12, textAlign: "center", fontSize: 11, lineHeight: 1.4 }}>
           <ImageOff aria-hidden="true" style={{ width: 23, height: 23 }} />
-          <span>{fallbackLabel}</span>
+          <span>{resolvedFallbackLabel}</span>
         </span>
       ) : null}
       {supportedSource(src) ? (

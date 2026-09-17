@@ -177,11 +177,16 @@ export function decodeProductOpportunityListResponse(
     evidence = decodeEvidenceFromPayload(payload, path, method, status);
     if (!Array.isArray(payload.items) || !payload.items.every(isProductOpportunityItem)
       || !Number.isInteger(payload.accessibleCount) || (payload.accessibleCount as number) < 0
+      || (payload.accessibleCount as number) < payload.items.length
       || typeof payload.hasLockedCatalog !== "boolean"
       || !["preview", "full"].includes(payload.planAccess as string)
       || !PRODUCT_CATALOG_STATES.has(payload.state as ProductOpportunityCatalogState)
       || !(payload.stateReason === null || payload.stateReason === "incomplete-count")
       || (payload.state === "partial" ? payload.stateReason !== "incomplete-count" : payload.stateReason !== null)
+      || (payload.state === "ready" && payload.items.length === 0)
+      || (payload.state === "partial" && payload.items.length === 0)
+      || ((payload.state === "catalog-empty" || payload.state === "filtered-empty") && payload.items.length > 0)
+      || ((payload.state === "catalog-empty" || payload.state === "filtered-empty") && payload.accessibleCount !== 0)
     ) throw new Error("list shape");
     const metricControls = decodeMetricControls(payload.metricControls);
     return {
@@ -253,11 +258,12 @@ export function decodeProductOpportunitySaveResponse(
   path: string,
   method: string,
   status: number,
+  expectedSaved: boolean,
 ): { saved: boolean; evidence: ProductOpportunityResponseEvidence } {
   if (!isRecord(payload)) throw invalidResponse(path, method, status);
   try {
     const evidence = decodeEvidenceFromPayload(payload, path, method, status);
-    if (typeof payload.saved !== "boolean") throw new Error("save shape");
+    if (typeof payload.saved !== "boolean" || payload.saved !== expectedSaved) throw new Error("save intent mismatch");
     return { saved: payload.saved, evidence };
   } catch (reason) {
     if (reason instanceof ProductOpportunityClientError) throw reason;
@@ -405,6 +411,8 @@ export function productOpportunityViewState(
     ? "auth-required"
     : hasExistingItems ? "stale" : "api-error";
   if (!result) return hasExistingItems ? "stale" : "loading";
+  if ((result.state === "ready" || result.state === "partial") && result.items.length === 0) return "api-error";
+  if ((result.state === "catalog-empty" || result.state === "filtered-empty") && result.items.length > 0) return "api-error";
   return result.state === "ready" ? "success" : result.state;
 }
 
@@ -461,5 +469,5 @@ export async function setProductOpportunitySaved(
       body: JSON.stringify({ productOpportunityId }),
     });
   const payload = await requireOk(response, path, method);
-  decodeProductOpportunitySaveResponse(payload, path, method, response.status);
+  decodeProductOpportunitySaveResponse(payload, path, method, response.status, saved);
 }

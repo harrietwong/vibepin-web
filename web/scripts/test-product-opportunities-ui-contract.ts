@@ -175,6 +175,10 @@ async function runBehaviorTests() {
     decodeProductOpportunitySaveResponse,
     productOpportunityViewState,
   } = await import("../src/lib/productOpportunitiesClient");
+  const {
+    productFamilyKeyboardTarget,
+    productFamilyTabIndex,
+  } = await import("../src/lib/productOpportunityAccessibility");
   const { getMessages } = await import("../src/lib/i18n/messages");
   test("State classifier distinguishes empty, filtered-empty, and incomplete-count partial", () => {
     assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: false, totalCount: 0 }), "catalog-empty");
@@ -201,11 +205,11 @@ async function runBehaviorTests() {
   assert.equal(productOpportunityViewState({
     items: [], accessibleCount: 0, hasLockedCatalog: false,
     metricControls: { available: false, family: null, metricVersion: null },
-    planAccess: "full", state: "ready", stateReason: null, evidence: {
+    planAccess: "full", state: "catalog-empty", stateReason: null, evidence: {
       method: "GET", path: "/api/product-opportunities", status: 200,
       requestId: "req-test", occurredAt: "2026-09-17T00:00:00.000Z", runtime: null, deployment: null,
     },
-  }, null, false), "success");
+  }, null, false), "catalog-empty");
   assert.equal(productOpportunityViewState(null, null, false, true), "syncing");
   assert.match(component, /productOpportunityViewState\(null, info, savedRecordsRef\.current\.length > 0\)/);
 });
@@ -268,7 +272,49 @@ async function runBehaviorTests() {
     assert.deepEqual(decodeProductOpportunityListResponse(listPayload, "/api/product-opportunities", "GET", 200), listPayload);
     assert.deepEqual(decodeProductOpportunityDetailResponse({ item, evidence: { ...evidence, path: "/api/product-opportunities/opp-1" } }, "/api/product-opportunities/opp-1", "GET", 200).item, item);
     assert.deepEqual(decodeSavedProductOpportunitiesResponse({ items: [], evidence: { ...evidence, path: "/api/saved-product-opportunities" } }, "/api/saved-product-opportunities", "GET", 200).items, []);
-    assert.deepEqual(decodeProductOpportunitySaveResponse({ saved: true, evidence: { ...evidence, method: "POST", path: "/api/saved-product-opportunities", status: 201 } }, "/api/saved-product-opportunities", "POST", 201).saved, true);
+    assert.deepEqual(decodeProductOpportunitySaveResponse({ saved: true, evidence: { ...evidence, method: "POST", path: "/api/saved-product-opportunities", status: 201 } }, "/api/saved-product-opportunities", "POST", 201, true).saved, true);
+  });
+  test("Contradictory successful list states fail closed as INVALID_RESPONSE", () => {
+    for (const contradictory of [
+      { ...listPayload, items: [], accessibleCount: 0, state: "ready" as const },
+      { ...listPayload, items: [item], accessibleCount: 1, state: "catalog-empty" as const },
+      { ...listPayload, items: [], accessibleCount: 0, state: "partial" as const, stateReason: "incomplete-count" as const },
+      { ...listPayload, items: [], accessibleCount: 3, state: "filtered-empty" as const },
+    ]) {
+      assert.throws(
+        () => decodeProductOpportunityListResponse(contradictory, "/api/product-opportunities", "GET", 200),
+        (error: unknown) => error instanceof Error
+          && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+      );
+    }
+  });
+  test("Save and unsave responses must match the requested intent", () => {
+    const saveEvidence = { ...evidence, method: "POST", path: "/api/saved-product-opportunities", status: 201 };
+    const removeEvidence = { ...evidence, method: "DELETE", path: "/api/saved-product-opportunities", status: 200 };
+    assert.throws(
+      () => decodeProductOpportunitySaveResponse({ saved: false, evidence: saveEvidence }, "/api/saved-product-opportunities", "POST", 201, true),
+      (error: unknown) => error instanceof Error
+        && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+    );
+    assert.throws(
+      () => decodeProductOpportunitySaveResponse({ saved: true, evidence: removeEvidence }, "/api/saved-product-opportunities", "DELETE", 200, false),
+      (error: unknown) => error instanceof Error
+        && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+    );
+  });
+  test("Product family radios expose roving keyboard targets and one tab stop", () => {
+    assert.equal(productFamilyKeyboardTarget("all", "ArrowRight"), "physical");
+    assert.equal(productFamilyKeyboardTarget("physical", "ArrowLeft"), "all");
+    assert.equal(productFamilyKeyboardTarget("all", "ArrowDown"), "physical");
+    assert.equal(productFamilyKeyboardTarget("digital", "ArrowRight"), "all");
+    assert.equal(productFamilyKeyboardTarget("physical", "Home"), "all");
+    assert.equal(productFamilyKeyboardTarget("physical", "End"), "digital");
+    assert.equal(productFamilyKeyboardTarget("all", "Enter"), null);
+    assert.equal(productFamilyTabIndex("all", "all"), 0);
+    assert.equal(productFamilyTabIndex("all", "physical"), -1);
+    assert.match(component, /productFamilyKeyboardTarget/);
+    assert.match(component, /tabIndex=\{productFamilyTabIndex\(family, value\)\}/);
+    assert.match(component, /aria-label=\{optionLabel\}/);
   });
   test("invalid 2xx payloads fail closed as INVALID_RESPONSE", () => {
     assert.throws(

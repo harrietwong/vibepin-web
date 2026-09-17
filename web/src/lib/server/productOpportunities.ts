@@ -470,14 +470,10 @@ export async function listProductOpportunities(
     );
   }
   if (effectiveLimit === 0) {
-    return {
-      items: [],
-      accessibleCount: scope.limit ?? 0,
-      hasLockedCatalog: await hasLockedCatalogPromise,
-      metricControls,
-      state: "ready",
-      stateReason: null,
-    };
+    // An out-of-range page is not a successful empty catalog. Returning a
+    // ready/empty payload would make the browser claim that the catalog has
+    // no products even when the caller merely asked past the preview window.
+    throw new Error("product opportunity page is out of range");
   }
 
   // The generated Supabase schema does not include the unapplied v63 tables yet.

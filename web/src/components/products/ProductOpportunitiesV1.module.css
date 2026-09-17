@@ -32,6 +32,12 @@
 @media(max-width:430px){.header h1{font-size:24px}.filters{display:grid;grid-template-columns:1fr}.familyFilter{grid-column:1}.familyFilter>div{width:100%}.filters>button{width:100%}}
 @media(max-width:430px){.grid{grid-template-columns:1fr}}
 
+/* Product opportunity keyboard and touch-target contract. */
+.upgradePanel a,.historyCard a,.empty a,.empty button,.sourceTrail a,.modalLinks a,.additionalReferences a,.error button{min-height:44px;padding-top:8px;padding-bottom:8px}
+.upgradePanel a,.historyCard a,.empty a,.sourceTrail a,.modalLinks a,.additionalReferences a{display:inline-flex;align-items:center}
+.empty button,.error button{display:inline-flex;align-items:center;justify-content:center;padding-left:14px;padding-right:14px;border-radius:10px}
+.headerLink:focus-visible,.familyFilter button:focus-visible,.filters input:focus-visible,.filters select:focus-visible,.filters>button:focus-visible,.imageButton:focus-visible,.cardTitle:focus-visible,.saveButton:focus-visible,.createButton:focus-visible,.sourceTrail a:focus-visible,.upgradePanel a:focus-visible,.loadMore:focus-visible,.empty a:focus-visible,.empty button:focus-visible,.error button:focus-visible,.closeButton:focus-visible,.modalLinks a:focus-visible,.additionalReferences a:focus-visible,.historyCard a:focus-visible,.historyActions button:focus-visible{outline:3px solid var(--app-brand);outline-offset:3px}
+
 /* Product opportunity accessibility contract: readable controls and touch targets. */
 .filters label>span{font-size:10px}
 .filters input,.filters select,.filters>button{min-height:44px}

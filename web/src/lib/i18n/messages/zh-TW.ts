@@ -2948,6 +2948,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateOneRemaining": "改為產生 1 張",
 
   "products.opportunities.title": "產品機會",
+  "products.image.loading": "正在載入商品圖片",
+  "products.image.unavailable": "商品圖片無法使用",
   "products.opportunities.subtitle": "真實商品、商家圖片、Pinterest 興趣與每日趨勢追蹤。",
   "products.opportunities.savedTitle": "已儲存商品",
   "products.opportunities.savedSubtitle": "返回比較商品，或將它們轉換為 Pin。",
@@ -2994,6 +2996,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "products.opportunities.timeoutError": "商品請求逾時。",
   "products.opportunities.invalidResponseError": "商品服務傳回無效回應。",
   "products.opportunities.savedCheckError": "無法檢查已儲存商品。為避免錯誤顯示現有記錄，儲存按鈕已暫停。",
+  "products.opportunities.saveError": "無法確認已儲存商品的變更，已恢復之前的狀態。",
   "products.opportunities.showAllSaved": "顯示全部已儲存商品",
   "products.opportunities.evidenceMethod": "方法",
   "products.opportunities.evidencePath": "路徑",
