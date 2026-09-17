@@ -125,7 +125,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
 
   const selectedDrafts = rows.filter(r => selected.has(r.d.id)).map(r => r.d);
   const allVisibleSelected = rows.length > 0 && rows.every(r => selected.has(r.d.id));
-  const canPublishSelected = selectedDrafts.some(d => !sanitizeHandoffField(d.postedAt));
+  const canPublishSelected = selectedDrafts.some(d => getPinLifecycle(d) !== "posted");
 
   function toggle(id: string) {
     setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -215,7 +215,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
               {tr("planViews.list.schedule")}
             </button>
             <button type="button" data-testid="plan-list-publish-selected" disabled={!canPublishSelected}
-              onClick={() => { const r = selectedDrafts.find(d => !sanitizeHandoffField(d.postedAt)); if (r) handlers.onPublish(r); }}
+              onClick={() => { const r = selectedDrafts.find(d => getPinLifecycle(d) !== "posted"); if (r) handlers.onPublish(r); }}
               title={canPublishSelected ? tr("planViews.list.publishSelectedTitle") : tr("planViews.list.publishSelectedDisabledTitle")}
               style={{ padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(5,150,105,0.45)", background: canPublishSelected ? "rgba(5,150,105,0.10)" : "transparent", color: canPublishSelected ? "#10B981" : C.muted, fontSize: 12, fontWeight: 700, cursor: canPublishSelected ? "pointer" : "not-allowed", opacity: canPublishSelected ? 1 : 0.6 }}>
               {tr("pinDetails.publishNow")}

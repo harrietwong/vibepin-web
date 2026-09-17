@@ -1,4 +1,4 @@
-import { isActionablePublishFailure } from "@/lib/studio/pinLifecycle";
+import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
 import type { PinDraft } from "@/lib/pinDraftStore";
 
 /**
@@ -28,36 +28,27 @@ export type PlanCardStatusStyle = {
   icon: "clock" | "check" | "alert";
 };
 
-type StatusInput = {
-  postedAt?: string | null;
-  publishError?: string | null;
-  failureType?: string | null;
-  archivedAt?: string | null;
-};
+type StatusInput = Partial<PinDraft>;
 
 /**
  * Resolve a draft to exactly one status.
  *
- * Failure is delegated to `isActionablePublishFailure` — the SAME predicate behind the
- * "N Pins failed to publish" banner and the Failed tab. Defining it again here produced a
- * looser rule (any one of publishError / failureType / a "fail" generation status), so the
- * calendar painted Failed badges on Pins the banner did not count: generation failures and
- * archived drafts. A card and the banner above it disagreeing about the same week is worse
- * than either being wrong alone, so there is one definition, not two.
- *
- * Published still wins over a stale error: a Pin that failed, was retried and then
- * succeeded is Published, not Failed.
+ * Delegated to `getPinLifecycle`, the same source used by Studio cards, the Plan
+ * sidebar, and the batch/list actions. This prevents a partial provider outcome from
+ * being shown as Published in the calendar while Create Pins asks for attention.
  */
 export function planCardStatus(draft: StatusInput | null | undefined): PlanCardStatus {
   if (!draft) return "scheduled";
-  if (draft.postedAt) return "published";
-  return isActionablePublishFailure({
-    failureType: draft.failureType as PinDraft["failureType"],
-    publishError: draft.publishError ?? undefined,
-    archivedAt: draft.archivedAt ?? undefined,
-  })
-    ? "failed"
-    : "scheduled";
+  // Archived Content is intentionally absent from active Plan/Studio surfaces. A
+  // stale receipt must not make a narrow calendar caller resurrect it as attention.
+  if (draft.archivedAt) return "scheduled";
+  // Calendar callers intentionally pass a narrow display shape. Supply only the
+  // compatibility identity required by the destination-result reader; all outcome
+  // fields still come from this draft, never from a parallel Plan derivation.
+  const lifecycle = getPinLifecycle({ id: "plan-card", imageUrl: "", ...draft } as PinDraft);
+  if (lifecycle === "posted") return "published";
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return "failed";
+  return "scheduled";
 }
 
 const STYLES: Record<PlanCardStatus, Omit<PlanCardStatusStyle, "status">> = {

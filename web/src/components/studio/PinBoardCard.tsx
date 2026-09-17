@@ -734,6 +734,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // for historical results, but presenting that projection here made "Home Decor"
   // look like an account-backed destination while confirmation correctly saw zero.
   const destinations = explicitPublishDestinations(draft);
+  // A retry without a Pinterest board cannot be confirmed. Keep recovery in the
+  // inline editor, where the destination picker and Board field are visible.
+  const destinationNeedsSetup = !destinations.length || destinations.some(destination =>
+    destination.provider === "pinterest" && !destination.boardId?.trim(),
+  );
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
   const editAriaLabel = `${tr("studioBoard.actions.edit")}: ${draft.title?.trim() || tr("studioBoard.card.untitledPin")}`;
@@ -1240,7 +1245,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               // partial success can never double-post the one that already published.
               <>
                 <button type="button" data-testid="card-try-again" onClick={() => {
-                  if (!destinations.length) {
+                  if (destinationNeedsSetup) {
                     setDestinationError(tr("studioBoard.blocker.no_destinations"));
                     setDestinationsOpen(true);
                     return;
@@ -1486,7 +1491,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                   {tr("studioBoard.expanded.moveToUnscheduled")}
                 </button>
                 <button type="button" data-testid="card-try-again" onClick={() => {
-                  if (!destinations.length) {
+                  if (destinationNeedsSetup) {
                     setDestinationError(tr("studioBoard.blocker.no_destinations"));
                     return;
                   }

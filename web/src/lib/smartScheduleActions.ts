@@ -5,6 +5,7 @@
 import { autoSchedulePin, autoSchedulePins } from "./smartSchedule";
 import { sanitizeHandoffField } from "./weeklyPlanHandoff";
 import * as pinDraftStore from "./pinDraftStore";
+import { getPinLifecycle } from "./studio/pinLifecycle";
 
 export type SmartScheduleAddResult = ReturnType<typeof autoSchedulePin>;
 
@@ -19,7 +20,7 @@ export function smartScheduleSelectedPins(ids: string[]): ReturnType<typeof auto
 export function filterUnscheduledPinIds(ids: string[]): string[] {
   return ids.filter(id => {
     const d = pinDraftStore.getDraft(id);
-    if (!d || d.postedAt) return false;
+    if (!d || getPinLifecycle(d) === "posted") return false;
     if (sanitizeHandoffField(d.scheduledDate) && sanitizeHandoffField(d.scheduledTime)) return false;
     return true;
   });

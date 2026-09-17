@@ -15,7 +15,11 @@
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import {
+  MAX_PREVIOUS_RESULTS,
+  contentDestinationResults,
+  hasActionableDestinationRecovery,
   hasFailedDestination,
+  hasNonTerminalDestination,
   hasUnresolvedDestination,
   hasPublishedDestination,
   type ContentDraftLike,
@@ -75,12 +79,38 @@ export function isScheduledLifecycle(d: Pick<PinDraft, "scheduledDate" | "planne
  */
 export function getPinLifecycle(draft: PinDraft): PinLifecycle {
   if (isGenerating(draft)) return "generating";
+  if (destinationSignal(draft, hasNonTerminalDestination)) return "needs_attention";
   if (destinationSignal(draft, hasUnresolvedDestination) && isPosted(draft)) return "needs_attention";
   if (destinationSignal(draft, hasFailedDestination)) return "failed";
   if (isPosted(draft)) return "posted";
   if (sanitizeHandoffField(draft.publishError) || isGenerationFailed(draft)) return "failed";
   if (isScheduledLifecycle(draft)) return "scheduled";
   return "unscheduled";
+}
+
+/**
+ * Builds the one safe state transition for “Move to Unscheduled”. Current result rows
+ * describe the active publish workflow; simply deleting `publishError` left those rows
+ * (and legacy posted mirrors) to recreate Failed/Posted on the next render. Move every
+ * receipt to immutable history, then clear the active outcome and its legacy mirrors.
+ */
+export function archiveCurrentPublishResults(
+  draft: Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory"> & ContentDestinationHints,
+): Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory"> {
+  const current = contentDestinationResults({ ...draft, id: draft.id ?? "", imageUrl: draft.imageUrl ?? "" } as ContentDraftLike);
+  const previousResults = [...(draft.previousResults ?? []), ...current].slice(-MAX_PREVIOUS_RESULTS);
+  return {
+    destinationResults: undefined,
+    previousResults,
+    postedAt: undefined,
+    remotePinId: undefined,
+    remotePinUrl: undefined,
+    socialPosts: undefined,
+    publishError: undefined,
+    publishErrorCode: undefined,
+    failureType: undefined,
+    errorCategory: undefined,
+  };
 }
 
 // ── Publish-failure categorization (PRD WP-B §11.5) ─────────────────────────────
@@ -149,7 +179,7 @@ export function isActionablePublishFailure(
   // A Content whose per-destination results carry a failure is actionable even when the
   // legacy single-Pin failureType was never written (fan-out publishes each destination
   // independently, so one can fail while the draft-level fields describe the other).
-  if (destinationSignal(d, hasFailedDestination)) return true;
+  if (destinationSignal(d, hasActionableDestinationRecovery)) return true;
   return d.failureType === "publish" && !!sanitizeHandoffField(d.publishError);
 }
 

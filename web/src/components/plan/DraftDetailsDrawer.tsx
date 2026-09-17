@@ -81,6 +81,7 @@ import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount,
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
 
 const UI = {
   card: "var(--app-surface, #161D2E)",
@@ -747,7 +748,7 @@ export function PinDetailsModal({
   // drawer exactly as it was rather than inventing a spinner.
   useEffect(() => {
     if (!open || !draft) return;
-    if (sanitizeHandoffField(draft.postedAt)) return; // already finished
+    if (getPinLifecycle(draft) === "posted") return; // every destination is terminally successful
     let cancelled = false;
     void fetchInFlightPublish(draft.id).then(res => {
       if (cancelled || !res.inFlight) return;
@@ -1405,7 +1406,7 @@ export function PinDetailsModal({
   canonicalDraft.detailsStatus = readiness.detailsStatus;
 
   // ── Pin state → which action rows to show ──────────────────────────────────────
-  const isPosted = !!activeDraft.postedAt;
+  const isPosted = getPinLifecycle(activeDraft) === "posted";
   const isFailed = !isPosted && /fail/i.test(activeDraft.generationStatus ?? "");
   // Live Pinterest Pin URL — prefers the real URL Pinterest returned at publish time
   // (remotePinUrl); the `https://www.pinterest.com/pin/<id>/` reconstruction is a

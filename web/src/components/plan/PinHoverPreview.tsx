@@ -17,6 +17,7 @@ import { preloadImage } from "@/lib/imagePreload";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { coverMedia } from "@/lib/contentDraftModel";
+import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
 
 const OPEN_DELAY_MS = 200;
 const CLOSE_DELAY_MS = 150;
@@ -113,7 +114,9 @@ function sourceLabel(draft: PinDraft): string {
 
 /** One plain lifecycle line for the hover preview. */
 function lifecycleLine(draft: PinDraft): { text: string; color: string } {
-  if (sanitizeHandoffField(draft.postedAt)) return { text: "Published", color: "#C4B5FD" };
+  const lifecycle = getPinLifecycle(draft);
+  if (lifecycle === "posted") return { text: "Published", color: "#C4B5FD" };
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return { text: "Needs attention", color: "#FBBF24" };
   if (sanitizeHandoffField(draft.scheduledDate)) return { text: "Scheduled", color: "#34D399" };
   return { text: "Unscheduled", color: "#CBD5E1" };
 }

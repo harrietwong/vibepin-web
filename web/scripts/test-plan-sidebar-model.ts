@@ -132,9 +132,9 @@ test("state classification: scheduled / posted / failed", () => {
   assert.equal(itemState(draft({ id: "f", publishError: "token expired" })), "failed");
 });
 
-test("a partial fan-out success counts as posted, never failed", () => {
-  // Pinterest published, Instagram failed. The card badge calls this Posted (the Pin
-  // IS live somewhere), and the sidebar must agree or the two views contradict.
+test("a partial fan-out success needs attention, never Published", () => {
+  // Pinterest published, Instagram failed. The immutable Pinterest receipt remains
+  // available in details, but the current workflow still needs repair.
   const partial = draft({
     id: "partial",
     plannedAt: "2026-08-26T09:00",
@@ -143,7 +143,7 @@ test("a partial fan-out success counts as posted, never failed", () => {
       { destinationId: "instagram:c2", provider: "instagram", socialConnectionId: "c2", status: "failed", errorMessage: "media rejected" },
     ],
   });
-  assert.equal(itemState(partial), "posted");
+  assert.equal(itemState(partial), "failed");
 });
 
 test("an all-destinations-failed content is failed", () => {

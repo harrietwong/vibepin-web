@@ -2,7 +2,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { isPinReady, type ReadinessInput } from "@/lib/pinReadiness";
-import { listActionablePublishFailuresInWeek } from "@/lib/studio/pinLifecycle";
+import { getPinLifecycle, listActionablePublishFailuresInWeek } from "@/lib/studio/pinLifecycle";
 
 /** Sentinel meaning "every category" — the Weekly Plan is one unified publishing
  *  calendar by default, with category only an optional filter. */
@@ -99,7 +99,7 @@ export function draftsForCategory(category: string): PinDraft[] {
 export function getAddedNeedsDateDrafts(category: string, weekStart: string): PinDraft[] {
   void weekStart; // kept for signature stability; membership is date-presence based now
   return draftsForCategory(category).filter(
-    d => pinDraftStore.isDraftAddedToWeeklyPlan(d) && !d.postedAt && !hasScheduledDate(d),
+    d => pinDraftStore.isDraftAddedToWeeklyPlan(d) && getPinLifecycle(d) !== "posted" && !hasScheduledDate(d),
   );
 }
 
@@ -119,7 +119,7 @@ export function computeWeeklyPlanStatsFromDrafts(drafts: PinDraft[], weekStart: 
   const inWeek      = drafts.filter(d => hasScheduledDate(d) && dateInWeek(d.scheduledDate, weekStart));
   const unscheduled = drafts.filter(d => pinDraftStore.isUnaddedGeneratedDraft(d));
 
-  const published = inWeek.filter(d => !!d.postedAt).length;
+  const published = inWeek.filter(d => getPinLifecycle(d) === "posted").length;
   const scheduled = inWeek.length - published;
 
   return {
@@ -138,7 +138,7 @@ export function computeWeeklyPlanStatsFromDrafts(drafts: PinDraft[], weekStart: 
 
 /** Pins in the given week that are NOT yet ready to publish (missing required details). */
 export function needsDetailsDraftsInWeek(category: string, weekStart: string): PinDraft[] {
-  return scheduledDraftsInWeek(category, weekStart).filter(d => !d.postedAt && !isDraftReadyToPublish(d));
+  return scheduledDraftsInWeek(category, weekStart).filter(d => getPinLifecycle(d) !== "posted" && !isDraftReadyToPublish(d));
 }
 
 export function computeWeeklyPlanStats(category: string, weekStart: string): WeeklyPlanStats {

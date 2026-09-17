@@ -17,9 +17,9 @@
  *
  *  • State comes from getPinLifecycle(), not from re-reading postedAt/publishError.
  *    That helper already resolves the awkward cases in one place — most importantly a
- *    partial fan-out success (Pinterest published, Instagram failed) is "posted", not
- *    "failed", because it checks posted BEFORE failed. Re-deriving here would silently
- *    disagree with the card badges on exactly those drafts.
+ *    partial fan-out success (Pinterest published, Instagram failed) is
+ *    "needs_attention", never "posted". Re-deriving here would silently disagree
+ *    with the card badges on exactly those drafts.
  */
 
 import type { PinDraft } from "@/lib/pinDraftStore";

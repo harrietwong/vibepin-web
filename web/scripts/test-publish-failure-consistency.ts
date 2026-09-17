@@ -21,6 +21,7 @@ import {
   isActionablePublishFailureInWeek,
   countPublishFailures,
   getPinLifecycle,
+  archiveCurrentPublishResults,
 } from "../src/lib/studio/pinLifecycle";
 import { deriveBoardCollections, matchesFilter } from "../src/hooks/usePinBoardDrafts";
 
@@ -122,6 +123,40 @@ test("只有明确 failed destination → Failed，而不是无状态的 Unsched
     ],
   });
   assert.equal(getPinLifecycle(failedDestination), "failed", "durable destination receipt 足以定义失败，不依赖旧 publishError 镜像字段");
+});
+test("unknown-only 与 published+pending/accepted → needs_attention；不可伪装为 Posted", () => {
+  const cases: Array<{ id: string; results: NonNullable<PinDraft["destinationResults"]> }> = [
+    { id: "unknown-only", results: [{ destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "delivery_unknown" }] },
+    { id: "published-pending", results: [
+      { destinationId: "pinterest:pin-1", provider: "pinterest", socialConnectionId: "pin-1", status: "published", remoteId: "pin-live" },
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "pending" },
+    ] },
+    { id: "published-accepted", results: [
+      { destinationId: "pinterest:pin-1", provider: "pinterest", socialConnectionId: "pin-1", status: "published", remoteId: "pin-live" },
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "accepted" },
+    ] },
+  ];
+  for (const { id, results } of cases) {
+    const item = draft({ id, destinationResults: results });
+    assert.equal(getPinLifecycle(item), "needs_attention", `${id} must remain an actionable attention state`);
+    assert.equal(matchesFilter({ draft: item, lifecycle: getPinLifecycle(item) }, "posted"), false, `${id} must not enter Posted`);
+  }
+});
+test("Move to Unscheduled 将当前 receipt 归档而非删除，并清除当前失败生命周期", () => {
+  const failed = draft({
+    id: "dismiss-publish-failure",
+    postedAt: "2026-07-23T02:00:00.000Z",
+    remotePinId: "pin-live",
+    destinationResults: [
+      { destinationId: "pinterest:pin-1", provider: "pinterest", socialConnectionId: "pin-1", status: "published", remoteId: "pin-live" },
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "failed", errorCode: "provider_error" },
+    ],
+  });
+  const patch = archiveCurrentPublishResults(failed);
+  const moved = { ...failed, ...patch } as PinDraft;
+  assert.equal(getPinLifecycle(moved), "unscheduled", "归档后没有当前 publish outcome，不能继续显示 Failed/Posted");
+  assert.equal(moved.previousResults?.length, 2, "两个 provider receipt 都必须保留为历史证据");
+  assert.equal(moved.previousResults?.[0].remoteId, "pin-live", "已发布的 receipt 不得丢失");
 });
 
 console.log("\n=== PRD v1.1 §6.3: workspace 全集，来源无关 ===");

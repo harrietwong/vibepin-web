@@ -151,7 +151,7 @@ export type ContentDraftLike = {
     boardId?: string; boardName?: string; capturedAt: string;
   }>;
   destinationResults?: DestinationPublishResult[];
-  /** `published` rows superseded by a later publish — history only, never publish input. */
+  /** Provider receipts from superseded publish attempts — history only, never publish input. */
   previousResults?: DestinationPublishResult[];
 };
 
@@ -413,6 +413,27 @@ export function hasFailedDestination(draft: ContentDraftLike): boolean {
  * `delivery_unknown` means the provider receipt cannot prove whether a dispatch
  * completed; presenting a sibling Pinterest success as fully Posted would be false. */
 export function hasUnresolvedDestination(draft: ContentDraftLike): boolean {
+  return contentDestinationResults(draft).some(result =>
+    result.status === "failed" || result.status === "delivery_unknown"
+      || result.status === "requested" || result.status === "accepted"
+      || result.status === "pending" || result.status === "publishing",
+  );
+}
+
+/** A non-terminal receipt is not evidence of a completed post. It belongs in an
+ * attention state, but is deliberately kept distinct from a retryable failure: an
+ * accepted/pending dispatch may still resolve without another provider call. */
+export function hasNonTerminalDestination(draft: ContentDraftLike): boolean {
+  return contentDestinationResults(draft).some(result =>
+    result.status === "requested" || result.status === "accepted"
+      || result.status === "pending" || result.status === "publishing"
+      || result.status === "delivery_unknown",
+  );
+}
+
+/** These rows need an explicit publish-recovery path. Pending/accepted rows do not:
+ * retrying them could double-dispatch while the provider is still resolving them. */
+export function hasActionableDestinationRecovery(draft: ContentDraftLike): boolean {
   return contentDestinationResults(draft).some(result =>
     result.status === "failed" || result.status === "delivery_unknown",
   );

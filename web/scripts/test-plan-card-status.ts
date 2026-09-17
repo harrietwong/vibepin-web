@@ -6,7 +6,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { planCardStatus, planCardStatusStyle } from "../src/lib/plan/cardStatus";
-import { isActionablePublishFailure } from "../src/lib/studio/pinLifecycle";
 
 let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
@@ -22,6 +21,16 @@ test("a posted Pin is published", () => {
 test("a real publish failure is failed", () => {
   assert.equal(planCardStatus({ failureType: "publish", publishError: "board unavailable" }), "failed");
 });
+test("partial, unknown, and pending destination receipts are failed/needs-attention — never Published", () => {
+  const published = { destinationId: "pinterest:a", provider: "pinterest" as const, socialConnectionId: "a", status: "published" as const, remoteId: "pin-a" };
+  const failed = { destinationId: "facebook:b", provider: "facebook" as const, socialConnectionId: "b", status: "failed" as const };
+  const pending = { destinationId: "facebook:b", provider: "facebook" as const, socialConnectionId: "b", status: "pending" as const };
+  const unknown = { destinationId: "facebook:b", provider: "facebook" as const, socialConnectionId: "b", status: "delivery_unknown" as const };
+  assert.equal(planCardStatus({ destinationResults: [published, failed] }), "failed");
+  assert.equal(planCardStatus({ destinationResults: [published, pending] }), "failed");
+  assert.equal(planCardStatus({ destinationResults: [unknown] }), "failed");
+  assert.equal(planCardStatus({ destinationResults: [published] }), "published");
+});
 
 console.log("\n=== the two orderings that would misreport ===");
 test("published beats a STALE error — retried and succeeded is Published, not Failed", () => {
@@ -30,25 +39,25 @@ test("published beats a STALE error — retried and succeeded is Published, not 
 test("not-yet-published is never inferred as failed", () => {
   // The normal scheduled state has no postedAt. Treating that as failure would paint
   // every upcoming Pin as broken.
-  assert.equal(planCardStatus({ postedAt: null, publishError: null }), "scheduled");
+  assert.equal(planCardStatus({ postedAt: undefined, publishError: undefined }), "scheduled");
 });
 
-console.log("\n=== the badge and the banner must agree ===");
-test("the card uses the SAME failure rule as the 'N Pins failed' banner", () => {
+console.log("\n=== active lifecycle owns the badge ===");
+test("the card keeps archived Content off the board and retains generation failures", () => {
   // A first version defined failure here independently (any of publishError /
   // failureType / a "fail" generation status). The calendar then showed far more Failed
   // badges than the banner counted, because the banner requires all three conditions.
   const cases = [
     { failureType: "publish", publishError: "boom" },                       // actionable
     { failureType: "publish", publishError: "boom", archivedAt: "2026-01-01" }, // archived ⇒ off the board
-    { failureType: "generation", publishError: "boom" },                    // not a PUBLISH failure
+    { generationStatus: "failed" },                                          // lifecycle failure
     { failureType: "publish" },                                             // no error text
     {},
   ];
   for (const c of cases) {
-    const banner = isActionablePublishFailure(c as never);
     const badge = planCardStatus(c as never) === "failed";
-    assert.equal(badge, banner, `badge and banner disagree for ${JSON.stringify(c)}`);
+    const expected = c.archivedAt ? false : c.generationStatus === "failed" || c.failureType === "publish" && !!c.publishError;
+    assert.equal(badge, expected, `badge and canonical lifecycle disagree for ${JSON.stringify(c)}`);
   }
 });
 
@@ -56,14 +65,14 @@ test("an archived failure is not badged — it is off the board", () => {
   assert.equal(planCardStatus({ failureType: "publish", publishError: "boom", archivedAt: "2026-01-01" }), "scheduled");
 });
 
-test("a GENERATION failure is not a publish failure", () => {
-  assert.equal(planCardStatus({ failureType: "generation", publishError: "boom" }), "scheduled");
+test("a generation failure is not mistaken for a published receipt", () => {
+  assert.equal(planCardStatus({ generationStatus: "failed" }), "failed");
 });
 
 console.log("\n=== colour is never the only signal ===");
 test("every status carries an icon AND a text label, not just an accent", () => {
   for (const draft of [{}, { postedAt: "x" }, { failureType: "publish", publishError: "e" }]) {
-    const s = planCardStatusStyle(draft);
+    const s = planCardStatusStyle(draft as never);
     assert(s.icon, `${s.status} must have an icon`);
     assert(s.labelKey, `${s.status} must have a text label`);
     assert(/^#[0-9A-Fa-f]{6}$/.test(s.accent), `${s.status} accent must be a colour token`);

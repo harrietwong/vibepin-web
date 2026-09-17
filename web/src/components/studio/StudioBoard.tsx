@@ -25,7 +25,7 @@ import { startPinterestConnect, savePinterestDefaultBoard } from "@/lib/pinteres
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { archiveCurrentPublishResults, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { isPinReady, isPublishableContentMedia, pinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { getCachedConnections } from "@/lib/social/connectionsCache";
 import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
@@ -1567,15 +1567,15 @@ export function StudioBoard() {
     toast.success(tr("studioBoard.toast.unscheduled"));
   }, [tr]);
 
-  // Failed card → "Move to Unscheduled" (PRD 13.4): clears the schedule slot AND the
-  // active failure so the card returns to a clean Unscheduled state. previousScheduledTime
-  // is intentionally KEPT (it's already history, not an active error) — a lightweight
-  // record of what was lost without a full audit log. Draft content/product links
-  // untouched.
+  // Failed card → "Move to Unscheduled": receipts are historical evidence, so archive
+  // them instead of deleting only a legacy error mirror (which used to recreate a false
+  // Failed/Posted state on the next render).
   const handleMoveToUnscheduled = useCallback((id: string) => {
+    const draft = pinDraftStore.getDraft(id);
+    if (!draft) return;
     pinDraftStore.updateDraft(id, {
-      scheduledDate: "", scheduledTime: "",
-      publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined,
+      scheduledDate: "", scheduledTime: "", plannedAt: "",
+      ...archiveCurrentPublishResults(draft),
     });
     toast.success(tr("studioBoard.toast.movedToUnscheduled"));
   }, [tr]);

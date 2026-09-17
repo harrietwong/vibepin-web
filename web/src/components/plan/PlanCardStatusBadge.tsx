@@ -11,6 +11,7 @@
 import { Check, Clock, AlertTriangle } from "lucide-react";
 import { planCardStatusStyle } from "@/lib/plan/cardStatus";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { PinDraft } from "@/lib/pinDraftStore";
 import type { CSSProperties } from "react";
 
 const ICONS = { clock: Clock, check: Check, alert: AlertTriangle } as const;
@@ -20,7 +21,7 @@ export function PlanCardStatusBadge({
   style,
   compact,
 }: {
-  draft: { postedAt?: string | null; publishError?: string | null; failureType?: string | null; generationStatus?: string | null } | null | undefined;
+  draft: Partial<PinDraft> | null | undefined;
   style?: CSSProperties;
   /** Icon only, for the smallest tiles — the label still rides `title`/aria-label. */
   compact?: boolean;

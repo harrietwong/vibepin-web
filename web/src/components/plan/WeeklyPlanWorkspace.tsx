@@ -86,7 +86,7 @@ import {
 } from "@/lib/weeklyPlanStats";
 import { markDataReady } from "@/lib/navTiming";
 import { logPlanHydrated, logPlanTiming } from "@/lib/planLoadTiming";
-import { listActionablePublishFailuresInWeek, publishFailureSetIdentity } from "@/lib/studio/pinLifecycle";
+import { getPinLifecycle, listActionablePublishFailuresInWeek, publishFailureSetIdentity } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { usePinBoardDrafts } from "@/hooks/usePinBoardDrafts";
@@ -269,7 +269,9 @@ function draftStatusDisplay(draft: PinDraft, tr: (key: MessageKey) => string): {
   if (!pinDraftStore.isDraftAddedToWeeklyPlan(draft)) {
     return unaddedStatusLabel();
   }
-  if (draft.postedAt) return { label: tr("plan.status.published"), color: "#7C3AED" };
+  const lifecycle = getPinLifecycle(draft);
+  if (lifecycle === "posted") return { label: tr("plan.status.published"), color: "#7C3AED" };
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return { label: tr("plan.cardStatus.failed"), color: "#D97706" };
   if (!sanitizeHandoffField(draft.scheduledDate)) {
     return { label: tr("plan.status.unscheduled"), color: "var(--app-text-muted)" };
   }
@@ -1507,7 +1509,7 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
             <p style={{ margin: "8px 4px", fontSize: 12, color: "var(--app-text-muted)" }}>{trBase("plan.dayDetail.empty")}</p>
           ) : rows.map(ev => {
             const d = byId.get(ev.draftId)!;
-            const published = !!d.postedAt;
+            const published = getPinLifecycle(d) === "posted";
             return (
               <div key={ev.draftId} data-testid="day-detail-row"
                 style={{ display: "flex", gap: 11, padding: 10, borderRadius: 11, border: "1px solid var(--app-border)", background: "var(--app-surface-2)" }}>
@@ -2094,12 +2096,10 @@ export function WeeklyPlanWorkspace() {
     toast.success(tr("plan.toast.generatedMissingDetails"));
   }
 
-  function handleWpPublishComplete(publishedIds: string[]) {
-    // Canonical posted state. Do NOT force-close the drawer/session — the drawer's own
-    // publish-complete summary handles feedback, and Batch Edit stays open until closed.
-    for (const id of publishedIds) pinDraftStore.markDraftPosted(id);
-    // Outcome toast is owned by the Batch Edit drawer (partial-failure aware), so we
-    // don't emit a second toast here — just sync canonical posted state.
+  function handleWpPublishComplete() {
+    // publishContent() persists every provider receipt before this callback runs. Do
+    // not synthesize a draft-level Posted mirror here: a fan-out can have one success
+    // and one failure, whose canonical state is needs_attention rather than Posted.
   }
 
   function handleBulkMoveDate() {
@@ -2267,7 +2267,7 @@ export function WeeklyPlanWorkspace() {
       boardId: d.boardId ?? "",
       imageUrlPresent: !!d.imageUrl,
       imageUrlKind: !d.imageUrl ? "none" : d.imageUrl.startsWith("data:") ? "data-url (local only)" : "url",
-      posted: !!d.postedAt,
+      posted: getPinLifecycle(d) === "posted",
       source: "localStorage",
     })));
   }, [planDataLoading, planUserId, displayWeekStart, items.length]);
@@ -2979,7 +2979,9 @@ function UnscheduledDraftsSection({ category, accountFilter, dnd, hoverActions, 
 // of Weekly Plan. No second editor, no duplicate readiness logic.
 
 function railStatus(draft: PinDraft, tr: (key: MessageKey) => string): { label: string; color: string } {
-  if (draft.postedAt) return { label: tr("plan.status.published"), color: "#7C3AED" };
+  const lifecycle = getPinLifecycle(draft);
+  if (lifecycle === "posted") return { label: tr("plan.status.published"), color: "#7C3AED" };
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return { label: tr("plan.cardStatus.failed"), color: "#D97706" };
   if (sanitizeHandoffField(draft.scheduledDate)) return { label: tr("plan.status.scheduled"), color: "#059669" };
   return { label: tr("plan.status.unscheduled"), color: "var(--app-text-muted)" };
 }
