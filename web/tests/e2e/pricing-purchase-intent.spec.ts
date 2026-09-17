@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 import {
   BILLING_DISABLED_SKIP_REASON,
   isBillingEnabled,
@@ -68,18 +69,42 @@ import { interceptCreemCheckout, UUID_RE } from "./helpers/creemCheckout";
  * early click lands on an unbound button and is silently lost. In dev that
  * window is seconds wide.
  *
- * LESSON LEARNED: do not try to fake a Supabase login with a seeded session
- * cookie + a page.route() intercept on /auth/v1/user. It looks plausible
- * (getUser() docs say it re-verifies the JWT against the server) but in
- * practice getUser() rejects a malformed/non-JWT access_token locally and
- * returns null WITHOUT ever issuing the network request — so the route
- * handler never fires and the page renders as anonymous. A test built on
- * this pattern can "pass" once by accident and then reliably fail; the only
- * trustworthy way to cover a signed-in flow here is a real account via
- * loginViaForm() + E2E_USER_EMAIL/PASSWORD.
+ * A mocked cookie is only used for the stale-hint UI regression below. That
+ * test explicitly waits for the browser's real `/auth/v1/user` request to hit
+ * its route before releasing the controlled failure, so it cannot pass from an
+ * unhydrated SSR snapshot. Checkout coverage continues to use a real account
+ * through loginViaForm() + E2E_USER_EMAIL/PASSWORD.
  */
 
 const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true });
+const SUPABASE_REF = SUPABASE_URL.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] ?? "e2e-mock";
+const AUTH_COOKIE_NAME = `sb-${SUPABASE_REF}-auth-token`;
+
+function buildPricingSessionCookie(): { name: string; value: string } {
+  const session = {
+    access_token: "e2e-pricing-stale-hint-access-token",
+    refresh_token: "e2e-pricing-stale-hint-refresh-token",
+    token_type: "bearer",
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    expires_in: 3600,
+    user: {
+      id: "e2e00000-0000-4000-8000-0000000000p1",
+      aud: "authenticated",
+      role: "authenticated",
+      email: "pricing-stale-hint@example.com",
+      app_metadata: {},
+      user_metadata: {},
+      created_at: new Date().toISOString(),
+    },
+  };
+  return { name: AUTH_COOKIE_NAME, value: `base64-${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}` };
+}
+
+async function seedPricingSessionCookie(context: BrowserContext): Promise<void> {
+  const cookie = buildPricingSessionCookie();
+  await context.addCookies([{ ...cookie, url: BASE_URL, sameSite: "Lax" }]);
+}
 
 /**
  * Click the Pro plan's CTA.
@@ -216,15 +241,30 @@ test.describe("paid checkout intent (requires CREEM_MODE=test|live)", () => {
 // ── Scenario D: a plain Log in has no intent and must not open checkout ───────
 // Billing-agnostic: asserts only the `next` the nav's Log in link carries.
 
-test("pricing header waits for session resolution before showing anonymous CTAs", async ({ page }) => {
-  await page.route("**/auth/v1/user**", async route => {
-    await new Promise(resolve => setTimeout(resolve, 3_000));
-    await route.continue();
+test("pricing header clears a stale cookie hint after the verified lookup fails", async ({ page, context }) => {
+  await seedPricingSessionCookie(context);
+  let lookupHits = 0;
+  let releaseLookup: (() => void) | undefined;
+  let markLookupStarted: (() => void) | undefined;
+  const lookupReleased = new Promise<void>(resolve => { releaseLookup = resolve; });
+  const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+  await page.route(`${SUPABASE_URL}/auth/v1/user**`, async route => {
+    lookupHits += 1;
+    markLookupStarted?.();
+    await lookupReleased;
+    await route.abort();
   });
+
   await page.goto("/pricing", { waitUntil: "domcontentloaded" });
+  await lookupStarted;
 
   await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: /^get started$/i })).toHaveCount(0);
+  await expect(page.locator('nav a[href="/app/studio"]').last()).toHaveText("Create Pins");
+
+  releaseLookup?.();
+  await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: /^get started$/i })).toHaveCount(1);
+  expect(lookupHits).toBe(1);
 });
 
 test('plain "Log in" from pricing carries no checkout intent', async ({ page }) => {

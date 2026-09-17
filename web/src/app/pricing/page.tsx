@@ -1,5 +1,6 @@
 import { getBillingMode } from "@/lib/server/creem/billingMode";
-import { getUserIdFromCookieSession } from "@/lib/server/authUser";
+import { hasPublicSessionCookie } from "@/lib/auth/publicSessionHint";
+import { cookies } from "next/headers";
 import PricingPageClient from "./pricing-client";
 import { PublicShell } from "@/components/public/PublicShell";
 
@@ -26,8 +27,9 @@ export default async function PricingPage() {
   // disabled state at FIRST paint when checkout is turned off (CREEM_MODE=
   // disabled) — nobody is routed through signup only to hit a 503.
   const billingEnabled = getBillingMode() !== "disabled";
-  // Keep the public header aligned with the cookie-backed browser session at
-  // first paint. The client still verifies the user before updating its state.
-  const initialUserId = await getUserIdFromCookieSession();
-  return <PublicShell><PricingPageClient billingEnabled={billingEnabled} initialUserId={initialUserId} /></PublicShell>;
+  // This is a local presence hint only: unlike Supabase `getSession()`, reading
+  // the request cookies cannot refresh an expired token or delay first paint.
+  // The client separately verifies its user before any billing action can run.
+  const initialSessionHint = hasPublicSessionCookie((await cookies()).getAll());
+  return <PublicShell><PricingPageClient billingEnabled={billingEnabled} initialSessionHint={initialSessionHint} /></PublicShell>;
 }

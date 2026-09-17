@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
@@ -28,6 +28,12 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 import { PLATFORMS, VISIBLE_SOCIAL_PROVIDERS } from "@/lib/social/platforms";
+import {
+  createPricingAuthState,
+  getPricingHeaderState,
+  getVerifiedPricingUserId,
+  pricingAuthReducer,
+} from "@/lib/auth/pricingHeaderAuth";
 
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
@@ -386,14 +392,14 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
   );
 }
 
-function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled: boolean; initialUserId: string | null }) {
+function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEnabled: boolean; initialSessionHint: boolean }) {
   const { t } = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [yearly, setYearly] = useState(false);
-  const [userId, setUserId] = useState<string | null>(initialUserId);
-  const [authReady, setAuthReady] = useState(initialUserId !== null);
+  const [authState, dispatchAuth] = useReducer(pricingAuthReducer, initialSessionHint, createPricingAuthState);
+  const authReadVersion = useRef(0);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanKey | null>(null);
   const [checkoutUnavailable, setCheckoutUnavailable] = useState(false);
   // Checkout deliberately turned off (CREEM_MODE=disabled) — a distinct, calmer
@@ -405,25 +411,46 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
   // the instant `authReady` catches up.
   const [pendingIntent, setPendingIntent] = useState<{ planId: PaidPlan } | null>(null);
 
-  // Resolve the session so we know whether to checkout directly or route through
-  // signup. `authReady` distinguishes "still loading" from "confirmed logged out".
-  useEffect(() => {
-    let active = true;
-    supabase.auth
-      .getUser()
+  // Cookie presence can improve the first paint, but only a completed getUser()
+  // readback may select checkout or consume an intent. Later auth events invalidate
+  // an earlier readback so a stale promise cannot overwrite SIGNED_OUT.
+  const verifyUser = useCallback((sessionHint: boolean) => {
+    const version = ++authReadVersion.current;
+    dispatchAuth({ type: "verification-start", sessionHint });
+    void supabase.auth.getUser()
       .then(({ data }) => {
-        if (active) setUserId(data.user?.id ?? null);
+        if (authReadVersion.current === version) {
+          dispatchAuth({ type: "verified", userId: data.user?.id ?? null });
+        }
       })
       .catch(() => {
-        /* anonymous visitor — ignore */
-      })
-      .finally(() => {
-        if (active) setAuthReady(true);
+        if (authReadVersion.current === version) {
+          dispatchAuth({ type: "verified", userId: null });
+        }
       });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active || event === "INITIAL_SESSION") return;
+      if (event === "SIGNED_OUT") {
+        authReadVersion.current += 1;
+        dispatchAuth({ type: "signed-out" });
+        return;
+      }
+      verifyUser(session?.user != null);
+    });
+    verifyUser(initialSessionHint);
     return () => {
       active = false;
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [initialSessionHint, verifyUser]);
+
+  const verifiedUserId = getVerifiedPricingUserId(authState);
+  const authReady = authState.verification === "ready";
+  const { showLogIn, showStudio } = getPricingHeaderState(authState);
 
   // Launch a signed-in buyer's checkout. On any failure, surface the retryable
   // banner (never leave a dead button).
@@ -485,13 +512,13 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
         setPendingIntent({ planId });
         return;
       }
-      if (userId) {
+      if (verifiedUserId) {
         void launchCheckout(planId);
       } else {
         routeToSignup(planId);
       }
     },
-    [billingEnabled, authReady, userId, launchCheckout, routeToSignup],
+    [billingEnabled, authReady, verifiedUserId, launchCheckout, routeToSignup],
   );
 
   // Consume a pending intent the instant auth resolves.
@@ -500,14 +527,14 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
     const { planId } = pendingIntent;
     const timer = window.setTimeout(() => {
       setPendingIntent(null);
-      if (userId) {
+      if (verifiedUserId) {
         void launchCheckout(planId);
       } else {
         routeToSignup(planId);
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [pendingIntent, authReady, userId, launchCheckout, routeToSignup]);
+  }, [pendingIntent, authReady, verifiedUserId, launchCheckout, routeToSignup]);
 
   // Timeout fallback: if auth never resolves, don't spin forever — degrade to
   // the "unavailable" banner after a bounded wait.
@@ -547,7 +574,7 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
     const period = searchParams.get("period") === "year" ? "year" : "month";
     const plan = PRICING_TIERS.find(t => t.id === checkoutPlanId);
 
-    if (!userId) {
+    if (!verifiedUserId) {
       // Landed back here still not signed in (e.g. direct link) — nothing to
       // resume; leave the URL alone rather than silently discarding intent.
       return;
@@ -571,7 +598,7 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
       router.replace("/pricing", { scroll: false });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [searchParams, billingEnabled, authReady, userId, launchCheckout, router]);
+  }, [searchParams, billingEnabled, authReady, verifiedUserId, launchCheckout, router]);
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -590,7 +617,7 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
           </div>
           <div className="flex items-center gap-2.5">
             <PublicLanguageTheme />
-            {authReady && !userId ? (
+            {showLogIn ? (
               <Link
                 href="/login?next=/pricing"
                 className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white"
@@ -599,9 +626,9 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
                 {t("public.nav.logIn")}
               </Link>
             ) : null}
-            {authReady ? (
+            {showStudio || authReady ? (
               <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
-                {userId ? t("public.nav.createPins") : t("public.pricing.getStarted")} <ArrowRight className="w-3.5 h-3.5" />
+                {showStudio ? t("public.nav.createPins") : t("public.pricing.getStarted")} <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             ) : (
               <span aria-hidden="true" style={{ display: "block", height: 36, width: 116 }} />
@@ -799,10 +826,10 @@ function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled:
   );
 }
 
-export default function PricingPageClient({ billingEnabled, initialUserId }: { billingEnabled: boolean; initialUserId: string | null }) {
+export default function PricingPageClient({ billingEnabled, initialSessionHint }: { billingEnabled: boolean; initialSessionHint: boolean }) {
   return (
     <Suspense fallback={null}>
-      <PricingPageContent billingEnabled={billingEnabled} initialUserId={initialUserId} />
+      <PricingPageContent billingEnabled={billingEnabled} initialSessionHint={initialSessionHint} />
     </Suspense>
   );
 }
