@@ -13,6 +13,7 @@ import {
   assertStrictTestRef,
   applyReport,
   dryRunReport,
+  failedApplyReport,
   newRunId,
   reportMarkdown,
 } from "./lib/credit-e2e-harness";
@@ -31,28 +32,29 @@ async function main(): Promise<void> {
   const outputBase = resolve(outputArg || `artifacts/credit-e2e/${runId}`);
   let report;
   if (apply) {
-    let config;
     try {
-      config = loadTestDbConfig();
+      const config = loadTestDbConfig();
+      assertStrictTestRef(config.projectRef);
+      if (!baseUrlArg || !expectedCommitArg || !expectedDeploymentArg) {
+        throw new Error(
+          "apply preflight failed: --base-url, --expected-commit, and --expected-deployment are required; " +
+          "the harness will not guess which Preview build to test",
+        );
+      }
+      const adapter = new SupabaseCreditE2eAdapter({
+        config,
+        baseUrl: baseUrlArg,
+        expectedCommit: expectedCommitArg,
+        expectedDeploymentId: expectedDeploymentArg,
+        screenshotDir: `${outputBase}-screenshots`,
+      });
+      report = await applyReport(adapter, runId);
     } catch (error) {
-      if (error instanceof TestDbConfigError) throw new Error(`apply preflight failed: ${error.message}`);
-      throw error;
+      const failure = error instanceof TestDbConfigError
+        ? new Error(`apply preflight failed: ${error.message}`)
+        : error;
+      report = failedApplyReport(runId, failure);
     }
-    assertStrictTestRef(config.projectRef);
-    if (!baseUrlArg || !expectedCommitArg || !expectedDeploymentArg) {
-      throw new Error(
-        "apply preflight failed: --base-url, --expected-commit, and --expected-deployment are required; " +
-        "the harness will not guess which Preview build to test",
-      );
-    }
-    const adapter = new SupabaseCreditE2eAdapter({
-      config,
-      baseUrl: baseUrlArg,
-      expectedCommit: expectedCommitArg,
-      expectedDeploymentId: expectedDeploymentArg,
-      screenshotDir: `${outputBase}-screenshots`,
-    });
-    report = await applyReport(adapter, runId);
   } else {
     report = dryRunReport(runId);
   }
@@ -65,9 +67,12 @@ async function main(): Promise<void> {
   console.log(`Credit E2E ${report.mode} report written: ${outputBase}.{json,md}`);
   if (report.mode === "dry-run") {
     console.log("No browser, HTTP, database, Auth, checkout, payment, or AI provider was called.");
-  } else {
-    console.log(`Verified isolated Test Supabase ${report.targetRef}; synthetic accounts and rows were cleaned.`);
+  } else if (report.outcome !== "FAIL") {
+    console.log(`Verified isolated Test Supabase ${report.targetRef}; cleanup status: ${report.cleanup.status}.`);
     console.log("No checkout, payment, AI provider, social provider, Production, or deployment mutation was called.");
+  } else {
+    console.error(`Credit E2E apply failed; failure and cleanup receipts were written to ${outputBase}.{json,md}.`);
+    process.exitCode = 1;
   }
 }
 

@@ -12,7 +12,7 @@ export const CREDIT_E2E_TEST_REF = "snulmwprsahzqvdbyenc";
 export const CREDIT_E2E_PRODUCTION_REF = "jaxteelkecvlozdrdoog";
 export const CREDIT_E2E_PLANS: readonly PlanKey[] = ["free", "starter", "pro", "business"];
 
-export type CreditE2eScenario = "limit_minus_one" | "limit";
+export type CreditE2eScenario = "default" | "limit_minus_one" | "limit";
 export type CreditE2eRun = {
   runId: string;
   plan: PlanKey;
@@ -27,20 +27,45 @@ export type CreditE2eRun = {
 export type CreditE2eReportScenario = Omit<CreditE2eRun, "email">;
 
 export type Evidence = {
-  surface: "billing" | "usage" | "create_pin" | "http" | "database";
-  status: "PASS" | "FAIL" | "NOT_OBSERVED";
+  surface: "binding" | "session" | "billing" | "usage" | "http" | "database" | "rpc" | "product_path" | "job" | "provider" | "cleanup";
+  status: "PASS" | "FAIL" | "BLOCKED" | "NOT_EXECUTED";
   detail: string;
+  caseId?: string;
   screenshot?: string;
   json?: string;
 };
 
+export type TargetBinding = {
+  previewOrigin: string | null;
+  candidateCommit: string | null;
+  deploymentId: string | null;
+  testSupabaseOrigin: string | null;
+  testSupabaseRef: string;
+  verified: boolean;
+};
+
+export type CleanupActionReceipt = {
+  resource: string;
+  status: "PASS" | "FAIL";
+  detail: string;
+};
+
+export type CleanupReceipt = {
+  status: "PASS" | "FAIL";
+  actions: CleanupActionReceipt[];
+};
+
 export type CreditE2eReport = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   mode: "dry-run" | "apply";
+  outcome: "PASS" | "FAIL" | "PARTIAL" | "NOT_EXECUTED";
   runId: string;
   targetRef: string;
+  binding: TargetBinding;
   externalWrites: boolean;
   rounds: Array<{ round: 1 | 2; scenarios: CreditE2eReportScenario[]; evidence: Evidence[] }>;
+  cleanup: CleanupReceipt;
+  failures: string[];
 };
 
 /** Synthetic-only identities. `runId` is constrained so account names never escape the test namespace. */
@@ -70,7 +95,8 @@ export function assertStrictTestRef(ref: string): void {
 }
 
 function usedAt(limit: number | null, scenario: CreditE2eScenario): number {
-  if (limit === null) return scenario === "limit" ? 10_000 : 9_999;
+  if (scenario === "default") return 0;
+  if (limit === null) return scenario === "limit" ? 2 : 1;
   return scenario === "limit" ? limit : Math.max(0, limit - 1);
 }
 
@@ -98,11 +124,11 @@ export function buildScenario(plan: PlanKey, runId: string, scenario: CreditE2eS
  * separately reviewed adapter is added.
  */
 export interface CreditE2eApplyAdapter {
-  assertTarget(ref: string): Promise<void>;
+  assertTarget(ref: string): Promise<TargetBinding>;
   provision(input: CreditE2eRun, password: string): Promise<{ userId: string }>;
   seedUsage(input: CreditE2eRun, userId: string, context?: { round: 1 | 2 }): Promise<void>;
   collectEvidence(input: CreditE2eRun, userId: string, context?: { round: 1 | 2 }): Promise<Evidence[]>;
-  cleanup(runId: string, userIds: string[]): Promise<void>;
+  cleanup(runId: string, userIds: string[]): Promise<CleanupReceipt>;
 }
 
 /** Strip apply-only identity material before anything can enter a persisted report. */
@@ -137,11 +163,24 @@ export async function applyReport(
   runId = newRunId(),
 ): Promise<CreditE2eReport> {
   assertStrictTestRef(CREDIT_E2E_TEST_REF);
-  await adapter.assertTarget(CREDIT_E2E_TEST_REF);
-
   const users = new Map<PlanKey, string>();
   const createdUserIds: string[] = [];
+  const rounds: CreditE2eReport["rounds"] = [];
+  const failures: string[] = [];
+  let binding: TargetBinding = {
+    previewOrigin: null,
+    candidateCommit: null,
+    deploymentId: null,
+    testSupabaseOrigin: null,
+    testSupabaseRef: CREDIT_E2E_TEST_REF,
+    verified: false,
+  };
+  let cleanup: CleanupReceipt = { status: "FAIL", actions: [] };
   try {
+    binding = await adapter.assertTarget(CREDIT_E2E_TEST_REF);
+    if (!binding.verified || binding.testSupabaseRef !== CREDIT_E2E_TEST_REF) {
+      throw new Error("Target binding was not independently verified");
+    }
     for (const plan of CREDIT_E2E_PLANS) {
       const identity = buildScenario(plan, runId, "limit_minus_one");
       const { userId } = await adapter.provision(identity, ephemeralPassword());
@@ -150,50 +189,117 @@ export async function applyReport(
       createdUserIds.push(userId);
     }
 
-    const rounds: CreditE2eReport["rounds"] = [];
     for (const round of [1, 2] as const) {
-      const scenarios: CreditE2eReportScenario[] = [];
-      const evidence: Evidence[] = [];
+      const roundReport: CreditE2eReport["rounds"][number] = { round, scenarios: [], evidence: [] };
+      rounds.push(roundReport);
       for (const plan of CREDIT_E2E_PLANS) {
         const userId = users.get(plan);
         if (!userId) throw new Error(`missing provisioned identity for ${plan}`);
-        for (const scenarioName of ["limit_minus_one", "limit"] as const) {
+        for (const scenarioName of ["default", "limit_minus_one", "limit"] as const) {
           const scenario = buildScenario(plan, runId, scenarioName);
           await adapter.seedUsage(scenario, userId, { round });
-          evidence.push(...safeEvidence(await adapter.collectEvidence(scenario, userId, { round })));
-          scenarios.push(reportScenario(scenario));
+          roundReport.evidence.push(...safeEvidence(await adapter.collectEvidence(scenario, userId, { round })));
+          roundReport.scenarios.push(reportScenario(scenario));
         }
       }
-      rounds.push({ round, scenarios, evidence });
     }
-
-    return {
-      schemaVersion: 1,
-      mode: "apply",
-      runId,
-      targetRef: CREDIT_E2E_TEST_REF,
-      externalWrites: true,
-      rounds,
-    };
+  } catch (error) {
+    const message = redactEvidenceText((error as Error)?.message ?? String(error));
+    failures.push(message);
+    const activeRound = rounds.at(-1);
+    if (activeRound) activeRound.evidence.push({ surface: "http", status: "FAIL", detail: `run stopped: ${message}` });
   } finally {
-    await adapter.cleanup(runId, createdUserIds);
+    try {
+      cleanup = await adapter.cleanup(runId, createdUserIds);
+    } catch (error) {
+      cleanup = {
+        status: "FAIL",
+        actions: [{ resource: "cleanup orchestration", status: "FAIL", detail: "adapter cleanup threw before returning a complete receipt" }],
+      };
+      failures.push(redactEvidenceText((error as Error)?.message ?? String(error)));
+    }
   }
+
+  const failedEvidenceCount = rounds.reduce(
+    (count, round) => count + round.evidence.filter(item => item.status === "FAIL").length,
+    0,
+  );
+  if (failedEvidenceCount > 0) failures.push(`${failedEvidenceCount} evidence item(s) failed`);
+  if (cleanup.status === "FAIL") failures.push("cleanup did not verify zero residual synthetic state");
+  const hasNotExecuted = rounds.some(round => round.evidence.some(item => item.status === "NOT_EXECUTED" || item.status === "BLOCKED"));
+  return {
+    schemaVersion: 2,
+    mode: "apply",
+    outcome: failures.length > 0 ? "FAIL" : hasNotExecuted ? "PARTIAL" : "PASS",
+    runId,
+    targetRef: CREDIT_E2E_TEST_REF,
+    binding,
+    externalWrites: true,
+    rounds,
+    cleanup,
+    failures,
+  };
 }
 
 export function dryRunReport(runId = newRunId()): CreditE2eReport {
   const rounds = ([1, 2] as const).map(round => ({
     round,
     scenarios: CREDIT_E2E_PLANS.flatMap(plan => [
+      buildScenario(plan, runId, "default"),
       buildScenario(plan, runId, "limit_minus_one"),
       buildScenario(plan, runId, "limit"),
     ]).map(reportScenario),
     evidence: [{
       surface: "http" as const,
-      status: "NOT_OBSERVED" as const,
+      status: "NOT_EXECUTED" as const,
       detail: "dry-run only: no browser, HTTP, database, checkout, payment, or AI generation was invoked",
     }],
   }));
-  return { schemaVersion: 1, mode: "dry-run", runId, targetRef: CREDIT_E2E_TEST_REF, externalWrites: false, rounds };
+  return {
+    schemaVersion: 2,
+    mode: "dry-run",
+    outcome: "NOT_EXECUTED",
+    runId,
+    targetRef: CREDIT_E2E_TEST_REF,
+    binding: {
+      previewOrigin: null,
+      candidateCommit: null,
+      deploymentId: null,
+      testSupabaseOrigin: null,
+      testSupabaseRef: CREDIT_E2E_TEST_REF,
+      verified: false,
+    },
+    externalWrites: false,
+    rounds,
+    cleanup: { status: "PASS", actions: [{ resource: "dry-run", status: "PASS", detail: "no synthetic state was created" }] },
+    failures: [],
+  };
+}
+
+export function failedApplyReport(runId: string, error: unknown): CreditE2eReport {
+  const failure = redactEvidenceText((error as Error)?.message ?? String(error));
+  return {
+    schemaVersion: 2,
+    mode: "apply",
+    outcome: "FAIL",
+    runId,
+    targetRef: CREDIT_E2E_TEST_REF,
+    binding: {
+      previewOrigin: null,
+      candidateCommit: null,
+      deploymentId: null,
+      testSupabaseOrigin: null,
+      testSupabaseRef: CREDIT_E2E_TEST_REF,
+      verified: false,
+    },
+    externalWrites: false,
+    rounds: [],
+    cleanup: {
+      status: "PASS",
+      actions: [{ resource: "preflight", status: "PASS", detail: "failed before adapter writes were enabled" }],
+    },
+    failures: [failure],
+  };
 }
 
 export function reportMarkdown(report: CreditE2eReport): string {
@@ -201,7 +307,13 @@ export function reportMarkdown(report: CreditE2eReport): string {
     "# Credit E2E Report",
     "",
     `- Mode: ${report.mode}`,
+    `- Outcome: ${report.outcome}`,
     `- Test project ref: ${report.targetRef}`,
+    `- Binding verified: ${report.binding.verified ? "yes" : "no"}`,
+    `- Preview origin: ${report.binding.previewOrigin ?? "NOT_EXECUTED"}`,
+    `- Candidate commit: ${report.binding.candidateCommit ?? "NOT_EXECUTED"}`,
+    `- Deployment: ${report.binding.deploymentId ?? "NOT_EXECUTED"}`,
+    `- Test Supabase origin: ${report.binding.testSupabaseOrigin ?? "NOT_EXECUTED"}`,
     `- External writes: ${report.externalWrites ? "yes" : "no"}`,
     `- Run: ${report.runId}`,
     "- Credentials, passwords, bearer tokens, and raw synthetic emails are deliberately omitted.",
@@ -216,8 +328,19 @@ export function reportMarkdown(report: CreditE2eReport): string {
       lines.push(`| ${scenario.plan} (${scenario.scenario}) | ${scenario.aiImages.used}/${scenario.aiImages.limit} | ${posts} | ${scenario.accountsPerPlatform} | ${scenario.emailFingerprint} |`);
     }
     lines.push("", "### Evidence", "");
-    for (const item of round.evidence) lines.push(`- [${item.status}] ${item.surface}: ${item.detail}`);
+    for (const item of round.evidence) {
+      const caseLabel = item.caseId ? ` ${item.caseId}` : "";
+      const screenshot = item.screenshot ? `; screenshot: ${item.screenshot}` : "";
+      const json = item.json ? `; response: ${item.json}` : "";
+      lines.push(`- [${item.status}]${caseLabel} ${item.surface}: ${item.detail}${screenshot}${json}`);
+    }
     lines.push("");
+  }
+  lines.push("## Cleanup", "", `- Cleanup: ${report.cleanup.status}`);
+  for (const action of report.cleanup.actions) lines.push(`- [${action.status}] ${action.resource}: ${action.detail}`);
+  if (report.failures.length > 0) {
+    lines.push("", "## Failures", "");
+    for (const failure of report.failures) lines.push(`- ${failure}`);
   }
   return lines.join("\n");
 }
