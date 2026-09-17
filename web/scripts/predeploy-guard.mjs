@@ -105,6 +105,19 @@ export function checkCreemPreviewTestConfig(env, stableOrigins) {
 }
 
 /**
+ * The single billing environment selector used by both the manual predeploy
+ * guard and Vercel's build-time Preview gate. A Preview sandbox must never be
+ * evaluated by the production-only rule merely because Next builds with
+ * NODE_ENV=production.
+ */
+export function checkDeploymentBillingContract(env, stableOrigins) {
+  const vercelEnv = String(env.VERCEL_ENV ?? "").trim().toLowerCase();
+  if (vercelEnv === "production") return checkBillingModeForProd(env);
+  if (vercelEnv === "preview") return checkCreemPreviewTestConfig(env, stableOrigins);
+  return [];
+}
+
+/**
  * Unmerged-work check (2026-07-22, after four sessions serially clobbered each
  * other's production deploys in one morning).
  *
@@ -357,32 +370,27 @@ if (process.env.PINTEREST_API_ENV === "sandbox") {
   failures.push('PINTEREST_API_ENV is "sandbox" — refusing a production deploy against the sandbox Pinterest environment');
 }
 
-// --- Check 6: billing must not be in test mode for a production deploy ---
-// See checkBillingModeForProd (top of file) — a test-mode Creem key must never
-// open real checkout on production.
-for (const problem of checkBillingModeForProd(process.env)) {
-  failures.push(problem);
-}
-
-// --- Check 6b: Preview Test billing needs an audited stable return origin ---
-if (
-  String(process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "preview" &&
-  String(process.env.CREEM_MODE ?? "").trim().toLowerCase() === "test"
-) {
+// --- Check 6: environment-targeted billing contract ---
+// Production rejects test billing. Preview sandbox checkout requires its audited
+// return alias. The two modes are deliberately mutually exclusive.
+let stableOrigins = [];
+if (String(process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "preview") {
   try {
     const manifestPath = path.join(repoRoot, "web", "config", "creem-preview-origin-manifest.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const stableOrigins = manifest?.stableOrigins;
+    stableOrigins = manifest?.stableOrigins;
     if (!Array.isArray(stableOrigins) || stableOrigins.length === 0 || !stableOrigins.every((value) => typeof value === "string")) {
       failures.push("web/config/creem-preview-origin-manifest.json must contain a non-empty stableOrigins string array.");
+      stableOrigins = [];
     } else {
-      for (const problem of checkCreemPreviewTestConfig(process.env, stableOrigins)) {
-        failures.push(problem);
-      }
+      infoLines.push("Preview Creem stable-origin manifest: ok");
     }
   } catch (err) {
     failures.push(`could not read/parse web/config/creem-preview-origin-manifest.json: ${err.message}`);
   }
+}
+for (const problem of checkDeploymentBillingContract(process.env, stableOrigins)) {
+  failures.push(problem);
 }
 
 // --- Check 7: no other active branch's work would be dropped ---

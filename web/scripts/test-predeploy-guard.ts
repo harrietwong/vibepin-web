@@ -38,9 +38,14 @@ async function main() {
       env: Record<string, string | undefined>,
       stableOrigins: readonly string[],
     ) => string[];
+    checkDeploymentBillingContract: (
+      env: Record<string, string | undefined>,
+      stableOrigins: readonly string[],
+    ) => string[];
   };
   const check = guard.checkBillingModeForProd;
   const checkPreview = guard.checkCreemPreviewTestConfig;
+  const checkDeployment = guard.checkDeploymentBillingContract;
 
   console.log("\npredeploy-guard billing-mode tests\n");
 
@@ -174,6 +179,48 @@ async function main() {
   await test("Production and non-Test Preview configs do not require a Preview alias", () => {
     assertEq(checkPreview({ VERCEL_ENV: "production", CREEM_MODE: "live" }, stableOrigins).length, 0, "production ignored");
     assertEq(checkPreview({ VERCEL_ENV: "preview", CREEM_MODE: "disabled" }, stableOrigins).length, 0, "disabled Preview ignored");
+  });
+
+  console.log("\npredeploy-guard deployment aggregation tests\n");
+
+  await test("exports the environment-targeted deployment billing contract", () => {
+    assert(typeof checkDeployment === "function", "checkDeploymentBillingContract exported");
+  });
+
+  await test("production + test billing is refused by the production check", () => {
+    const problems = checkDeployment({ VERCEL_ENV: "production", CREEM_MODE: "test" }, stableOrigins);
+    assertEq(problems.length, 1, "one production problem");
+    assert(/CREEM_MODE is "test"/.test(problems[0]), "production check is selected");
+  });
+
+  await test("Preview + complete test billing is accepted by the Preview check", () => {
+    assertEq(
+      checkDeployment(
+        {
+          VERCEL_ENV: "preview",
+          CREEM_MODE: "test",
+          CREEM_API_KEY: "creem_test_fake",
+          CREEM_PREVIEW_SUCCESS_ORIGIN: stableOrigins[0],
+        },
+        stableOrigins,
+      ).length,
+      0,
+      "Preview sandbox config is not treated as production",
+    );
+  });
+
+  await test("Preview + incomplete test billing is refused by the Preview check", () => {
+    const problems = checkDeployment(
+      { VERCEL_ENV: "preview", CREEM_MODE: "test", CREEM_API_KEY: "creem_test_fake" },
+      stableOrigins,
+    );
+    assertEq(problems.length, 1, "missing Preview alias is refused");
+    assert(/CREEM_PREVIEW_SUCCESS_ORIGIN/.test(problems[0]), "Preview problem is selected");
+  });
+
+  await test("Preview live and disabled retain their explicit no-alias semantics", () => {
+    assertEq(checkDeployment({ VERCEL_ENV: "preview", CREEM_MODE: "live" }, stableOrigins).length, 0, "Preview live is not a sandbox-alias gate");
+    assertEq(checkDeployment({ VERCEL_ENV: "preview", CREEM_MODE: "disabled" }, stableOrigins).length, 0, "Preview disabled is not a sandbox-alias gate");
   });
 
   // ── Unmerged-branch check (2026-07-22 multi-session clobbering) ─────────────
