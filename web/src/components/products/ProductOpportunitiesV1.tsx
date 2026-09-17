@@ -27,6 +27,12 @@ import {
   productFamilyTabIndex,
   type ProductOpportunityFamily,
 } from "@/lib/productOpportunityAccessibility";
+import {
+  DEFAULT_PRODUCT_OPPORTUNITY_FILTERS,
+  parseProductOpportunityFilterQuery,
+  serializeProductOpportunityFilterQuery,
+  type ProductOpportunityFilters,
+} from "@/lib/productOpportunityFilters";
 import styles from "./ProductOpportunitiesV1.module.css";
 import { ProductImageSurface } from "./ProductImageSurface";
 
@@ -41,10 +47,12 @@ function number(value: number, locale: string): string {
 }
 
 function dateTime(value: string, locale: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
   return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function productDetailsLabel(item: ProductOpportunityItem, tr: Translator): string {
@@ -154,11 +162,14 @@ function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
   return (
     <div className={styles.errorCopy}>
       <span>{safeMessage}</span>
-      <small data-testid="product-error-evidence">
-        {`${tr("products.opportunities.evidenceMethod")} ${error.method} · ${tr("products.opportunities.evidencePath")} ${error.path} · ${tr("products.opportunities.evidenceStatus")} ${error.status ?? notReported} · ${tr("products.opportunities.evidenceCode")} ${error.code}`}
-        {` · ${tr("products.opportunities.evidenceRequest")} ${error.requestId ?? notReported} · ${tr("products.opportunities.evidenceTime")} ${dateTime(error.occurredAt, preferences.appLanguage)}`}
-        {` · ${tr("products.opportunities.evidenceRuntime")} ${error.runtime ?? notReported} · ${tr("products.opportunities.evidenceDeployment")} ${error.deployment ?? notReported}`}
-      </small>
+      <details className={styles.errorEvidence}>
+        <summary>{tr("support.diagnosticTitle")}</summary>
+        <small data-testid="product-error-evidence">
+          {`${tr("products.opportunities.evidenceMethod")} ${error.method} · ${tr("products.opportunities.evidencePath")} ${error.path} · ${tr("products.opportunities.evidenceStatus")} ${error.status ?? notReported} · ${tr("products.opportunities.evidenceCode")} ${error.code}`}
+          {` · ${tr("products.opportunities.evidenceRequest")} ${error.requestId ?? notReported} · ${tr("products.opportunities.evidenceTime")} ${dateTime(error.occurredAt, preferences.appLanguage)}`}
+          {` · ${tr("products.opportunities.evidenceRuntime")} ${error.runtime ?? notReported} · ${tr("products.opportunities.evidenceDeployment")} ${error.deployment ?? notReported}`}
+        </small>
+      </details>
     </div>
   );
 }
@@ -285,7 +296,9 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const detailRequestSequence = useRef(0);
   const catalogViewTracked = useRef(false);
   const savedViewTracked = useRef(false);
+  const [urlFiltersReady, setUrlFiltersReady] = useState(mode !== "catalog");
   const [family, setFamily] = useState<Family>("all");
+  const [draftFamily, setDraftFamily] = useState<Family>("all");
   const [draftSearch, setDraftSearch] = useState("");
   const [draftCategory, setDraftCategory] = useState("");
   const [draftPlatform, setDraftPlatform] = useState("");
@@ -293,6 +306,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const [draftTrend, setDraftTrend] = useState<"" | "rising" | "steady" | "cooling">("");
   const [filters, setFilters] = useState({ search: "", category: "", platform: "", demand: "" as "" | "high_recent_demand", trend: "" as "" | "rising" | "steady" | "cooling" });
   const [sort, setSort] = useState<"most_saved" | "newest" | "fastest_growing">("most_saved");
+  const [draftSort, setDraftSort] = useState<"most_saved" | "newest" | "fastest_growing">("most_saved");
   const [metricControls, setMetricControls] = useState({ available: false, family: null as "physical" | "digital" | null, metricVersion: null as number | null });
   const [items, setItems] = useState<ProductOpportunityItem[]>([]);
   const [savedRecords, setSavedRecords] = useState<SavedProductOpportunity[]>([]);
@@ -311,6 +325,40 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const [accessibleCount, setAccessibleCount] = useState(0);
   const [hasLockedCatalog, setHasLockedCatalog] = useState(false);
   const [planAccess, setPlanAccess] = useState<"preview" | "full">("preview");
+
+  const applyProductFilters = useCallback((next: ProductOpportunityFilters, navigate: boolean) => {
+    setFamily(next.family);
+    setDraftFamily(next.family);
+    setDraftSearch(next.search);
+    setDraftCategory(next.category);
+    setDraftPlatform(next.platform);
+    setDraftDemand(next.demand);
+    setDraftTrend(next.trend);
+    setFilters({
+      search: next.search,
+      category: next.category,
+      platform: next.platform,
+      demand: next.demand,
+      trend: next.trend,
+    });
+    setSort(next.sort);
+    setDraftSort(next.sort);
+    if (navigate) {
+      const query = serializeProductOpportunityFilterQuery(next);
+      router.push(query ? `/app/products?${query}` : "/app/products");
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (mode !== "catalog") return;
+    const restore = () => {
+      applyProductFilters(parseProductOpportunityFilterQuery(window.location.search), false);
+      setUrlFiltersReady(true);
+    };
+    restore();
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, [applyProductFilters, mode]);
 
   const loadCatalog = useCallback(async (append = false) => {
     const requestId = ++requestSequence.current;
@@ -392,12 +440,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   /* eslint-disable react-hooks/set-state-in-effect -- effects initiate the external catalog request. */
   useEffect(() => { if (mode === "saved") void loadSaved(); }, [loadSaved, mode]);
   useEffect(() => {
-    if (mode !== "catalog") return;
+    if (mode !== "catalog" || !urlFiltersReady) return;
     void loadCatalog(false);
     void loadCatalogSavedState();
     // loadCatalog owns reloads when the family changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [family, filters, loadCatalogSavedState, mode, sort]);
+  }, [family, filters, loadCatalogSavedState, mode, sort, urlFiltersReady]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const visibleSaved = useMemo(() => savedRecords.filter((record) => family === "all" || (record.item ?? record.historyItem)?.productFamily === family), [family, savedRecords]);
@@ -494,12 +542,17 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const catalogRows = mode === "catalog" ? items : visibleSaved.flatMap((record) => record.item ? [record.item] : []);
   const canLoadMore = mode === "catalog" && planAccess === "full" && items.length < accessibleCount;
   const chooseFamily = (value: Family) => {
-    setFamily(value);
-    setMetricControls({ available: false, family: null, metricVersion: null });
-    setDraftDemand("");
-    setDraftTrend("");
-    setFilters((current) => ({ ...current, demand: "", trend: "" }));
-    setSort((current) => current === "fastest_growing" ? "most_saved" : current);
+    if (mode === "saved") {
+      setFamily(value);
+      setDraftFamily(value);
+      return;
+    }
+    setDraftFamily(value);
+    if (value !== draftFamily) {
+      setDraftDemand("");
+      setDraftTrend("");
+      setDraftSort((current) => current === "fastest_growing" ? "most_saved" : current);
+    }
   };
   const applyFilters = () => {
     if (draftDemand) {
@@ -508,24 +561,24 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     if (draftTrend) {
       track("trend_filter_used", { productFamily: family, trend: draftTrend });
     }
-    setFilters({
+    const next: ProductOpportunityFilters = {
+      family: draftFamily,
       search: draftSearch.trim(),
       category: draftCategory.trim(),
       platform: draftPlatform.trim(),
       demand: draftDemand,
       trend: draftTrend,
-    });
+      sort: draftSort,
+    };
+    setMetricControls({ available: false, family: null, metricVersion: null });
+    applyProductFilters(next, true);
   };
   const clearFilters = () => {
-    setDraftSearch("");
-    setDraftCategory("");
-    setDraftPlatform("");
-    setDraftDemand("");
-    setDraftTrend("");
-    chooseFamily("all");
-    setFilters({ search: "", category: "", platform: "", demand: "", trend: "" });
+    setMetricControls({ available: false, family: null, metricVersion: null });
+    applyProductFilters(DEFAULT_PRODUCT_OPPORTUNITY_FILTERS, true);
   };
   const hasCatalogFilters = family !== "all"
+    || sort !== "most_saved"
     || Boolean(filters.search || filters.category || filters.platform || filters.demand || filters.trend);
   const savedFamilyHasNoMatches = mode === "saved"
     && family !== "all"
@@ -541,14 +594,14 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? tr("products.opportunities.browse") : tr("products.opportunities.savedTitle")}</Link>
       </header>
       {mode === "catalog" ? <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
-        <ProductFamilyRadioGroup family={family} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} />
+        <ProductFamilyRadioGroup family={draftFamily} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} />
         <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder={tr("products.opportunities.searchPlaceholder")} aria-label={tr("products.opportunities.searchLabel")} /></label>
         <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABEL_KEYS).map(([value, key]) => <option key={value} value={value}>{tr(key)}</option>)}</select></label>
         <label><span>{tr("products.opportunities.platform")}</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder={tr("products.opportunities.allPlatforms")} /></label>
         <datalist id="product-opportunity-platforms">{platformSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
         {metricControls.available ? <label><span>{tr("products.opportunities.demand")}</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">{tr("products.opportunities.allDemand")}</option><option value="high_recent_demand">{tr("products.opportunities.highDemand")}</option></select></label> : null}
         {metricControls.available ? <label><span>{tr("products.opportunities.trend")}</span><select value={draftTrend} onChange={(event) => { const value = event.target.value; setDraftTrend(value === "rising" || value === "steady" || value === "cooling" ? value : ""); }}><option value="">{tr("products.opportunities.allTrends")}</option><option value="rising">{tr("products.opportunities.rising")}</option><option value="steady">{tr("products.opportunities.steady")}</option><option value="cooling">{tr("products.opportunities.cooling")}</option></select></label> : null}
-        <label><span>{tr("products.opportunities.sort")}</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
+        <label><span>{tr("products.opportunities.sort")}</span><select value={draftSort} onChange={(event) => { const value = event.target.value; setDraftSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
         <button type="submit">{tr("products.opportunities.apply")}</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}
       </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><ProductFamilyRadioGroup family={family} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} /></div>}
@@ -557,7 +610,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : dataState === "stale" ? tr("products.opportunities.stateStale") : dataState === "partial" ? tr("products.opportunities.statePartial") : ""}{lastEvidence ? <small>{tr("products.opportunities.evidenceRequest")} {lastEvidence.requestId} · {tr("products.opportunities.evidenceTime")} {dateTime(lastEvidence.occurredAt, preferences.appLanguage)}</small> : null}</div> : null}
       {loading ? <div className={styles.loading} data-testid={`product-state-${dataState}`} aria-live="polite"><Loader2 className={styles.spin} aria-hidden="true" /><span>{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : tr("products.opportunities.stateLoading")}</span></div>
         : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? tr("products.opportunities.authRequiredTitle") : tr("products.opportunities.apiErrorTitle")}</h2><p>{dataState === "auth-required" ? tr("products.opportunities.authRequiredBody") : tr("products.opportunities.apiErrorBody")}</p></div>
-        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyTitle") : tr("products.opportunities.savedEmptyTitle") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyBody") : tr("products.opportunities.savedEmptyBody") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>
+        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyTitle") : tr("products.opportunities.savedEmptyTitle") : dataState === "filtered-empty" ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyBody") : tr("products.opportunities.savedEmptyBody") : dataState === "filtered-empty" ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : dataState === "filtered-empty" ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>
         : <><section className={styles.grid} aria-label={mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}>{catalogRows.map((item) => <ProductCard key={item.id} item={item} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)} savedState={savedState} mode={mode} onOpen={() => void openDetails(item)} onSave={() => void toggleSaved(item)} onCreate={() => createPin(item)} />)}</section>{mode === "saved" ? visibleSaved.filter((record) => !record.item).map((record) => <SavedPlaceholder key={record.productOpportunityId} record={record} removing={savingIds.has(record.productOpportunityId)} onRemove={() => void removeSavedHistory(record.productOpportunityId)} />) : null}</>}
       {hasLockedCatalog && mode === "catalog" ? <aside className={styles.upgradePanel}><div><Heart aria-hidden="true" /><span>{tr("products.opportunities.upgradeTitle")}</span></div><p>{tr("products.opportunities.upgradeBody")}</p><Link href="/pricing">{tr("products.opportunities.viewPlans")} <ArrowRight aria-hidden="true" /></Link></aside> : null}
       {canLoadMore ? <button className={styles.loadMore} onClick={() => void loadCatalog(true)} disabled={loadingMore}>{loadingMore ? <Loader2 className={styles.spin} aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}{loadingMore ? tr("products.opportunities.loadingMore") : tr("products.opportunities.loadMore")}</button> : null}

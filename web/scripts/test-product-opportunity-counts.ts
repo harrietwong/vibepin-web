@@ -42,8 +42,8 @@ test("Save and Create Pin are separate explicit actions", () => {
   assert.match(catalog, /setProductOpportunitySaved\(item\.id, next\)/);
   assert.match(catalog, /const createPin = useCallback\(async \(item: ProductOpportunityItem\) =>/);
   assert.match(catalog, /openCreatePinsWithDraft/);
-  assert.match(catalog, />Create Pin<\/button>/);
-  assert.match(catalog, /saved \? "Saved" : "Save"/);
+  assert.match(catalog, /tr\("products\.opportunities\.createPin"\)/);
+  assert.match(catalog, /saved \? tr\("products\.opportunities\.saved"\) : tr\("products\.opportunities\.save"\)/);
   assert.doesNotMatch(catalog, /setProductOpportunitySaved\([^)]*\)[\s\S]{0,200}createPin\(/);
 });
 
@@ -55,7 +55,7 @@ test("Saved Products has a dedicated entry and history surface", () => {
 
 test("Missing product titles are omitted rather than fabricated", () => {
   assert.match(catalog, /\{item\.productName\?\.trim\(\) \? <button[^>]*>\{item\.productName\}<\/button> : null\}/);
-  assert.match(catalog, /history\?\.productName\?\.trim\(\) \|\| "Saved item"/);
+  assert.match(catalog, /history\?\.productName\?\.trim\(\) \|\| tr\("products\.opportunities\.savedItem"\)/);
   assert.doesNotMatch(catalog, /history\?\.productName\?\.trim\(\) \|\| history\?\.(?:merchant|domain)/);
   assert.doesNotMatch(catalog, /productName\s*\|\|\s*["']Product["']/);
   assert.doesNotMatch(catalog, /productName\s*\?\?\s*["']Product["']/);

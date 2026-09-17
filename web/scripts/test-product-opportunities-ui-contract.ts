@@ -169,10 +169,15 @@ async function runBehaviorTests() {
   process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service";
   const { classifyProductOpportunityState } = await import("../src/lib/server/productOpportunities");
   const {
+    parseProductOpportunityFilterQuery,
+    serializeProductOpportunityFilterQuery,
+  } = await import("../src/lib/productOpportunityFilters");
+  const {
     decodeProductOpportunityDetailResponse,
     decodeProductOpportunityListResponse,
     decodeSavedProductOpportunitiesResponse,
     decodeProductOpportunitySaveResponse,
+    normalizeProductOpportunityOccurredAt,
     productOpportunityViewState,
   } = await import("../src/lib/productOpportunitiesClient");
   const {
@@ -180,11 +185,34 @@ async function runBehaviorTests() {
     productFamilyTabIndex,
   } = await import("../src/lib/productOpportunityAccessibility");
   const { getMessages } = await import("../src/lib/i18n/messages");
-  test("State classifier distinguishes empty, filtered-empty, and incomplete-count partial", () => {
-    assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: false, totalCount: 0 }), "catalog-empty");
-    assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: true, totalCount: 0 }), "filtered-empty");
-    assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: null }), "partial");
-    assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: 2 }), "ready");
+  test("State classifier proves the base catalog exists before claiming filtered-empty", () => {
+    assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: false, totalCount: 0, baseCatalogCount: 0 }), "catalog-empty");
+    assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: true, totalCount: 0, baseCatalogCount: 0 }), "catalog-empty");
+    assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: true, totalCount: 0, baseCatalogCount: 7 }), "filtered-empty");
+    assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: null, baseCatalogCount: 2 }), "partial");
+    assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: 2, baseCatalogCount: 2 }), "ready");
+  });
+  test("Product filter query parser is allowlisted, normalized, and round-trips Back/Forward state", () => {
+    const parsed = parseProductOpportunityFilterQuery("?family=digital&q= planner &category=digital-products&platform=etsy.com&sort=newest&token=secret&selection=private");
+    assert.deepEqual(parsed, {
+      family: "digital", search: "planner", category: "digital-products", platform: "etsy.com",
+      demand: "", trend: "", sort: "newest",
+    });
+    const serialized = serializeProductOpportunityFilterQuery(parsed);
+    assert.match(serialized, /family=digital/);
+    assert.match(serialized, /q=planner/);
+    assert.doesNotMatch(serialized, /token|selection|private|secret/);
+    assert.deepEqual(parseProductOpportunityFilterQuery(`?${serialized}`), parsed);
+    assert.deepEqual(parseProductOpportunityFilterQuery("?family=bad&sort=bad&trend=bad"), {
+      family: "all", search: "", category: "", platform: "", demand: "", trend: "", sort: "most_saved",
+    });
+  });
+  test("Catalog UI respects the canonical empty state and applies all controls transactionally", () => {
+    assert.doesNotMatch(component, /dataState === "filtered-empty" \|\| hasCatalogFilters/);
+    assert.match(component, /applyProductFilters/);
+    assert.match(component, /popstate/);
+    assert.match(component, /serializeProductOpportunityFilterQuery/);
+    assert.match(component, /<details[^>]*className=\{styles\.errorEvidence\}/);
   });
   test("Client state distinguishes auth/api errors, stale, and syncing", () => {
     const base = {
@@ -328,6 +356,14 @@ async function runBehaviorTests() {
     assert.throws(
       () => decodeSavedProductOpportunitiesResponse({ items: {} }, "/api/saved-product-opportunities", "GET", 200),
       (error: unknown) => error instanceof Error && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+    );
+  });
+  test("Malformed error timestamps are discarded before localized rendering", () => {
+    const normalized = normalizeProductOpportunityOccurredAt("not-a-date", "2026-09-17T00:00:00.000Z");
+    assert.equal(normalized, "2026-09-17T00:00:00.000Z");
+    assert.equal(
+      normalizeProductOpportunityOccurredAt("2026-09-17T03:04:05.000Z", "2026-09-17T00:00:00.000Z"),
+      "2026-09-17T03:04:05.000Z",
     );
   });
   test("evidence is real and request paths never expose query strings", () => {

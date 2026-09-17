@@ -187,12 +187,17 @@ export function classifyProductOpportunityState({
   itemCount,
   filtered,
   totalCount,
+  baseCatalogCount,
 }: {
   itemCount: number;
   filtered: boolean;
   totalCount: number | null;
+  baseCatalogCount: number;
 }): ProductOpportunityCatalogState {
-  if (itemCount === 0) return filtered ? "filtered-empty" : "catalog-empty";
+  if (itemCount === 0) {
+    if (!filtered || baseCatalogCount === 0) return "catalog-empty";
+    return "filtered-empty";
+  }
   // This is only an incomplete exact-count signal. It does not mean that a
   // secondary product tier, quality tier, or part of the catalog is missing.
   if (totalCount === null) return "partial";
@@ -437,6 +442,25 @@ async function hasRowsOutsideFreePreview(
   return (count ?? 0) > freeLimit;
 }
 
+async function countAccessibleCatalog(
+  db: ReturnType<typeof createServerClient>,
+  scope: ReturnType<typeof productCatalogScope>,
+): Promise<number> {
+  let query = db
+    .from("product_opportunity_catalog_v1")
+    .select("id", { count: "exact" })
+    .eq("lifecycle_status", "active")
+    .not("product_image_url", "is", null) as unknown as OpportunityListQuery;
+  if (scope.requiresFreePreviewRank) {
+    query = query
+      .not("free_preview_rank", "is", null)
+      .lte("free_preview_rank", scope.limit!);
+  }
+  const { error, count } = await query.range(0, 0);
+  if (error) throw new Error(`accessible product catalog count failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function listProductOpportunities(
   plan: PlanKey,
   options: {
@@ -454,6 +478,10 @@ export async function listProductOpportunities(
   const db = createServerClient();
   const scope = productCatalogScope(plan);
   const hasLockedCatalogPromise = hasRowsOutsideFreePreview(db, scope.limit);
+  const filtered = Boolean(
+    options.family || options.search || options.category || options.platform
+      || options.demand || options.trend,
+  );
   const metricControlsPromise = loadMetricControls(db, options.family);
   const requestedLimit = Math.max(1, Math.min(options.limit ?? 50, 100));
   const offset = Math.max(0, options.offset ?? 0);
@@ -518,11 +546,14 @@ export async function listProductOpportunities(
   if (error) throw new Error(`product opportunity query failed: ${error.message}`);
   const rows = (data ?? []) as unknown as CatalogRow[];
   const calibrations = await approvedCalibrationMap();
-  const filtered = Boolean(
-    options.family || options.search || options.category || options.platform
-      || options.demand || options.trend,
-  );
-  const state = classifyProductOpportunityState({ itemCount: rows.length, filtered, totalCount: count });
+  const state = classifyProductOpportunityState({
+    itemCount: rows.length,
+    filtered,
+    totalCount: count,
+    baseCatalogCount: filtered && rows.length === 0
+      ? await countAccessibleCatalog(db, scope)
+      : Math.max(rows.length, count ?? 0),
+  });
   return {
     items: rows.map((row) => catalogItem(row, calibrations)),
     accessibleCount: count ?? rows.length,

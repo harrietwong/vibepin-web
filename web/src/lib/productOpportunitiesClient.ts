@@ -68,6 +68,10 @@ function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+export function normalizeProductOpportunityOccurredAt(value: unknown, fallback = new Date().toISOString()): string {
+  return isIsoDate(value) ? value : fallback;
+}
+
 function decodeEvidence(
   value: unknown,
   path: string,
@@ -370,7 +374,7 @@ async function requireOk(response: Response, path: string, method = "GET"): Prom
       typeof record.requestId === "string" ? record.requestId : requestId,
       method,
       {
-        occurredAt: typeof record.occurredAt === "string" ? record.occurredAt : undefined,
+        occurredAt: normalizeProductOpportunityOccurredAt(record.occurredAt),
         runtime: typeof record.runtime === "string" ? record.runtime : null,
         deployment: typeof record.deployment === "string" ? record.deployment : null,
       },
