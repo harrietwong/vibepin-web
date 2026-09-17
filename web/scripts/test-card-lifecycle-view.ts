@@ -113,12 +113,12 @@ test("generating: its own variant, nothing actionable", () => {
 
 // ── 2. Partial success — the case the inline JSX kept getting wrong ───────────
 
-test("partial success is POSTED + needs attention, and its primary is Retry", () => {
+test("partial success is needs_attention (not Posted), and its primary is Retry", () => {
   const vm = buildCardViewModel(
     draft({ destinationResults: [pinterestPublished, instagramFailed] }),
-    "posted",
+    "needs_attention",
   );
-  assert.equal(vm.variant, "posted", "posted beats failed");
+  assert.equal(vm.variant, "failed", "needs_attention owns the card's current state while receipts retain the historical success");
   assert.equal(vm.needsAttention, true, "the failed destination still needs attention");
   assert.equal(vm.hasPublished, true);
   assert.equal(vm.primaryAction, "retry", "Retry re-sends only the failed destination");
@@ -197,10 +197,10 @@ test("supersededResults leaves untouched destinations alone and is capped", () =
 
 // ── 6. Variant naming + relative time ────────────────────────────────────────
 
-test("cardVariant renames only 'unscheduled' → 'draft'", () => {
+test("cardVariant maps unscheduled to draft and needs_attention to failed", () => {
   const cases: Array<[LifecycleInput, string]> = [
     ["unscheduled", "draft"], ["scheduled", "scheduled"], ["posted", "posted"],
-    ["failed", "failed"], ["generating", "generating"],
+    ["failed", "failed"], ["needs_attention", "failed"], ["generating", "generating"],
   ];
   for (const [input, expected] of cases) assert.equal(cardVariant(input), expected);
 });

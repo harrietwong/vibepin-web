@@ -90,7 +90,7 @@ export function scheduledTime(draft: Pick<PinDraft, "scheduledTime" | "plannedAt
 export function itemState(draft: PinDraft): PlanItemState {
   const lifecycle = getPinLifecycle(draft);
   if (lifecycle === "posted") return "posted";
-  if (lifecycle === "failed") return "failed";
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return "failed";
   return "scheduled";
 }
 

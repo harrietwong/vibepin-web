@@ -15,7 +15,7 @@
 import {
   contentDestinationResults,
   contentMedia,
-  hasFailedDestination,
+  hasUnresolvedDestination,
   hasPublishedDestination,
   type ContentDraftLike,
   type DestinationPublishResult,
@@ -119,18 +119,17 @@ function newestTimestamp(values: Array<string | undefined>): string | null {
  * exactly how a card once showed "Scheduled" in a Posted column. The only mapping is
  * naming — the store calls the empty state `unscheduled`, the PRD calls it `draft`.
  */
-export type LifecycleInput = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
+export type LifecycleInput = "generating" | "failed" | "needs_attention" | "unscheduled" | "scheduled" | "posted";
 
 export function cardVariant(lifecycle: LifecycleInput): CardVariant {
-  return lifecycle === "unscheduled" ? "draft" : lifecycle;
+  return lifecycle === "unscheduled" ? "draft" : lifecycle === "needs_attention" ? "failed" : lifecycle;
 }
 
 /**
  * Build the view model for one card.
  *
  * Partial success is the case worth stating: a Content whose Pinterest row published
- * and whose Instagram row failed is `posted` (the store's own rule — posted beats
- * failed) with `needsAttention: true` and a `retry` primary, because the actionable
+ * and whose Instagram row failed is `needs_attention` with a `retry` primary, because the actionable
  * next step is re-sending the failed destination only, not republishing the Pin.
  */
 export function buildCardViewModel(
@@ -144,7 +143,7 @@ export function buildCardViewModel(
   const resultRows = results.map(result => toRow(result));
   const earlier = (draft as { previousResults?: DestinationPublishResult[] }).previousResults ?? [];
   const earlierResultRows = earlier.map(result => toRow(result, true));
-  const needsAttention = hasFailedDestination(draft);
+  const needsAttention = hasUnresolvedDestination(draft);
   const hasPublished = hasPublishedDestination(draft);
 
   // The primary action, in priority order:

@@ -22,7 +22,7 @@ import {
   countPublishFailures,
   getPinLifecycle,
 } from "../src/lib/studio/pinLifecycle";
-import { deriveBoardCollections } from "../src/hooks/usePinBoardDrafts";
+import { deriveBoardCollections, matchesFilter } from "../src/hooks/usePinBoardDrafts";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -84,6 +84,44 @@ test("成功发布后清除失败态 → 不计入（postedAt 且失败字段已
   const posted = draft({ id: "P", source: "uploaded_image", postedAt: "2026-07-23T02:00:00.000Z" });
   assert.equal(isActionablePublishFailure(posted), false);
   assert.equal(getPinLifecycle(posted), "posted");
+});
+
+console.log("\n=== FB-0905-25: 部分 destination 成功仍需处理时不得伪装为 Posted ===");
+test("Pinterest 已发布、Facebook 失败 → 唯一主状态为 needs_attention，Failed 可见而 Posted 不可见", () => {
+  const partial = draft({
+    id: "partial-destination-result",
+    source: "uploaded_image",
+    destinationResults: [
+      { destinationId: "pinterest:pin-1", provider: "pinterest", socialConnectionId: "pin-1", status: "published", publishedAt: "2026-07-23T02:00:00.000Z", remoteId: "pin-live" },
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "failed", errorCode: "provider_error", errorMessage: "failed" },
+    ],
+  });
+  const lifecycle = getPinLifecycle(partial);
+  assert.equal(lifecycle, "needs_attention", "未解决的 destination 失败必须胜过历史成功，成为卡片唯一主状态");
+  assert.equal(matchesFilter({ draft: partial, lifecycle }, "failed"), true, "Failed 筛选必须保留可修复的部分成功");
+  assert.equal(matchesFilter({ draft: partial, lifecycle }, "posted"), false, "部分成功不得进入 Posted 筛选或显示 Posted 主徽标");
+  const item = deriveBoardCollections([partial]).boardItems[0];
+  assert.equal(item.lifecycle, "needs_attention", "Board 与 lifecycle reducer 必须使用同一 canonical 状态");
+  assert.equal(item.draft.destinationResults?.[0].remoteId, "pin-live", "历史 provider receipt 必须原样保留");
+});
+test("Pinterest 已发布、另一个 destination 回执未知 → 不得显示 Posted", () => {
+  const partialUnknown = draft({
+    id: "partial-unknown-result",
+    destinationResults: [
+      { destinationId: "pinterest:pin-1", provider: "pinterest", socialConnectionId: "pin-1", status: "published", remoteId: "pin-live" },
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "delivery_unknown" },
+    ],
+  });
+  assert.equal(getPinLifecycle(partialUnknown), "needs_attention", "未知回执不是完整 Posted；需先对账/处理");
+});
+test("只有明确 failed destination → Failed，而不是无状态的 Unscheduled", () => {
+  const failedDestination = draft({
+    id: "failed-destination-result",
+    destinationResults: [
+      { destinationId: "facebook:page-1", provider: "facebook", socialConnectionId: "page-1", status: "failed", errorCode: "provider_error" },
+    ],
+  });
+  assert.equal(getPinLifecycle(failedDestination), "failed", "durable destination receipt 足以定义失败，不依赖旧 publishError 镜像字段");
 });
 
 console.log("\n=== PRD v1.1 §6.3: workspace 全集，来源无关 ===");

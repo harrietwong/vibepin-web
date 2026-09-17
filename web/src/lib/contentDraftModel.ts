@@ -409,8 +409,19 @@ export function hasFailedDestination(draft: ContentDraftLike): boolean {
   return contentDestinationResults(draft).some(result => result.status === "failed");
 }
 
+/** A result that is not a confirmed failure can still require action. In particular,
+ * `delivery_unknown` means the provider receipt cannot prove whether a dispatch
+ * completed; presenting a sibling Pinterest success as fully Posted would be false. */
+export function hasUnresolvedDestination(draft: ContentDraftLike): boolean {
+  return contentDestinationResults(draft).some(result =>
+    result.status === "failed" || result.status === "delivery_unknown",
+  );
+}
+
 export function destinationNeedsAttention(draft: ContentDraftLike): DestinationPublishResult[] {
-  return contentDestinationResults(draft).filter(result => result.status === "failed");
+  return contentDestinationResults(draft).filter(result =>
+    result.status === "failed" || result.status === "delivery_unknown",
+  );
 }
 
 /**

@@ -46,14 +46,13 @@ const C = {
 };
 
 function listStatus(d: PinDraft): ListStatus {
-  // Published first (posted takes precedence over everything, matching getPinLifecycle).
-  if (sanitizeHandoffField(d.postedAt)) return "Published";
   // Failed uses the SAME canonical predicate as Create Pins (getPinLifecycle), which
   // covers BOTH publish failures (publishError/failureType) AND generation failures —
   // the old `d.generationStatus === "failed"` check missed every publish failure, so
   // publish-failed drafts were wrongly shown as Scheduled/Unscheduled here.
   const lifecycle = getPinLifecycle(d);
-  if (lifecycle === "failed") return "Failed";
+  if (lifecycle === "failed" || lifecycle === "needs_attention") return "Failed";
+  if (lifecycle === "posted") return "Published";
   const ev = mapPlanDraftToCalendarEvent(d);
   if (ev.planStatus === "scheduled") return "Scheduled";
   // "generating" (a transient client-only state) has no dedicated List status; map it

@@ -2,7 +2,7 @@
  * pinLifecycle.ts — Create Pins board status model (studioBoardV2).
  *
  * The ONLY card status values (matches the existing studio PinCardActions model):
- *   generating | failed | unscheduled | scheduled | posted
+ *   generating | failed | needs_attention | unscheduled | scheduled | posted
  *
  * Derived purely from durable draft fields — there is NO "ready" / "need details"
  * card status. Missing fields (title/description/board/url…) never change the card
@@ -16,6 +16,7 @@ import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import {
   hasFailedDestination,
+  hasUnresolvedDestination,
   hasPublishedDestination,
   type ContentDraftLike,
 } from "@/lib/contentDraftModel";
@@ -40,7 +41,7 @@ function destinationSignal(
   return probe({ ...d, id: d.id, imageUrl: d.imageUrl ?? "" } as ContentDraftLike);
 }
 
-export type PinLifecycle = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
+export type PinLifecycle = "generating" | "failed" | "needs_attention" | "unscheduled" | "scheduled" | "posted";
 
 function genStatus(d: Pick<PinDraft, "generationStatus">): string {
   return (d.generationStatus ?? "").toLowerCase();
@@ -54,10 +55,9 @@ function isGenerationFailed(d: Pick<PinDraft, "generationStatus">): boolean {
   return s === "failed" || s === "error";
 }
 
-/** Posted also when ANY destination published. A Content that reached Pinterest but
- *  failed on Instagram is Posted (and simultaneously surfaces in Failed for repair);
- *  getPinLifecycle() below checks posted BEFORE failed, so partial success never
- *  demotes a Content to "failed". */
+/** Posted only when a provider has confirmed at least one destination. A separate
+ *  unresolved-destination check in getPinLifecycle() takes precedence so a partial
+ *  publish never presents that historical success as the card's current state. */
 export function isPosted(d: Pick<PinDraft, "postedAt" | "remotePinId"> & ContentDestinationHints): boolean {
   return !!sanitizeHandoffField(d.postedAt)
     || !!sanitizeHandoffField(d.remotePinId)
@@ -68,11 +68,15 @@ export function isScheduledLifecycle(d: Pick<PinDraft, "scheduledDate" | "planne
 }
 
 /**
- * Derive lifecycle. Order: generating → posted → failed → scheduled → unscheduled.
+ * Derive lifecycle. Order: generating → needs_attention → posted → failed → scheduled
+ * → unscheduled. `needs_attention` is the one canonical state for a Content with both
+ * an immutable success receipt and an unresolved destination failure.
  * (Missing required fields do NOT produce a status — they stay "unscheduled".)
  */
 export function getPinLifecycle(draft: PinDraft): PinLifecycle {
   if (isGenerating(draft)) return "generating";
+  if (destinationSignal(draft, hasUnresolvedDestination) && isPosted(draft)) return "needs_attention";
+  if (destinationSignal(draft, hasFailedDestination)) return "failed";
   if (isPosted(draft)) return "posted";
   if (sanitizeHandoffField(draft.publishError) || isGenerationFailed(draft)) return "failed";
   if (isScheduledLifecycle(draft)) return "scheduled";
@@ -223,6 +227,7 @@ export function getStatusBadge(draft: PinDraft): StatusBadge {
   const lifecycle = getPinLifecycle(draft);
   switch (lifecycle) {
     case "generating": return { lifecycle, label: "Generating",  tone: "info" };
+    case "needs_attention": return { lifecycle, label: "Needs attention", tone: "error" };
     case "posted":     return { lifecycle, label: "Posted",      tone: "success" };
     case "failed":     return { lifecycle, label: "Failed",      tone: "error" };
     case "scheduled":  return { lifecycle, label: "Scheduled",   tone: "scheduled" };

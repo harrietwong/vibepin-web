@@ -29,7 +29,7 @@ import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio
 import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
 import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
-import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
+import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -150,17 +150,6 @@ const secondaryBtn: React.CSSProperties = {
   borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text,
   fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
 };
-const scheduleBtn: React.CSSProperties = {
-  ...secondaryBtn,
-  flex: "0 0 auto",
-  padding: "7px 10px",
-  minHeight: "var(--studio-schedule-hit-height, 34px)",
-  background: "transparent",
-  color: BUI.textSec,
-  fontSize: 11,
-  fontWeight: 700,
-};
-
 // Recommended-keyword chip — subtle, matches the existing dark card density.
 const keywordChipStyle: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 7px", borderRadius: 999,
@@ -732,11 +721,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // caller and already computes isPublishFailure for the action matrix below.
   const statusLabel = status.lifecycle === "failed"
     ? tr(isPublishFailure ? "studioBoard.card.publishFailedBadge" : "studioBoard.card.generationFailedBadge")
-    : status.label;
+    : status.lifecycle === "needs_attention"
+      ? tr("studioBoard.card.needsAttention")
+      : status.label;
   const publishing = props.publishing;
   const posted = lifecycle === "posted";
   const failed = lifecycle === "failed";
-  const needsAttention = failed || hasFailedDestination(draft);
+  const needsAttention = lifecycle === "needs_attention" || failed;
   const destinationResults = contentDestinationResults(draft);
   // Chips represent only an explicit, saved publishing decision. The broader
   // contentDestinations() projection intentionally keeps legacy Board-only rows alive
@@ -745,6 +736,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const destinations = explicitPublishDestinations(draft);
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
+  const editAriaLabel = `${tr("studioBoard.actions.edit")}: ${draft.title?.trim() || tr("studioBoard.card.untitledPin")}`;
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
@@ -795,7 +787,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // More menu at all. Every item stops at the menu (fixed backdrop) so a click never
   // opens/edits the card.
   const menuItems: Array<{ id: string; label: string; danger?: boolean }> =
-    lifecycle === "failed" ? (isPublishFailure ? [
+    (lifecycle === "failed" || lifecycle === "needs_attention") ? (isPublishFailure ? [
       { id: "move-to-unscheduled", label: tr("studioBoard.menu.moveToUnscheduled") },
       { id: "delete", label: tr("studioBoard.menu.delete"), danger: true },
     ] : [
@@ -1247,34 +1239,48 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               // Retry re-sends ONLY the failed destinations (onlyPending), so retrying a
               // partial success can never double-post the one that already published.
               <>
-                <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
+                <button type="button" data-testid="card-try-again" onClick={() => {
+                  if (!destinations.length) {
+                    setDestinationError(tr("studioBoard.blocker.no_destinations"));
+                    setDestinationsOpen(true);
+                    return;
+                  }
+                  props.onTryAgain(draft);
+                }} disabled={publishing} style={primaryBtn}>
                   {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.retry")}
                 </button>
                 {/* The one actionable next step for this failure category — never a raw message. */}
-                {nextStep && (
+                {nextStep && nextStep.action !== "edit" && (
                   <button type="button" data-testid="card-next-step"
                     onClick={() => { if (nextStep.action === "reconnect") props.onConnect?.(); else startEditing(); }}
                     style={secondaryBtn}>
                     {tr(nextStep.key)}
                   </button>
                 )}
-                <button type="button" data-testid="card-edit" onClick={startEditing} style={secondaryBtn}>
+                <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={secondaryBtn}>
                   {tr("studioBoard.actions.edit")}
                 </button>
               </>
+            ) : lifecycle === "needs_attention" ? (
+              // An unknown provider receipt is deliberately not retried blindly. The
+              // merchant can inspect or repair the saved destination, while the card
+              // continues to show Needs attention rather than a false Posted badge.
+              <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={secondaryBtn}>
+                {tr("studioBoard.actions.edit")}
+              </button>
             ) : view.needsAttention ? (
               // Generation failure: not a publish attempt, so its own recovery stands.
               <>
                 <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
                   {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.action.tryAgain")}
                 </button>
-                <button type="button" data-testid="card-edit" onClick={startEditing} style={secondaryBtn}>
+              <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={secondaryBtn}>
                   {tr("studioBoard.actions.edit")}
                 </button>
               </>
             ) : scheduled ? (
               <>
-                <button type="button" data-testid="card-edit" onClick={startEditing} style={primaryBtn}>
+                <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={primaryBtn}>
                   {tr("studioBoard.actions.edit")}
                 </button>
                 {/* Publishing now overrides the merchant's own plan, so it confirms first. */}
@@ -1286,15 +1292,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 </button>
               </>
             ) : posted ? (
-              <button type="button" data-testid="card-edit" onClick={startEditing} style={primaryBtn}>
+              <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={primaryBtn}>
                 {tr("studioBoard.actions.edit")}
               </button>
             ) : (
               <>
-                <button type="button" data-testid="card-schedule" className="studio-schedule-button" onClick={doSchedule} disabled={publishing} style={scheduleBtn}>
+                <button type="button" data-testid="card-schedule" className="studio-schedule-button" onClick={doSchedule} disabled={publishing} style={primaryBtn}>
                   <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.action.schedule")}
                 </button>
-                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={primaryBtn}>
+                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={secondaryBtn}>
                   {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
                 </button>
               </>
@@ -1435,7 +1441,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         {/* Failed-card info (expanded): same error/fix/previous-time detail as the
             compact card, shown here too since a failed card can also be expanded
             via Edit. PRD 13. */}
-        {failed && (
+        {needsAttention && (
           <div data-testid="card-failed-info-expanded" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", borderRadius: 9, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
             <p data-testid="card-failed-reason-expanded" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4 }}>
               <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} /> {failureReasonText}
@@ -1472,18 +1478,28 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
               </button>
             </>
-          ) : failed ? (
+          ) : (failed || lifecycle === "needs_attention") ? (
             isPublishFailure ? (
               <>
                 <button type="button" data-testid="card-move-to-unscheduled" onClick={() => props.onMoveToUnscheduled(draft.id)}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                   {tr("studioBoard.expanded.moveToUnscheduled")}
                 </button>
-                <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing}
+                <button type="button" data-testid="card-try-again" onClick={() => {
+                  if (!destinations.length) {
+                    setDestinationError(tr("studioBoard.blocker.no_destinations"));
+                    return;
+                  }
+                  props.onTryAgain(draft);
+                }} disabled={publishing}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
                   {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.actions.retry")}
                 </button>
               </>
+            ) : lifecycle === "needs_attention" ? (
+              <button type="button" data-testid="card-done" onClick={stopEditing} style={secondaryBtn}>
+                {tr("studioBoard.actions.done")}
+              </button>
             ) : (
               <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing}
                 style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
