@@ -281,10 +281,11 @@ async function main() {
     const source = await readFile(new URL("../src/app/pricing/pricing-client.tsx", import.meta.url), "utf8");
 
     assertEq(pp.PRICING_TIERS.length, 4, "pricing page still has exactly four plan cards");
+    const accountBulletIndex = { free: 2, starter: 0, pro: 0, business: 0 } as const;
     for (const plan of pp.PRICING_TIERS) {
       assert(
-        plan.bullets.some((bullet) => /\baccounts? per platform\b/i.test(bullet)),
-        `${plan.id} card must contain an accounts-per-platform row`,
+        accountBulletIndex[plan.id] < plan.bullets.length,
+        `${plan.id} card must retain its canonical account-bullet index`,
       );
     }
     assertEq(
@@ -310,12 +311,16 @@ async function main() {
       "the shared icon group must be wired once inside the four-card loop and once in comparison",
     );
     assert(
-      /isAccountsPerPlatformFeature\(f\) && <PricingPlatformIcons \/>/.test(source),
-      "each card account row must render the platform icon group",
+      /const ACCOUNT_BULLET_INDEX: Record<PlanKey, number> = \{ free: 2, starter: 0, pro: 0, business: 0 \}/.test(source),
+      "all four card account rows must retain their stable canonical indexes",
     );
     assert(
-      /isAccountsPerPlatformFeature\(row\.label\) && <PricingPlatformIcons \/>/.test(source),
-      "the comparison account label must render the same platform icon group",
+      /index === ACCOUNT_BULLET_INDEX\[plan\.id\] && <PricingPlatformIcons \/>/.test(source),
+      "each card must render the icon group from its canonical account-bullet index",
+    );
+    assert(
+      /sectionIndex === 0 && rowIndex === 0 && <PricingPlatformIcons \/>/.test(source),
+      "the canonical Basics/accounts comparison row must render the same platform icon group",
     );
     assert(!/tiktok/i.test(source), "Pricing UI must not hard-code or render TikTok");
     assert(

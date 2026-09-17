@@ -22,6 +22,7 @@ import {
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { PublicLanguageTheme, PublicNavLinks } from "@/components/public/PublicShell";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { formatPublicPricingComparisonValue } from "@/lib/i18n/pricingComparisonValue";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 import { PLATFORMS, VISIBLE_SOCIAL_PROVIDERS } from "@/lib/social/platforms";
@@ -310,16 +311,17 @@ function CellValue({ value, highlighted }: { value: string; highlighted: boolean
   if (value === "—") {
     return <Minus aria-label={t("public.pricing.compare.notIncluded")} className="h-4 w-4 mx-auto" style={{ color: "#374151" }} />;
   }
+  const displayValue = formatPublicPricingComparisonValue(value, t);
   if (value === "Limited" || value === "Basic") {
     return (
       <span className="text-[11px] font-semibold" style={{ color: "#8B93A1" }}>
-        {value === "Limited" ? t("public.pricing.compare.limited") : t("public.pricing.compare.basic")}
+        {displayValue}
       </span>
     );
   }
   return (
     <span className="text-[12px] font-bold text-white tabular-nums" style={MONO}>
-      {value}
+      {displayValue}
     </span>
   );
 }

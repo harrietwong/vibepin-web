@@ -6,6 +6,7 @@
  * catalog silently resolves the English source string.
  */
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import en from "../src/lib/i18n/messages/en";
 import { getMessages } from "../src/lib/i18n/messages";
@@ -22,6 +23,9 @@ import {
 import { FAQ_ITEMS } from "../src/lib/landing/conversionData";
 
 type Catalog = Record<string, string>;
+type ComparisonValueFormatter = (value: string, translate: (key: string) => string) => string;
+
+const requireFromTest = createRequire(join(process.cwd(), "scripts/test-public-pricing-i18n.ts"));
 
 let passed = 0;
 let failed = 0;
@@ -89,7 +93,7 @@ test("every target locale contains stable pricing, landing, and footer copy keys
       plan.previewBullets.forEach((_, index) => message(catalog, `public.pricing.plan.${plan.id}.previewBullet.${index}`));
     }
 
-    ["eyebrow", "title", "titleAccent", "description", "features", "included", "notIncluded", "limited", "basic"].forEach(key =>
+    ["eyebrow", "title", "titleAccent", "description", "features", "included", "notIncluded", "limited", "basic", "unlimited", "monthlyValue"].forEach(key =>
       message(catalog, `public.pricing.compare.${key}`),
     );
     COMPARISON_SECTIONS.forEach((section, sectionIndex) => {
@@ -153,6 +157,58 @@ test("all 54 card bullets have real copy instead of generated filler", () => {
       ...plan.previewBullets.map((_, index) => message(catalog, `public.pricing.plan.${plan.id}.previewBullet.${index}`)),
     ]);
     assert(bullets.length === 54, `${language} resolves ${bullets.length} card bullets instead of 54`);
+  }
+});
+
+test("every canonical comparison value is formatted for the active locale", () => {
+  let formatValue: ComparisonValueFormatter;
+  try {
+    formatValue = (requireFromTest("../src/lib/i18n/pricingComparisonValue") as {
+      formatPublicPricingComparisonValue: ComparisonValueFormatter;
+    }).formatPublicPricingComparisonValue;
+  } catch (error) {
+    throw new Error(`comparison display formatter is unavailable: ${(error as Error).message}`);
+  }
+  assert(typeof formatValue === "function", "comparison display formatter is not exported");
+
+  const canonicalValues = [...new Set(COMPARISON_SECTIONS.flatMap(section =>
+    section.rows.flatMap(row => row.values),
+  ))];
+  const englishExpected: Record<string, string> = {
+    "1": "1", "2": "2", "3": "3",
+    "5 / month": "5 / month", "10 / month": "10 / month", "20 / month": "20 / month",
+    "150 / month": "150 / month", "300 / month": "300 / month", "500 / month": "500 / month",
+    "800 / month": "800 / month", "2,000 / month": "2,000 / month",
+    "3,000 / month": "3,000 / month", "10,000 / month": "10,000 / month",
+    Unlimited: "Unlimited", Limited: "Limited", Basic: "Basic", "✓": "✓", "—": "—",
+  };
+  const zhCNExpected: Record<string, string> = {
+    ...englishExpected,
+    "5 / month": "每月 5", "10 / month": "每月 10", "20 / month": "每月 20",
+    "150 / month": "每月 150", "300 / month": "每月 300", "500 / month": "每月 500",
+    "800 / month": "每月 800", "2,000 / month": "每月 2,000",
+    "3,000 / month": "每月 3,000", "10,000 / month": "每月 10,000",
+    Unlimited: "不限量", Limited: "有限使用", Basic: "基础功能",
+  };
+  const zhTWExpected: Record<string, string> = {
+    ...englishExpected,
+    "5 / month": "每月 5", "10 / month": "每月 10", "20 / month": "每月 20",
+    "150 / month": "每月 150", "300 / month": "每月 300", "500 / month": "每月 500",
+    "800 / month": "每月 800", "2,000 / month": "每月 2,000",
+    "3,000 / month": "每月 3,000", "10,000 / month": "每月 10,000",
+    Unlimited: "不限量", Limited: "有限使用", Basic: "基本功能",
+  };
+
+  for (const [language, catalog, expected] of [
+    ["en", en as Catalog, englishExpected],
+    ["zh-CN", getMessages("zh-CN") as Catalog, zhCNExpected],
+    ["zh-TW", getMessages("zh-TW") as Catalog, zhTWExpected],
+  ] as const) {
+    for (const canonical of canonicalValues) {
+      assert(expected[canonical] !== undefined, `${language} test fixture is missing canonical value ${canonical}`);
+      const actual = formatValue(canonical, key => message(catalog, key));
+      assert(actual === expected[canonical], `${language} formats ${canonical} as ${actual}, expected ${expected[canonical]}`);
+    }
   }
 });
 
@@ -236,6 +292,10 @@ test("pricing and shared public-shell components resolve public copy through the
   const pricingSource = readFileSync(join(root, "src/app/pricing/pricing-client.tsx"), "utf8");
   const landingPricingSource = readFileSync(join(root, "src/components/landing/conversion/PricingSection.tsx"), "utf8");
   const footerSource = readFileSync(join(root, "src/components/landing/conversion/LandingFooter.tsx"), "utf8");
+  assert(
+    pricingSource.includes("formatPublicPricingComparisonValue(value, t)"),
+    "comparison values bypass the locale-aware display formatter",
+  );
   for (const forbidden of ["{plan.name}", "{plan.description}", "{plan.cta}", ">{row.label}<", ">{row.note}<"]) {
     assert(!pricingSource.includes(forbidden), `pricing page directly renders ${forbidden}`);
   }
