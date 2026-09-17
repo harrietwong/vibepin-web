@@ -586,8 +586,8 @@ body::-webkit-scrollbar { width: 12px; }
 }
 
 /* Create Pins keeps Schedule visually compact on desktop while preserving a full
-   44px touch target at the 390px mobile acceptance viewport. The button remains a
-   quiet secondary action; this variable changes hit height, not color or priority. */
+   44px touch target at the 390px mobile acceptance viewport. Schedule remains the
+   primary action; this variable changes hit height, not color or priority. */
 .studio-schedule-button {
   --studio-schedule-hit-height: 34px;
 }

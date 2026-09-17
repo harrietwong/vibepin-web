@@ -211,10 +211,10 @@ test("Plan uses one control and only docks above the two-card container threshol
   assert(boardSrc.includes("const observer = new ResizeObserver(measure);"), "Plan docking does not follow container size");
 });
 
-test("Schedule is the quiet secondary action and Publish is the primary CTA", () => {
-  assert(cardSrc.includes("const scheduleBtn"), "no dedicated quiet Schedule style exists");
-  assert(/data-testid="card-schedule"[\s\S]{0,160}style=\{scheduleBtn\}/.test(cardSrc), "compact Schedule is not using the quiet style");
-  assert(/data-testid="card-publish"[\s\S]{0,160}style=\{primaryBtn\}/.test(cardSrc), "compact Publish is not the primary CTA");
+test("Schedule is the primary CTA and Publish is the quiet secondary action", () => {
+  assert(!cardSrc.includes("const scheduleBtn"), "obsolete quiet Schedule style still exists");
+  assert(/data-testid="card-schedule"[\s\S]{0,160}style=\{primaryBtn\}/.test(cardSrc), "compact Schedule is not the primary CTA");
+  assert(/data-testid="card-publish"[\s\S]{0,160}style=\{secondaryBtn\}/.test(cardSrc), "compact Publish is not using the quiet style");
   assert(studioScheduleHitHeight(390) === 44, "390px Schedule touch target is not 44px");
   assert(studioScheduleHitHeight(767) === 44, "mobile boundary does not keep the 44px target");
   assert(studioScheduleHitHeight(768) === 34, "desktop/tablet compact boundary is not 34px");
