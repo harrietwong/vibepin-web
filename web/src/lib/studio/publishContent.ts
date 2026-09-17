@@ -131,7 +131,7 @@ export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: Publis
     // Reconcile responses for the same intent can arrive out of order. Provider
     // confirmation is monotonic: once published, a later ambiguous/failed snapshot
     // must not turn a real post back into an actionable retry.
-    const status = existing?.status === "published" && incomingStatus !== "published"
+    const status: DestinationPublishResult["status"] = existing?.status === "published" && incomingStatus !== "published"
       ? "published" : incomingStatus;
     return {
       ...(existing ?? {}), destinationId: destination.destinationId,
@@ -145,9 +145,14 @@ export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: Publis
     };
     }),
   ];
+  const legacy = legacyFieldsFromResults(rows, draft);
   return {
     destinationResults: rows,
-    ...legacyFieldsFromResults(rows, draft),
+    ...legacy,
+    socialPosts: legacy.socialPosts.map(post => ({
+      ...post,
+      publishedAt: post.publishedAt ?? "",
+    })),
     publishIntentStatus: rows.some(row => row.status === "delivery_unknown") ? "recovery_pending" : "completed",
     publishReceiptDismissedAt: undefined,
   };
