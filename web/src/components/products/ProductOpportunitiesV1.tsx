@@ -573,7 +573,6 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       trend: metricsAllowed ? draftTrend : "",
       sort: metricsAllowed || draftSort !== "fastest_growing" ? draftSort : "most_saved",
     };
-    setMetricControls({ available: false, family: null, metricVersion: null });
     applyProductFilters(next, true);
   };
   const clearFilters = () => {

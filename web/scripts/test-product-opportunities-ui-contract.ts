@@ -210,6 +210,18 @@ async function runBehaviorTests() {
     ), false);
     assert.match(component, /products\.opportunities\.filtersPending/);
   });
+  test("Applying same-family filters retains proven metric controls until the response replaces them", () => {
+    const applyStart = component.indexOf("  const applyFilters = () => {");
+    const clearStart = component.indexOf("  const clearFilters = () => {", applyStart);
+    assert.ok(applyStart >= 0 && clearStart > applyStart, "applyFilters source boundary is present");
+    const applySource = component.slice(applyStart, clearStart);
+    assert.doesNotMatch(applySource, /setMetricControls\(/);
+    assert.equal(metricFiltersAvailableForDraft("physical", "physical", {
+      available: true,
+      family: "physical",
+      metricVersion: 7,
+    }), true);
+  });
   test("Product filter query parser is allowlisted, normalized, and round-trips Back/Forward state", () => {
     const parsed = parseProductOpportunityFilterQuery("?family=digital&q= planner &category=digital-products&platform=etsy.com&sort=newest&token=secret&selection=private");
     assert.deepEqual(parsed, {
