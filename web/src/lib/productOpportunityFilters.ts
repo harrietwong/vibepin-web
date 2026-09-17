@@ -55,4 +55,3 @@ export function serializeProductOpportunityFilterQuery(filters: ProductOpportuni
   if (filters.sort !== "most_saved") params.set("sort", filters.sort);
   return params.toString();
 }
-
