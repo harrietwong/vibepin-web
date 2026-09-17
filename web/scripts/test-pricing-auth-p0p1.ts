@@ -5,6 +5,8 @@ import { join } from "node:path";
 import {
   authFailureRedirect,
   authUiErrorMessage,
+  decodeAuthNextCookie,
+  resolveAuthNext,
   safeNextPath,
 } from "../src/lib/authRedirects";
 import { CREEM_PRODUCT_REQUIREMENTS } from "../src/lib/server/creem/creemProducts";
@@ -54,6 +56,32 @@ for (const unsafe of [null, "", "https://evil.example", "//evil.example", "/auth
   });
 }
 
+for (const unsafe of [
+  "/%2F%2Fevil.example",
+  "/%5C%5Cevil.example",
+  "/%6Cogin",
+  "/app/%2e%2e/login",
+  "/app/..//evil.example",
+  "/app%252Fstudio",
+  "/app/%E0%A4%A",
+]) {
+  test(`encoded unsafe next ${JSON.stringify(unsafe)} falls back to Studio`, () => {
+    eq(safeNextPath(unsafe), "/app/studio", "encoded safe fallback");
+  });
+}
+
+test("malformed vp_next cookies are ignored without throwing", () => {
+  eq(decodeAuthNextCookie("%E0%A4%A"), null, "malformed cookie fallback");
+  eq(decodeAuthNextCookie("%252Fapp%252Fstudio"), null, "double-encoded cookie fallback");
+});
+
+test("query next has explicit precedence over the cookie next", () => {
+  eq(resolveAuthNext("/pricing?checkout=pro", "%2Fapp%2Fstudio"), "/pricing?checkout=pro", "query wins");
+  eq(resolveAuthNext("", "%2Fapp%2Fstudio"), "/app/studio", "present empty query does not fall through");
+  eq(resolveAuthNext(null, "%2Fpricing%3Fcheckout%3Dpro"), "/pricing?checkout=pro", "cookie used when query absent");
+  eq(resolveAuthNext("/app%2Fstudio", "%2Fpricing%3Fcheckout%3Dpro"), "/app/studio", "double-encoded query falls back");
+});
+
 test("callback failure preserves only the validated next path", () => {
   const href = authFailureRedirect("/pricing?checkout=pro&period=year");
   const parsed = new URL(href, "https://vibepin.co");
@@ -83,6 +111,10 @@ test("callback clears transient next state and uses the safe failure redirect", 
   const text = source("src/app/auth/callback/route.ts");
   assert(text.includes("authFailureRedirect(next)"), "safe failure redirect used");
   assert(text.includes('response.cookies.set("vp_next", ""'), "transient next cookie cleared");
+  assert(text.includes("resolveAuthNext"), "query/cookie precedence is explicit");
+  assert(text.includes("try {"), "provider exchange errors are caught");
+  assert(text.includes("catch {"), "provider error text is not reflected");
+  assert(!text.includes("error.message"), "provider error text is not reflected");
 });
 
 test("Billing Usage API exposes explicit metered/unmetered success states", () => {
