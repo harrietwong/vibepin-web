@@ -256,23 +256,88 @@ export function expectedBillingUi(input: CreditE2eRun): {
   };
 }
 
-export function validateBillingUiText(text: string, input: CreditE2eRun): void {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (/Couldn't sync billing data|Could not load usage|usage unavailable/i.test(normalized)) {
+type BillingUiSections = string | { currentPlanText: string; usageText: string };
+
+function semanticLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function lineAfterLabel(lines: string[], label: string): string[] {
+  const wanted = label.toLowerCase();
+  const bucketLabels = ["ai images", "ai text generations", "scheduled posts"];
+  const index = lines.findIndex(line => {
+    const lower = line.toLowerCase();
+    return lower === wanted || lower.startsWith(`${wanted} `);
+  });
+  if (index < 0) throw new Error(`Billing UI is missing usage bucket: ${label}`);
+
+  const firstLine = lines[index];
+  const values = firstLine.length === label.length ? [] : [firstLine.slice(label.length).trim()];
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const lower = lines[cursor].toLowerCase();
+    if (bucketLabels.some(bucket => lower === bucket || lower.startsWith(`${bucket} `))) break;
+    values.push(lines[cursor]);
+  }
+  return values;
+}
+
+function assertCappedBucket(
+  lines: string[],
+  label: string,
+  expectedUsed: number,
+  expectedLimit: number,
+): void {
+  const values = lineAfterLabel(lines, label);
+  const summary = values.map(value => value.match(/^(\d+)\s*\/\s*(\d+)\s+used$/i)).find(Boolean);
+  if (!summary || Number(summary[1]) !== expectedUsed || Number(summary[2]) !== expectedLimit) {
+    throw new Error(`${label} used/limit semantic mismatch`);
+  }
+  const expectedRemaining = Math.max(0, expectedLimit - expectedUsed);
+  const remaining = values.map(value => value.match(/^(\d+)\s+remaining$/i)).find(Boolean);
+  if (!remaining || Number(remaining[1]) !== expectedRemaining) {
+    throw new Error(`${label} remaining semantic mismatch`);
+  }
+}
+
+function assertUnlimitedBucket(lines: string[], label: string, expectedUsed: number): void {
+  const values = lineAfterLabel(lines, label);
+  const summary = values.map(value => value.match(/^(\d+)\s+used$/i)).find(Boolean);
+  if (!summary || Number(summary[1]) !== expectedUsed) throw new Error(`${label} used semantic mismatch`);
+  if (!values.some(value => /^No monthly limit$/i.test(value))) {
+    throw new Error(`${label} unlimited semantic mismatch`);
+  }
+}
+
+export function validateBillingUiText(sections: BillingUiSections, input: CreditE2eRun): void {
+  const currentPlanText = typeof sections === "string" ? sections : sections.currentPlanText;
+  const usageText = typeof sections === "string" ? sections : sections.usageText;
+  if (/Couldn't sync billing data|Could not load usage|usage unavailable/i.test(`${currentPlanText}\n${usageText}`)) {
     throw new Error("Billing UI displayed sync error instead of verified usage truth");
   }
-  const expected = expectedBillingUi(input);
-  const escapedPlan = expected.plan.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (!new RegExp(`\\bcurrent\\s+plan\\b[\\s:—-]*${escapedPlan}\\b`, "i").test(normalized)) {
-    throw new Error(`Billing UI is missing expected semantic: current plan ${expected.plan}`);
+
+  const planLines = semanticLines(currentPlanText);
+  const planLabelIndex = planLines.findIndex(line => /^current\s+plan$/i.test(line));
+  const inlinePlan = planLines
+    .map(line => line.match(/^current\s+plan\s*[:—-]?\s+(.+)$/i)?.[1])
+    .find(Boolean);
+  const observedPlan = planLabelIndex >= 0 ? planLines[planLabelIndex + 1] : inlinePlan;
+  const expectedPlan = planLabel(input.plan);
+  if (!observedPlan || observedPlan.split(/\s+/)[0]?.toLowerCase() !== expectedPlan.toLowerCase()) {
+    throw new Error(`Billing UI is missing expected semantic: current plan ${expectedPlan}`);
   }
-  const fragments = ["Usage this period", ...expected.aiImages, ...expected.scheduledPosts];
-  const requiredCounts = new Map<string, number>();
-  for (const fragment of fragments) requiredCounts.set(fragment, (requiredCounts.get(fragment) ?? 0) + 1);
-  for (const [fragment, required] of requiredCounts) {
-    const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const actual = normalized.match(new RegExp(escaped, "gi"))?.length ?? 0;
-    if (actual < required) throw new Error(`Billing UI is missing expected semantic: ${fragment}`);
+
+  const usageLines = semanticLines(usageText);
+  if (!usageLines.some(line => /^Usage this period(?:\s|$)/i.test(line))) {
+    throw new Error("Billing UI is missing expected semantic: Usage this period");
+  }
+  assertCappedBucket(usageLines, "AI images", input.aiImages.used, input.aiImages.limit);
+  if (input.scheduledPosts.limit === null) {
+    assertUnlimitedBucket(usageLines, "Scheduled posts", input.scheduledPosts.used);
+  } else {
+    assertCappedBucket(usageLines, "Scheduled posts", input.scheduledPosts.used, input.scheduledPosts.limit);
   }
 }
 
@@ -547,7 +612,7 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
       await evidencePage.getByTestId("billing-usage-period").waitFor({ state: "visible", timeout: 30_000 });
       const currentPlanText = await evidencePage.getByTestId("billing-current-plan").innerText();
       const usageText = await evidencePage.getByTestId("billing-usage-period").innerText();
-      validateBillingUiText(`${currentPlanText}\n${usageText}`, input);
+      validateBillingUiText({ currentPlanText, usageText }, input);
       if (await evidencePage.getByTestId("billing-sync-error").count() > 0) throw new Error("Billing status rendered sync-error semantics");
       if (await evidencePage.getByTestId("billing-usage-sync-error").count() > 0) throw new Error("Usage rendered sync-error semantics");
       const screenshot = await this.maskedScreenshot(evidencePage, input, round, credential, "pass");

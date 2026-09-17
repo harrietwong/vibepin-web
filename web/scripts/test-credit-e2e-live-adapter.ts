@@ -42,8 +42,13 @@ const validAdapterOptions = {
 
 function visibleTextFromFixture(node: ReturnType<typeof createElement>): string {
   return renderToStaticMarkup(node)
+    .replace(/<(?:div|section|main|p|h[1-6])(?:\s[^>]*)?>/gi, "\n")
+    .replace(/<\/(?:div|section|main|p|h[1-6])>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
     .trim();
 }
 
@@ -232,6 +237,27 @@ async function main(): Promise<void> {
   });
 
   test(`round ${round}: Billing UI text must prove plan, used, limit, remaining, unlimited, and no sync error`, () => {
+    const free = buildScenario("free", "credit-live-unit", "limit");
+    const freeCurrentPlan = "Current plan\nFree\nActive";
+    const freeUsage = [
+      "Usage this period",
+      "AI images 10 / 10 used",
+      "0 remaining",
+      "AI text generations 0 / 10 used",
+      "10 remaining",
+      "Scheduled posts 5 / 5 used",
+      "0 remaining",
+    ].join("\n");
+    assert.doesNotThrow(() => validateBillingUiText({ currentPlanText: freeCurrentPlan, usageText: freeUsage }, free));
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: freeCurrentPlan,
+      usageText: freeUsage.replace("AI images 10 / 10 used", "AI images 110 / 10 used"),
+    }, free), /AI images.*mismatch/i);
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: freeCurrentPlan,
+      usageText: freeUsage.replace("Scheduled posts 5 / 5 used", "Scheduled posts 15 / 5 used"),
+    }, free), /Scheduled posts.*mismatch/i);
+
     const pro = buildScenario("pro", "credit-live-unit", "limit_minus_one");
     const proExpected = expectedBillingUi(pro);
     assert.deepEqual(proExpected, {
@@ -239,29 +265,45 @@ async function main(): Promise<void> {
       aiImages: ["AI images", "799 / 800 used", "1 remaining"],
       scheduledPosts: ["Scheduled posts", "299 / 300 used", "1 remaining"],
     });
-    assert.doesNotThrow(() => validateBillingUiText(
-      "Current plan Pro Usage this period AI images 799 / 800 used 1 remaining Scheduled posts 299 / 300 used 1 remaining",
-      pro,
-    ));
-    assert.throws(() => validateBillingUiText(
-      "Current plan Pro Usage this period AI images 799 / 800 used Scheduled posts 299 / 300 used 1 remaining",
-      pro,
-    ), /1 remaining/i);
+    const proCurrentPlan = "Current plan\nPro\nActive";
+    const proUsage = [
+      "Usage this period",
+      "AI images 799 / 800 used",
+      "1 remaining",
+      "AI text generations 0 / 250 used",
+      "250 remaining",
+      "Scheduled posts 299 / 300 used",
+      "1 remaining",
+    ].join("\n");
+    assert.doesNotThrow(() => validateBillingUiText({ currentPlanText: proCurrentPlan, usageText: proUsage }, pro));
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: proCurrentPlan,
+      usageText: proUsage.replace("AI images 799 / 800 used", "AI images 1799 / 800 used"),
+    }, pro), /AI images.*mismatch/i);
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: proCurrentPlan,
+      usageText: proUsage.replace("1 remaining", "remaining unavailable"),
+    }, pro), /AI images remaining/i);
     const business = buildScenario("business", "credit-live-unit", "limit");
-    const componentDomFixture = createElement("main", null,
-      createElement("section", { "data-testid": "billing-current-plan" },
-        createElement("p", null, "CURRENT PLAN"),
-        createElement("h2", null, "BUSINESS"),
-        createElement("span", null, "Active"),
-      ),
-      createElement("section", { "data-testid": "billing-usage-period" },
-        createElement("h3", null, "Usage this period"),
-        createElement("div", null, createElement("span", null, "AI images"), createElement("span", null, "3000 / 3000 used"), createElement("p", null, "0 remaining")),
-        createElement("div", null, createElement("span", null, "Scheduled posts"), createElement("span", null, "2 used"), createElement("p", null, "No monthly limit")),
-      ),
+    const currentPlanDomFixture = createElement("section", { "data-testid": "billing-current-plan" },
+      createElement("p", null, "CURRENT PLAN"),
+      createElement("h2", null, "BUSINESS", createElement("span", null, "Monthly")),
+      createElement("span", null, "Active"),
     );
-    const componentAccessibleText = visibleTextFromFixture(componentDomFixture);
-    assert.doesNotThrow(() => validateBillingUiText(componentAccessibleText, business));
+    const usageDomFixture = createElement("section", { "data-testid": "billing-usage-period" },
+      createElement("h3", null, "Usage this period"),
+      createElement("div", null, createElement("span", null, "AI images"), createElement("span", null, "3000 / 3000 used"), createElement("p", null, "0 remaining")),
+      createElement("div", null, createElement("span", null, "AI text generations"), createElement("span", null, "0 / 1000 used"), createElement("p", null, "1000 remaining")),
+      createElement("div", null, createElement("span", null, "Scheduled posts"), createElement("span", null, "2 used"), createElement("p", null, "No monthly limit")),
+    );
+    assert.doesNotThrow(() => validateBillingUiText({
+      currentPlanText: visibleTextFromFixture(currentPlanDomFixture),
+      usageText: visibleTextFromFixture(usageDomFixture),
+    }, business));
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: visibleTextFromFixture(currentPlanDomFixture),
+      usageText: visibleTextFromFixture(usageDomFixture).replace("Scheduled posts 2 used", "Scheduled posts 12 used"),
+    }, business), /Scheduled posts used.*mismatch/i);
     assert.deepEqual(expectedBillingUi(business).scheduledPosts, ["Scheduled posts", "2 used", "No monthly limit"]);
     assert.throws(() => validateBillingUiText(
       "Current plan Business Couldn't sync billing data AI images 3000 / 3000 used 0 remaining Scheduled posts 2 used No monthly limit",
