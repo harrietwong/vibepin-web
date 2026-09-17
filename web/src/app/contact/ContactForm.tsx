@@ -115,10 +115,10 @@ export default function ContactForm() {
           </div>
         </div>
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Link href="/" data-testid="contact-success-home" className="btn-cta rounded-full px-4 py-2 text-[12px] font-bold text-white">
+          <Link href="/" data-testid="contact-success-home" className="btn-cta min-h-11 inline-flex items-center rounded-full px-4 py-2 text-[12px] font-bold text-white">
             {t("contact.success.home")}
           </Link>
-          <button type="button" data-testid="contact-success-another" onClick={resetForm} className="rounded-full border px-4 py-2 text-[12px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2" style={{ borderColor: "var(--public-border-hi)", color: "var(--public-text)" }}>
+          <button type="button" data-testid="contact-success-another" onClick={resetForm} className="min-h-11 rounded-full border px-4 py-2 text-[12px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2" style={{ borderColor: "var(--public-border-hi)", color: "var(--public-text)" }}>
             {t("contact.success.another")}
           </button>
         </div>
@@ -153,8 +153,9 @@ export default function ContactForm() {
       </div>
       <Field label={t("contact.subject")} name="subject" placeholder={t("contact.subjectPlaceholder")} value={subject} onChange={setSubject} />
       <div className="mt-3">
-        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{t("contact.message")}</label>
+        <label htmlFor="contact-message" className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{t("contact.message")}</label>
         <textarea
+          id="contact-message"
           name="message"
           rows={5}
           placeholder={t("contact.messagePlaceholder")}
@@ -174,7 +175,7 @@ export default function ContactForm() {
       <button
         type="submit"
         disabled={status === "submitting"}
-        className="btn-cta w-full mt-5 rounded-full py-3 text-[14px] font-bold text-white transition-transform hover:scale-[1.02] disabled:opacity-60 disabled:hover:scale-100"
+        className="btn-cta min-h-11 w-full mt-5 rounded-full py-3 text-[14px] font-bold text-white transition-transform hover:scale-[1.02] disabled:opacity-60 disabled:hover:scale-100"
       >
         {status === "submitting" ? t("contact.sending") : t("contact.send")}
       </button>
@@ -219,8 +220,9 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{label}</label>
+      <label htmlFor={`contact-${name}`} className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{label}</label>
       <input
+        id={`contact-${name}`}
         type={type}
         name={name}
         placeholder={placeholder}

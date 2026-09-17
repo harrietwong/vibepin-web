@@ -43,3 +43,16 @@ export function closePublicMenuOnEscape(
   focusTrigger();
   return true;
 }
+
+/**
+ * Returns the item that should receive focus for the standard menu navigation
+ * keys. `null` means the browser should handle the key normally.
+ */
+export function publicMenuTargetIndex(key: string, current: number, total: number): number | null {
+  if (total < 1) return null;
+  if (key === "ArrowDown") return (current + 1) % total;
+  if (key === "ArrowUp") return (current - 1 + total) % total;
+  if (key === "Home") return 0;
+  if (key === "End") return total - 1;
+  return null;
+}

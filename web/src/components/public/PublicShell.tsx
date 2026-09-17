@@ -10,6 +10,7 @@ import type { ThemePreference } from "@/lib/theme/themeStore";
 import {
   closePublicMenuOnEscape,
   isPublicHeaderCompact,
+  publicMenuTargetIndex,
   PUBLIC_CONTROL_MIN_SIZE,
 } from "./publicShellContract";
 
@@ -26,18 +27,26 @@ const MENU_STYLE: React.CSSProperties = {
   boxShadow: "0 16px 40px rgba(15, 23, 42, 0.18)",
 };
 
+/** Public-page copy is currently maintained for these four customer locales. */
+const PUBLIC_SHELL_LANGUAGES = ALL_APP_LANGUAGES.filter(({ code }) =>
+  code === "en" || code === "zh-CN" || code === "zh-TW" || code === "vi",
+);
+
 function PublicMenuRow({
   active,
   onClick,
   children,
+  buttonRef,
 }: {
   active: boolean;
   onClick: () => void;
   children: ReactNode;
+  buttonRef?: (element: HTMLButtonElement | null) => void;
 }) {
   return (
     <button
       type="button"
+      ref={buttonRef}
       role="menuitemradio"
       aria-checked={active}
       onClick={onClick}
@@ -62,6 +71,34 @@ function PublicMenuRow({
       {children}
     </button>
   );
+}
+
+function usePublicMenuKeyboard(
+  open: boolean,
+  currentIndex: number,
+  itemCount: number,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+  itemRefs: React.MutableRefObject<Array<HTMLButtonElement | null>>,
+  close: () => void,
+) {
+  useEffect(() => {
+    if (!open) return;
+    const focusSelectedItem = () => itemRefs.current[currentIndex]?.focus();
+    const frame = window.requestAnimationFrame(focusSelectedItem);
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentIndex, itemRefs, open]);
+
+  return (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (closePublicMenuOnEscape(event.key, close, () => triggerRef.current?.focus())) {
+      event.preventDefault();
+      return;
+    }
+    const current = itemRefs.current.findIndex(item => item === document.activeElement);
+    const target = publicMenuTargetIndex(event.key, current < 0 ? currentIndex : current, itemCount);
+    if (target === null) return;
+    event.preventDefault();
+    itemRefs.current[target]?.focus();
+  };
 }
 
 function useEscapeClose(
@@ -92,11 +129,15 @@ function PublicLanguageControl() {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   useEscapeClose(open, setOpen, triggerRef, containerRef);
 
   const current = preferences.appLanguage;
+  const currentIndex = PUBLIC_SHELL_LANGUAGES.findIndex(language => language.code === current);
+  const onMenuKeyDown = usePublicMenuKeyboard(open, Math.max(0, currentIndex), PUBLIC_SHELL_LANGUAGES.length, triggerRef, itemRefs, () => setOpen(false));
   const choose = (code: LanguageCode) => {
     setOpen(false);
+    triggerRef.current?.focus();
     if (code !== current) void savePreferences({ appLanguage: code });
   };
 
@@ -111,6 +152,12 @@ function PublicLanguageControl() {
         aria-label={t("public.controls.language")}
         title={t("public.controls.language")}
         onClick={() => setOpen(!open)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
         className="public-shell-control focus-visible:outline-2 focus-visible:outline-offset-2"
         style={{ minHeight: PUBLIC_CONTROL_MIN_SIZE, minWidth: PUBLIC_CONTROL_MIN_SIZE }}
       >
@@ -118,9 +165,9 @@ function PublicLanguageControl() {
         <ChevronDown aria-hidden="true" size={13} />
       </button>
       {open && (
-        <div data-testid="public-language-menu" role="menu" style={{ ...MENU_STYLE, width: 212, maxHeight: 360, overflowY: "auto" }}>
-          {ALL_APP_LANGUAGES.map(language => (
-            <PublicMenuRow key={language.code} active={language.code === current} onClick={() => choose(language.code)}>
+        <div data-testid="public-language-menu" role="menu" onKeyDown={onMenuKeyDown} style={{ ...MENU_STYLE, width: 212, maxHeight: 360, overflowY: "auto" }}>
+          {PUBLIC_SHELL_LANGUAGES.map((language, index) => (
+            <PublicMenuRow key={language.code} active={language.code === current} onClick={() => choose(language.code)} buttonRef={element => { itemRefs.current[index] = element; }}>
               <span style={{ width: 27, color: "var(--public-text-muted)", fontSize: 10, fontWeight: 800 }}>
                 {appLanguageShortLabel(language.code)}
               </span>
@@ -146,8 +193,11 @@ function PublicThemeControl() {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   useEscapeClose(open, setOpen, triggerRef, containerRef);
   const CurrentIcon = theme === "light" ? Sun : theme === "system" ? Monitor : Moon;
+  const currentIndex = THEME_OPTIONS.findIndex(option => option.value === theme);
+  const onMenuKeyDown = usePublicMenuKeyboard(open, currentIndex, THEME_OPTIONS.length, triggerRef, itemRefs, () => setOpen(false));
 
   return (
     <div ref={containerRef} className="relative">
@@ -160,15 +210,21 @@ function PublicThemeControl() {
         aria-label={t("public.controls.theme")}
         title={t("public.controls.theme")}
         onClick={() => setOpen(!open)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
         className="public-shell-control public-shell-control--icon focus-visible:outline-2 focus-visible:outline-offset-2"
         style={{ minHeight: PUBLIC_CONTROL_MIN_SIZE, minWidth: PUBLIC_CONTROL_MIN_SIZE }}
       >
         <CurrentIcon aria-hidden="true" size={15} />
       </button>
       {open && (
-        <div data-testid="public-theme-menu" role="menu" style={{ ...MENU_STYLE, width: 148 }}>
-          {THEME_OPTIONS.map(({ value, Icon, label }) => (
-            <PublicMenuRow key={value} active={theme === value} onClick={() => { setTheme(value); setOpen(false); }}>
+        <div data-testid="public-theme-menu" role="menu" onKeyDown={onMenuKeyDown} style={{ ...MENU_STYLE, width: 148 }}>
+          {THEME_OPTIONS.map(({ value, Icon, label }, index) => (
+            <PublicMenuRow key={value} active={theme === value} buttonRef={element => { itemRefs.current[index] = element; }} onClick={() => { setTheme(value); setOpen(false); triggerRef.current?.focus(); }}>
               <Icon aria-hidden="true" size={14} />
               <span style={{ flex: 1 }}>{t(label as Parameters<typeof t>[0])}</span>
               {theme === value && <Check aria-hidden="true" size={14} />}

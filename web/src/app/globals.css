@@ -107,10 +107,11 @@ body::-webkit-scrollbar { width: 12px; }
   --public-border: #E2E8F0;
   --public-border-hi: #CBD5E1;
   --public-text: #17202B;
-  --public-text-muted: #64748B;
+  --public-text-muted: #52657D;
   --public-accent: #0E7490;
   --public-accent-strong: #0F766E;
   --public-accent-soft: rgba(14, 116, 144, 0.10);
+  --public-nav-bg: color-mix(in srgb, var(--public-surface) 92%, transparent);
   min-width: 0;
   background: var(--public-bg);
   color: var(--public-text);
@@ -127,6 +128,7 @@ body::-webkit-scrollbar { width: 12px; }
   --public-accent: #38BDF8;
   --public-accent-strong: #67E8F9;
   --public-accent-soft: rgba(56, 189, 248, 0.12);
+  --public-nav-bg: color-mix(in srgb, var(--public-surface) 92%, transparent);
 }
 .public-shell-controls {
   position: relative;
@@ -178,6 +180,67 @@ body::-webkit-scrollbar { width: 12px; }
 .public-shell textarea,
 .public-shell select { max-width: 100%; }
 
+/* Landing and pricing were originally dark-first pages. Their page roots and
+   common text/surface tokens must follow the public provider, not app globals
+   or literal dark values, so a theme choice changes the whole public surface. */
+.public-shell .lp {
+  background: var(--public-bg) !important;
+  color: var(--public-text) !important;
+}
+.public-shell .lp > nav {
+  background: var(--public-nav-bg) !important;
+  border-color: var(--public-border) !important;
+}
+.public-shell .lp .text-white:not(.btn-cta):not(.btn-cta *) {
+  color: var(--public-text) !important;
+}
+.public-shell .lp [style*="#0A0C14"],
+.public-shell .lp [style*="#0B0F1A"],
+.public-shell .lp [style*="#0C1018"],
+.public-shell .lp [style*="#080C12"],
+.public-shell .lp [style*="#120E1E"],
+.public-shell .lp [style*="#141622"],
+.public-shell .lp [style*="#0A0E16"] {
+  background: var(--public-surface) !important;
+}
+.public-shell .lp [style*="rgba(255,255,255"] {
+  border-color: var(--public-border) !important;
+}
+.public-shell .lp [style*="#8B93A1"],
+.public-shell .lp [style*="#8B9E97"],
+.public-shell .lp [style*="#9097A0"],
+.public-shell .lp [style*="#6B7280"],
+.public-shell .lp [style*="#5B6472"],
+.public-shell .lp [style*="#4B5563"],
+.public-shell .lp [style*="#4D5E58"] {
+  color: var(--public-text-muted) !important;
+}
+.public-shell .lp [style*="#C8CDD6"],
+.public-shell .lp [style*="#E5C9F5"] {
+  color: var(--public-text) !important;
+}
+.public-shell .lp .btn-cta,
+.public-shell .lp .btn-cta .text-white,
+.public-shell .lp nav .btn-cta {
+  color: #fff !important;
+}
+.public-shell .public-auth-page .bg-white,
+.public-shell .public-auth-page .bg-gray-50 {
+  background: var(--public-surface) !important;
+}
+.public-shell .public-auth-page .border-gray-200,
+.public-shell .public-auth-page .border-red-100 {
+  border-color: var(--public-border) !important;
+}
+.public-shell .public-auth-page .text-gray-900,
+.public-shell .public-auth-page .text-gray-700 {
+  color: var(--public-text) !important;
+}
+.public-shell .public-auth-page .text-gray-500,
+.public-shell .public-auth-page .text-gray-400 {
+  color: var(--public-text-muted) !important;
+}
+
 /* The public pages predate the shared shell and still carry a few dark-first
    utility classes/inline tokens. Keep those pages legible in light mode
    without changing the dedicated app/admin surfaces. */
@@ -190,7 +253,7 @@ body::-webkit-scrollbar { width: 12px; }
   background: var(--public-surface) !important;
 }
 [data-theme="light"] .public-page-content > nav {
-  background: color-mix(in srgb, var(--public-surface) 92%, transparent) !important;
+  background: var(--public-nav-bg) !important;
   border-color: var(--public-border) !important;
 }
 [data-theme="light"] .public-page-content [style*="rgba(255,255,255"] {

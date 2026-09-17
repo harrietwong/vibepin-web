@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { readLocalTheme, writeLocalTheme } from "../src/lib/theme/themeStore";
 import { normalizeLocalePreferences } from "../src/lib/i18n/config";
+import { getMessages } from "../src/lib/i18n/messages";
+import { resolveTheme } from "../src/lib/theme/themeStore";
+
+// Providers create the browser client at module evaluation time. Supply inert
+// public values so this is a real React render test, not an environment test.
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const HomePage = require("../src/app/page").default as typeof import("../src/app/page").default;
 import {
   PUBLIC_CONTROL_MIN_SIZE,
   isPublicShellRoute,
   isPublicHeaderCompact,
+  publicMenuTargetIndex,
   closePublicMenuOnEscape,
 } from "../src/components/public/publicShellContract";
 
@@ -21,10 +33,12 @@ const globals = readFileSync("src/app/globals.css", "utf8");
 const rootLayout = readFileSync("src/app/layout.tsx", "utf8");
 const themeStore = readFileSync("src/lib/theme/themeStore.ts", "utf8");
 const localeConfig = readFileSync("src/lib/i18n/config.ts", "utf8");
+const shellContract = readFileSync("src/components/public/publicShellContract.ts", "utf8");
 const en = readFileSync("src/lib/i18n/messages/en.ts", "utf8");
 const zhCN = readFileSync("src/lib/i18n/messages/zh-CN.ts", "utf8");
 const zhTW = readFileSync("src/lib/i18n/messages/zh-TW.ts", "utf8");
 const vi = readFileSync("src/lib/i18n/messages/vi.ts", "utf8");
+const contactForm = readFileSync("src/app/contact/ContactForm.tsx", "utf8");
 
 const publicPages = [
   "src/app/page.tsx",
@@ -49,6 +63,12 @@ test("PublicShell owns one shared app-language/theme provider pair", () => {
   assert.equal((shell.match(/<ThemeProvider>/g) ?? []).length, 1);
   assert.equal((shell.match(/<LocaleProvider>/g) ?? []).length, 1);
   assert.match(shell, /<PublicLanguageTheme\s*\/>/);
+});
+
+test("landing server-renders through PublicShell before reading locale context", () => {
+  const markup = renderToStaticMarkup(React.createElement(HomePage));
+  assert.match(markup, /Pinterest growth starts with signals\./);
+  assert.match(markup, /data-testid="public-language-button"/);
 });
 
 test("Public controls use the same preference stores and expose keyboard-safe menus", () => {
@@ -102,6 +122,31 @@ test("Theme and locale preferences use the same persisted contract as the worksp
   assert.equal(normalizeLocalePreferences({ appLanguage: "zh-CN" }).appLanguage, "zh-CN");
 });
 
+function contrastRatio(foreground: string, background: string) {
+  const channels = (hex: string) => hex.match(/[A-Fa-f0-9]{2}/g)!.map(value => parseInt(value, 16) / 255);
+  const luminance = (hex: string) => channels(hex).map(value => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+test("public locale and theme switching resolve real user-facing state", () => {
+  assert.equal(getMessages("zh-CN")["public.controls.language"], "语言");
+  assert.equal(getMessages("zh-TW")["contact.success.title"], "訊息已傳送");
+  assert.equal(getMessages("vi")["public.nav.pricing"], "Bảng giá");
+  assert.equal(resolveTheme("light"), "light");
+  assert.equal(resolveTheme("dark"), "dark");
+});
+
+test("public light and dark body/muted text meet WCAG AA contrast", () => {
+  assert.ok(contrastRatio("17202B", "F7F8FA") >= 4.5, "light body text");
+  assert.ok(contrastRatio("52657D", "F7F8FA") >= 4.5, "light muted text");
+  assert.ok(contrastRatio("E8F0EC", "080E0B") >= 4.5, "dark body text");
+  assert.ok(contrastRatio("8B9E97", "080E0B") >= 4.5, "dark muted text");
+  assert.match(globals, /--public-bg/);
+  assert.match(globals, /\.public-shell \.lp/);
+});
+
 test("Escape closes the real public menu and restores its trigger focus", () => {
   let closed = false;
   let focused = false;
@@ -111,8 +156,22 @@ test("Escape closes the real public menu and restores its trigger focus", () => 
   assert.equal(focused, true);
 });
 
+test("public menu keyboard contract covers roving selection keys", () => {
+  assert.match(shellContract, /ArrowDown/);
+  assert.equal(publicMenuTargetIndex("ArrowDown", 1, 3), 2);
+  assert.equal(publicMenuTargetIndex("ArrowUp", 0, 3), 2);
+  assert.equal(publicMenuTargetIndex("Home", 2, 3), 0);
+  assert.equal(publicMenuTargetIndex("End", 0, 3), 2);
+  assert.equal(publicMenuTargetIndex("Enter", 0, 3), null);
+});
+
 test("Public controls preserve a 44px minimum hit target", () => {
   assert.equal(PUBLIC_CONTROL_MIN_SIZE, 44);
+  assert.match(contactForm, /htmlFor=\{`contact-\$\{name\}`\}/);
+  assert.match(contactForm, /id=\{`contact-\$\{name\}`\}/);
+  assert.match(contactForm, /htmlFor="contact-message"/);
+  assert.match(contactForm, /id="contact-message"/);
+  assert.match(contactForm, /contact-success-another"[\s\S]*?min-h-11/);
 });
 
 test("The shared header enters its compact layout at a 390px viewport", () => {

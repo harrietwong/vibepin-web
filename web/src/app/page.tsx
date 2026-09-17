@@ -481,7 +481,7 @@ function WorkflowTimelineStep({ n, title, copy, bullets, mock, icon }: { n: numb
   );
 }
 
-export default function HomePage() {
+function HomePageContent() {
   const { t } = useLocale();
   // Curated Boho Living Room landing assets (single source of truth in the manifest).
   const pinSamples = bohoReferences;
@@ -492,7 +492,6 @@ export default function HomePage() {
   const heroRefs     = take(pinSamples, 5, "Reference", 1);
 
   return (
-    <PublicShell>
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
 
       {/* ══ NAV ══ */}
@@ -558,6 +557,14 @@ export default function HomePage() {
       <LandingFooter />
 
     </div>
+  );
+}
+
+/** Providers must wrap the component that reads locale state during render. */
+export default function HomePage() {
+  return (
+    <PublicShell>
+      <HomePageContent />
     </PublicShell>
   );
 }
