@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getMessages } from "../src/lib/i18n/messages";
+import { getMessages, PARTIAL } from "../src/lib/i18n/messages";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
@@ -31,9 +31,27 @@ test("all required public prose is present in each supported locale catalog", ()
   }
 });
 
+test("named public routes, including auth, contact, and deletion, have their own locale entries", () => {
+  const required = [
+    "public.route.login.title", "public.route.signup.title", "public.route.dataDeletion.title",
+    "contact.title", "contact.success.title", "public.auth.error.oauthCallback",
+  ] as const;
+  for (const locale of locales.filter(locale => locale !== "en")) {
+    const own = PARTIAL[locale]!;
+    for (const key of required) assert.ok(Object.prototype.hasOwnProperty.call(own, key), `${locale} falls back for ${key}`);
+  }
+});
+
 test("catalogs resolve localized prose rather than a headline-only fallback", () => {
   assert.notEqual(getMessages("en")["public.document.privacy.body"], getMessages("zh-CN")["public.document.privacy.body"]);
   assert.notEqual(getMessages("en")["public.auth.error.authenticationFailed"], getMessages("vi")["public.auth.error.authenticationFailed"]);
+});
+
+test("stored callback codes resolve at render time when the locale changes", () => {
+  const callbackKey = "public.auth.error.oauthCallback";
+  assert.notEqual(getMessages("en")[callbackKey], getMessages("zh-CN")[callbackKey]);
+  assert.notEqual(getMessages("en")[callbackKey], getMessages("zh-TW")[callbackKey]);
+  assert.notEqual(getMessages("en")[callbackKey], getMessages("vi")[callbackKey]);
 });
 
 const routesToRender = [

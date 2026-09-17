@@ -17,7 +17,7 @@ const supabase = createBrowserClient(
 function LoginContent() {
   const copy = usePublicRouteCopy("login");
   const { t } = useLocale();
-  const authError = (code: string | null | undefined) => t(code === "oauth_unavailable" ? "public.auth.error.oauthUnavailable" : code === "oauth_callback" ? "public.auth.error.oauthCallback" : "public.auth.error.authenticationFailed");
+  const authError = (code: string | null | undefined) => t(code === "oauth_unavailable" ? "public.auth.error.oauthUnavailable" : code === "oauth_callback" ? "public.auth.error.oauthCallback" : code === "reset_email_required" ? "public.auth.resetEmailRequired" : "public.auth.error.authenticationFailed");
   const router = useRouter();
   const params = useSearchParams();
   const next   = safeNextPath(params.get("next"));
@@ -26,7 +26,8 @@ function LoginContent() {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(() => params.get("error") ? authError(params.get("error")) : "");
+  const [errorCode, setErrorCode] = useState<string | null>(() => params.get("error"));
+  const error = errorCode ? authError(errorCode) : "";
 
   const signUpHref = (() => {
     const qs = new URLSearchParams();
@@ -38,11 +39,11 @@ function LoginContent() {
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setError("");
+    setErrorCode(null);
     document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
     const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
     if (loginError) {
-      setError(authError("authentication_failed"));
+      setErrorCode("authentication_failed");
       setLoading(false);
     } else {
       router.push(next);
@@ -52,7 +53,7 @@ function LoginContent() {
 
   async function handleGoogle() {
     setLoading(true);
-    setError("");
+    setErrorCode(null);
     document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
     try {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
@@ -60,11 +61,11 @@ function LoginContent() {
         options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
       });
       if (oauthError) {
-        setError(authError("oauth_unavailable"));
+        setErrorCode("oauth_unavailable");
         setLoading(false);
       }
     } catch {
-      setError(authError("oauth_unavailable"));
+      setErrorCode("oauth_unavailable");
       setLoading(false);
     }
   }
@@ -131,12 +132,12 @@ function LoginContent() {
                   {copy.password}
                 </label>
                 <button type="button" onClick={async () => {
-                  if (!email) { setError(copy.resetEmailRequired); return; }
+                  if (!email) { setErrorCode("reset_email_required"); return; }
                   setLoading(true);
                   await supabase.auth.resetPasswordForEmail(email, {
                     redirectTo: `${window.location.origin}/auth/callback?next=/app/studio`,
                   });
-                  setError("");
+                  setErrorCode(null);
                   setLoading(false);
                   alert(copy.resetSent);
                 }} className="min-h-11 inline-flex items-center text-[11px] text-[#0891B2] hover:underline font-medium">

@@ -26,7 +26,8 @@ function SignupContent() {
   const [email,     setEmail]     = useState("");
   const [password,  setPassword]  = useState("");
   const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState(() => params.get("error") ? authError(params.get("error")) : "");
+  const [errorCode, setErrorCode] = useState<string | null>(() => params.get("error"));
+  const error = errorCode === "password_short" ? `${copy.password} (${copy.passwordHint})` : errorCode ? authError(errorCode) : "";
   const [done,      setDone]      = useState(false);
 
   const signInHref = (() => {
@@ -38,27 +39,27 @@ function SignupContent() {
 
   async function handleGoogle() {
     setLoading(true);
-    setError("");
+    setErrorCode(null);
     try {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
       });
       if (oauthError) {
-        setError(authError("oauth_unavailable"));
+        setErrorCode("oauth_unavailable");
         setLoading(false);
       }
     } catch {
-      setError(authError("oauth_unavailable"));
+      setErrorCode("oauth_unavailable");
       setLoading(false);
     }
   }
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
-    if (password.length < 8) { setError(`${copy.password} (${copy.passwordHint})`); return; }
+    if (password.length < 8) { setErrorCode("password_short"); return; }
     setLoading(true);
-    setError("");
+    setErrorCode(null);
     // SECURITY: never write the ?plan= param into user_metadata. user_metadata
     // is user-editable, and the plan there was previously trusted for
     // authorization → anyone could self-grant a paid plan. The plan lives only
@@ -72,7 +73,7 @@ function SignupContent() {
       },
     });
     if (signupError) {
-      setError(authError("authentication_failed"));
+      setErrorCode("authentication_failed");
       setLoading(false);
     } else {
       setDone(true);
