@@ -18,6 +18,7 @@
 
 import assert from "node:assert";
 import { resolveFailureMediaUrl, isDegenerateDataUrl, isQaFixtureMediaId, classifyLoadedMedia, reduceMediaCursor, resolveFailureMediaCandidates, failureMediaRenderModel, type FailureMediaDraft } from "../src/lib/studio/failureMedia";
+import * as failureMedia from "../src/lib/studio/failureMedia";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -151,6 +152,18 @@ test("media cursor state machine resets A→B→A even when B never advances", (
   assert.deepEqual(state, { identity: "A", index: 0 });
 });
 
+test("PinCardMedia cursor sync resets A after A fails, B stays loaded, then A returns", () => {
+  const syncMediaCursor = (failureMedia as Record<string, unknown>).syncMediaCursor as
+    ((state: { identity: string; index: number }, identity: string) => { identity: string; index: number }) | undefined;
+  assert.equal(typeof syncMediaCursor, "function", "PinCardMedia cursor sync state machine is not available");
+  let state = { identity: "A", index: 0 };
+  state = { ...state, index: state.index + 1 };
+  state = syncMediaCursor!(state, "B");
+  assert.deepEqual(state, { identity: "B", index: 0 });
+  state = syncMediaCursor!(state, "A");
+  assert.deepEqual(state, { identity: "A", index: 0 });
+});
+
 test("draft-level legacy marker drops only the marked primary and preserves real sourceImageUrl", () => {
   const d = draft({
     imageUrl: LEGACY_MEDIA_URL,
@@ -187,6 +200,23 @@ test("persisted media metadata matches canonical URL identities on both sides", 
     setupSnapshot: { selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }] } as never,
   });
   assert.equal(resolveFailureMediaUrl(d), PRODUCT_SOLID_PINK);
+});
+
+test("real short 128x128 product PNG data URL survives trusted persisted media metadata", () => {
+  const indexedPinkPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACAAQMAAAD58POIAAAAA1BMVEX/AID0WooXAAAAGUlEQVR42mNgGAWjYBSMglEwCkbBKKAvAAAIgAABw1fMHQAAAABJRU5ErkJggg==";
+  assert.equal(indexedPinkPng.length, 154);
+  assert.equal(isDegenerateDataUrl(indexedPinkPng), true);
+  const product = draft({
+    imageUrl: indexedPinkPng,
+    source: "uploaded_image",
+    media: [media("catalog-pink-indexed", indexedPinkPng, "product", 128, 128)],
+  });
+  assert.equal(resolveFailureMediaUrl(product), indexedPinkPng);
+  const qaFixture = draft({
+    imageUrl: indexedPinkPng,
+    media: [media("qa-slide-1", indexedPinkPng, "legacy", 128, 128)],
+  });
+  assert.equal(resolveFailureMediaUrl(qaFixture), null);
 });
 
 test("qa slot identity does not reject a real product/generated replacement", () => {

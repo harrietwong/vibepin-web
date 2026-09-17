@@ -66,6 +66,11 @@ export function reduceMediaCursor(state: MediaCursorState, action: MediaCursorAc
   return { identity: state.identity, index: state.index + 1 };
 }
 
+/** Synchronize the interactive renderer's cursor before reading its current index. */
+export function syncMediaCursor(state: MediaCursorState, identity: string): MediaCursorState {
+  return reduceMediaCursor(state, { type: "sync", identity });
+}
+
 /** Test-only fixture identity.  The strict shape prevents ordinary catalog ids from
  * being rejected just because they contain the words "qa" or "slide". */
 export function isQaFixtureMediaId(id: string | null | undefined): boolean {
@@ -156,11 +161,19 @@ export function isDegenerateDataUrl(url: string | null | undefined): boolean {
   return value.startsWith("data:") && value.length < DEGENERATE_DATA_URL_MAX_LENGTH;
 }
 
-function usable(url: string | null | undefined): url is string {
+function usable(
+  url: string | null | undefined,
+  media: Pick<FailureMediaCandidate, "width" | "height"> | undefined,
+  provenance: MediaProvenance,
+): url is string {
   const v = (url ?? "").trim();
   if (!v) return false;
   if (isBlobUrl(v)) return false; // dead in any tab/session other than the one that created it
-  if (isDegenerateDataUrl(v)) return false; // decodable 1x1/2x2 data fixture
+  if (isDegenerateDataUrl(v)) {
+    const hasReliableDimensions = (media?.width ?? 0) > 2 && (media?.height ?? 0) > 2;
+    const trustedSource = provenance === "product" || provenance === "generated" || provenance === "reference";
+    if (!hasReliableDimensions || !trustedSource) return false; // short data fixtures without trusted persisted dimensions
+  }
   return true;
 }
 
@@ -183,7 +196,7 @@ function candidate(
   knownPlaceholder: boolean,
 ): FailureMediaCandidate | null {
   const value = (url ?? "").trim();
-  if (!usable(value)) return null;
+  if (!usable(value, media, provenance)) return null;
   const verdict = classifyLoadedMedia({ ...media, provenance, knownPlaceholder });
   if (verdict !== "valid") return null;
   const origin = role === "draft" && (provenance === "generated" || provenance === "unknown")

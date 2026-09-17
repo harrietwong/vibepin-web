@@ -19,7 +19,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ImageOff } from "lucide-react";
 import { toProxyUrl } from "@/lib/imageProxy";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { resolveFailureMediaCandidates, resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/failureMedia";
+import { reduceMediaCursor, resolveFailureMediaCandidates, resolveFailureMediaUrl, syncMediaCursor, type FailureMediaDraft } from "@/lib/studio/failureMedia";
 import { BUI } from "@/components/studio/boardUI";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { contentMedia } from "@/lib/contentDraftModel";
@@ -75,9 +75,11 @@ function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, g
   // version rendered the new chain under the OLD index for one frame before
   // correcting itself. Candidate identities are stable and cannot contain a newline.
   const chainKey = chain.map(candidate => candidate.identity).join("\n");
-  const [cursor, setCursor] = useState({ chainKey, index: 0 });
-  const idx = cursor.chainKey === chainKey ? cursor.index : 0;
-  const advance = () => setCursor({ chainKey, index: idx + 1 });
+  const [cursor, setCursor] = useState({ identity: chainKey, index: 0 });
+  const synchronizedCursor = syncMediaCursor(cursor, chainKey);
+  if (synchronizedCursor !== cursor) setCursor(synchronizedCursor);
+  const idx = synchronizedCursor.index;
+  const advance = () => setCursor(previous => reduceMediaCursor(syncMediaCursor(previous, chainKey), { type: "advance" }));
 
   const current = idx < chain.length ? chain[idx] : null;
 
