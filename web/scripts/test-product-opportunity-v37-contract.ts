@@ -78,7 +78,7 @@ assert.match(metricControls, /NEXT_PUBLIC_PRODUCT_METRICS_PHYSICAL_ENABLED/, "Ph
 assert.match(metricControls, /NEXT_PUBLIC_PRODUCT_METRICS_DIGITAL_ENABLED/, "Digital metrics need an independent release flag");
 assert.match(component, /<Heart/, "Save must use the approved heart icon language");
 assert.match(component, /Saved to Saved Products/, "Save and Create Pin need distinct feedback");
-assert.match(component, /Return to products you want to compare or turn into a Pin/, "Saved Products must describe a shortlist, not a tracking trigger");
+assert.match(component, /products\.opportunities\.savedSubtitle/, "Saved Products must describe a shortlist, not a tracking trigger");
 assert.doesNotMatch(component, /compare, track, or turn into a Pin/, "Saving must not imply that user action starts Product tracking");
 assert.doesNotMatch(
   component,
@@ -86,7 +86,7 @@ assert.doesNotMatch(
   "A Saved Products read failure must not be silently rendered as an unsaved catalog",
 );
 assert.match(component, /savedState !== "ready"/, "Save mutations must pause until the existing saved state is known");
-assert.match(component, /saved products could not be checked/, "Catalog users need a retryable Saved Products read error");
+assert.match(component, /products\.opportunities\.savedCheckError/, "Catalog users need a retryable Saved Products read error");
 assert.match(component, /historyItem/, "Paid Saved Products must retain truthful read-only history");
 assert.match(component, /Previous product page/, "Historical saved records must keep the product reference");
 assert.match(component, /Pinterest reference/, "Historical saved records must keep Pinterest evidence");
@@ -123,16 +123,16 @@ for (const event of [
   assert.match(analytics, new RegExp(`\\| \\"${event}\\"`), `${event} must be accepted by the durable analytics client`);
   assert.match(component, new RegExp(`track\\(\\"${event}\\"`), `${event} must be emitted by the Product Opportunities UI`);
 }
-assert.match(component, /Most Saved/, "The first truthful sort must remain available");
-assert.match(component, /Newest Discovered/, "Newest discovery sorting must remain available");
-assert.match(component, />Category</, "Category filtering must remain user-visible");
+assert.match(component, /products\.opportunities\.mostSaved/, "The first truthful sort must remain available");
+assert.match(component, /products\.opportunities\.newest/, "Newest discovery sorting must remain available");
+assert.match(component, /products\.opportunities\.category/, "Category filtering must remain user-visible");
 assert.doesNotMatch(component, /"womens-fashion": "Women's Fashion"/, "Acquisition provenance must not become a second business category");
 assert.match(component, /"wedding-celebrations": "Wedding & Celebrations"/, "Wedding needs a user-facing label");
 assert.match(component, /gifts: "Gifts"/, "Gifts needs a user-facing label");
 assert.match(component, /"jewelry-accessories": "Jewelry & Accessories"/, "Jewelry needs a user-facing label");
 assert.match(component, /"digital-products": "Digital Products"/, "Digital category needs a user-facing label");
 assert.match(component, /Object\.entries\(CATEGORY_LABELS\)/, "Category filtering must render labels while submitting stable slugs");
-assert.match(component, />Platform</, "Platform filtering must remain user-visible");
+assert.match(component, /products\.opportunities\.platform/, "Platform filtering must remain user-visible");
 assert.match(server, /productType: opportunity\.product_type/, "Proven merchant Product Type must survive the API boundary");
 assert.match(component, /item\.productType/, "Proven merchant Product Type must be shown when present");
 assert.match(server, /product_opportunity_catalog_v1/, "Catalog queries must use the evidence-safe joined view");
@@ -156,9 +156,9 @@ assert.match(metricControls, /approved_at/, "Metric controls need an explicit ap
 assert.match(server, /product_metric_calibrations/, "Metric controls must prove an approved effective calibration for the same family version");
 assert.match(server, /\.eq\("metric_version", gate\.metric_version\)/, "Metric controls must use the release gate's exact metric version");
 assert.match(server, /\.lte\("effective_from", new Date\(\)\.toISOString\(\)\)/, "Metric controls must reject future calibration policy");
-assert.match(component, /metricControls\.available \? <label><span>Demand/, "Demand must render only after the family gate passes");
-assert.match(component, /metricControls\.available \? <label><span>Trend/, "Trend must render only after the family gate passes");
-assert.match(component, /metricControls\.available \? <option value="fastest_growing">Fastest Growing/, "Fastest Growing must render only after the family gate passes");
+assert.match(component, /metricControls\.available \? <label><span>\{tr\("products\.opportunities\.demand"\)\}/, "Demand must render only after the family gate passes");
+assert.match(component, /metricControls\.available \? <label><span>\{tr\("products\.opportunities\.trend"\)\}/, "Trend must render only after the family gate passes");
+assert.match(component, /metricControls\.available \? <option value="fastest_growing">\{tr\("products\.opportunities\.fastestGrowing"\)\}/, "Fastest Growing must render only after the family gate passes");
 assert.match(listApi, /ProductMetricControlsNotReadyError/, "Direct API callers must be rejected when gated controls are not ready");
 assert.doesNotMatch(
   component + listApi + detailApi + savedApi,
@@ -168,11 +168,11 @@ assert.doesNotMatch(
 assert.doesNotMatch(component, /productName\s*\|\|\s*["']Product["']/, "Missing product names must never become a fabricated Product title");
 assert.doesNotMatch(component, /Product opportunity from/, "Accessible labels must describe missing-title products without inventing a title");
 assert.match(component, /Product details from/, "Missing-title accessible labels must remain descriptive and truthful");
-assert.match(component, /after product discovery and review/, "Empty catalog copy must name the workflow that can actually add products");
+assert.match(component, /products\.opportunities\.catalogEmptyBody/, "Empty catalog copy must name the workflow that can actually add products");
 assert.doesNotMatch(component, /after the next daily tracking run/, "Trend tracking must not be described as product discovery");
-assert.match(component, /No products match these filters/, "Filtered catalog emptiness must not be presented as an empty product catalog");
+assert.match(component, /products\.opportunities\.filteredEmptyTitle/, "Filtered catalog emptiness must not be presented as an empty product catalog");
 assert.match(component, /No saved products match this product type/, "A saved-family mismatch must not claim that the user has no saved products");
-assert.match(component, /Show all saved products/, "Saved-family empty state must provide a truthful recovery action");
+assert.match(component, /products\.opportunities\.showAllSaved/, "Saved-family empty state must provide a truthful recovery action");
 assert.doesNotMatch(component, /number\(item\.latestPinterestSaves!\)/, "Missing Pinterest saves must never be formatted as a fabricated zero");
 assert.doesNotMatch(client, /\.from\s*\(|pin_products/i, "Browser client must not query product tables or bypass server-side plan access");
 assert.doesNotMatch(

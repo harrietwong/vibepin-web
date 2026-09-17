@@ -51,6 +51,8 @@ export type ProductOpportunityCatalogState =
   | "catalog-empty"
   | "filtered-empty";
 
+export type ProductOpportunityPartialReason = "incomplete-count";
+
 export type ProductOpportunityViewState =
   | ProductOpportunityCatalogState
   | "syncing"
@@ -176,6 +178,7 @@ export type ProductOpportunityListResult = {
   hasLockedCatalog: boolean;
   metricControls: ProductMetricControls;
   state: ProductOpportunityCatalogState;
+  stateReason: ProductOpportunityPartialReason | null;
 };
 
 export function classifyProductOpportunityState({
@@ -188,8 +191,8 @@ export function classifyProductOpportunityState({
   totalCount: number | null;
 }): ProductOpportunityCatalogState {
   if (itemCount === 0) return filtered ? "filtered-empty" : "catalog-empty";
-  // A successful query with no exact count is usable but incomplete evidence.
-  // Keep it visibly partial instead of claiming a complete catalog.
+  // This is only an incomplete exact-count signal. It does not mean that a
+  // secondary product tier, quality tier, or part of the catalog is missing.
   if (totalCount === null) return "partial";
   return "ready";
 }
@@ -471,6 +474,7 @@ export async function listProductOpportunities(
       hasLockedCatalog: await hasLockedCatalogPromise,
       metricControls,
       state: "ready",
+      stateReason: null,
     };
   }
 
@@ -520,12 +524,14 @@ export async function listProductOpportunities(
     options.family || options.search || options.category || options.platform
       || options.demand || options.trend,
   );
+  const state = classifyProductOpportunityState({ itemCount: rows.length, filtered, totalCount: count });
   return {
     items: rows.map((row) => catalogItem(row, calibrations)),
     accessibleCount: count ?? rows.length,
     hasLockedCatalog: await hasLockedCatalogPromise,
     metricControls,
-    state: classifyProductOpportunityState({ itemCount: rows.length, filtered, totalCount: count }),
+    state,
+    stateReason: state === "partial" ? "incomplete-count" : null,
   };
 }
 

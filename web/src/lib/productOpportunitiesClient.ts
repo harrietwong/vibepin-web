@@ -5,6 +5,7 @@ import type {
   ProductOpportunityItem,
   ProductOpportunityCatalogState,
   ProductOpportunityListResult,
+  ProductOpportunityPartialReason,
   ProductOpportunityViewState,
   SavedProductOpportunity,
 } from "./server/productOpportunities";
@@ -135,6 +136,7 @@ export type ProductOpportunityListResponse = {
   metricControls: ProductOpportunityListResult["metricControls"];
   planAccess: "preview" | "full";
   state: ProductOpportunityCatalogState;
+  stateReason: ProductOpportunityPartialReason | null;
   evidence: ProductOpportunityResponseEvidence;
 };
 

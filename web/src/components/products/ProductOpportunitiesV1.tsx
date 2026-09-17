@@ -21,6 +21,7 @@ import type {
 } from "@/lib/server/productOpportunities";
 import { buildPrefillFromProductOpportunity, openCreatePinsWithDraft } from "@/lib/createPinsPrefill";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import styles from "./ProductOpportunitiesV1.module.css";
 import { ProductImageSurface } from "./ProductImageSurface";
 
@@ -83,13 +84,24 @@ function ProductImage({ item, large = false }: { item: ProductOpportunityItem; l
 }
 
 function ErrorEvidence({ error }: { error: ProductOpportunityErrorInfo }) {
+  const { t: tr } = useLocale();
+  const notReported = tr("products.opportunities.notReported");
+  const safeMessage = error.code === "AUTH_REQUIRED"
+    ? tr("products.opportunities.authRequiredBody")
+    : error.code === "REQUEST_TIMEOUT"
+      ? tr("products.opportunities.timeoutError")
+      : error.code === "NETWORK_ERROR"
+        ? tr("products.opportunities.networkError")
+        : error.code === "INVALID_RESPONSE"
+          ? tr("products.opportunities.invalidResponseError")
+          : tr("products.opportunities.apiErrorBody");
   return (
     <div className={styles.errorCopy}>
-      <span>{error.message}</span>
+      <span>{safeMessage}</span>
       <small data-testid="product-error-evidence">
-        {error.method} {error.path} · status {error.status ?? "not reported"} · {error.code}
-        {error.requestId ? ` · request ${error.requestId}` : ""}
-        {` · ${error.occurredAt}`}{error.runtime ? ` · runtime ${error.runtime}` : ""}{error.deployment ? ` · deployment ${error.deployment}` : ""}
+        {`${tr("products.opportunities.evidenceMethod")} ${error.method} · ${tr("products.opportunities.evidencePath")} ${error.path} · ${tr("products.opportunities.evidenceStatus")} ${error.status ?? notReported} · ${tr("products.opportunities.evidenceCode")} ${error.code}`}
+        {` · ${tr("products.opportunities.evidenceRequest")} ${error.requestId ?? notReported} · ${tr("products.opportunities.evidenceTime")} ${error.occurredAt}`}
+        {` · ${tr("products.opportunities.evidenceRuntime")} ${error.runtime ?? notReported} · ${tr("products.opportunities.evidenceDeployment")} ${error.deployment ?? notReported}`}
       </small>
     </div>
   );
@@ -208,6 +220,7 @@ function SavedPlaceholder({ record, removing, onRemove }: {
 }
 
 export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
+  const { t: tr } = useLocale();
   const router = useRouter();
   const requestSequence = useRef(0);
   const detailRequestSequence = useRef(0);
@@ -224,6 +237,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const [metricControls, setMetricControls] = useState({ available: false, family: null as "physical" | "digital" | null, metricVersion: null as number | null });
   const [items, setItems] = useState<ProductOpportunityItem[]>([]);
   const [savedRecords, setSavedRecords] = useState<SavedProductOpportunity[]>([]);
+  const savedRecordsRef = useRef<SavedProductOpportunity[]>([]);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [savedState, setSavedState] = useState<SavedState>("loading");
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
@@ -285,6 +299,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     setLoading(true); setSavedState("loading"); setError(null); setDataState("syncing");
     try {
       const records = await fetchSavedProductOpportunities();
+      savedRecordsRef.current = records;
       setSavedRecords(records); setSavedIds(new Set(records.map((record) => record.productOpportunityId)));
       setSavedState("ready");
       setDataState(records.length > 0 ? "ready" : "catalog-empty");
@@ -297,7 +312,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       setSavedState("error");
       const info = productOpportunityErrorInfo(reason);
       setError(info);
-      setDataState(productOpportunityViewState(null, info, false));
+      setDataState(productOpportunityViewState(null, info, savedRecordsRef.current.length > 0));
     }
     finally { setLoading(false); }
   }, []);
@@ -306,6 +321,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     setSavedState("loading");
     try {
       const records = await fetchSavedProductOpportunities();
+      savedRecordsRef.current = records;
       setSavedRecords(records);
       setSavedIds(new Set(records.map((record) => record.productOpportunityId)));
       setSavedState("ready");
@@ -461,27 +477,27 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   return (
     <main className={styles.page}>
       <header className={styles.header}>
-        <div><p className={styles.eyebrow}>{mode === "saved" ? "Your shortlist" : "Daily product tracking"}</p><h1>{mode === "saved" ? "Saved Products" : "Product Opportunities"}</h1><p className={styles.subtitle}>{mode === "saved" ? "Return to products you want to compare or turn into a Pin." : "Real products with merchant images, Pinterest interest, and daily trend tracking."}</p></div>
-        <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? "Browse opportunities" : "Saved Products"}</Link>
+        <div><p className={styles.eyebrow}>{mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}</p><h1>{mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}</h1><p className={styles.subtitle}>{mode === "saved" ? tr("products.opportunities.savedSubtitle") : tr("products.opportunities.subtitle")}</p></div>
+        <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? tr("products.opportunities.browse") : tr("products.opportunities.savedTitle")}</Link>
       </header>
       {mode === "catalog" ? <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
-        <div className={styles.familyFilter} role="group" aria-label="Product type"><span>Product type</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? "All products" : value === "physical" ? "Physical" : "Digital"}</button>)}</div></div>
-        <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder="Search products, merchants, or categories" aria-label="Search Product Opportunities" /></label>
-        <label><span>Category</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">All categories</option>{Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label><span>Platform</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder="All platforms" /></label>
+        <div className={styles.familyFilter} role="group" aria-label={tr("products.opportunities.filterProductType")}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div>
+        <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder={tr("products.opportunities.searchPlaceholder")} aria-label={tr("products.opportunities.searchLabel")} /></label>
+        <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label><span>{tr("products.opportunities.platform")}</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder={tr("products.opportunities.allPlatforms")} /></label>
         <datalist id="product-opportunity-platforms">{platformSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
-        {metricControls.available ? <label><span>Demand</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">All demand levels</option><option value="high_recent_demand">High recent demand</option></select></label> : null}
-        {metricControls.available ? <label><span>Trend</span><select value={draftTrend} onChange={(event) => { const value = event.target.value; setDraftTrend(value === "rising" || value === "steady" || value === "cooling" ? value : ""); }}><option value="">All recent trends</option><option value="rising">Growing faster</option><option value="steady">Holding steady</option><option value="cooling">Slowing recently</option></select></label> : null}
-        <label><span>Sort</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">Most Saved</option><option value="newest">Newest Discovered</option>{metricControls.available ? <option value="fastest_growing">Fastest Growing</option> : null}</select></label>
-        <button type="submit">Apply</button>
-        {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>Clear</button> : null}
-      </form> : <div className={styles.filters} role="group" aria-label="Product type"><div className={styles.familyFilter}><span>Product type</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? "All products" : value === "physical" ? "Physical" : "Digital"}</button>)}</div></div></div>}
-      {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>Try again</button></div> : null}
-      {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">Your saved products could not be checked. Save buttons are paused so existing records are not shown incorrectly.<button onClick={() => void loadCatalogSavedState()}>Try again</button></div> : null}
-      {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? "Refreshing verified products…" : dataState === "stale" ? "Showing the last verified products while the catalog reconnects." : dataState === "partial" ? "Some verified products are available; the catalog is still syncing." : ""}{lastEvidence ? <small>request {lastEvidence.requestId} · {lastEvidence.occurredAt}</small> : null}</div> : null}
-      {loading ? <div className={styles.loading}><Loader2 className={styles.spin} aria-hidden="true" /><span>Loading product opportunities…</span></div>
-        : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? "Sign in to view Product Opportunities" : "Product data could not be loaded"}</h2><p>{dataState === "auth-required" ? "Sign in to continue to the verified product catalog." : "The catalog service returned an error. Your verified products were not replaced with an empty result."}</p></div>
-        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : dataState === "filtered-empty" || hasCatalogFilters ? "No products match these filters" : "No products to show yet"}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : dataState === "filtered-empty" || hasCatalogFilters ? "Try changing or clearing your filters." : "New qualified products will appear after product discovery and review."}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>Show all saved products</button> : <Link href="/app/products">Browse Product Opportunities</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>Clear filters</button> : null}</div>
+        {metricControls.available ? <label><span>{tr("products.opportunities.demand")}</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">{tr("products.opportunities.allDemand")}</option><option value="high_recent_demand">{tr("products.opportunities.highDemand")}</option></select></label> : null}
+        {metricControls.available ? <label><span>{tr("products.opportunities.trend")}</span><select value={draftTrend} onChange={(event) => { const value = event.target.value; setDraftTrend(value === "rising" || value === "steady" || value === "cooling" ? value : ""); }}><option value="">{tr("products.opportunities.allTrends")}</option><option value="rising">{tr("products.opportunities.rising")}</option><option value="steady">{tr("products.opportunities.steady")}</option><option value="cooling">{tr("products.opportunities.cooling")}</option></select></label> : null}
+        <label><span>{tr("products.opportunities.sort")}</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
+        <button type="submit">{tr("products.opportunities.apply")}</button>
+        {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}
+      </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><div className={styles.familyFilter}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div></div>}
+      {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>{tr("products.opportunities.retry")}</button></div> : null}
+      {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">{tr("products.opportunities.savedCheckError")}<button onClick={() => void loadCatalogSavedState()}>{tr("products.opportunities.retry")}</button></div> : null}
+      {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : dataState === "stale" ? tr("products.opportunities.stateStale") : dataState === "partial" ? tr("products.opportunities.statePartial") : ""}{lastEvidence ? <small>{tr("products.opportunities.evidenceRequest")} {lastEvidence.requestId} · {tr("products.opportunities.evidenceTime")} {lastEvidence.occurredAt}</small> : null}</div> : null}
+      {loading ? <div className={styles.loading}><Loader2 className={styles.spin} aria-hidden="true" /><span>{tr("products.opportunities.stateSyncing")}</span></div>
+        : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? tr("products.opportunities.authRequiredTitle") : tr("products.opportunities.apiErrorTitle")}</h2><p>{dataState === "auth-required" ? tr("products.opportunities.authRequiredBody") : tr("products.opportunities.apiErrorBody")}</p></div>
+        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>
         : <><section className={styles.grid} aria-label={mode === "saved" ? "Saved products" : "Product opportunities"}>{catalogRows.map((item) => <ProductCard key={item.id} item={item} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)} savedState={savedState} mode={mode} onOpen={() => void openDetails(item)} onSave={() => void toggleSaved(item)} onCreate={() => createPin(item)} />)}</section>{mode === "saved" ? visibleSaved.filter((record) => !record.item).map((record) => <SavedPlaceholder key={record.productOpportunityId} record={record} removing={savingIds.has(record.productOpportunityId)} onRemove={() => void removeSavedHistory(record.productOpportunityId)} />) : null}</>}
       {hasLockedCatalog && mode === "catalog" ? <aside className={styles.upgradePanel}><div><Heart aria-hidden="true" /><span>Free includes 10 complete Product Opportunities</span></div><p>Paid plans unlock the full catalog while keeping the same real product and trend data.</p><Link href="/pricing">View plans <ArrowRight aria-hidden="true" /></Link></aside> : null}
       {canLoadMore ? <button className={styles.loadMore} onClick={() => void loadCatalog(true)} disabled={loadingMore}>{loadingMore ? <Loader2 className={styles.spin} aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}{loadingMore ? "Loading…" : "Load more"}</button> : null}
