@@ -78,6 +78,33 @@ export function checkBillingModeForProd(env) {
 }
 
 /**
+ * Preview Test checkout has an explicit return-destination contract. The stable
+ * alias must be both an exact env value and an audited manifest entry; a Vercel
+ * hostname pattern would turn an Origin header into an open redirect primitive.
+ * Production and Preview configurations without sandbox billing are intentionally
+ * outside this gate.
+ */
+export function checkCreemPreviewTestConfig(env, stableOrigins) {
+  const preview = String(env.VERCEL_ENV ?? "").trim().toLowerCase() === "preview";
+  const mode = String(env.CREEM_MODE ?? "").trim().toLowerCase();
+  if (!preview || mode !== "test") return [];
+
+  const problems = [];
+  const apiKey = String(env.CREEM_API_KEY ?? "").trim();
+  if (!apiKey.startsWith("creem_test_")) {
+    problems.push("Preview CREEM_MODE=test requires a creem_test_ CREEM_API_KEY — refusing an invalid sandbox billing configuration.");
+  }
+
+  const origin = String(env.CREEM_PREVIEW_SUCCESS_ORIGIN ?? "").trim();
+  if (!origin) {
+    problems.push("Preview CREEM_MODE=test requires CREEM_PREVIEW_SUCCESS_ORIGIN to be an exact audited stable alias from web/config/creem-preview-origin-manifest.json.");
+  } else if (!stableOrigins.includes(origin)) {
+    problems.push("CREEM_PREVIEW_SUCCESS_ORIGIN is not an exact audited stable alias from web/config/creem-preview-origin-manifest.json — refusing Preview Test checkout.");
+  }
+  return problems;
+}
+
+/**
  * Unmerged-work check (2026-07-22, after four sessions serially clobbered each
  * other's production deploys in one morning).
  *
@@ -216,7 +243,6 @@ const isMainModule =
   process.argv[1] && path.resolve(process.argv[1]) === __filename;
 if (!isMainModule) {
   // Imported (e.g. by the unit test) — expose the pure check and stop here.
-  // eslint-disable-next-line no-undef
 } else {
   runGuard();
 }
@@ -336,6 +362,27 @@ if (process.env.PINTEREST_API_ENV === "sandbox") {
 // open real checkout on production.
 for (const problem of checkBillingModeForProd(process.env)) {
   failures.push(problem);
+}
+
+// --- Check 6b: Preview Test billing needs an audited stable return origin ---
+if (
+  String(process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "preview" &&
+  String(process.env.CREEM_MODE ?? "").trim().toLowerCase() === "test"
+) {
+  try {
+    const manifestPath = path.join(repoRoot, "web", "config", "creem-preview-origin-manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const stableOrigins = manifest?.stableOrigins;
+    if (!Array.isArray(stableOrigins) || stableOrigins.length === 0 || !stableOrigins.every((value) => typeof value === "string")) {
+      failures.push("web/config/creem-preview-origin-manifest.json must contain a non-empty stableOrigins string array.");
+    } else {
+      for (const problem of checkCreemPreviewTestConfig(process.env, stableOrigins)) {
+        failures.push(problem);
+      }
+    }
+  } catch (err) {
+    failures.push(`could not read/parse web/config/creem-preview-origin-manifest.json: ${err.message}`);
+  }
 }
 
 // --- Check 7: no other active branch's work would be dropped ---

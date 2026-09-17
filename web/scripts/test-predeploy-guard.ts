@@ -34,8 +34,13 @@ async function main() {
   // Importing the guard for its pure export must NOT run the git/fs body.
   const guard = (await import("./predeploy-guard.mjs")) as {
     checkBillingModeForProd: (env: Record<string, string | undefined>) => string[];
+    checkCreemPreviewTestConfig: (
+      env: Record<string, string | undefined>,
+      stableOrigins: readonly string[],
+    ) => string[];
   };
   const check = guard.checkBillingModeForProd;
+  const checkPreview = guard.checkCreemPreviewTestConfig;
 
   console.log("\npredeploy-guard billing-mode tests\n");
 
@@ -85,6 +90,90 @@ async function main() {
 
   await test("empty env → no problem (nothing to flag)", () => {
     assertEq(check({}).length, 0, "clean");
+  });
+
+  console.log("\npredeploy-guard Preview Creem return-origin tests\n");
+  const manifest = (await import("../config/creem-preview-origin-manifest.json")).default as {
+    stableOrigins: string[];
+  };
+  const stableOrigins = manifest.stableOrigins;
+
+  await test("manifest records the exact stable Preview alias", () => {
+    assertEq(stableOrigins.length, 1, "one audited stable alias");
+    assertEq(stableOrigins[0], "https://vibepin-fb-preview.vercel.app", "exact alias");
+  });
+
+  await test("exports the pure Preview Test config check", () => {
+    assert(typeof checkPreview === "function", "checkCreemPreviewTestConfig exported");
+  });
+
+  await test("Preview Test billing requires the manifest stable alias", () => {
+    const problems = checkPreview(
+      { VERCEL_ENV: "preview", CREEM_MODE: "test", CREEM_API_KEY: "creem_test_fake" },
+      stableOrigins,
+    );
+    assertEq(problems.length, 1, "missing stable origin is refused");
+    assert(/CREEM_PREVIEW_SUCCESS_ORIGIN/.test(problems[0]), "names the missing variable");
+  });
+
+  await test("Preview Test billing accepts the exact manifest stable alias", () => {
+    assertEq(
+      checkPreview(
+        {
+          VERCEL_ENV: "preview",
+          CREEM_MODE: "test",
+          CREEM_API_KEY: "creem_test_fake",
+          CREEM_PREVIEW_SUCCESS_ORIGIN: "https://vibepin-fb-preview.vercel.app",
+        },
+        stableOrigins,
+      ).length,
+      0,
+      "exact stable alias accepted",
+    );
+  });
+
+  await test("Preview Test billing rejects an unlisted or malformed stable alias", () => {
+    for (const origin of [
+      "https://attacker.vercel.app",
+      "http://vibepin-fb-preview.vercel.app",
+      "https://vibepin-fb-preview.vercel.app/",
+      "https://vibepin-fb-preview.vercel.app?next=evil",
+    ]) {
+      assertEq(
+        checkPreview(
+          {
+            VERCEL_ENV: "preview",
+            CREEM_MODE: "test",
+            CREEM_API_KEY: "creem_test_fake",
+            CREEM_PREVIEW_SUCCESS_ORIGIN: origin,
+          },
+          stableOrigins,
+        ).length,
+        1,
+        `${origin} refused`,
+      );
+    }
+  });
+
+  await test("Preview Test billing rejects a non-test billing key", () => {
+    assertEq(
+      checkPreview(
+        {
+          VERCEL_ENV: "preview",
+          CREEM_MODE: "test",
+          CREEM_API_KEY: "creem_live_fake",
+          CREEM_PREVIEW_SUCCESS_ORIGIN: stableOrigins[0],
+        },
+        stableOrigins,
+      ).length,
+      1,
+      "wrong key refused",
+    );
+  });
+
+  await test("Production and non-Test Preview configs do not require a Preview alias", () => {
+    assertEq(checkPreview({ VERCEL_ENV: "production", CREEM_MODE: "live" }, stableOrigins).length, 0, "production ignored");
+    assertEq(checkPreview({ VERCEL_ENV: "preview", CREEM_MODE: "disabled" }, stableOrigins).length, 0, "disabled Preview ignored");
   });
 
   // ── Unmerged-branch check (2026-07-22 multi-session clobbering) ─────────────

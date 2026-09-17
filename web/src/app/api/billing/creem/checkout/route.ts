@@ -51,6 +51,7 @@ import { createServerClient } from "@/lib/supabase";
 import { creemProductIdFor, extraAccountProductIdFor } from "@/lib/server/creem/creemProducts";
 import { createCheckoutSession } from "@/lib/server/creem/creemClient";
 import { assertBillingModeUsable, getBillingMode } from "@/lib/server/creem/billingMode";
+import { CREEM_PREVIEW_STABLE_ORIGINS } from "@/lib/server/creem/previewOriginManifest";
 import { getActivePlanInterval, resolvePlan } from "@/lib/server/entitlements";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 import type { PlanKey } from "@/lib/pricingPlans";
@@ -112,7 +113,8 @@ function previewVercelOrigin(value: string, hasProtocol: boolean): string | null
 function configuredPreviewSuccessOrigin(): string | null {
   if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview") return null;
   const origin = (process.env.CREEM_PREVIEW_SUCCESS_ORIGIN ?? "").trim().toLowerCase();
-  return origin ? previewVercelOrigin(origin, true) : null;
+  const parsed = origin ? previewVercelOrigin(origin, true) : null;
+  return parsed && CREEM_PREVIEW_STABLE_ORIGINS.includes(origin) ? parsed : null;
 }
 
 /** Exact unique URL for the Vercel deployment currently serving this request. */
