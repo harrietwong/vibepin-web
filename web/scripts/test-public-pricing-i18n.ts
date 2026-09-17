@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import en from "../src/lib/i18n/messages/en";
+import en, { type MessageKey } from "../src/lib/i18n/messages/en";
 import { getMessages } from "../src/lib/i18n/messages";
 import { PARTIAL } from "../src/lib/i18n/messages";
 import { ALL_APP_LANGUAGES } from "../src/lib/i18n/config";
@@ -24,6 +24,11 @@ import { FAQ_ITEMS } from "../src/lib/landing/conversionData";
 
 type Catalog = Record<string, string>;
 type ComparisonValueFormatter = (value: string, translate: (key: string) => string) => string;
+
+// Compile-time gate: the default catalog is the final fallback for every
+// supported key, including generated public-pricing keys.
+const defaultEnglishMessage = (key: MessageKey): string => en[key];
+void defaultEnglishMessage;
 
 const requireFromTest = createRequire(join(process.cwd(), "scripts/test-public-pricing-i18n.ts"));
 

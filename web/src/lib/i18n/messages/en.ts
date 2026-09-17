@@ -706,5 +706,11 @@ const en = {
   ...workspaceMessages,
 } as const;
 
-export type MessageKey = keyof typeof en | PublicPricingMessageKey;
-export default en;
+// `publicPricingEn` is generated as a runtime catalog, so spreading it above
+// cannot preserve its template-literal keys in `typeof en`. Expose the same
+// object with the complete fallback contract: every MessageKey must be safe to
+// index on the default English catalog.
+const completeEn = en as typeof en & Readonly<Record<PublicPricingMessageKey, string>>;
+
+export type MessageKey = keyof typeof completeEn;
+export default completeEn;

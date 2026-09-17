@@ -47,7 +47,7 @@ const PARTIAL: Partial<Record<LanguageCode, Partial<Record<MessageKey, string>>>
 
 export function getMessages(lang: LanguageCode): Record<MessageKey, string> {
   const partial = PARTIAL[lang] ?? {};
-  return { ...en, ...partial };
+  return { ...en, ...partial } as Record<MessageKey, string>;
 }
 
 /** All locales that ship at least a partial catalog (English always present). */
