@@ -88,21 +88,39 @@ const DEFAULT_ORIGIN = "https://vibepin.co";
  * In Preview, accepting only that exact HTTPS origin preserves the return path
  * without turning every *.vercel.app deployment into an open redirect target.
  */
-function previewSuccessOrigin(): string | null {
-  if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview") return null;
-
-  const vercelUrl = (process.env.VERCEL_URL ?? "").trim().toLowerCase();
-  if (!vercelUrl) return null;
-
+function previewVercelOrigin(value: string, hasProtocol: boolean): string | null {
   try {
-    const url = new URL(`https://${vercelUrl}`);
-    if (url.hostname.endsWith(".vercel.app") && url.pathname === "/") {
+    const url = new URL(hasProtocol ? value : `https://${value}`);
+    if (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".vercel.app") &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password
+    ) {
       return url.origin;
     }
   } catch {
-    /* malformed VERCEL_URL → do not expand the allowlist */
+    /* malformed server config → do not expand the allowlist */
   }
   return null;
+}
+
+/** Exact stable Preview alias, configured server-side rather than from headers. */
+function configuredPreviewSuccessOrigin(): string | null {
+  if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview") return null;
+  const origin = (process.env.CREEM_PREVIEW_SUCCESS_ORIGIN ?? "").trim().toLowerCase();
+  return origin ? previewVercelOrigin(origin, true) : null;
+}
+
+/** Exact unique URL for the Vercel deployment currently serving this request. */
+function previewDeploymentOrigin(): string | null {
+  if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview") return null;
+
+  const vercelUrl = (process.env.VERCEL_URL ?? "").trim().toLowerCase();
+  return vercelUrl ? previewVercelOrigin(vercelUrl, false) : null;
 }
 
 /** The request's own origin when its host is allowlisted, else the default. */
@@ -113,12 +131,20 @@ function safeSuccessOrigin(req: NextRequest): string {
       const parsedOrigin = new URL(origin);
       const host = parsedOrigin.hostname;
       if (ALLOWED_HOSTS.has(host)) return origin;
-      if (parsedOrigin.origin === previewSuccessOrigin()) return parsedOrigin.origin;
+      if (
+        parsedOrigin.origin === configuredPreviewSuccessOrigin() ||
+        parsedOrigin.origin === previewDeploymentOrigin()
+      ) {
+        return parsedOrigin.origin;
+      }
     } catch {
       /* malformed origin → default */
     }
   }
-  return DEFAULT_ORIGIN;
+  // Origin can be absent on a constrained browser/proxy request. In Preview, the
+  // exact server-configured stable alias remains safe; never infer an origin from
+  // forwarded headers or the request URL.
+  return configuredPreviewSuccessOrigin() ?? DEFAULT_ORIGIN;
 }
 
 export async function POST(req: NextRequest): Promise<Response> {

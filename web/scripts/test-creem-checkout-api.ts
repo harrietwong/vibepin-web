@@ -121,9 +121,10 @@ const originalLoad = (Module as any)._load;
   return originalLoad.call(this, request, parent, isMain);
 };
 
-function makeReq(body: unknown, origin?: string): Request {
+function makeReq(body: unknown, origin?: string, extraHeaders?: Record<string, string>): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (origin) headers["origin"] = origin;
+  Object.assign(headers, extraHeaders);
   return new Request("https://vibepin.co/api/billing/creem/checkout", {
     method: "POST",
     headers,
@@ -197,6 +198,102 @@ async function main() {
     assertEq(res.status, 200, "status");
     const input = fakes.lastCheckoutInput as { successUrl: string };
     assertEq(input.successUrl, "http://localhost:3000/welcome", "allowlisted localhost origin honored");
+  });
+
+  await test("preview checkout returns to its configured stable alias when it differs from VERCEL_URL", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedVercelUrl = process.env.VERCEL_URL;
+    const savedStableOrigin = process.env.CREEM_PREVIEW_SUCCESS_ORIGIN;
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "web-deployment-harriets-projects-86e9e358.vercel.app";
+    process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = "https://vibepin-fb-preview.vercel.app";
+    try {
+      const res = await route.POST(
+        makeReq({ plan: "starter", interval: "month" }, "https://vibepin-fb-preview.vercel.app") as never,
+      );
+      assertEq(res.status, 200, "status");
+      assertEq(
+        (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+        "https://vibepin-fb-preview.vercel.app/welcome",
+        "configured stable preview alias honored",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedVercelUrl === undefined) delete process.env.VERCEL_URL; else process.env.VERCEL_URL = savedVercelUrl;
+      if (savedStableOrigin === undefined) delete process.env.CREEM_PREVIEW_SUCCESS_ORIGIN; else process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = savedStableOrigin;
+    }
+  });
+
+  await test("preview checkout without Origin falls back only to its configured stable alias", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedStableOrigin = process.env.CREEM_PREVIEW_SUCCESS_ORIGIN;
+    process.env.VERCEL_ENV = "preview";
+    process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = "https://vibepin-fb-preview.vercel.app";
+    try {
+      const res = await route.POST(makeReq({ plan: "starter", interval: "month" }) as never);
+      assertEq(res.status, 200, "status");
+      assertEq(
+        (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+        "https://vibepin-fb-preview.vercel.app/welcome",
+        "no Origin uses the server-configured stable alias",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedStableOrigin === undefined) delete process.env.CREEM_PREVIEW_SUCCESS_ORIGIN; else process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = savedStableOrigin;
+    }
+  });
+
+  await test("forwarded host headers cannot spoof a stable Preview checkout return", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedStableOrigin = process.env.CREEM_PREVIEW_SUCCESS_ORIGIN;
+    process.env.VERCEL_ENV = "preview";
+    process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = "https://vibepin-fb-preview.vercel.app";
+    try {
+      const res = await route.POST(
+        makeReq(
+          { plan: "starter", interval: "month" },
+          "https://attacker.vercel.app",
+          { "x-forwarded-host": "vibepin-fb-preview.vercel.app", "x-forwarded-proto": "https" },
+        ) as never,
+      );
+      assertEq(res.status, 200, "status");
+      assertEq(
+        (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+        "https://vibepin-fb-preview.vercel.app/welcome",
+        "spoofed forwarded headers cannot replace the configured fallback",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedStableOrigin === undefined) delete process.env.CREEM_PREVIEW_SUCCESS_ORIGIN; else process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = savedStableOrigin;
+    }
+  });
+
+  await test("production never expands the return allowlist with a Preview alias", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedStableOrigin = process.env.CREEM_PREVIEW_SUCCESS_ORIGIN;
+    const savedMode = process.env.CREEM_MODE;
+    const savedKey = process.env.CREEM_API_KEY;
+    process.env.VERCEL_ENV = "production";
+    process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = "https://vibepin-fb-preview.vercel.app";
+    process.env.CREEM_MODE = "live";
+    process.env.CREEM_API_KEY = "creem_live_fake";
+    try {
+      fakes.lastCheckoutInput = undefined;
+      const res = await route.POST(
+        makeReq({ plan: "starter", interval: "month" }, "https://vibepin-fb-preview.vercel.app") as never,
+      );
+      assertEq(res.status, 200, "production live checkout is otherwise usable");
+      assertEq(
+        (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+        "https://vibepin.co/welcome",
+        "production rejects the Preview alias",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedStableOrigin === undefined) delete process.env.CREEM_PREVIEW_SUCCESS_ORIGIN; else process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = savedStableOrigin;
+      if (savedMode === undefined) delete process.env.CREEM_MODE; else process.env.CREEM_MODE = savedMode;
+      if (savedKey === undefined) delete process.env.CREEM_API_KEY; else process.env.CREEM_API_KEY = savedKey;
+    }
   });
 
   await test("preview checkout returns to its configured Vercel host, not production", async () => {
@@ -557,6 +654,29 @@ async function main() {
       "the buyer came from Settings to connect an account — that is where they go back",
     );
     assertEq(input.metadata.returnTo, "settings_social", "metadata carries the return intent");
+  });
+
+  await test("Preview add-on checkout returns to the configured stable alias", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedStableOrigin = process.env.CREEM_PREVIEW_SUCCESS_ORIGIN;
+    process.env.VERCEL_ENV = "preview";
+    process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = "https://vibepin-fb-preview.vercel.app";
+    try {
+      fakes.plan = "pro";
+      fakes.planInterval = "month";
+      const res = await route.POST(
+        makeReq({ kind: "extra_account", units: 1 }, "https://vibepin-fb-preview.vercel.app") as never,
+      );
+      assertEq(res.status, 200, "status");
+      assertEq(
+        (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+        "https://vibepin-fb-preview.vercel.app/app/settings/social?addon=success",
+        "add-on uses the stable Preview alias",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedStableOrigin === undefined) delete process.env.CREEM_PREVIEW_SUCCESS_ORIGIN; else process.env.CREEM_PREVIEW_SUCCESS_ORIGIN = savedStableOrigin;
+    }
   });
 
   await test("the add-on return URL honors an allowlisted origin too", async () => {
