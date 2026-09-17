@@ -330,6 +330,14 @@ test("payloadAfterOutcomes: a later success clears a previous attempt's error co
   assert.equal(after.publishErrorCode, undefined);
   assert.equal(after.failureType, undefined);
 });
+test("payloadAfterOutcomes: a new cron outcome clears a prior dismissed workflow marker", () => {
+  const after = payloadAfterOutcomes(
+    { scheduledDate: "2026-08-27", publishReceiptDismissedAt: "2026-08-26T10:00:00.000Z" },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "p1" }],
+    "2026-08-27T10:00:00.000Z",
+  );
+  assert.equal(after.publishReceiptDismissedAt, undefined);
+});
 
 test("payloadAfterOutcomes: nothing owed ⇒ completed, never marked failed", () => {
   // A stale-claim re-run where every destination had already published.

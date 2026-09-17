@@ -44,7 +44,7 @@ const storage = new FakeStorage();
 // The stubs above must be in place BEFORE pinDraftStore initializes, so these are
 // required here rather than statically imported (static imports hoist above them).
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { publishContent, reconcilePublishIntent } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
+const { publishContent, reconcilePublishIntent, reconciledPublishIntentPatch } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
 const { buildPublishConfirmation, confirmPublishSnapshot } = require("../src/lib/studio/publishConfirmation") as typeof import("../src/lib/studio/publishConfirmation");
 const pinDraftStore = require("../src/lib/pinDraftStore") as typeof import("../src/lib/pinDraftStore");
 const { contentDestinationResults } = require("../src/lib/contentDraftModel") as typeof import("../src/lib/contentDraftModel");
@@ -600,6 +600,21 @@ async function main(): Promise<void> {
     }, "test-token");
     assert.deepEqual(result?.destinations, []);
     assert.match(called, /\/api\/publish\/reconcile\?intentId=publish%3Atest%20intent\|GET\|include\|Bearer/);
+  });
+  await test("reconcile atomically writes resolved, failed, and still-unknown evidence", () => {
+    const draft = seedDraft({ id: "reconcile-patch", destinations: [{ provider: "pinterest", socialConnectionId: PIN_CONN, boardId: "board-1" }] });
+    const patch = reconciledPublishIntentPatch(draft, {
+      intentId: "publish:reconcile-patch:1",
+      destinations: [
+        { destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", status: "published", retryAllowed: false, remoteId: "pin-1", remoteUrl: "https://pin/1", evidence: {} },
+        { destinationId: "instagram:ig-1", provider: "instagram", status: "failed", retryAllowed: true, remoteId: null, remoteUrl: null, evidence: {} },
+        { destinationId: "facebook:fb-1", provider: "facebook", status: "delivery_unknown", retryAllowed: false, remoteId: null, remoteUrl: null, evidence: {} },
+      ],
+    });
+    assert.deepEqual(patch.destinationResults?.map(row => row.status), ["published", "failed", "delivery_unknown"]);
+    assert.equal(patch.publishIntentStatus, "recovery_pending");
+    assert.equal(patch.publishReceiptDismissedAt, undefined);
+    assert.equal(patch.remotePinId, "pin-1");
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

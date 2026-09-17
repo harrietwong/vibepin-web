@@ -118,6 +118,32 @@ export async function reconcilePublishIntent(intentId: string, fetcher: typeof f
   return body.intentId === intentId ? body : null;
 }
 
+/** Apply read-only durable reconciliation evidence in one store patch. No provider
+ * dispatch happens here; resolved, failed, and still-unknown rows stay distinct. */
+export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: PublishIntentReconcileResponse): Partial<PinDraft> {
+  const prior = contentDestinationResults(draft);
+  const rows: DestinationPublishResult[] = reconciled.destinations.map(destination => {
+    const existing = prior.find(row => row.destinationId === destination.destinationId);
+    const status = destination.status === "published" || destination.status === "failed" ? destination.status : "delivery_unknown";
+    return {
+      ...(existing ?? {}), destinationId: destination.destinationId,
+      provider: destination.provider as DestinationPublishResult["provider"],
+      socialConnectionId: existing?.socialConnectionId ?? null, status,
+      ...(destination.remoteId ? { remoteId: destination.remoteId } : {}),
+      ...(destination.remoteUrl ? { postUrl: destination.remoteUrl } : {}),
+      ...(status === "published" ? { publishedAt: existing?.publishedAt ?? new Date().toISOString() } : {}),
+      ...(status === "delivery_unknown" ? { errorMessage: destination.retryAllowed ? "Delivery is still being reconciled; retry is available when it resolves." : "Delivery status is still unknown. Reconcile before retrying." } : {}),
+      intentId: reconciled.intentId,
+    };
+  });
+  return {
+    destinationResults: rows,
+    ...legacyFieldsFromResults(rows, draft),
+    publishIntentStatus: rows.some(row => row.status === "delivery_unknown") ? "recovery_pending" : "completed",
+    publishReceiptDismissedAt: undefined,
+  };
+}
+
 export type PublishContentOutcome = {
   published: DestinationPublishResult[];
   failed: DestinationPublishResult[];

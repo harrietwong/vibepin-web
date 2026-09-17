@@ -172,6 +172,17 @@ test("Move to Unscheduled 保留当前 receipt 以锁住成功腿，并清除当
   assert.deepEqual(retry.dispatchDestinationIds, ["facebook:page-1"], "retry 不得把已发布 Pinterest 腿重新放入 dispatch");
   assert.equal(retry.priorIntentId, "publish:d:prior", "durable retry 必须继续消费原失败 intent 的合法 entitlement");
 });
+test("Move to Unscheduled 先规范化 legacy receipt，清空 mirror 后仍保留 Pinterest/social 历史", () => {
+  const legacy = draft({
+    id: "legacy-dismiss",
+    postedAt: "2026-07-23T02:00:00.000Z", remotePinId: "legacy-pin",
+    socialPosts: [{ provider: "facebook", postId: "fb-1", postUrl: "https://facebook.test/fb-1", publishedAt: "2026-07-23T02:00:00.000Z" }],
+  });
+  const moved = { ...legacy, ...archiveCurrentPublishResults(legacy) } as PinDraft;
+  assert.equal(moved.destinationResults?.length, 2);
+  assert.equal(moved.destinationResults?.find(row => row.provider === "pinterest")?.remoteId, "legacy-pin");
+  assert.equal(moved.destinationResults?.find(row => row.provider === "facebook")?.remoteId, "fb-1");
+});
 
 console.log("\n=== PRD v1.1 §6.3: workspace 全集，来源无关 ===");
 test("失败口径与来源无关：board-source 与 Weekly-Plan 来源同等计入 workspace 全集", () => {

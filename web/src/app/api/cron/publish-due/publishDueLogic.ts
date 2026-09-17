@@ -682,6 +682,9 @@ export function payloadAfterOutcomes(
   options?: OutcomePersistOptions,
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
+  // A new scheduled attempt is current workflow again; it must not inherit a prior
+  // merchant dismissal and render its real receipt as an unscheduled draft.
+  delete next.publishReceiptDismissedAt;
   applyDestinationResults(next, payload, outcomes, nowIso);
   // The client's mergeServerDrafts LWW compares this field — see payloadAfterSuccess.
   next.updatedAt = nowIso;

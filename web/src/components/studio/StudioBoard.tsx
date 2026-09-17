@@ -97,7 +97,7 @@ import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivatio
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
 import { contentMedia } from "@/lib/contentDraftModel";
-import { publishContent, explainPublishBlockers, reconcilePublishIntent } from "@/lib/studio/publishContent";
+import { publishContent, explainPublishBlockers, reconcilePublishIntent, reconciledPublishIntentPatch } from "@/lib/studio/publishContent";
 import { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import {
   partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
@@ -1119,7 +1119,11 @@ export function StudioBoard() {
       // this is a read-only evidence lookup, so it cannot dispatch or meter another
       // post. The receipt just written by publishContent is the authoritative intent.
       const intentId = pinDraftStore.getDraft(receipt.draftId)?.publishIntentId?.trim() || receipt.priorIntentId || "";
-      await reconcilePublishIntent(intentId);
+      const reconciled = await reconcilePublishIntent(intentId);
+      const current = pinDraftStore.getDraft(receipt.draftId);
+      if (reconciled && current) {
+        pinDraftStore.updateDraft(receipt.draftId, reconciledPublishIntentPatch(current, reconciled));
+      }
       toast.info(tr("publishResults.recoveryHint"));
       return;
     }

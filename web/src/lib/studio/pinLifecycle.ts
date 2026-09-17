@@ -15,6 +15,7 @@
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import {
+  contentDestinationResults,
   hasActionableDestinationRecovery,
   hasFailedDestination,
   hasNonTerminalDestination,
@@ -98,10 +99,13 @@ export function getPinLifecycle(draft: PinDraft): PinLifecycle {
 export function archiveCurrentPublishResults(
   draft: Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory" | "publishReceiptDismissedAt"> & ContentDestinationHints,
 ): Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory" | "publishReceiptDismissedAt"> {
+  // Normalize legacy mirrors BEFORE clearing them. Otherwise an old Pinterest/social
+  // receipt exists only in postedAt/remotePinId/socialPosts and would disappear.
+  const normalizedResults = contentDestinationResults({ ...draft, id: draft.id ?? "", imageUrl: draft.imageUrl ?? "" } as ContentDraftLike);
   return {
     // Keep last-attempt rows active as immutable provider evidence. onlyPending and
     // durable retry claims read these rows to exclude a sibling that already posted.
-    destinationResults: draft.destinationResults,
+    destinationResults: normalizedResults.length ? normalizedResults : undefined,
     previousResults: draft.previousResults,
     publishReceiptDismissedAt: new Date().toISOString(),
     postedAt: undefined,

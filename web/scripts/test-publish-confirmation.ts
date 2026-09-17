@@ -192,6 +192,7 @@ async function main() {
     const board = readFileSync(join(process.cwd(), "src/components/studio/StudioBoard.tsx"), "utf8");
     assert.match(board, /reconcilePublishIntent/);
     assert.match(board, /outcome\.blocked === "recovery_pending"/);
+    assert.match(board, /reconciledPublishIntentPatch\(current, reconciled\)/);
   });
   await test("Cancel, Escape, close and backdrop are zero-dispatch UI paths", () => {
     const dialog = readFileSync(join(process.cwd(), "src/components/shared/ConfirmPublishDialog.tsx"), "utf8");
