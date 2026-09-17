@@ -207,6 +207,17 @@ test("qa slot identity does not reject a real product/generated replacement", ()
   assert.equal(resolveFailureMediaUrl(generated), PRODUCT_SOLID_PINK);
 });
 
+test("1080px QA fixture provenance is excluded from the renderer candidate model", () => {
+  const qaFixtureUrl = "https://cdn.example.test/history/qa-slide-1.png";
+  const d = draft({
+    imageUrl: qaFixtureUrl,
+    media: [media("qa-slide-1", qaFixtureUrl, "legacy", 1080, 1080)],
+  });
+  const model = failureMediaRenderModel(d, 0);
+  assert.equal(model.current, null);
+  assert.deepEqual(model.chain, []);
+});
+
 test("render model marks the product fallback after primary filtering from candidate role", () => {
   const d = draft({
     imageUrl: LEGACY_MEDIA_URL,

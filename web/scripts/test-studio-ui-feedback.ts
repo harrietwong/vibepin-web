@@ -153,6 +153,11 @@ test("card media keeps its existing recovery boundary while images use the share
   assert(typeof resilientMedia.reduceMediaLoadState === "function", "shared image recovery lifecycle is unavailable");
 });
 
+test("PinCardMedia uses the provenance-aware failure media candidate model", () => {
+  assert(cardMediaSrc.includes("resolveFailureMediaCandidates"), "PinCardMedia bypasses the shared provenance-aware candidate resolver");
+  assert(!cardMediaSrc.includes("function candidateChain"), "PinCardMedia still maintains a URL-only candidate chain");
+});
+
 test("video cards remain on the shared renderer with poster/provenance intact", () => {
   const video = source("src/components/media/ContentMediaRenderer.tsx");
   assert(cardMediaSrc.includes('primaryMedia?.kind === "video"'), "PinCardMedia no longer preserves the video branch");

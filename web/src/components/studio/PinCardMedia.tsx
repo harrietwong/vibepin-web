@@ -19,7 +19,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ImageOff } from "lucide-react";
 import { toProxyUrl } from "@/lib/imageProxy";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/failureMedia";
+import { resolveFailureMediaCandidates, resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/failureMedia";
 import { BUI } from "@/components/studio/boardUI";
 import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { contentMedia } from "@/lib/contentDraftModel";
@@ -27,51 +27,6 @@ import type { MessageKey } from "@/lib/i18n/messages/en";
 
 function lookupParent(id: string): FailureMediaDraft | null {
   return pinDraftStore.getDraft(id);
-}
-
-/** Ordered list of every candidate URL for this draft (deduped), ending implicitly
- *  in the placeholder once the caller exhausts the list. Computed once per draft —
- *  onError just advances an index into it. */
-function candidateChain(draft: FailureMediaDraft): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const push = (u: string | null | undefined) => {
-    const v = (u ?? "").trim();
-    if (!v || v.startsWith("blob:") || seen.has(v)) return;
-    seen.add(v);
-    out.push(v);
-  };
-  push(draft.imageUrl);
-  push(draft.sourceImageUrl);
-  push(draft.setupSnapshot?.selectedProducts?.[0]?.imageUrl);
-  // This card's own group reference before the batch-wide list — for groups 2..N the
-  // snapshot's first reference is a DIFFERENT reference and would be misleading.
-  push(draft.referenceImageUrl);
-  push(draft.setupSnapshot?.selectedReferences?.[0]?.imageUrl);
-  if (draft.parentDraftId) {
-    const parent = lookupParent(draft.parentDraftId);
-    if (parent) {
-      push(parent.imageUrl);
-      push(parent.sourceImageUrl);
-      push(parent.setupSnapshot?.selectedProducts?.[0]?.imageUrl);
-      push(parent.referenceImageUrl);
-      push(parent.setupSnapshot?.selectedReferences?.[0]?.imageUrl);
-    }
-  }
-  return out;
-}
-
-/**
- * True when the displayed candidate is an INPUT image (product / reference / parent)
- * rather than this draft's own generated result.
- *
- * Index 0 is `draft.imageUrl` — the real generated image when it exists. Anything
- * beyond it is a fallback, and showing a product or reference photo unlabelled would
- * read as "generation succeeded". PRD acceptance test 44 requires these be marked.
- */
-function isFallbackCandidate(draft: FailureMediaDraft, index: number): boolean {
-  const own = (draft.imageUrl ?? "").trim();
-  return index > 0 || !own;
 }
 
 /** A loaded image no real upload/generation could ever produce — a 1x1 (or similarly
@@ -114,13 +69,12 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
 }
 
 function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, tr }: PinCardMediaProps & { tr: (key: MessageKey) => string }) {
-  const chain = useMemo(() => candidateChain(draft), [draft]);
+  const chain = useMemo(() => resolveFailureMediaCandidates(draft, lookupParent), [draft]);
   // A different draft (or an edit that changes the candidate chain) resets the walk.
   // Derived DURING RENDER instead of by setting state from an effect: the effect
   // version rendered the new chain under the OLD index for one frame before
-  // correcting itself. Candidates are URLs, so a newline cannot occur inside one and
-  // is a safe join separator.
-  const chainKey = chain.join("\n");
+  // correcting itself. Candidate identities are stable and cannot contain a newline.
+  const chainKey = chain.map(candidate => candidate.identity).join("\n");
   const [cursor, setCursor] = useState({ chainKey, index: 0 });
   const idx = cursor.chainKey === chainKey ? cursor.index : 0;
   const advance = () => setCursor({ chainKey, index: idx + 1 });
@@ -155,7 +109,7 @@ function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, g
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
       data-testid="card-generation-failed-image"
-      src={toProxyUrl(current)}
+      src={toProxyUrl(current.url)}
       alt={alt}
       loading="lazy"
       onError={advance}
@@ -180,7 +134,7 @@ function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, g
   // a healthy card showing its own source image is not a fallback.
   const showOriginalBadge = placeholderVariant === "generationFailed"
     && !generating
-    && isFallbackCandidate(draft, idx);
+    && current.origin === "original";
 
   if (!showOriginalBadge) return img;
 
