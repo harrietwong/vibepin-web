@@ -25,6 +25,7 @@
 export const CORE: string[] = [
   "test-i18n",
   "test-public-locale-routes",
+  "test-public-shell-runtime",
   "test-shared-pin-details",
   "test-freshness",
   "test-pin-metadata",

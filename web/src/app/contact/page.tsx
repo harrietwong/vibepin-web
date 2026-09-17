@@ -5,6 +5,7 @@ import { BackButton } from "@/components/BackButton";
 import ContactForm, { ContactDetails, ContactPageIntro } from "./ContactForm";
 import { LEGAL_ENTITY_NAME, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
 import { PublicLanguageTheme, PublicNavLinks, PublicShell } from "@/components/public/PublicShell";
+import { PublicCopy, PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 const CONTACT = "support@vibepin.co";
 
@@ -49,19 +50,11 @@ export default function ContactPage() {
           </div>
 
           <div className="mt-16 pt-8 border-t flex flex-wrap gap-5 text-[12px]" style={{ borderColor: "rgba(255,255,255,0.07)", color: "#5B6472" }}>
-            <Link href="/" className="hover:text-white transition-colors">← Home</Link>
-            <Link href="/about" className="hover:text-white transition-colors">About</Link>
-            <Link href="/careers" className="hover:text-white transition-colors">Careers</Link>
-            <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
-            <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
-            <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
+            <Link href="/" className="hover:text-white transition-colors"><PublicCopy id="public.common.home" /></Link><Link href="/about" className="hover:text-white transition-colors"><PublicCopy id="public.nav.about" /></Link><Link href="/careers" className="hover:text-white transition-colors"><PublicCopy id="public.nav.careers" /></Link><Link href="/privacy" className="hover:text-white transition-colors"><PublicLocaleText route="privacy" field="title" /></Link><Link href="/terms" className="hover:text-white transition-colors"><PublicLocaleText route="terms" field="title" /></Link><Link href="/refund-policy" className="hover:text-white transition-colors"><PublicLocaleText route="refund" field="title" /></Link>
           </div>
 
           <div className="mt-6 pt-6 border-t text-[11px] leading-relaxed" style={{ borderColor: "rgba(255,255,255,0.07)", color: "#4B5563" }}>
-            <p className="mb-0.5">Legal entity: {LEGAL_ENTITY_NAME}</p>
-            <p className="mb-0.5">Brand: VibePin</p>
-            <p className="mb-0.5">Website: {LEGAL_WEBSITE_URL}</p>
-            <p>Support: {CONTACT}</p>
+            <p className="mb-0.5"><PublicCopy id="public.common.legalEntity" /> {LEGAL_ENTITY_NAME}</p><p className="mb-0.5"><PublicCopy id="public.common.brand" /> VibePin</p><p className="mb-0.5"><PublicCopy id="public.common.website" /> {LEGAL_WEBSITE_URL}</p><p><PublicCopy id="public.common.support" /> {CONTACT}</p>
           </div>
         </div>
       </div>

@@ -263,8 +263,7 @@ body::-webkit-scrollbar { width: 12px; }
   color: var(--public-text) !important;
 }
 [data-theme="light"] .public-page-content .btn-cta,
-[data-theme="light"] .public-page-content .btn-cta .text-white,
-[data-theme="light"] .public-page-content nav .text-white {
+[data-theme="light"] .public-page-content .btn-cta .text-white {
   color: #fff !important;
 }
 [data-theme="light"] .public-page-content [style*="#8B93A1"],

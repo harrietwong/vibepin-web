@@ -30,7 +30,6 @@ function test(name: string, fn: () => void) {
 
 const shell = readFileSync("src/components/public/PublicShell.tsx", "utf8");
 const globals = readFileSync("src/app/globals.css", "utf8");
-const rootLayout = readFileSync("src/app/layout.tsx", "utf8");
 const themeStore = readFileSync("src/lib/theme/themeStore.ts", "utf8");
 const localeConfig = readFileSync("src/lib/i18n/config.ts", "utf8");
 const shellContract = readFileSync("src/components/public/publicShellContract.ts", "utf8");
@@ -95,13 +94,6 @@ test("Public shell stays contained at narrow mobile widths and respects reduced 
   assert.match(globals, /public-shell/);
 });
 
-test("The shared anti-FOUC theme bootstrap covers public routes", () => {
-  assert.match(rootLayout, /location\.pathname\.startsWith\('\/app'\)/);
-  assert.match(rootLayout, /isPublicShellPath/);
-  assert.match(rootLayout, /acceptable-use-policy/);
-  assert.match(rootLayout, /location\.pathname\.startsWith\('\/app'\)\|\|isPublicShellPath/);
-});
-
 test("Public route allowlist excludes admin and unrelated root routes", () => {
   assert.equal(isPublicShellRoute("/"), true);
   assert.equal(isPublicShellRoute("/contact"), true);
@@ -145,6 +137,7 @@ test("public light and dark body/muted text meet WCAG AA contrast", () => {
   assert.ok(contrastRatio("8B9E97", "080E0B") >= 4.5, "dark muted text");
   assert.match(globals, /--public-bg/);
   assert.match(globals, /\.public-shell \.lp/);
+  assert.doesNotMatch(globals, /public-page-content nav \.text-white/);
 });
 
 test("Escape closes the real public menu and restores its trigger focus", () => {

@@ -11,6 +11,7 @@
     "validate:i18n-coverage": "npx tsx scripts/validate-i18n-coverage.ts",
     "test:i18n-runtime": "npx tsx scripts/i18n-text-runtime-qa.ts",
     "test:public-locale-routes": "npx tsx scripts/test-public-locale-routes.ts",
+    "test:public-shell-runtime": "npx tsx scripts/test-public-shell-runtime.ts",
     "test:i18n-all-locales": "npx tsx scripts/i18n-all-locales-runtime-qa.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:public-routes": "tsc --project tsconfig.public-routes.json --noEmit",

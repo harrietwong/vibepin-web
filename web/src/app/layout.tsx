@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Toaster } from "sonner";
 import { PreviewBadge } from "@/components/dev/PreviewBadge";
 import { LEGAL_ENTITY_NAME, LEGAL_CONTACT_EMAIL, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
+import { PUBLIC_THEME_INIT_SCRIPT } from "@/lib/theme/publicThemeBootstrap";
 import "./globals.css";
 
 const ORGANIZATION_JSON_LD = {
@@ -48,23 +49,11 @@ export const metadata: Metadata = {
 // storage key, own `data-admin-theme` attribute, own --admin-* CSS vars in
 // globals.css) — it never reads/writes the /app theme state above, and vice
 // versa. Mirrors lib/admin/adminTheme.ts (ADMIN_THEME_STORAGE_KEY, DEFAULT_ADMIN_THEME="light").
-const THEME_INIT_SCRIPT = `(function(){try{
-  var isPublicShellPath=/^(\\/|\\/(pricing|contact|about|careers|privacy|terms|refund-policy|acceptable-use-policy|data-deletion-status|pinterest-app|welcome|login|signup)\\/?$/.test(location.pathname);
-  if(location.pathname.startsWith('/app')||isPublicShellPath){
-    var t=localStorage.getItem('vp:appearance_theme:v1');
-    var r=t==='light'?'light':t==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):'dark';
-    document.documentElement.setAttribute('data-theme',r);
-  } else if(location.pathname.startsWith('/admin')){
-    var at=localStorage.getItem('vibepin-admin-theme');
-    document.documentElement.setAttribute('data-admin-theme', at==='dark'?'dark':'light');
-  }
-}catch(e){}})();`;
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: PUBLIC_THEME_INIT_SCRIPT }} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION_JSON_LD) }}

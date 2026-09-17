@@ -14,7 +14,7 @@
  */
 
 import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
-import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
+import { PublicCopy, PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 export const metadata = {
   title: "Data Deletion Status — VibePin",
@@ -58,13 +58,12 @@ export default async function DataDeletionStatusPage({
         </h1>
         {confirmationCode ? (
           <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--public-text-muted)", margin: 0 }}>
-            <PublicLocaleText route="dataDeletion" field="body" /> Confirmation code:{" "}
+            <PublicLocaleText route="dataDeletion" field="body" /> <PublicCopy id="public.common.confirmationCode" />{" "}
             <strong style={{ color: "var(--public-text)" }}>{confirmationCode}</strong>
           </p>
         ) : (
           <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--public-text-muted)", margin: 0 }}>
-            No confirmation code was provided. If you requested data deletion via Facebook,
-            please allow a few minutes and check the link Facebook provided again.
+            <PublicCopy id="public.common.noConfirmationCode" />
           </p>
         )}
       </div>

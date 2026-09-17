@@ -73,15 +73,15 @@ export default function ContactForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, subject, message, website }),
       });
-      const data = await res.json().catch(() => ({}));
-
       if (res.ok) {
         setStatus("success");
         return;
       }
 
       setStatus("error");
-      setError(data?.error || t("contact.genericError"));
+      // Server details can be operational or provider-specific. Keep the
+      // customer-visible failure localized and stable.
+      setError(t("contact.genericError"));
     } catch {
       setStatus("error");
       setError(t("contact.networkError"));

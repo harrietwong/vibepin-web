@@ -1,7 +1,7 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
-import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
+import { PublicCopy, PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 export const metadata = {
   title: "Welcome — VibePin",
@@ -28,8 +28,7 @@ export default function WelcomePage() {
           <PublicLocaleText route="welcome" field="body" />
         </p>
         <p className="text-[14px] leading-relaxed max-w-[540px] mx-auto mb-10" style={{ color: "#6B7280" }}>
-          We&apos;re setting up your access now — it usually takes just a moment. If anything looks
-          off, refresh your dashboard in a minute.
+          <PublicCopy id="public.welcome.pending" />
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -41,7 +40,7 @@ export default function WelcomePage() {
             className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
             style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
           >
-            Start discovering
+            <PublicCopy id="public.welcome.discover" />
           </Link>
         </div>
       </div>

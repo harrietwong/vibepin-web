@@ -4,9 +4,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
-import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
+import { safeNextPath } from "@/lib/authRedirects";
 import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
 import { usePublicRouteCopy } from "@/components/public/PublicLocaleSummary";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,6 +16,8 @@ const supabase = createBrowserClient(
 
 function LoginContent() {
   const copy = usePublicRouteCopy("login");
+  const { t } = useLocale();
+  const authError = (code: string | null | undefined) => t(code === "oauth_unavailable" ? "public.auth.error.oauthUnavailable" : code === "oauth_callback" ? "public.auth.error.oauthCallback" : "public.auth.error.authenticationFailed");
   const router = useRouter();
   const params = useSearchParams();
   const next   = safeNextPath(params.get("next"));
@@ -23,7 +26,7 @@ function LoginContent() {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(() => authUiErrorMessage(params.get("error")) ?? "");
+  const [error,    setError]    = useState(() => params.get("error") ? authError(params.get("error")) : "");
 
   const signUpHref = (() => {
     const qs = new URLSearchParams();
@@ -39,7 +42,7 @@ function LoginContent() {
     document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
     const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
     if (loginError) {
-      setError(authUiErrorMessage("authentication_failed") as string);
+      setError(authError("authentication_failed"));
       setLoading(false);
     } else {
       router.push(next);
@@ -57,11 +60,11 @@ function LoginContent() {
         options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
       });
       if (oauthError) {
-        setError(authUiErrorMessage("oauth_unavailable") as string);
+        setError(authError("oauth_unavailable"));
         setLoading(false);
       }
     } catch {
-      setError(authUiErrorMessage("oauth_unavailable") as string);
+      setError(authError("oauth_unavailable"));
       setLoading(false);
     }
   }
@@ -112,19 +115,19 @@ function LoginContent() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              <label htmlFor="login-email" className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
                 {copy.email}
               </label>
               <input
-                type="email" value={email} onChange={e => setEmail(e.target.value)}
+                id="login-email" type="email" value={email} onChange={e => setEmail(e.target.value)}
                 required autoFocus
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[14px] text-gray-900 focus:border-[#0891B2] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0891B2]/20 transition-all"
-                placeholder="you@example.com"
+                placeholder={t("public.auth.emailPlaceholder")}
               />
             </div>
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                <label htmlFor="login-password" className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                   {copy.password}
                 </label>
                 <button type="button" onClick={async () => {
@@ -136,15 +139,15 @@ function LoginContent() {
                   setError("");
                   setLoading(false);
                   alert(copy.resetSent);
-                }} className="text-[11px] text-[#0891B2] hover:underline font-medium">
+                }} className="min-h-11 inline-flex items-center text-[11px] text-[#0891B2] hover:underline font-medium">
                   {copy.forgotPassword}
                 </button>
               </div>
               <input
-                type="password" value={password} onChange={e => setPassword(e.target.value)}
+                id="login-password" type="password" value={password} onChange={e => setPassword(e.target.value)}
                 required
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[14px] text-gray-900 focus:border-[#0891B2] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0891B2]/20 transition-all"
-                placeholder="••••••••"
+                placeholder={t("public.auth.passwordPlaceholder")}
               />
             </div>
 

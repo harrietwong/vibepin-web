@@ -4,24 +4,21 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
-import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
+import { safeNextPath } from "@/lib/authRedirects";
 import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
 import { usePublicRouteCopy } from "@/components/public/PublicLocaleSummary";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
-const PLAN_LABELS: Record<string, string> = {
-  free: "Free", starter: "Starter · $19/mo",
-  pro: "Pro · $49/mo", business: "Business · $99/mo",
-  // Legacy plan keys from links minted before the 2026-07 pricing revamp.
-  creator: "Starter · $19/mo", growth: "Pro · $49/mo",
-};
-
 function SignupContent() {
   const copy = usePublicRouteCopy("signup");
+  const { t } = useLocale();
+  const authError = (code: string | null | undefined) => t(code === "oauth_unavailable" ? "public.auth.error.oauthUnavailable" : code === "oauth_callback" ? "public.auth.error.oauthCallback" : "public.auth.error.authenticationFailed");
+  const planLabel = (value: string) => t(value === "starter" || value === "creator" ? "public.auth.plan.starter" : value === "pro" || value === "growth" ? "public.auth.plan.pro" : value === "business" ? "public.auth.plan.business" : "public.auth.plan.free");
   const params = useSearchParams();
   const plan   = params.get("plan") ?? "free";
   const next   = safeNextPath(params.get("next"));
@@ -29,7 +26,7 @@ function SignupContent() {
   const [email,     setEmail]     = useState("");
   const [password,  setPassword]  = useState("");
   const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState(() => authUiErrorMessage(params.get("error")) ?? "");
+  const [error,     setError]     = useState(() => params.get("error") ? authError(params.get("error")) : "");
   const [done,      setDone]      = useState(false);
 
   const signInHref = (() => {
@@ -48,11 +45,11 @@ function SignupContent() {
         options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
       });
       if (oauthError) {
-        setError(authUiErrorMessage("oauth_unavailable") as string);
+        setError(authError("oauth_unavailable"));
         setLoading(false);
       }
     } catch {
-      setError(authUiErrorMessage("oauth_unavailable") as string);
+      setError(authError("oauth_unavailable"));
       setLoading(false);
     }
   }
@@ -75,7 +72,7 @@ function SignupContent() {
       },
     });
     if (signupError) {
-      setError(authUiErrorMessage("authentication_failed") as string);
+      setError(authError("authentication_failed"));
       setLoading(false);
     } else {
       setDone(true);
@@ -108,7 +105,7 @@ function SignupContent() {
               <h1 className="text-xl font-black text-gray-900 mb-1">{copy.eyebrow}</h1>
               <p className="text-sm text-gray-500 mb-1">
                 {plan !== "free" ? (
-                  <span>{copy.planPrefix} <span className="font-semibold text-[#0891B2]">{PLAN_LABELS[plan]}</span></span>
+                  <span>{copy.planPrefix} <span className="font-semibold text-[#0891B2]">{planLabel(plan)}</span></span>
                 ) : copy.body}
               </p>
 
@@ -141,25 +138,25 @@ function SignupContent() {
 
               <form onSubmit={handleSignup} className="space-y-4 mt-6">
                 <div>
-                  <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                  <label htmlFor="signup-email" className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
                     {copy.email}
                   </label>
                   <input
-                    type="email" value={email} onChange={e => setEmail(e.target.value)}
+                    id="signup-email" type="email" value={email} onChange={e => setEmail(e.target.value)}
                     required autoFocus
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[14px] text-gray-900 focus:border-[#0891B2] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0891B2]/20 transition-all"
-                    placeholder="you@example.com"
+                    placeholder={t("public.auth.emailPlaceholder")}
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                  <label htmlFor="signup-password" className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
                     {copy.password} <span className="text-gray-400 normal-case font-normal">({copy.passwordHint})</span>
                   </label>
                   <input
-                    type="password" value={password} onChange={e => setPassword(e.target.value)}
+                    id="signup-password" type="password" value={password} onChange={e => setPassword(e.target.value)}
                     required minLength={8}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[14px] text-gray-900 focus:border-[#0891B2] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0891B2]/20 transition-all"
-                    placeholder="••••••••"
+                    placeholder={t("public.auth.passwordPlaceholder")}
                   />
                 </div>
 
