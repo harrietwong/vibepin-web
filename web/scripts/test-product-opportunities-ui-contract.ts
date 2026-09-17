@@ -219,7 +219,6 @@ async function runBehaviorTests() {
     assert.equal(metricFiltersAvailableForDraft("physical", "physical", {
       available: true,
       family: "physical",
-      metricVersion: 7,
     }), true);
   });
   test("Product filter query parser is allowlisted, normalized, and round-trips Back/Forward state", () => {
