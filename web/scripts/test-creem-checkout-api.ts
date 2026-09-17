@@ -94,7 +94,7 @@ const originalLoad = (Module as any)._load;
       createServerClient: () => ({
         auth: {
           admin: {
-            getUserById: async (_id: string) =>
+            getUserById: async () =>
               fakes.email
                 ? { data: { user: { email: fakes.email } }, error: null }
                 : { data: { user: null }, error: { message: "no user" } },
@@ -197,6 +197,53 @@ async function main() {
     assertEq(res.status, 200, "status");
     const input = fakes.lastCheckoutInput as { successUrl: string };
     assertEq(input.successUrl, "http://localhost:3000/welcome", "allowlisted localhost origin honored");
+  });
+
+  await test("preview checkout returns to its configured Vercel host, not production", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedVercelUrl = process.env.VERCEL_URL;
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "web-preview-harriets-projects-86e9e358.vercel.app";
+    try {
+      const res = await route.POST(
+        makeReq(
+          { plan: "starter", interval: "month" },
+          "https://web-preview-harriets-projects-86e9e358.vercel.app",
+        ) as never,
+      );
+      assertEq(res.status, 200, "status");
+      const input = fakes.lastCheckoutInput as { successUrl: string };
+      assertEq(
+        input.successUrl,
+        "https://web-preview-harriets-projects-86e9e358.vercel.app/welcome",
+        "configured preview origin honored",
+      );
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedVercelUrl === undefined) delete process.env.VERCEL_URL;
+      else process.env.VERCEL_URL = savedVercelUrl;
+    }
+  });
+
+  await test("an arbitrary Vercel host cannot become a checkout return origin", async () => {
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    const savedVercelUrl = process.env.VERCEL_URL;
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "web-preview-harriets-projects-86e9e358.vercel.app";
+    try {
+      const res = await route.POST(
+        makeReq({ plan: "starter", interval: "month" }, "https://attacker.vercel.app") as never,
+      );
+      assertEq(res.status, 200, "status");
+      const input = fakes.lastCheckoutInput as { successUrl: string };
+      assertEq(input.successUrl, "https://vibepin.co/welcome", "unconfigured Vercel host rejected");
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = savedVercelEnv;
+      if (savedVercelUrl === undefined) delete process.env.VERCEL_URL;
+      else process.env.VERCEL_URL = savedVercelUrl;
+    }
   });
 
   await test("success_url falls back to vibepin.co for an evil origin", async () => {

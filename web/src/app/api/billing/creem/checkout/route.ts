@@ -83,13 +83,37 @@ const ALLOWED_HOSTS = new Set([
 ]);
 const DEFAULT_ORIGIN = "https://vibepin.co";
 
+/**
+ * Vercel supplies VERCEL_URL for the deployment currently serving this request.
+ * In Preview, accepting only that exact HTTPS origin preserves the return path
+ * without turning every *.vercel.app deployment into an open redirect target.
+ */
+function previewSuccessOrigin(): string | null {
+  if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview") return null;
+
+  const vercelUrl = (process.env.VERCEL_URL ?? "").trim().toLowerCase();
+  if (!vercelUrl) return null;
+
+  try {
+    const url = new URL(`https://${vercelUrl}`);
+    if (url.hostname.endsWith(".vercel.app") && url.pathname === "/") {
+      return url.origin;
+    }
+  } catch {
+    /* malformed VERCEL_URL → do not expand the allowlist */
+  }
+  return null;
+}
+
 /** The request's own origin when its host is allowlisted, else the default. */
 function safeSuccessOrigin(req: NextRequest): string {
   const origin = req.headers.get("origin");
   if (origin) {
     try {
-      const host = new URL(origin).hostname;
+      const parsedOrigin = new URL(origin);
+      const host = parsedOrigin.hostname;
       if (ALLOWED_HOSTS.has(host)) return origin;
+      if (parsedOrigin.origin === previewSuccessOrigin()) return parsedOrigin.origin;
     } catch {
       /* malformed origin → default */
     }
