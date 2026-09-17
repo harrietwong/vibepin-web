@@ -100,14 +100,15 @@ export function buildScenario(plan: PlanKey, runId: string, scenario: CreditE2eS
 export interface CreditE2eApplyAdapter {
   assertTarget(ref: string): Promise<void>;
   provision(input: CreditE2eRun, password: string): Promise<{ userId: string }>;
-  seedUsage(input: CreditE2eRun, userId: string): Promise<void>;
-  collectEvidence(input: CreditE2eRun, userId: string): Promise<Evidence[]>;
+  seedUsage(input: CreditE2eRun, userId: string, context?: { round: 1 | 2 }): Promise<void>;
+  collectEvidence(input: CreditE2eRun, userId: string, context?: { round: 1 | 2 }): Promise<Evidence[]>;
   cleanup(runId: string, userIds: string[]): Promise<void>;
 }
 
 /** Strip apply-only identity material before anything can enter a persisted report. */
 export function reportScenario(input: CreditE2eRun): CreditE2eReportScenario {
   const { email: _email, ...safe } = input;
+  void _email;
   return safe;
 }
 
@@ -158,8 +159,8 @@ export async function applyReport(
         if (!userId) throw new Error(`missing provisioned identity for ${plan}`);
         for (const scenarioName of ["limit_minus_one", "limit"] as const) {
           const scenario = buildScenario(plan, runId, scenarioName);
-          await adapter.seedUsage(scenario, userId);
-          evidence.push(...safeEvidence(await adapter.collectEvidence(scenario, userId)));
+          await adapter.seedUsage(scenario, userId, { round });
+          evidence.push(...safeEvidence(await adapter.collectEvidence(scenario, userId, { round })));
           scenarios.push(reportScenario(scenario));
         }
       }
