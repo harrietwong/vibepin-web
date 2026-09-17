@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { Page } from "playwright";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   assertNoPrivateEvidence,
+  assertScreenshotDomSafe,
   buildBillingFixtureRows,
+  buildScreenshotMaskLocators,
+  buildSyntheticAppMetadata,
   buildUsageAccountRow,
   expectedBillingUi,
   runCleanupSteps,
+  SupabaseCreditE2eAdapter,
   validateBillingUiText,
   validateBuildIdentity,
-  validateRestoredAppMetadata,
   validatePreviewIdentity,
   validateTestSupabaseBinding,
   validateUsageSnapshot,
@@ -19,6 +26,69 @@ function test(name: string, fn: () => void): void {
   fn();
   passed += 1;
   console.log(`  PASS ${name}`);
+}
+
+const validAdapterOptions = {
+  baseUrl: "https://vibepin-fb-preview.vercel.app",
+  expectedCommit: "abcdef1234567890abcdef1234567890abcdef12",
+  expectedDeploymentId: "dpl_exact",
+  config: {
+    url: "https://snulmwprsahzqvdbyenc.supabase.co",
+    projectRef: "snulmwprsahzqvdbyenc",
+    anonKey: "test-anon",
+    serviceRoleKey: "test-service",
+  },
+};
+
+function visibleTextFromFixture(node: ReturnType<typeof createElement>): string {
+  return renderToStaticMarkup(node)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function responseLossService() {
+  const users: Array<{ id: string; email: string; app_metadata: Record<string, unknown> }> = [];
+  const deletedUserIds: string[] = [];
+  let createPayload: Record<string, unknown> | null = null;
+  const query = () => {
+    const result = { data: [], error: null, count: 0 };
+    const builder: Record<string, unknown> & PromiseLike<typeof result> = {
+      delete: () => builder,
+      select: () => builder,
+      eq: () => builder,
+      like: () => builder,
+      then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
+    };
+    return builder;
+  };
+  const service = {
+    from: () => query(),
+    auth: {
+      admin: {
+        async createUser(payload: Record<string, unknown>) {
+          createPayload = payload;
+          users.push({
+            id: "00000000-0000-4000-8000-000000000099",
+            email: String(payload.email),
+            app_metadata: { ...payload.app_metadata as Record<string, unknown> },
+          });
+          return { data: { user: null }, error: new Error("response lost after commit") };
+        },
+        async listUsers() { return { data: { users: [...users] }, error: null }; },
+        async deleteUser(userId: string) {
+          deletedUserIds.push(userId);
+          const index = users.findIndex(user => user.id === userId);
+          if (index >= 0) users.splice(index, 1);
+          return { data: {}, error: null };
+        },
+        async getUserById(userId: string) {
+          return { data: { user: users.find(user => user.id === userId) ?? null }, error: null };
+        },
+      },
+    },
+  } as unknown as SupabaseClient;
+  return { service, users, deletedUserIds, getCreatePayload: () => createPayload };
 }
 
 async function main(): Promise<void> {
@@ -104,6 +174,17 @@ async function main(): Promise<void> {
       anonKey: "test-anon",
       serviceRoleKey: "test-service",
     }), /exact.*origin/i);
+
+    let clientFactoryCalls = 0;
+    assert.throws(() => new SupabaseCreditE2eAdapter({
+      ...validAdapterOptions,
+      config: { ...validAdapterOptions.config, url: "https://other.supabase.co" },
+      serviceClientFactory: () => {
+        clientFactoryCalls += 1;
+        return {} as SupabaseClient;
+      },
+    }), /origin.*ref/i);
+    assert.equal(clientFactoryCalls, 0, "exact config must be validated before constructing a Supabase client");
   });
 
   test(`round ${round}: usage seed row uses canonical limits and scenario counters`, () => {
@@ -167,12 +248,23 @@ async function main(): Promise<void> {
       pro,
     ), /1 remaining/i);
     const business = buildScenario("business", "credit-live-unit", "limit");
-    assert.doesNotThrow(() => validateBillingUiText(
-      "Current plan Business Usage this period AI images 3000 / 3000 used 0 remaining Scheduled posts 2 used Unlimited No monthly limit",
-      business,
-    ));
+    const componentDomFixture = createElement("main", null,
+      createElement("section", { "data-testid": "billing-current-plan" },
+        createElement("p", null, "CURRENT PLAN"),
+        createElement("h2", null, "BUSINESS"),
+        createElement("span", null, "Active"),
+      ),
+      createElement("section", { "data-testid": "billing-usage-period" },
+        createElement("h3", null, "Usage this period"),
+        createElement("div", null, createElement("span", null, "AI images"), createElement("span", null, "3000 / 3000 used"), createElement("p", null, "0 remaining")),
+        createElement("div", null, createElement("span", null, "Scheduled posts"), createElement("span", null, "2 used"), createElement("p", null, "No monthly limit")),
+      ),
+    );
+    const componentAccessibleText = visibleTextFromFixture(componentDomFixture);
+    assert.doesNotThrow(() => validateBillingUiText(componentAccessibleText, business));
+    assert.deepEqual(expectedBillingUi(business).scheduledPosts, ["Scheduled posts", "2 used", "No monthly limit"]);
     assert.throws(() => validateBillingUiText(
-      "Current plan Business Couldn't sync billing data AI images 3000 / 3000 used 0 remaining Scheduled posts 2 used Unlimited",
+      "Current plan Business Couldn't sync billing data AI images 3000 / 3000 used 0 remaining Scheduled posts 2 used No monthly limit",
       business,
     ), /sync error/i);
   });
@@ -184,20 +276,120 @@ async function main(): Promise<void> {
     assert.throws(() => assertNoPrivateEvidence("Bearer secret-token-value"), /token/i);
   });
 
-  test(`round ${round}: cleanup verifies run metadata is restored before auth deletion`, () => {
-    const original = { provider: "email", providers: ["email"] };
-    assert.doesNotThrow(() => validateRestoredAppMetadata(original, { provider: "email", providers: ["email"] }));
-    assert.throws(() => validateRestoredAppMetadata(original, {
-      provider: "email",
-      providers: ["email"],
-      credit_e2e_run_id: "credit-live-unit",
-    }), /run metadata/i);
-    assert.throws(() => validateRestoredAppMetadata({ ...original, plan: "free" }, {
-      ...original,
+  test(`round ${round}: temporary auth accounts carry exact discovery metadata`, () => {
+    const scenario = buildScenario("pro", "credit-live-unit", "default");
+    assert.deepEqual(buildSyntheticAppMetadata(scenario), {
       plan: "pro",
-    }), /plan metadata/i);
+      credit_e2e_run_id: "credit-live-unit",
+      credit_e2e_synthetic: true,
+    });
   });
   }
+
+await (async () => {
+  let fetchCalls = 0;
+  const fetchSpy: typeof fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected external request");
+  };
+  const adapter = new SupabaseCreditE2eAdapter({ ...validAdapterOptions, supabaseFetchImpl: fetchSpy, fetchImpl: fetchSpy });
+  const receipt = await adapter.cleanup("credit-never-bound", []);
+  assert.equal(fetchCalls, 0, "cleanup before verified binding/resource creation must issue zero external requests");
+  assert.equal(receipt.status, "PASS");
+  passed += 1;
+  console.log("  PASS unverified empty cleanup performs zero external requests");
+})();
+
+await (async () => {
+  const embeddedEmail = "e2e-credit-pro-credit-shot@vibepin.test";
+  const nonSecretFixturePassword = `fixture-${embeddedEmail.length}`;
+  await assert.doesNotReject(() => assertScreenshotDomSafe(
+    async () => `Signed in as ${embeddedEmail} · Current plan Pro`,
+    embeddedEmail,
+  ));
+  await assert.rejects(() => assertScreenshotDomSafe(
+    async () => { throw new Error("DOM unavailable"); },
+    embeddedEmail,
+  ), /DOM unavailable/);
+
+  const maskCalls: Array<{ text: string; exact?: boolean }> = [];
+  const fakePage = {
+    getByTestId: () => ({ kind: "account" }),
+    getByText: (text: string, options?: { exact?: boolean }) => {
+      maskCalls.push({ text, exact: options?.exact });
+      return { kind: "email" };
+    },
+  } as unknown as Page;
+  assert.equal(buildScreenshotMaskLocators(fakePage, embeddedEmail).length, 2);
+  assert.deepEqual(maskCalls, [{ text: embeddedEmail, exact: false }]);
+
+  const adapter = new SupabaseCreditE2eAdapter({
+    ...validAdapterOptions,
+    screenshotDir: "unused-hermetic-screenshot-dir",
+    serviceClientFactory: () => ({} as SupabaseClient),
+  });
+  const capture = (adapter as unknown as {
+    maskedScreenshot: (
+      page: Page,
+      input: ReturnType<typeof buildScenario>,
+      round: 1 | 2,
+      credential: { email: string; password: string },
+      suffix: "pass" | "fail",
+    ) => Promise<string>;
+  }).maskedScreenshot.bind(adapter);
+  let screenshotCalls = 0;
+  const unreadablePage = {
+    locator: () => ({ innerText: async () => { throw new Error("DOM unavailable"); } }),
+    screenshot: async () => { screenshotCalls += 1; },
+  } as unknown as Page;
+  await assert.rejects(capture(
+    unreadablePage,
+    buildScenario("pro", "credit-shot", "default"),
+    1,
+    { email: embeddedEmail, password: nonSecretFixturePassword },
+    "fail",
+  ), /DOM unavailable/);
+  const unmaskablePage = {
+    locator: () => ({ innerText: async () => `Signed in as ${embeddedEmail}` }),
+    getByTestId: () => ({ kind: "account" }),
+    getByText: () => { throw new Error("mask unavailable"); },
+    screenshot: async () => { screenshotCalls += 1; },
+  } as unknown as Page;
+  await assert.rejects(capture(
+    unmaskablePage,
+    buildScenario("pro", "credit-shot", "default"),
+    1,
+    { email: embeddedEmail, password: nonSecretFixturePassword },
+    "fail",
+  ), /mask unavailable/);
+  assert.equal(screenshotCalls, 0, "unreadable or unmaskable evidence must never call page.screenshot");
+  passed += 1;
+  console.log("  PASS screenshot safety rejects unreadable DOM and masks embedded synthetic email text");
+})();
+
+await (async () => {
+  const fake = responseLossService();
+  fake.users.push({
+    id: "00000000-0000-4000-8000-000000000088",
+    email: "real-user@example.test",
+    app_metadata: { plan: "pro", credit_e2e_run_id: "credit-response-loss", credit_e2e_synthetic: true },
+  });
+  const adapter = new SupabaseCreditE2eAdapter({
+    ...validAdapterOptions,
+    serviceClientFactory: () => fake.service,
+  });
+  const scenario = buildScenario("pro", "credit-response-loss", "default");
+  await assert.rejects(adapter.provision(scenario, "temporary-password"), /Could not provision/);
+  assert.equal(fake.users.length, 2, "the fake simulates an Auth commit whose response was lost");
+  assert.deepEqual(fake.getCreatePayload()?.app_metadata, buildSyntheticAppMetadata(scenario));
+  const receipt = await adapter.cleanup(scenario.runId, []);
+  assert.equal(receipt.status, "PASS");
+  assert.deepEqual(fake.users.map(user => user.email), ["real-user@example.test"], "discovery must ignore non-whitelisted emails even with copied metadata");
+  assert.deepEqual(fake.deletedUserIds, ["00000000-0000-4000-8000-000000000099"]);
+  assert.match(JSON.stringify(receipt), /zero-residual auth/i);
+  passed += 1;
+  console.log("  PASS lost createUser response is recovered by restricted run discovery and deleted");
+})();
 
 await (async () => {
   const calls: string[] = [];

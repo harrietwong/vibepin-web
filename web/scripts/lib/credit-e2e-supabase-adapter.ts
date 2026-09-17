@@ -5,8 +5,10 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PLAN_ENTITLEMENTS } from "../../src/lib/server/planEntitlements";
 import {
+  CREDIT_E2E_PLANS,
   CREDIT_E2E_TEST_REF,
   assertStrictTestRef,
+  syntheticEmail,
   type CleanupReceipt,
   type CreditE2eApplyAdapter,
   type CreditE2eRun,
@@ -85,6 +87,8 @@ export function validateBuildIdentity(identity: BuildIdentity, expected: Preview
 export function validateTestSupabaseBinding(config: TestDbConfig): { origin: string; projectRef: string } {
   assertNotProduction(config);
   assertStrictTestRef(config.projectRef);
+  requiredString(config.anonKey, "Test Supabase anon key");
+  requiredString(config.serviceRoleKey, "Test Supabase service-role key");
   const parsed = exactHttpsOrigin(config.url, "Test Supabase URL");
   const expectedOrigin = `https://${config.projectRef}.supabase.co`;
   const originRef = parsed.hostname.split(".")[0] ?? "";
@@ -220,6 +224,14 @@ export function buildBillingFixtureRows(input: CreditE2eRun, userId: string, now
   };
 }
 
+export function buildSyntheticAppMetadata(input: CreditE2eRun): Record<string, unknown> {
+  return {
+    plan: input.plan,
+    credit_e2e_run_id: input.runId,
+    credit_e2e_synthetic: true,
+  };
+}
+
 function planLabel(plan: CreditE2eRun["plan"]): string {
   return plan[0].toUpperCase() + plan.slice(1);
 }
@@ -231,7 +243,7 @@ export function expectedBillingUi(input: CreditE2eRun): {
 } {
   const aiRemaining = Math.max(0, input.aiImages.limit - input.aiImages.used);
   const scheduledPosts = input.scheduledPosts.limit === null
-    ? ["Scheduled posts", `${input.scheduledPosts.used} used`, "Unlimited", "No monthly limit"]
+    ? ["Scheduled posts", `${input.scheduledPosts.used} used`, "No monthly limit"]
     : [
         "Scheduled posts",
         `${input.scheduledPosts.used} / ${input.scheduledPosts.limit} used`,
@@ -250,11 +262,16 @@ export function validateBillingUiText(text: string, input: CreditE2eRun): void {
     throw new Error("Billing UI displayed sync error instead of verified usage truth");
   }
   const expected = expectedBillingUi(input);
-  const fragments = [`Current plan ${expected.plan}`, "Usage this period", ...expected.aiImages, ...expected.scheduledPosts];
+  const escapedPlan = expected.plan.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`\\bcurrent\\s+plan\\b[\\s:—-]*${escapedPlan}\\b`, "i").test(normalized)) {
+    throw new Error(`Billing UI is missing expected semantic: current plan ${expected.plan}`);
+  }
+  const fragments = ["Usage this period", ...expected.aiImages, ...expected.scheduledPosts];
   const requiredCounts = new Map<string, number>();
   for (const fragment of fragments) requiredCounts.set(fragment, (requiredCounts.get(fragment) ?? 0) + 1);
   for (const [fragment, required] of requiredCounts) {
-    const actual = normalized.split(fragment).length - 1;
+    const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const actual = normalized.match(new RegExp(escaped, "gi"))?.length ?? 0;
     if (actual < required) throw new Error(`Billing UI is missing expected semantic: ${fragment}`);
   }
 }
@@ -269,14 +286,24 @@ export function assertNoPrivateEvidence(text: string): void {
   }
 }
 
-export function validateRestoredAppMetadata(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-): void {
-  if (current.credit_e2e_run_id !== original.credit_e2e_run_id) {
-    throw new Error("Synthetic run metadata was not restored");
-  }
-  if (current.plan !== original.plan) throw new Error("Synthetic plan metadata was not restored");
+export async function assertScreenshotDomSafe(
+  readVisibleText: () => Promise<string>,
+  syntheticEmail: string,
+): Promise<void> {
+  // Deliberately let DOM-read failures reject. An empty fallback would turn an
+  // unreadable page into a false privacy PASS and could export uninspected pixels.
+  const visibleText = await readVisibleText();
+  const escapedEmail = syntheticEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assertNoPrivateEvidence(visibleText.replace(new RegExp(escapedEmail, "gi"), "[redacted-email]"));
+}
+
+export function buildScreenshotMaskLocators(page: Page, syntheticEmail: string): Locator[] {
+  return [
+    page.getByTestId("account-menu-trigger"),
+    // The account address can be embedded in surrounding copy (for example,
+    // "Signed in as user@…"), so exact matching would leave it unmasked.
+    page.getByText(syntheticEmail, { exact: false }),
+  ];
 }
 
 export type CleanupStep = { resource: string; run: () => Promise<void> };
@@ -294,29 +321,52 @@ export async function runCleanupSteps(steps: CleanupStep[]): Promise<CleanupRece
   return { status: actions.some(action => action.status === "FAIL") ? "FAIL" : "PASS", actions };
 }
 
+type ServiceClientFactory = (
+  url: string,
+  key: string,
+  options: {
+    auth: { persistSession: boolean; autoRefreshToken: boolean };
+    global?: { fetch?: typeof fetch };
+  },
+) => SupabaseClient;
+
 type AdapterOptions = PreviewExpectation & {
   config: TestDbConfig;
   screenshotDir?: string;
   fetchImpl?: typeof fetch;
+  supabaseFetchImpl?: typeof fetch;
+  serviceClientFactory?: ServiceClientFactory;
 };
 
 type Credential = { email: string; password: string };
 type FixtureIdentity = { customerId?: string; subscriptionId?: string };
+type DiscoveredSyntheticUser = { id: string; email: string; plan: CreditE2eRun["plan"] };
 
 export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
   private readonly service: SupabaseClient;
   private readonly credentials = new Map<string, Credential>();
-  private readonly originalAppMetadata = new Map<string, Record<string, unknown>>();
   private readonly fixtureIdentities = new Map<string, FixtureIdentity>();
   private browser: Browser | null = null;
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string;
+  private bindingVerified = false;
+  private resourceCreationAttempted = false;
 
   constructor(private readonly options: AdapterOptions) {
-    this.baseUrl = new URL(options.baseUrl).origin;
+    // Validate every immutable target coordinate before a Supabase client can be
+    // constructed. Creating the client first makes an invalid target harder to
+    // distinguish from a client/configuration failure.
+    validateTestSupabaseBinding(options.config);
+    this.baseUrl = exactHttpsOrigin(options.baseUrl, "Preview base URL").origin;
+    const expectedCommit = requiredString(options.expectedCommit, "Expected full commit");
+    if (!/^[a-f0-9]{40}$/i.test(expectedCommit)) throw new Error("Expected full commit must be 40 hexadecimal characters");
+    requiredString(options.expectedDeploymentId, "Expected deployment id");
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.service = createClient(options.config.url, options.config.serviceRoleKey, {
+    const clientFactory: ServiceClientFactory = options.serviceClientFactory
+      ?? ((url, key, clientOptions) => createClient(url, key, clientOptions));
+    this.service = clientFactory(options.config.url, options.config.serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: options.supabaseFetchImpl },
     });
   }
 
@@ -345,6 +395,7 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     if (previewIdentity.deploymentId !== buildIdentity.deploymentId) throw new Error("Identity endpoints disagree on deployment id");
     const { error } = await this.service.from("usage_accounts").select("id").limit(0);
     if (error) throw new Error(`Test usage ledger preflight failed (${error.code ?? "unknown"})`);
+    this.bindingVerified = true;
     return {
       previewOrigin: new URL(this.options.baseUrl).origin,
       candidateCommit: this.options.expectedCommit.toLowerCase(),
@@ -356,22 +407,49 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
   }
 
   async provision(input: CreditE2eRun, password: string): Promise<{ userId: string }> {
+    // Mark the attempt before awaiting createUser. A timeout or lost response can
+    // still mean the Auth user was committed and must be discovered during cleanup.
+    this.resourceCreationAttempted = true;
     const { data, error } = await this.service.auth.admin.createUser({
       email: input.email,
       password,
       email_confirm: true,
+      app_metadata: buildSyntheticAppMetadata(input),
     });
     if (error || !data.user?.id) throw new Error(`Could not provision ${input.plan} synthetic account`);
     this.credentials.set(data.user.id, { email: input.email, password });
-    this.originalAppMetadata.set(data.user.id, { ...(data.user.app_metadata ?? {}) });
     return { userId: data.user.id };
   }
 
+  private async discoverSyntheticRunUsers(runId: string): Promise<DiscoveredSyntheticUser[]> {
+    const expectedByEmail = new Map(
+      CREDIT_E2E_PLANS.map(plan => [syntheticEmail(plan, runId).toLowerCase(), plan] as const),
+    );
+    const matches: DiscoveredSyntheticUser[] = [];
+    const perPage = 1000;
+    for (let page = 1; page <= 100; page += 1) {
+      const { data, error } = await this.service.auth.admin.listUsers({ page, perPage });
+      if (error) throw new Error("Run-scoped Auth discovery failed");
+      const users = data?.users ?? [];
+      for (const user of users) {
+        const email = user.email?.toLowerCase() ?? "";
+        const plan = expectedByEmail.get(email);
+        const metadata = user.app_metadata ?? {};
+        if (
+          plan
+          && metadata.credit_e2e_synthetic === true
+          && metadata.credit_e2e_run_id === runId
+          && metadata.plan === plan
+        ) {
+          matches.push({ id: user.id, email, plan });
+        }
+      }
+      if (users.length < perPage) return matches;
+    }
+    throw new Error("Run-scoped Auth discovery exceeded the bounded 100-page scan");
+  }
+
   async seedUsage(input: CreditE2eRun, userId: string): Promise<void> {
-    const { error: metaError } = await this.service.auth.admin.updateUserById(userId, {
-      app_metadata: { plan: input.plan, credit_e2e_run_id: input.runId },
-    });
-    if (metaError) throw new Error(`Could not set ${input.plan} trusted plan metadata`);
     const row = buildUsageAccountRow(input, userId);
     const { error } = await this.service.from("usage_accounts").upsert(row, { onConflict: "user_id" });
     if (error) throw new Error(`Could not seed ${input.plan} usage (${error.code ?? "unknown"})`);
@@ -409,10 +487,9 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     suffix: "pass" | "fail",
   ): Promise<string> {
     if (!this.options.screenshotDir) throw new Error("Screenshot directory is required for apply evidence");
+    await assertScreenshotDomSafe(() => page.locator("body").innerText(), credential.email);
+    const masks = buildScreenshotMaskLocators(page, credential.email);
     await mkdir(resolve(this.options.screenshotDir), { recursive: true });
-    const visibleText = await page.locator("body").innerText().catch(() => "");
-    assertNoPrivateEvidence(visibleText.replaceAll(credential.email, "[redacted-email]"));
-    const masks: Locator[] = [page.getByTestId("account-menu-trigger"), page.getByText(credential.email, { exact: true })];
     const path = resolve(this.options.screenshotDir, `round-${round}-${input.plan}-${input.scenario}-billing-${suffix}.png`);
     await page.screenshot({ path, fullPage: true, mask: masks, maskColor: "#111827" });
     return path;
@@ -620,6 +697,31 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
   }
 
   async cleanup(runId: string, userIds: string[]): Promise<CleanupReceipt> {
+    if (
+      !this.bindingVerified
+      && !this.resourceCreationAttempted
+      && userIds.length === 0
+      && !this.browser
+      && this.fixtureIdentities.size === 0
+    ) {
+      return {
+        status: "PASS",
+        actions: [{ resource: "unverified preflight", status: "PASS", detail: "no resources were created; cleanup issued no external requests" }],
+      };
+    }
+    let discoveredUsers: DiscoveredSyntheticUser[] = [];
+    const discoveryReceipt = await runCleanupSteps([{
+      resource: "run-scoped temporary Auth discovery",
+      run: async () => {
+        discoveredUsers = await this.discoverSyntheticRunUsers(runId);
+      },
+    }]);
+    const planByUserId = new Map(discoveredUsers.map(user => [user.id, user.plan] as const));
+    for (const [userId, credential] of this.credentials) {
+      const plan = CREDIT_E2E_PLANS.find(candidate => credential.email.toLowerCase() === syntheticEmail(candidate, runId).toLowerCase());
+      if (plan) planByUserId.set(userId, plan);
+    }
+    const cleanupUserIds = [...new Set([...userIds, ...discoveredUsers.map(user => user.id)])];
     const steps: CleanupStep[] = [];
     if (this.browser) {
       steps.push({
@@ -630,9 +732,16 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
         },
       });
     }
-    userIds.forEach((userId, index) => {
+    cleanupUserIds.forEach((userId, index) => {
       const owner = `owner-${index + 1}`;
-      const fixture = this.fixtureIdentities.get(userId);
+      const plan = planByUserId.get(userId);
+      const derivedFixture = plan && plan !== "free"
+        ? {
+            customerId: `credit-e2e:${runId}:${plan}:customer`,
+            subscriptionId: `credit-e2e:${runId}:${plan}:subscription`,
+          }
+        : undefined;
+      const fixture = this.fixtureIdentities.get(userId) ?? derivedFixture;
       if (fixture?.subscriptionId) {
         steps.push({ resource: `${owner} billing subscription`, run: async () => {
           const { error } = await this.service.from("creem_subscriptions").delete().eq("creem_subscription_id", fixture.subscriptionId as string);
@@ -649,18 +758,6 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
         { resource: `${owner} usage account and cascades`, run: async () => {
           const { error } = await this.service.from("usage_accounts").delete().eq("user_id", userId);
           if (error) throw error;
-        } },
-        { resource: `${owner} run metadata restore`, run: async () => {
-          const { error } = await this.service.auth.admin.updateUserById(userId, {
-            app_metadata: this.originalAppMetadata.get(userId) ?? {},
-          });
-          if (error) throw error;
-        } },
-        { resource: `${owner} run metadata verification`, run: async () => {
-          const original = this.originalAppMetadata.get(userId) ?? {};
-          const { data, error } = await this.service.auth.admin.getUserById(userId);
-          if (error || !data.user) throw error ?? new Error("auth user missing before cleanup");
-          validateRestoredAppMetadata(original, { ...(data.user.app_metadata ?? {}) });
         } },
         { resource: `${owner} auth account`, run: async () => {
           const { error } = await this.service.auth.admin.deleteUser(userId);
@@ -692,10 +789,18 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
         if (error || count !== 0) throw new Error(`${table} run residual verification failed`);
       }
     } });
-    const receipt = await runCleanupSteps(steps);
-    for (const userId of userIds) {
+    steps.push({ resource: "run-scoped zero-residual Auth verification", run: async () => {
+      const residual = await this.discoverSyntheticRunUsers(runId);
+      if (residual.length !== 0) throw new Error("run-scoped temporary Auth accounts remain");
+    } });
+    const cleanupReceipt = await runCleanupSteps(steps);
+    const actions = [...discoveryReceipt.actions, ...cleanupReceipt.actions];
+    const receipt: CleanupReceipt = {
+      status: actions.some(action => action.status === "FAIL") ? "FAIL" : "PASS",
+      actions,
+    };
+    for (const userId of cleanupUserIds) {
       this.credentials.delete(userId);
-      this.originalAppMetadata.delete(userId);
       this.fixtureIdentities.delete(userId);
     }
     return receipt;
