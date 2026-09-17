@@ -216,6 +216,17 @@ test.describe("paid checkout intent (requires CREEM_MODE=test|live)", () => {
 // ── Scenario D: a plain Log in has no intent and must not open checkout ───────
 // Billing-agnostic: asserts only the `next` the nav's Log in link carries.
 
+test("pricing header waits for session resolution before showing anonymous CTAs", async ({ page }) => {
+  await page.route("**/auth/v1/user**", async route => {
+    await new Promise(resolve => setTimeout(resolve, 3_000));
+    await route.continue();
+  });
+  await page.goto("/pricing", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /^get started$/i })).toHaveCount(0);
+});
+
 test('plain "Log in" from pricing carries no checkout intent', async ({ page }) => {
   await page.goto("/pricing", { waitUntil: "networkidle" });
   await page.getByRole("link", { name: /^log in$/i }).click();
@@ -335,6 +346,15 @@ test.describe("signed-in, no intent", () => {
     !CREDS.email || !CREDS.password,
     "needs E2E_USER_EMAIL / E2E_USER_PASSWORD",
   );
+
+  test("authenticated pricing header keeps the studio CTA and omits Log in", async ({ page }) => {
+    await page.goto(`/login?next=${encodeURIComponent("/pricing")}`, { waitUntil: "domcontentloaded" });
+    await loginViaForm(page);
+    await page.waitForURL(/\/pricing/, { timeout: 30_000 });
+
+    await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(0);
+    await expect(page.locator('nav a[href="/app/studio"]').last()).toHaveText("Create Pins");
+  });
 
   test("signed-in user with no intent lands on pricing without a checkout", async ({ page }) => {
     const checkout = await interceptCreemCheckout(page, BASE_URL);

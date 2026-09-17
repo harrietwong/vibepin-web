@@ -1,4 +1,5 @@
 import { getBillingMode } from "@/lib/server/creem/billingMode";
+import { getUserIdFromCookieSession } from "@/lib/server/authUser";
 import PricingPageClient from "./pricing-client";
 import { PublicShell } from "@/components/public/PublicShell";
 
@@ -17,7 +18,7 @@ export const metadata = {
 // useful anyway.)
 export const dynamic = "force-dynamic";
 
-export default function PricingPage() {
+export default async function PricingPage() {
   // Prices are static USD from pricingPlans; no geo/localization lookup needed
   // (Creem is merchant-of-record and handles currency at checkout).
   //
@@ -25,5 +26,8 @@ export default function PricingPage() {
   // disabled state at FIRST paint when checkout is turned off (CREEM_MODE=
   // disabled) — nobody is routed through signup only to hit a 503.
   const billingEnabled = getBillingMode() !== "disabled";
-  return <PublicShell><PricingPageClient billingEnabled={billingEnabled} /></PublicShell>;
+  // Keep the public header aligned with the cookie-backed browser session at
+  // first paint. The client still verifies the user before updating its state.
+  const initialUserId = await getUserIdFromCookieSession();
+  return <PublicShell><PricingPageClient billingEnabled={billingEnabled} initialUserId={initialUserId} /></PublicShell>;
 }

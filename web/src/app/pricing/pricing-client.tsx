@@ -386,14 +386,14 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
   );
 }
 
-function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
+function PricingPageContent({ billingEnabled, initialUserId }: { billingEnabled: boolean; initialUserId: string | null }) {
   const { t } = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [yearly, setYearly] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [userId, setUserId] = useState<string | null>(initialUserId);
+  const [authReady, setAuthReady] = useState(initialUserId !== null);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanKey | null>(null);
   const [checkoutUnavailable, setCheckoutUnavailable] = useState(false);
   // Checkout deliberately turned off (CREEM_MODE=disabled) — a distinct, calmer
@@ -590,16 +590,22 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
           </div>
           <div className="flex items-center gap-2.5">
             <PublicLanguageTheme />
-            <Link
-              href="/login?next=/pricing"
-              className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white"
-              style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}
-            >
-              {t("public.nav.logIn")}
-            </Link>
-            <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
-              {t("public.pricing.getStarted")} <ArrowRight className="w-3.5 h-3.5" />
-            </Link>
+            {authReady && !userId ? (
+              <Link
+                href="/login?next=/pricing"
+                className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white"
+                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}
+              >
+                {t("public.nav.logIn")}
+              </Link>
+            ) : null}
+            {authReady ? (
+              <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
+                {userId ? t("public.nav.createPins") : t("public.pricing.getStarted")} <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            ) : (
+              <span aria-hidden="true" style={{ display: "block", height: 36, width: 116 }} />
+            )}
           </div>
         </div>
       </nav>
@@ -793,10 +799,10 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
   );
 }
 
-export default function PricingPageClient({ billingEnabled }: { billingEnabled: boolean }) {
+export default function PricingPageClient({ billingEnabled, initialUserId }: { billingEnabled: boolean; initialUserId: string | null }) {
   return (
     <Suspense fallback={null}>
-      <PricingPageContent billingEnabled={billingEnabled} />
+      <PricingPageContent billingEnabled={billingEnabled} initialUserId={initialUserId} />
     </Suspense>
   );
 }
