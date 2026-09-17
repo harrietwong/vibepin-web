@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { CheckCircle } from "lucide-react";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const CONTACT = "support@vibepin.co";
 
@@ -9,6 +12,7 @@ type Status = "idle" | "submitting" | "success" | "error";
 
 export default function ContactForm() {
   const searchParams = useSearchParams();
+  const { t } = useLocale();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -27,13 +31,16 @@ export default function ContactForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (status === "submitting" || status === "success") return;
     setError(null);
 
     if (!email.trim() || !email.includes("@")) {
+      setStatus("error");
       setError("Please enter a valid email address.");
       return;
     }
     if (!message.trim()) {
+      setStatus("error");
       setError("Please enter a message.");
       return;
     }
@@ -60,16 +67,40 @@ export default function ContactForm() {
     }
   }
 
+  function resetForm() {
+    setName("");
+    setEmail("");
+    setSubject("");
+    setMessage("");
+    setWebsite("");
+    setError(null);
+    setStatus("idle");
+  }
+
   if (status === "success") {
     return (
       <div
+        data-testid="contact-success-state"
+        role="status"
+        aria-live="polite"
         className="rounded-2xl border p-6 sm:p-7"
-        style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.10)", boxShadow: "0 24px 70px rgba(0,0,0,0.28)" }}
+        style={{ background: "var(--public-surface)", borderColor: "var(--public-border)", boxShadow: "0 12px 32px rgba(15,23,42,0.10)" }}
       >
-        <p className="text-[15px] font-black text-white mb-2">Message sent</p>
-        <p className="text-[13px] leading-relaxed" style={{ color: "#8B93A1" }}>
-          Thanks — we got your message and will reply within 1–2 business days.
-        </p>
+        <div className="flex items-start gap-3">
+          <CheckCircle aria-hidden="true" className="mt-0.5 shrink-0" size={22} style={{ color: "var(--public-accent)" }} />
+          <div className="min-w-0">
+            <p className="text-[15px] font-black mb-1" style={{ color: "var(--public-text)" }}>{t("contact.success.title")}</p>
+            <p className="text-[13px] leading-relaxed" style={{ color: "var(--public-text-muted)" }}>{t("contact.success.description")}</p>
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <Link href="/" data-testid="contact-success-home" className="btn-cta rounded-full px-4 py-2 text-[12px] font-bold text-white">
+            {t("contact.success.home")}
+          </Link>
+          <button type="button" data-testid="contact-success-another" onClick={resetForm} className="rounded-full border px-4 py-2 text-[12px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2" style={{ borderColor: "var(--public-border-hi)", color: "var(--public-text)" }}>
+            {t("contact.success.another")}
+          </button>
+        </div>
       </div>
     );
   }
@@ -77,8 +108,9 @@ export default function ContactForm() {
   return (
     <form
       onSubmit={handleSubmit}
+      aria-busy={status === "submitting"}
       className="rounded-2xl border p-6 sm:p-7"
-      style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.10)", boxShadow: "0 24px 70px rgba(0,0,0,0.28)" }}
+      style={{ background: "var(--public-surface)", borderColor: "var(--public-border)", boxShadow: "0 12px 32px rgba(15,23,42,0.10)" }}
     >
       <p className="text-[15px] font-black text-white mb-4">Send us a message</p>
 
@@ -113,7 +145,7 @@ export default function ContactForm() {
       </div>
 
       {error && (
-        <p className="text-[12px] mt-3" style={{ color: "#F87171" }}>
+        <p data-testid="contact-error" role="alert" className="text-[12px] mt-3" style={{ color: "#DC2626" }}>
           {error}
         </p>
       )}

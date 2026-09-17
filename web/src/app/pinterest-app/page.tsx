@@ -1,6 +1,7 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
+import { PublicShell } from "@/components/public/PublicShell";
 
 // TODO: replace with final support email after domain purchase
 const CONTACT = "support@vibepin.co";
@@ -13,7 +14,8 @@ export const metadata = {
 
 export default function PinterestAppPage() {
   return (
-    <div className="min-h-screen antialiased" style={{ background: "#080E0B", color: "#D1D5DB" }}>
+    <PublicShell>
+    <div className="min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md"
@@ -219,5 +221,6 @@ export default function PinterestAppPage() {
         </div>
       </div>
     </div>
+    </PublicShell>
   );
 }

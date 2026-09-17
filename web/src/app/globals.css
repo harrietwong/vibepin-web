@@ -99,6 +99,93 @@ body::-webkit-scrollbar { width: 12px; }
 }
 .btn-glow:hover { filter: brightness(1.06); }
 
+/* ── Public route shell ──────────────────────────────────────────────────── */
+.public-shell {
+  --public-bg: #F7F8FA;
+  --public-surface: #FFFFFF;
+  --public-surface-2: #F1F5F9;
+  --public-border: #E2E8F0;
+  --public-border-hi: #CBD5E1;
+  --public-text: #17202B;
+  --public-text-muted: #64748B;
+  --public-accent: #0E7490;
+  --public-accent-strong: #0F766E;
+  --public-accent-soft: rgba(14, 116, 144, 0.10);
+  min-width: 0;
+  background: var(--public-bg);
+  color: var(--public-text);
+  isolation: isolate;
+}
+[data-theme="dark"] .public-shell {
+  --public-bg: #080E0B;
+  --public-surface: #0F1512;
+  --public-surface-2: #161D19;
+  --public-border: rgba(255,255,255,0.10);
+  --public-border-hi: rgba(255,255,255,0.18);
+  --public-text: #E8F0EC;
+  --public-text-muted: #8B9E97;
+  --public-accent: #38BDF8;
+  --public-accent-strong: #67E8F9;
+  --public-accent-soft: rgba(56, 189, 248, 0.12);
+}
+.public-shell-controls {
+  position: fixed;
+  top: 12px;
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--public-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--public-surface) 90%, transparent);
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.10);
+  backdrop-filter: blur(12px);
+}
+.public-shell-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  min-width: 44px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--public-text);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  cursor: pointer;
+}
+.public-shell-control:hover,
+.public-shell-control[aria-expanded="true"] { background: var(--public-accent-soft); }
+.public-shell-control--icon { min-width: 32px; padding: 0; }
+.public-shell-menu-row:hover { background: var(--public-accent-soft) !important; }
+.public-shell a,
+.public-shell button,
+.public-shell input,
+.public-shell textarea,
+.public-shell select { max-width: 100%; }
+
+@media (max-width: 390px) {
+  .public-shell-controls { top: 8px; right: max(8px, env(safe-area-inset-right)); }
+  .public-shell-control { min-height: 40px; min-width: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .public-shell *,
+  .public-shell *::before,
+  .public-shell *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ── Masonry ─────────────────────────────────────────────────────────────── */
 .pin-masonry { column-gap: 0.75rem; column-fill: balance; }
 .pin-masonry--sm   { columns: 2; }
@@ -345,6 +432,16 @@ body::-webkit-scrollbar { width: 12px; }
   --text:      #F0F4F2;
   --text-2:    #8B9E97;
   --text-dim:  #4D5E58;
+}
+[data-theme="light"] .public-shell .lp {
+  --bg:        #F7F8FA;
+  --surface:   #FFFFFF;
+  --surface-2: #F1F5F9;
+  --border:    rgba(15,23,42,0.10);
+  --border-hi: rgba(15,23,42,0.18);
+  --text:      #17202B;
+  --text-2:    #64748B;
+  --text-dim:  #94A3B8;
 }
 
 /* ── Terminal blink cursor ───────────────────────────────────────────────── */

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
 import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
+import { PublicShell } from "@/components/public/PublicShell";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -166,12 +167,14 @@ function LoginContent() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA]">
-        <div className="h-8 w-8 rounded-xl animate-pulse" style={{ background: "linear-gradient(135deg,#FF4D8D,#7C3AED)" }} />
-      </div>
-    }>
-      <LoginContent />
-    </Suspense>
+    <PublicShell>
+      <Suspense fallback={
+        <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA]">
+          <div className="h-8 w-8 rounded-xl animate-pulse" style={{ background: "linear-gradient(135deg,#FF4D8D,#7C3AED)" }} />
+        </div>
+      }>
+        <LoginContent />
+      </Suspense>
+    </PublicShell>
   );
 }

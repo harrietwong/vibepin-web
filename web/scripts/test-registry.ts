@@ -150,6 +150,8 @@ export const CORE: string[] = [
   "test-social-only-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
+  "test-public-shell-controls",
+  "test-contact-success-ui",
   // Settings / support
   "test-settings-p0",
   "test-settings-social-responsive",

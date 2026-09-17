@@ -2,6 +2,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { LEGAL_ENTITY_NAME } from "@/lib/legalEntity";
+import { PublicShell } from "@/components/public/PublicShell";
 
 const CONTACT = "support@vibepin.co";
 const UPDATED = "August 8, 2026";
@@ -13,7 +14,8 @@ export const metadata = {
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen antialiased" style={{ background: "#080E0B", color: "#D1D5DB" }}>
+    <PublicShell>
+    <div className="min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md"
@@ -325,5 +327,6 @@ export default function PrivacyPage() {
         </div>
       </div>
     </div>
+    </PublicShell>
   );
 }

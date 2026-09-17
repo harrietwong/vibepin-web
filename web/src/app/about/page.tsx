@@ -2,6 +2,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { LEGAL_ENTITY_NAME, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
+import { PublicShell } from "@/components/public/PublicShell";
 
 export const metadata = {
   title: "About — VibePin",
@@ -16,7 +17,8 @@ const VALUES = [
 
 export default function AboutPage() {
   return (
-    <div className="min-h-screen antialiased" style={{ background: "#080C12", color: "#D1D5DB" }}>
+    <PublicShell>
+    <div className="min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md" style={{ background: "rgba(8,12,18,0.92)", borderColor: "rgba(255,255,255,0.07)" }}>
         <div className="max-w-[860px] mx-auto px-5 h-[56px] flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -75,5 +77,6 @@ export default function AboutPage() {
         </div>
       </div>
     </div>
+    </PublicShell>
   );
 }

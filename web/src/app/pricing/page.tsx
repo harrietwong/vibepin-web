@@ -1,5 +1,6 @@
 import { getBillingMode } from "@/lib/server/creem/billingMode";
 import PricingPageClient from "./pricing-client";
+import { PublicShell } from "@/components/public/PublicShell";
 
 export const metadata = {
   title: "Pricing — VibePin",
@@ -24,5 +25,5 @@ export default function PricingPage() {
   // disabled state at FIRST paint when checkout is turned off (CREEM_MODE=
   // disabled) — nobody is routed through signup only to hit a 503.
   const billingEnabled = getBillingMode() !== "disabled";
-  return <PricingPageClient billingEnabled={billingEnabled} />;
+  return <PublicShell><PricingPageClient billingEnabled={billingEnabled} /></PublicShell>;
 }

@@ -40,16 +40,16 @@ export const metadata: Metadata = {
   },
 };
 
-// Anti-FOUC: set data-theme on <html> before first paint so the app shell never
-// flashes the wrong theme. Scoped to /app paths so marketing/landing routes keep
-// their own styling. Mirrors themeStore (THEME_STORAGE_KEY, DEFAULT_THEME="dark").
+// Anti-FOUC: set data-theme on <html> before first paint so the app and public
+// shell never flash the wrong theme. Mirrors themeStore
+// (THEME_STORAGE_KEY, DEFAULT_THEME="dark").
 //
 // The /admin branch below is a fully independent admin-console concern (own
 // storage key, own `data-admin-theme` attribute, own --admin-* CSS vars in
 // globals.css) — it never reads/writes the /app theme state above, and vice
 // versa. Mirrors lib/admin/adminTheme.ts (ADMIN_THEME_STORAGE_KEY, DEFAULT_ADMIN_THEME="light").
 const THEME_INIT_SCRIPT = `(function(){try{
-  if(location.pathname.startsWith('/app')){
+  if(!location.pathname.startsWith('/admin')){
     var t=localStorage.getItem('vp:appearance_theme:v1');
     var r=t==='light'?'light':t==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):'dark';
     document.documentElement.setAttribute('data-theme',r);

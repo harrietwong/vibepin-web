@@ -69,6 +69,18 @@ const en = {
   "topbar.language": "Language",
   "topbar.theme": "Theme",
 
+  // ── Public shell ──
+  "public.nav.about": "About",
+  "public.nav.careers": "Careers",
+  "public.nav.contact": "Contact",
+  "public.nav.pricing": "Pricing",
+  "public.controls.language": "Language",
+  "public.controls.theme": "Theme",
+  "contact.success.title": "Message sent",
+  "contact.success.description": "Thanks — we got your message and will reply within 1–2 business days.",
+  "contact.success.home": "Back to home",
+  "contact.success.another": "Send another message",
+
   // ── Settings modal shell ──
   "settings.title": "Settings",
   "settings.subtitle": "Manage your account, publishing, and AI preferences.",

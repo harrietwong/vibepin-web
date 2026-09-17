@@ -13,6 +13,8 @@
  * so this route is never intercepted by the login guard.
  */
 
+import { PublicShell } from "@/components/public/PublicShell";
+
 export const metadata = {
   title: "Data Deletion Status — VibePin",
 };
@@ -26,6 +28,7 @@ export default async function DataDeletionStatusPage({
   const confirmationCode = typeof code === "string" && code.trim() ? code.trim() : null;
 
   return (
+    <PublicShell>
     <main
       style={{
         minHeight: "100vh",
@@ -64,5 +67,6 @@ export default async function DataDeletionStatusPage({
         )}
       </div>
     </main>
+    </PublicShell>
   );
 }

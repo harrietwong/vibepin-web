@@ -14,6 +14,7 @@ import { SupportedNichesStrip } from "@/components/landing/conversion/SupportedN
 import { PricingSection } from "@/components/landing/conversion/PricingSection";
 import { FaqSection } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
+import { PublicShell } from "@/components/public/PublicShell";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const scoreColor = (s: number) => (s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : "#EF4444");
@@ -489,6 +490,7 @@ export default function HomePage() {
   const heroRefs     = take(pinSamples, 5, "Reference", 1);
 
   return (
+    <PublicShell>
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
 
       {/* ══ NAV ══ */}
@@ -556,5 +558,6 @@ export default function HomePage() {
       <LandingFooter />
 
     </div>
+    </PublicShell>
   );
 }
