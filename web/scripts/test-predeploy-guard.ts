@@ -193,6 +193,12 @@ async function main() {
     assert(/CREEM_MODE is "test"/.test(problems[0]), "production check is selected");
   });
 
+  await test("manual predeploy guard defaults an unset target to production and refuses test billing", () => {
+    const problems = checkDeployment({ CREEM_MODE: "test" }, stableOrigins);
+    assertEq(problems.length, 1, "one default-production problem");
+    assert(/CREEM_MODE is "test"/.test(problems[0]), "unset target uses production billing guard");
+  });
+
   await test("Preview + complete test billing is accepted by the Preview check", () => {
     assertEq(
       checkDeployment(

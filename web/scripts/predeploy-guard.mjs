@@ -112,9 +112,10 @@ export function checkCreemPreviewTestConfig(env, stableOrigins) {
  */
 export function checkDeploymentBillingContract(env, stableOrigins) {
   const vercelEnv = String(env.VERCEL_ENV ?? "").trim().toLowerCase();
-  if (vercelEnv === "production") return checkBillingModeForProd(env);
   if (vercelEnv === "preview") return checkCreemPreviewTestConfig(env, stableOrigins);
-  return [];
+  // `npm run predeploy:guard` is the manual production-release gate. Its target
+  // may be unset outside Vercel, so fail closed by preserving production checks.
+  return checkBillingModeForProd(env);
 }
 
 /**
