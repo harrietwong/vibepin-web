@@ -166,6 +166,7 @@ test("payloadAfterFailure: auth error → errorCategory auth, preserves schedule
   assert.equal(after.failureType, "publish");
   assert.equal(after.errorCategory, "auth");
   assert.equal(after.publishErrorCode, "needs_reconnect");
+  assert.equal(after.publishReceiptDismissedAt, undefined);
   assert.equal(after.publishError, "Pinterest connection expired — please reconnect");
   assert.equal(after.previousScheduledTime, "2026-07-11T09:00:00.000Z"); // plannedAt preferred, now ISO
   assert.equal(after.scheduledDate, "");

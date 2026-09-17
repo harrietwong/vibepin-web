@@ -541,6 +541,7 @@ export function payloadAfterFailure(
 ): Record<string, unknown> {
   const clearSchedule = options?.clearSchedule !== false;
   const next = { ...withAdoptedTarget(payload, connectionId) };
+  delete next.publishReceiptDismissedAt;
   // Bump payload.updatedAt (same reason as payloadAfterSuccess — see comment there):
   // the client's LWW merge compares this field, so it must match the row's updated_at.
   next.updatedAt = nowIso;

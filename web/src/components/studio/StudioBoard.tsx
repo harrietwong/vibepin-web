@@ -1121,7 +1121,7 @@ export function StudioBoard() {
       const intentId = pinDraftStore.getDraft(receipt.draftId)?.publishIntentId?.trim() || receipt.priorIntentId || "";
       const reconciled = await reconcilePublishIntent(intentId);
       const current = pinDraftStore.getDraft(receipt.draftId);
-      if (reconciled && current) {
+      if (reconciled && current && current.publishIntentId === intentId) {
         pinDraftStore.updateDraft(receipt.draftId, reconciledPublishIntentPatch(current, reconciled));
       }
       toast.info(tr("publishResults.recoveryHint"));

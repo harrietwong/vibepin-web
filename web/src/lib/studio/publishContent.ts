@@ -122,7 +122,10 @@ export async function reconcilePublishIntent(intentId: string, fetcher: typeof f
  * dispatch happens here; resolved, failed, and still-unknown rows stay distinct. */
 export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: PublishIntentReconcileResponse): Partial<PinDraft> {
   const prior = contentDestinationResults(draft);
-  const rows: DestinationPublishResult[] = reconciled.destinations.map(destination => {
+  const reconciledIds = new Set(reconciled.destinations.map(destination => destination.destinationId));
+  const rows: DestinationPublishResult[] = [
+    ...prior.filter(row => !reconciledIds.has(row.destinationId)),
+    ...reconciled.destinations.map(destination => {
     const existing = prior.find(row => row.destinationId === destination.destinationId);
     const status = destination.status === "published" || destination.status === "failed" ? destination.status : "delivery_unknown";
     return {
@@ -135,7 +138,8 @@ export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: Publis
       ...(status === "delivery_unknown" ? { errorMessage: destination.retryAllowed ? "Delivery is still being reconciled; retry is available when it resolves." : "Delivery status is still unknown. Reconcile before retrying." } : {}),
       intentId: reconciled.intentId,
     };
-  });
+    }),
+  ];
   return {
     destinationResults: rows,
     ...legacyFieldsFromResults(rows, draft),
