@@ -24,6 +24,7 @@
 /** Fast node-only unit/contract tests. `npm test` runs every one of these. */
 export const CORE: string[] = [
   "test-i18n",
+  "test-public-locale-routes",
   "test-shared-pin-details",
   "test-freshness",
   "test-pin-metadata",

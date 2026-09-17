@@ -14,6 +14,7 @@
  */
 
 import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
+import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 export const metadata = {
   title: "Data Deletion Status — VibePin",
@@ -53,11 +54,11 @@ export default async function DataDeletionStatusPage({
         }}
       >
         <h1 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 12px" }}>
-          Data deletion request received
+          <PublicLocaleText route="dataDeletion" field="title" />
         </h1>
         {confirmationCode ? (
           <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--public-text-muted)", margin: 0 }}>
-            Your data deletion request has been received and processed. Confirmation code:{" "}
+            <PublicLocaleText route="dataDeletion" field="body" /> Confirmation code:{" "}
             <strong style={{ color: "var(--public-text)" }}>{confirmationCode}</strong>
           </p>
         ) : (

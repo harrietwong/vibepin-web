@@ -1,6 +1,7 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
+import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 export const metadata = {
   title: "Welcome — VibePin",
@@ -19,12 +20,12 @@ export default function WelcomePage() {
       </nav>
 
       <div className="max-w-[720px] mx-auto px-5 py-24 sm:py-28 text-center">
-        <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}>Subscription confirmed</p>
+        <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}><PublicLocaleText route="welcome" field="eyebrow" /></p>
         <h1 className="text-4xl sm:text-6xl font-black text-white tracking-tight leading-[1.05] mb-5">
-          You&apos;re in.
+          <PublicLocaleText route="welcome" field="title" />
         </h1>
         <p className="text-[16px] leading-relaxed max-w-[540px] mx-auto mb-3" style={{ color: "#8B93A1" }}>
-          Thanks for subscribing to VibePin. Your payment went through and your plan is active.
+          <PublicLocaleText route="welcome" field="body" />
         </p>
         <p className="text-[14px] leading-relaxed max-w-[540px] mx-auto mb-10" style={{ color: "#6B7280" }}>
           We&apos;re setting up your access now — it usually takes just a moment. If anything looks
@@ -33,7 +34,7 @@ export default function WelcomePage() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link href="/app/studio" className="btn-cta rounded-full px-8 py-3.5 text-[14px] font-bold text-white">
-            Start creating
+            <PublicLocaleText route="welcome" field="cta" />
           </Link>
           <Link
             href="/app/discover"

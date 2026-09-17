@@ -3,6 +3,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { LEGAL_ENTITY_NAME } from "@/lib/legalEntity";
 import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
+import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 const CONTACT = "support@vibepin.co";
 const UPDATED = "August 8, 2026";
@@ -39,9 +40,10 @@ export default function PrivacyPage() {
 
       {/* Content */}
       <div className="max-w-[860px] mx-auto px-5 py-16">
-        <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}>Legal</p>
-        <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2">Privacy Policy</h1>
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}><PublicLocaleText route="privacy" field="eyebrow" /></p>
+        <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2"><PublicLocaleText route="privacy" field="title" /></h1>
         <p className="text-[13px] mb-12" style={{ color: "#4D5E58" }}>Last updated: {UPDATED}</p>
+        <p className="text-[14px] leading-relaxed mb-8" style={{ color: "var(--public-text-muted)" }}><PublicLocaleText route="privacy" field="body" /></p>
 
         <div className="space-y-10 text-[14px] leading-relaxed" style={{ color: "#8B9E97" }}>
 

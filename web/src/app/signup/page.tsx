@@ -6,6 +6,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
 import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
 import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
+import { usePublicRouteCopy } from "@/components/public/PublicLocaleSummary";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,6 +21,7 @@ const PLAN_LABELS: Record<string, string> = {
 };
 
 function SignupContent() {
+  const copy = usePublicRouteCopy("signup");
   const params = useSearchParams();
   const plan   = params.get("plan") ?? "free";
   const next   = safeNextPath(params.get("next"));
@@ -57,7 +59,7 @@ function SignupContent() {
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
-    if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (password.length < 8) { setError(`${copy.password} (${copy.passwordHint})`); return; }
     setLoading(true);
     setError("");
     // SECURITY: never write the ?plan= param into user_metadata. user_metadata
@@ -96,19 +98,18 @@ function SignupContent() {
           {done ? (
             <div className="text-center py-4">
               <div className="text-4xl mb-4">📬</div>
-              <h2 className="text-lg font-black text-gray-900 mb-2">Check your email</h2>
+              <h2 className="text-lg font-black text-gray-900 mb-2">{copy.confirmationTitle}</h2>
               <p className="text-sm text-gray-500 leading-relaxed">
-                We sent a confirmation link to <strong>{email}</strong>.
-                Click it to activate your account and get started.
+                {copy.confirmationBody} <strong>{email}</strong>.
               </p>
             </div>
           ) : (
             <>
-              <h1 className="text-xl font-black text-gray-900 mb-1">Create your account</h1>
+              <h1 className="text-xl font-black text-gray-900 mb-1">{copy.eyebrow}</h1>
               <p className="text-sm text-gray-500 mb-1">
                 {plan !== "free" ? (
-                  <span>Plan: <span className="font-semibold text-[#0891B2]">{PLAN_LABELS[plan]}</span></span>
-                ) : "Start for free — no credit card required"}
+                  <span>{copy.planPrefix} <span className="font-semibold text-[#0891B2]">{PLAN_LABELS[plan]}</span></span>
+                ) : copy.body}
               </p>
 
               {error && (
@@ -129,19 +130,19 @@ function SignupContent() {
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                 </svg>
-                Continue with Google
+                {copy.google}
               </button>
 
               <div className="flex items-center gap-3 mb-1">
                 <div className="flex-1 h-px bg-gray-200" />
-                <span className="text-[11px] text-gray-400 font-medium">or</span>
+                <span className="text-[11px] text-gray-400 font-medium">{copy.divider}</span>
                 <div className="flex-1 h-px bg-gray-200" />
               </div>
 
               <form onSubmit={handleSignup} className="space-y-4 mt-6">
                 <div>
                   <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-                    Email
+                    {copy.email}
                   </label>
                   <input
                     type="email" value={email} onChange={e => setEmail(e.target.value)}
@@ -152,7 +153,7 @@ function SignupContent() {
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-                    Password <span className="text-gray-400 normal-case font-normal">(min 8 characters)</span>
+                    {copy.password} <span className="text-gray-400 normal-case font-normal">({copy.passwordHint})</span>
                   </label>
                   <input
                     type="password" value={password} onChange={e => setPassword(e.target.value)}
@@ -167,13 +168,13 @@ function SignupContent() {
                   className="w-full rounded-xl py-3 text-[14px] font-bold text-white transition-all disabled:opacity-60"
                   style={{ background: loading ? "#94A3B8" : "linear-gradient(135deg, #0891B2, #0E7490)" }}
                 >
-                  {loading ? "Creating account…" : "Create account"}
+                  {loading ? `${copy.cta}…` : copy.cta}
                 </button>
 
                 <p className="text-[11px] text-gray-400 text-center leading-relaxed">
-                  By signing up you agree to our{" "}
-                  <a href="#" className="underline">Terms</a> and{" "}
-                  <a href="#" className="underline">Privacy Policy</a>.
+                  {copy.legalNotice}{" "}
+                  <Link href="/terms" className="underline">{copy.termsLabel}</Link>{" · "}
+                  <Link href="/privacy" className="underline">{copy.privacyLabel}</Link>
                 </p>
               </form>
             </>
@@ -182,9 +183,9 @@ function SignupContent() {
 
         {!done && (
           <p className="text-center text-[13px] text-gray-500 mt-5">
-            Already have an account?{" "}
+            {copy.signInPrompt}{" "}
             <Link href={signInHref} className="text-[#0891B2] font-semibold hover:underline">
-              Sign in
+              {copy.signInCta}
             </Link>
           </p>
         )}

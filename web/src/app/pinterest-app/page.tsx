@@ -2,6 +2,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
+import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 // TODO: replace with final support email after domain purchase
 const CONTACT = "support@vibepin.co";
@@ -38,9 +39,10 @@ export default function PinterestAppPage() {
 
       {/* Content */}
       <div className="max-w-[860px] mx-auto px-5 py-16">
-        <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}>Pinterest Integration</p>
-        <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2">How VibePin Uses Pinterest</h1>
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}><PublicLocaleText route="pinterest" field="eyebrow" /></p>
+        <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2"><PublicLocaleText route="pinterest" field="title" /></h1>
         <p className="text-[13px] mb-12" style={{ color: "#4D5E58" }}>Last updated: {UPDATED}</p>
+        <p className="text-[14px] leading-relaxed mb-8" style={{ color: "var(--public-text-muted)" }}><PublicLocaleText route="pinterest" field="body" /></p>
 
         <div className="space-y-10 text-[14px] leading-relaxed" style={{ color: "#8B9E97" }}>
 

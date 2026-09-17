@@ -3,6 +3,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { LEGAL_ENTITY_NAME, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
 import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
+import { PublicLocaleText } from "@/components/public/PublicLocaleSummary";
 
 export const metadata = {
   title: "About — VibePin",
@@ -34,11 +35,11 @@ export default function AboutPage() {
       </nav>
 
       <div className="max-w-[860px] mx-auto px-5 py-16">
-        <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}>About</p>
+        <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}><PublicLocaleText route="about" field="eyebrow" /></p>
         <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight leading-[1.06] mb-5">
-          Pinterest growth that{" "}
-          <span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 55%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>starts with signals.</span>
+          <PublicLocaleText route="about" field="title" />
         </h1>
+        <p className="text-[15px] leading-relaxed mb-5" style={{ color: "var(--public-text-muted)" }}><PublicLocaleText route="about" field="body" /></p>
         <div className="space-y-5 text-[15px] leading-relaxed" style={{ color: "#8B93A1" }}>
           <p>VibePin is a Pinterest opportunity-intelligence and content-planning tool for creators, ecommerce sellers, affiliate marketers, and Pinterest managers.</p>
           <p>Most tools push you to make more content. VibePin helps you decide what&apos;s worth making first — by surfacing real Pinterest demand, proven Pin performance, and related product signals, then turning the best opportunities into product-aware Pin drafts and a reviewable weekly plan.</p>
@@ -59,7 +60,7 @@ export default function AboutPage() {
             <p className="text-[15px] font-black text-white">Questions or feedback?</p>
             <p className="text-[12px] mt-1" style={{ color: "#8B93A1" }}>We&apos;d love to hear from you.</p>
           </div>
-          <Link href="/contact" className="btn-cta rounded-full px-6 py-3 text-[13px] font-bold text-white shrink-0">Contact us</Link>
+          <Link href="/contact" className="btn-cta rounded-full px-6 py-3 text-[13px] font-bold text-white shrink-0"><PublicLocaleText route="about" field="cta" /></Link>
         </div>
 
         <div className="mt-14 pt-8 border-t flex flex-wrap gap-5 text-[12px]" style={{ borderColor: "rgba(255,255,255,0.07)", color: "#5B6472" }}>
