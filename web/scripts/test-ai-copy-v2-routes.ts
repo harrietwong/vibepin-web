@@ -149,7 +149,8 @@ async function main() {
   const sessionModule = await import("../src/lib/ai-copy/v2/sessionStore");
   const { __setCopyProviderForTests, orchestrateCopyGeneration, buildPromptForSession } = await import("../src/lib/ai-copy/v2/orchestrator");
   const { __setTrendKeywordLoaderForTests, TREND_KEYWORD_SELECT_FIELDS } = await import("../src/lib/ai-copy/v2/trendKeywordSource");
-  const { POST: analyze, createAnalyzeHandler } = await import("../src/app/api/ai-copy/v2/analyze/route");
+  const { POST: analyze } = await import("../src/app/api/ai-copy/v2/analyze/route");
+  const { createAnalyzeHandler } = await import("../src/app/api/ai-copy/v2/analyze/analyzeHandler");
   const { POST: generate } = await import("../src/app/api/ai-copy/v2/generate/route");
   const setProvider = (provider: Record<string, unknown>) => {
     const generated = provider.generate as ((...args: unknown[]) => Promise<ProviderCopyOutput>) | undefined;
