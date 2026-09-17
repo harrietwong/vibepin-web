@@ -24,6 +24,8 @@ import {
   archiveCurrentPublishResults,
 } from "../src/lib/studio/pinLifecycle";
 import { deriveBoardCollections, matchesFilter } from "../src/hooks/usePinBoardDrafts";
+import { buildPublishConfirmation } from "../src/lib/studio/publishConfirmation";
+import { buildCardViewModel } from "../src/lib/studio/cardView";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -142,7 +144,7 @@ test("unknown-only 与 published+pending/accepted → needs_attention；不可�
     assert.equal(matchesFilter({ draft: item, lifecycle: getPinLifecycle(item) }, "posted"), false, `${id} must not enter Posted`);
   }
 });
-test("Move to Unscheduled 将当前 receipt 归档而非删除，并清除当前失败生命周期", () => {
+test("Move to Unscheduled 保留当前 receipt 以锁住成功腿，并清除当前失败生命周期", () => {
   const failed = draft({
     id: "dismiss-publish-failure",
     postedAt: "2026-07-23T02:00:00.000Z",
@@ -155,8 +157,20 @@ test("Move to Unscheduled 将当前 receipt 归档而非删除，并清除当前
   const patch = archiveCurrentPublishResults(failed);
   const moved = { ...failed, ...patch } as PinDraft;
   assert.equal(getPinLifecycle(moved), "unscheduled", "归档后没有当前 publish outcome，不能继续显示 Failed/Posted");
-  assert.equal(moved.previousResults?.length, 2, "两个 provider receipt 都必须保留为历史证据");
-  assert.equal(moved.previousResults?.[0].remoteId, "pin-live", "已发布的 receipt 不得丢失");
+  assert.equal(moved.destinationResults?.length, 2, "当前 provider receipt 必须保留，供 retry 去重与审计");
+  assert.equal(moved.destinationResults?.[0].remoteId, "pin-live", "已发布的 receipt 不得丢失");
+  const view = buildCardViewModel(moved, "unscheduled");
+  assert.equal(view.resultRows.length, 2, "归档后的卡片仍可查看全部 receipt");
+  const retry = buildPublishConfirmation({
+    ...moved,
+    publishIntentId: "publish:d:prior",
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "pin-1", boardId: "board-1", capturedAt: "2026-07-23T00:00:00.000Z" },
+      { provider: "facebook", socialConnectionId: "page-1", capturedAt: "2026-07-23T00:00:00.000Z" },
+    ],
+  }, { onlyPending: true, actionId: "retry-after-dismiss" });
+  assert.deepEqual(retry.dispatchDestinationIds, ["facebook:page-1"], "retry 不得把已发布 Pinterest 腿重新放入 dispatch");
+  assert.equal(retry.priorIntentId, "publish:d:prior", "durable retry 必须继续消费原失败 intent 的合法 entitlement");
 });
 
 console.log("\n=== PRD v1.1 §6.3: workspace 全集，来源无关 ===");

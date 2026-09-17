@@ -143,8 +143,9 @@ export function buildCardViewModel(
   const resultRows = results.map(result => toRow(result));
   const earlier = (draft as { previousResults?: DestinationPublishResult[] }).previousResults ?? [];
   const earlierResultRows = earlier.map(result => toRow(result, true));
-  const needsAttention = hasUnresolvedDestination(draft);
-  const hasPublished = hasPublishedDestination(draft);
+  const dismissed = !!draft.publishReceiptDismissedAt?.trim();
+  const needsAttention = !dismissed && hasUnresolvedDestination(draft);
+  const hasPublished = !dismissed && hasPublishedDestination(draft);
 
   // The primary action, in priority order:
   //   generating → nothing to do but wait

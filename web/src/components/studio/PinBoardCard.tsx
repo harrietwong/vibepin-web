@@ -913,7 +913,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
 
 
   /** Posted card: the per-platform summary + the expandable result list (PRD §3). */
-  const resultsBlock = (view.hasPublished || view.needsAttention) ? (
+  const resultsBlock = (view.resultRows.length > 0 || view.earlierResultRows.length > 0) ? (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <button type="button" data-testid="card-view-results" aria-expanded={resultsOpen}
         onClick={() => setResultsOpen(open => !open)}

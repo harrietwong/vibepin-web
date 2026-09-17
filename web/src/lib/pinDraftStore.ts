@@ -94,6 +94,9 @@ export interface PinDraft {
    * second publish started. Append-only history; never read by the publish path.
    */
   previousResults?:     DestinationPublishResult[];
+  /** The merchant dismissed this attempt from the active workflow; receipts remain
+   * durable and continue to protect already-published destinations from Retry. */
+  publishReceiptDismissedAt?: string;
   /** Stable user-confirmed immediate-publish intent; persisted before provider dispatch. */
   publishIntentId?:      string;
   /** Parent intent frozen when this distinct retry action was confirmed. */

@@ -15,8 +15,6 @@
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import {
-  MAX_PREVIOUS_RESULTS,
-  contentDestinationResults,
   hasActionableDestinationRecovery,
   hasFailedDestination,
   hasNonTerminalDestination,
@@ -30,7 +28,7 @@ import {
  *  banner identity, the week-scoped Plan filters, the test fixtures) must keep
  *  compiling and must keep their pre-Content answers. */
 type ContentDestinationHints = Partial<
-  Pick<ContentDraftLike, "id" | "imageUrl" | "destinationResults" | "socialPosts"
+  Pick<ContentDraftLike, "id" | "imageUrl" | "destinationResults" | "socialPosts" | "publishReceiptDismissedAt"
     | "remotePinId" | "remotePinUrl" | "postedAt" | "publishError" | "boardId" | "boardName">
 >;
 
@@ -63,6 +61,7 @@ function isGenerationFailed(d: Pick<PinDraft, "generationStatus">): boolean {
  *  unresolved-destination check in getPinLifecycle() takes precedence so a partial
  *  publish never presents that historical success as the card's current state. */
 export function isPosted(d: Pick<PinDraft, "postedAt" | "remotePinId"> & ContentDestinationHints): boolean {
+  if (sanitizeHandoffField(d.publishReceiptDismissedAt)) return false;
   return !!sanitizeHandoffField(d.postedAt)
     || !!sanitizeHandoffField(d.remotePinId)
     || destinationSignal(d, hasPublishedDestination);
@@ -79,9 +78,10 @@ export function isScheduledLifecycle(d: Pick<PinDraft, "scheduledDate" | "planne
  */
 export function getPinLifecycle(draft: PinDraft): PinLifecycle {
   if (isGenerating(draft)) return "generating";
-  if (destinationSignal(draft, hasNonTerminalDestination)) return "needs_attention";
-  if (destinationSignal(draft, hasUnresolvedDestination) && isPosted(draft)) return "needs_attention";
-  if (destinationSignal(draft, hasFailedDestination)) return "failed";
+  const dismissed = !!sanitizeHandoffField(draft.publishReceiptDismissedAt);
+  if (!dismissed && destinationSignal(draft, hasNonTerminalDestination)) return "needs_attention";
+  if (!dismissed && destinationSignal(draft, hasUnresolvedDestination) && isPosted(draft)) return "needs_attention";
+  if (!dismissed && destinationSignal(draft, hasFailedDestination)) return "failed";
   if (isPosted(draft)) return "posted";
   if (sanitizeHandoffField(draft.publishError) || isGenerationFailed(draft)) return "failed";
   if (isScheduledLifecycle(draft)) return "scheduled";
@@ -91,17 +91,19 @@ export function getPinLifecycle(draft: PinDraft): PinLifecycle {
 /**
  * Builds the one safe state transition for “Move to Unscheduled”. Current result rows
  * describe the active publish workflow; simply deleting `publishError` left those rows
- * (and legacy posted mirrors) to recreate Failed/Posted on the next render. Move every
- * receipt to immutable history, then clear the active outcome and its legacy mirrors.
+ * (and legacy posted mirrors) to recreate Failed/Posted on the next render. Mark the
+ * workflow dismissed and clear its legacy mirrors, but retain each receipt in place:
+ * `onlyPending` and the durable retry gate must still know which sibling posted.
  */
 export function archiveCurrentPublishResults(
-  draft: Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory"> & ContentDestinationHints,
-): Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory"> {
-  const current = contentDestinationResults({ ...draft, id: draft.id ?? "", imageUrl: draft.imageUrl ?? "" } as ContentDraftLike);
-  const previousResults = [...(draft.previousResults ?? []), ...current].slice(-MAX_PREVIOUS_RESULTS);
+  draft: Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory" | "publishReceiptDismissedAt"> & ContentDestinationHints,
+): Pick<PinDraft, "destinationResults" | "previousResults" | "postedAt" | "remotePinId" | "remotePinUrl" | "socialPosts" | "publishError" | "publishErrorCode" | "failureType" | "errorCategory" | "publishReceiptDismissedAt"> {
   return {
-    destinationResults: undefined,
-    previousResults,
+    // Keep last-attempt rows active as immutable provider evidence. onlyPending and
+    // durable retry claims read these rows to exclude a sibling that already posted.
+    destinationResults: draft.destinationResults,
+    previousResults: draft.previousResults,
+    publishReceiptDismissedAt: new Date().toISOString(),
     postedAt: undefined,
     remotePinId: undefined,
     remotePinUrl: undefined,
@@ -176,6 +178,7 @@ export function isActionablePublishFailure(
   // Archived is the one absolute veto: an archived Content is off every board, so no
   // per-destination failure can pull it back into the actionable set.
   if (d.archivedAt) return false;
+  if (sanitizeHandoffField(d.publishReceiptDismissedAt)) return false;
   // A Content whose per-destination results carry a failure is actionable even when the
   // legacy single-Pin failureType was never written (fan-out publishes each destination
   // independently, so one can fail while the draft-level fields describe the other).

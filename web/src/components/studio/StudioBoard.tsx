@@ -97,7 +97,7 @@ import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivatio
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
 import { contentMedia } from "@/lib/contentDraftModel";
-import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
+import { publishContent, explainPublishBlockers, reconcilePublishIntent } from "@/lib/studio/publishContent";
 import { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import {
   partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
@@ -1114,6 +1114,15 @@ export function StudioBoard() {
       confirmation: receipt,
     });
     if (outcome.blocked === "locked") return;
+    if (outcome.blocked === "recovery_pending") {
+      // Unknown delivery is never a blind Retry. Reconcile the durable intent first;
+      // this is a read-only evidence lookup, so it cannot dispatch or meter another
+      // post. The receipt just written by publishContent is the authoritative intent.
+      const intentId = pinDraftStore.getDraft(receipt.draftId)?.publishIntentId?.trim() || receipt.priorIntentId || "";
+      await reconcilePublishIntent(intentId);
+      toast.info(tr("publishResults.recoveryHint"));
+      return;
+    }
     if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
     // A Retry with nothing left to send. Neutral, not an error: nothing failed, and
     // without this branch it falls through to "0 published, 0 failed" → publishFailed,

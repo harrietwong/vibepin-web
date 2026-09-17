@@ -153,6 +153,7 @@ export type ContentDraftLike = {
   destinationResults?: DestinationPublishResult[];
   /** Provider receipts from superseded publish attempts — history only, never publish input. */
   previousResults?: DestinationPublishResult[];
+  publishReceiptDismissedAt?: string;
 };
 
 /**

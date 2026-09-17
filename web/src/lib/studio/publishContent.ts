@@ -417,6 +417,7 @@ export async function publishContent(
     // any network call — a crash mid-publish then reads as an interrupted attempt
     // rather than as a Content that was never submitted.
     pinDraftStore.updateDraft(draftId, {
+      publishReceiptDismissedAt: undefined,
       publishError: undefined,
       publishIntentId: confirmation.intentId,
       publishIntentPriorIntentId: confirmation.priorIntentId,
@@ -677,6 +678,7 @@ export async function publishContent(
     const totalFailure = !!firstFailure && published.length === 0;
 
     pinDraftStore.updateDraft(draftId, {
+      publishReceiptDismissedAt: undefined,
       destinationResults: results,
       ...(previousResults.length ? { previousResults } : {}),
       socialPosts: legacy.socialPosts,

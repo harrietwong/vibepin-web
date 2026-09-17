@@ -188,6 +188,11 @@ async function main() {
       assert(!/fetch\s*\(\s*["']\/api\/publish\/social/.test(source), `${path} calls social route directly`);
     }
   });
+  await test("unknown delivery invokes the read-only reconcile path instead of a generic retry error", () => {
+    const board = readFileSync(join(process.cwd(), "src/components/studio/StudioBoard.tsx"), "utf8");
+    assert.match(board, /reconcilePublishIntent/);
+    assert.match(board, /outcome\.blocked === "recovery_pending"/);
+  });
   await test("Cancel, Escape, close and backdrop are zero-dispatch UI paths", () => {
     const dialog = readFileSync(join(process.cwd(), "src/components/shared/ConfirmPublishDialog.tsx"), "utf8");
     assert(dialog.includes('event.key === "Escape"'));

@@ -179,6 +179,15 @@ test("previousResults surface as superseded rows under 'Earlier publishes'", () 
   assert.equal(vm.latestPublishedAt, "2026-08-27T12:00:00.000Z");
 });
 
+test("dismissed publish receipts remain visible without reviving attention", () => {
+  const vm = buildCardViewModel(
+    draft({ destinationResults: [pinterestPublished, instagramFailed], publishReceiptDismissedAt: "2026-08-27T12:00:00.000Z" }),
+    "unscheduled",
+  );
+  assert.equal(vm.resultRows.length, 2);
+  assert.equal(vm.needsAttention, false);
+});
+
 test("supersededResults keeps only published rows the fresh attempt replaces", () => {
   const fresh = [{ ...pinterestPublished, remoteId: "pin-2" }, instagramFailed];
   const kept = supersededResults([pinterestPublished, instagramFailed], fresh, []);
