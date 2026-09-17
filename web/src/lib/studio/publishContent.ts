@@ -127,7 +127,12 @@ export function reconciledPublishIntentPatch(draft: PinDraft, reconciled: Publis
     ...prior.filter(row => !reconciledIds.has(row.destinationId)),
     ...reconciled.destinations.map(destination => {
     const existing = prior.find(row => row.destinationId === destination.destinationId);
-    const status = destination.status === "published" || destination.status === "failed" ? destination.status : "delivery_unknown";
+    const incomingStatus = destination.status === "published" || destination.status === "failed" ? destination.status : "delivery_unknown";
+    // Reconcile responses for the same intent can arrive out of order. Provider
+    // confirmation is monotonic: once published, a later ambiguous/failed snapshot
+    // must not turn a real post back into an actionable retry.
+    const status = existing?.status === "published" && incomingStatus !== "published"
+      ? "published" : incomingStatus;
     return {
       ...(existing ?? {}), destinationId: destination.destinationId,
       provider: destination.provider as DestinationPublishResult["provider"],

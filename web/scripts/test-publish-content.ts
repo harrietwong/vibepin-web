@@ -616,6 +616,12 @@ async function main(): Promise<void> {
     assert.equal(patch.publishReceiptDismissedAt, undefined);
     assert.equal(patch.remotePinId, "pin-1");
   });
+  await test("a late same-intent unknown receipt cannot downgrade an already-published destination", () => {
+    const draft = seedDraft({ id: "reconcile-monotonic", destinations: [{ provider: "pinterest", socialConnectionId: PIN_CONN, boardId: "board-1" }] });
+    const published = reconciledPublishIntentPatch(draft, { intentId: "publish:reconcile-monotonic:1", destinations: [{ destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", status: "published", retryAllowed: false, remoteId: "pin-1", remoteUrl: "https://pin/1", evidence: {} }] });
+    const late = reconciledPublishIntentPatch({ ...draft, ...published } as PinDraft, { intentId: "publish:reconcile-monotonic:1", destinations: [{ destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", status: "delivery_unknown", retryAllowed: false, remoteId: null, remoteUrl: null, evidence: {} }] });
+    assert.equal(late.destinationResults?.[0].status, "published");
+  });
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
