@@ -77,11 +77,18 @@ import { interceptCreemCheckout, UUID_RE } from "./helpers/creemCheckout";
  */
 
 const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000";
-const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true });
-const SUPABASE_REF = SUPABASE_URL.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] ?? "e2e-mock";
-const AUTH_COOKIE_NAME = `sb-${SUPABASE_REF}-auth-token`;
+// This regression must key both its seeded cookie and route to the exact project
+// in the browser bundle. Unlike fully mocked REST specs, a placeholder origin
+// would leave getUser() un-intercepted and make the waiting assertion hang.
+// resolveSupabaseTarget() still rejects the production project whenever an env is
+// supplied; without an explicit test-project env this one case is skipped below.
+const STALE_HINT_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+  ? resolveSupabaseTarget()
+  : null;
+const STALE_HINT_SUPABASE_REF = STALE_HINT_SUPABASE_URL?.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] ?? null;
+const STALE_HINT_SKIP_REASON = "needs explicit NEXT_PUBLIC_SUPABASE_URL for the isolated test Supabase project";
 
-function buildPricingSessionCookie(): { name: string; value: string } {
+function buildPricingSessionCookie(supabaseRef: string): { name: string; value: string } {
   const session = {
     access_token: "e2e-pricing-stale-hint-access-token",
     refresh_token: "e2e-pricing-stale-hint-refresh-token",
@@ -98,11 +105,14 @@ function buildPricingSessionCookie(): { name: string; value: string } {
       created_at: new Date().toISOString(),
     },
   };
-  return { name: AUTH_COOKIE_NAME, value: `base64-${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}` };
+  return {
+    name: `sb-${supabaseRef}-auth-token`,
+    value: `base64-${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`,
+  };
 }
 
-async function seedPricingSessionCookie(context: BrowserContext): Promise<void> {
-  const cookie = buildPricingSessionCookie();
+async function seedPricingSessionCookie(context: BrowserContext, supabaseRef: string): Promise<void> {
+  const cookie = buildPricingSessionCookie(supabaseRef);
   await context.addCookies([{ ...cookie, url: BASE_URL, sameSite: "Lax" }]);
 }
 
@@ -242,29 +252,39 @@ test.describe("paid checkout intent (requires CREEM_MODE=test|live)", () => {
 // Billing-agnostic: asserts only the `next` the nav's Log in link carries.
 
 test("pricing header clears a stale cookie hint after the verified lookup fails", async ({ page, context }) => {
-  await seedPricingSessionCookie(context);
+  test.skip(!STALE_HINT_SUPABASE_URL || !STALE_HINT_SUPABASE_REF, STALE_HINT_SKIP_REASON);
+  // test.skip() is a runtime control-flow primitive; retain the explicit guard for
+  // TypeScript and to ensure no placeholder target is ever used by this fixture.
+  if (!STALE_HINT_SUPABASE_URL || !STALE_HINT_SUPABASE_REF) return;
+
+  await seedPricingSessionCookie(context, STALE_HINT_SUPABASE_REF);
   let lookupHits = 0;
-  let releaseLookup: (() => void) | undefined;
   let markLookupStarted: (() => void) | undefined;
-  const lookupReleased = new Promise<void>(resolve => { releaseLookup = resolve; });
+  let releaseAllLookups: (() => void) | undefined;
+  const lookupsReleased = new Promise<void>(resolve => { releaseAllLookups = resolve; });
   const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
-  await page.route(`${SUPABASE_URL}/auth/v1/user**`, async route => {
+  await page.route(`${STALE_HINT_SUPABASE_URL}/auth/v1/user**`, async route => {
     lookupHits += 1;
     markLookupStarted?.();
-    await lookupReleased;
+    await lookupsReleased;
     await route.abort();
   });
 
-  await page.goto("/pricing", { waitUntil: "domcontentloaded" });
-  await lookupStarted;
+  try {
+    await page.goto("/pricing", { waitUntil: "domcontentloaded" });
+    await lookupStarted;
 
-  await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(0);
-  await expect(page.locator('nav a[href="/app/studio"]').last()).toHaveText("Create Pins");
+    await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(0);
+    await expect(page.locator('nav a[href="/app/studio"]').last()).toHaveText("Create Pins");
+  } finally {
+    // App Router Strict Mode may replay the effect, yielding two concurrent
+    // getUser() calls. One shared gate releases every pending route handler.
+    releaseAllLookups?.();
+  }
 
-  releaseLookup?.();
   await expect(page.getByRole("link", { name: /^log in$/i })).toHaveCount(1);
   await expect(page.getByRole("link", { name: /^get started$/i })).toHaveCount(1);
-  expect(lookupHits).toBe(1);
+  expect(lookupHits).toBeGreaterThan(0);
 });
 
 test('plain "Log in" from pricing carries no checkout intent', async ({ page }) => {
