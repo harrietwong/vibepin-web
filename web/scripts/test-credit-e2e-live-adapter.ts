@@ -276,6 +276,9 @@ async function main(): Promise<void> {
       "1 remaining",
     ].join("\n");
     assert.doesNotThrow(() => validateBillingUiText({ currentPlanText: proCurrentPlan, usageText: proUsage }, pro));
+    assert.doesNotThrow(() => validateBillingUiText({ currentPlanText: "Current plan\nProMonthly\nActive", usageText: proUsage }, pro));
+    assert.throws(() => validateBillingUiText({ currentPlanText: "Current plan\nBusinessMonthly\nActive", usageText: proUsage }, pro), /current plan Pro/i);
+    assert.throws(() => validateBillingUiText({ currentPlanText: "Current plan\nProMaxMonthly\nActive", usageText: proUsage }, pro), /current plan Pro/i);
     assert.throws(() => validateBillingUiText({
       currentPlanText: proCurrentPlan,
       usageText: proUsage.replace("AI images 799 / 800 used", "AI images 1799 / 800 used"),
@@ -300,6 +303,14 @@ async function main(): Promise<void> {
       currentPlanText: visibleTextFromFixture(currentPlanDomFixture),
       usageText: visibleTextFromFixture(usageDomFixture),
     }, business));
+    assert.doesNotThrow(() => validateBillingUiText({
+      currentPlanText: "Current plan\nBusinessYearly\nActive",
+      usageText: visibleTextFromFixture(usageDomFixture),
+    }, business));
+    assert.throws(() => validateBillingUiText({
+      currentPlanText: "Current plan\nBusinessQuarterly\nActive",
+      usageText: visibleTextFromFixture(usageDomFixture),
+    }, business), /current plan Business/i);
     assert.throws(() => validateBillingUiText({
       currentPlanText: visibleTextFromFixture(currentPlanDomFixture),
       usageText: visibleTextFromFixture(usageDomFixture).replace("Scheduled posts 2 used", "Scheduled posts 12 used"),

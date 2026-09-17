@@ -311,6 +311,18 @@ function assertUnlimitedBucket(lines: string[], label: string, expectedUsed: num
   }
 }
 
+function isExpectedPlanHeading(observed: string, expectedPlan: string): boolean {
+  const actual = observed.replace(/\s+/g, " ").trim().toLowerCase();
+  const plan = expectedPlan.toLowerCase();
+  return new Set([
+    plan,
+    `${plan}monthly`,
+    `${plan} monthly`,
+    `${plan}yearly`,
+    `${plan} yearly`,
+  ]).has(actual);
+}
+
 export function validateBillingUiText(sections: BillingUiSections, input: CreditE2eRun): void {
   const currentPlanText = typeof sections === "string" ? sections : sections.currentPlanText;
   const usageText = typeof sections === "string" ? sections : sections.usageText;
@@ -325,7 +337,7 @@ export function validateBillingUiText(sections: BillingUiSections, input: Credit
     .find(Boolean);
   const observedPlan = planLabelIndex >= 0 ? planLines[planLabelIndex + 1] : inlinePlan;
   const expectedPlan = planLabel(input.plan);
-  if (!observedPlan || observedPlan.split(/\s+/)[0]?.toLowerCase() !== expectedPlan.toLowerCase()) {
+  if (!observedPlan || !isExpectedPlanHeading(observedPlan, expectedPlan)) {
     throw new Error(`Billing UI is missing expected semantic: current plan ${expectedPlan}`);
   }
 
