@@ -55,7 +55,9 @@ export type ProductOpportunityPartialReason = "incomplete-count";
 
 export type ProductOpportunityViewState =
   | ProductOpportunityCatalogState
+  | "loading"
   | "syncing"
+  | "success"
   | "stale"
   | "api-error"
   | "auth-required";

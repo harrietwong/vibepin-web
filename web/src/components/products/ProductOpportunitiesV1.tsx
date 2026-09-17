@@ -28,38 +28,40 @@ import { ProductImageSurface } from "./ProductImageSurface";
 type Family = "all" | "physical" | "digital";
 type Mode = "catalog" | "saved";
 type SavedState = "loading" | "ready" | "error";
+type Translator = ReturnType<typeof useLocale>["t"];
 const PAGE_SIZE = 48;
 
-function number(value: number): string {
-  return new Intl.NumberFormat("en-US", { notation: value >= 10_000 ? "compact" : "standard" }).format(value);
+function number(value: number, locale: string): string {
+  return new Intl.NumberFormat(locale, { notation: value >= 10_000 ? "compact" : "standard" }).format(value);
 }
 
-function dateTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+function dateTime(value: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
 }
 
-function productDetailsLabel(item: ProductOpportunityItem): string {
+function productDetailsLabel(item: ProductOpportunityItem, tr: Translator): string {
   const name = item.productName?.trim();
   return name
-    ? `Product details: ${name}`
-    : `Product details from ${item.merchant || item.domain || "merchant site"}`;
+    ? `${tr("products.opportunities.productDetails")}: ${name}`
+    : `${tr("products.opportunities.productDetailsFrom")} ${item.merchant || item.domain || tr("products.opportunities.merchantSite")}`;
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  fashion: "Fashion",
-  "home-decor": "Home Decor",
-  "wedding-celebrations": "Wedding & Celebrations",
-  gifts: "Gifts",
-  "jewelry-accessories": "Jewelry & Accessories",
-  "digital-products": "Digital Products",
+const CATEGORY_LABEL_KEYS: Record<string, Parameters<Translator>[0]> = {
+  fashion: "products.opportunities.categoryFashion",
+  "home-decor": "products.opportunities.categoryHomeDecor",
+  "wedding-celebrations": "products.opportunities.categoryWedding",
+  gifts: "products.opportunities.categoryGifts",
+  "jewelry-accessories": "products.opportunities.categoryJewelry",
+  "digital-products": "products.opportunities.categoryDigital",
 };
 
-function categoryLabel(category: string | null): string | null {
+function categoryLabel(category: string | null, tr: Translator): string | null {
   if (!category) return null;
-  return CATEGORY_LABELS[category] ?? null;
+  const key = CATEGORY_LABEL_KEYS[category];
+  return key ? tr(key) : null;
 }
 
 function metricsEnabled(item: ProductOpportunityItem): boolean {
@@ -69,14 +71,15 @@ function metricsEnabled(item: ProductOpportunityItem): boolean {
 }
 
 function Momentum({ item }: { item: ProductOpportunityItem }) {
+  const { t: tr, preferences } = useLocale();
   if (!item.recentMomentum) return null;
   const content = {
-    rising: { icon: ArrowUpRight, text: "Growing faster", className: styles.rising },
-    steady: { icon: Minus, text: "Holding steady", className: styles.steady },
-    cooling: { icon: ArrowDownRight, text: "Slowing recently", className: styles.cooling },
+    rising: { icon: ArrowUpRight, text: tr("products.opportunities.rising"), className: styles.rising },
+    steady: { icon: Minus, text: tr("products.opportunities.steady"), className: styles.steady },
+    cooling: { icon: ArrowDownRight, text: tr("products.opportunities.cooling"), className: styles.cooling },
   }[item.recentMomentum];
   const Icon = content.icon;
-  return <span className={`${styles.momentum} ${content.className}`}><Icon aria-hidden="true" />{content.text}{item.momentumPercent != null ? ` ${Math.abs(item.momentumPercent).toFixed(0)}%` : ""}</span>;
+  return <span className={`${styles.momentum} ${content.className}`}><Icon aria-hidden="true" />{content.text}{item.momentumPercent != null ? ` ${new Intl.NumberFormat(preferences.appLanguage, { maximumFractionDigits: 0 }).format(Math.abs(item.momentumPercent))}%` : ""}</span>;
 }
 
 function ProductImage({ item, large = false }: { item: ProductOpportunityItem; large?: boolean }) {
@@ -114,35 +117,36 @@ type ProductCardProps = {
 };
 
 function ProductCard({ item, saved, saving, savedState, mode, onOpen, onSave, onCreate }: ProductCardProps) {
+  const { t: tr, preferences } = useLocale();
   const showMetrics = metricsEnabled(item);
   return (
     <article className={styles.card} data-testid="product-opportunity-card">
-      <button className={styles.imageButton} onClick={onOpen} aria-label={productDetailsLabel(item)}>
+      <button className={styles.imageButton} onClick={onOpen} aria-label={productDetailsLabel(item, tr)}>
         <ProductImage item={item} />
-        <span className={styles.family}>{item.productFamily === "digital" ? "Digital" : "Physical"}</span>
-        {showMetrics && item.highRecentDemand === true ? <span className={styles.highDemand} title="Based on Pinterest saves gained in the last 30 days">High recent demand</span> : null}
+        <span className={styles.family}>{item.productFamily === "digital" ? tr("products.opportunities.typeDigital") : tr("products.opportunities.typePhysical")}</span>
+        {showMetrics && item.highRecentDemand === true ? <span className={styles.highDemand} title={tr("products.opportunities.highDemandBasis")}>{tr("products.opportunities.highDemand")}</span> : null}
       </button>
       <div className={styles.cardBody}>
-        <div className={styles.sourceLine}><span>{item.merchant || item.domain}</span>{item.productType ? <span>{item.productType}</span> : categoryLabel(item.category) ? <span>{categoryLabel(item.category)}</span> : null}</div>
-        <p className={styles.provenance} data-testid="product-provenance">VibePin product opportunity · {item.pinterestEvidenceType === "product_pin" ? "Product Pin evidence" : "Source Pin evidence"}{item.latestPinterestSnapshotAt ? ` · Updated ${dateTime(item.latestPinterestSnapshotAt)}` : ""}</p>
+        <div className={styles.sourceLine}><span>{item.merchant || item.domain}</span>{item.productType ? <span>{item.productType}</span> : categoryLabel(item.category, tr) ? <span>{categoryLabel(item.category, tr)}</span> : null}</div>
+        <p className={styles.provenance} data-testid="product-provenance">{tr("products.opportunities.provenanceOpportunity")} · {item.pinterestEvidenceType === "product_pin" ? tr("products.opportunities.productPinEvidence") : tr("products.opportunities.sourcePinEvidence")}{item.latestPinterestSnapshotAt ? ` · ${tr("products.opportunities.updated")} ${dateTime(item.latestPinterestSnapshotAt, preferences.appLanguage)}` : ""}</p>
         {item.productName?.trim() ? <button className={styles.cardTitle} onClick={onOpen}>{item.productName}</button> : null}
         {showMetrics && (item.savesGained30d != null || item.latestPinterestSaves != null || item.recentMomentum != null) ? <div className={styles.signalRow}>
           {item.savesGained30d != null ? (
-            <div className={styles.signalBlock}><strong>+{number(item.savesGained30d)}</strong><span>Pinterest saves in 30 days</span></div>
+            <div className={styles.signalBlock}><strong>+{number(item.savesGained30d, preferences.appLanguage)}</strong><span>{tr("products.opportunities.saves30d")}</span></div>
           ) : item.latestPinterestSaves != null ? (
-            <div className={styles.signalBlock}><strong>{number(item.latestPinterestSaves)}</strong><span>Pinterest saves</span></div>
+            <div className={styles.signalBlock}><strong>{number(item.latestPinterestSaves, preferences.appLanguage)}</strong><span>{tr("products.opportunities.pinterestSaves")}</span></div>
           ) : null}
           <Momentum item={item} />
         </div> : null}
         <div className={styles.actions}>
           <button className={`${styles.saveButton} ${savedState === "ready" && saved ? styles.savedButton : ""}`} onClick={onSave} disabled={saving || savedState !== "ready"} aria-pressed={savedState === "ready" ? saved : undefined}>
-            {saving || savedState === "loading" ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}{savedState === "loading" ? "Checking…" : savedState === "error" ? "Check saved items" : saved ? "Saved" : "Save"}
+            {saving || savedState === "loading" ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}{savedState === "loading" ? tr("products.opportunities.checkingSaved") : savedState === "error" ? tr("products.opportunities.checkSaved") : saved ? tr("products.opportunities.saved") : tr("products.opportunities.save")}
           </button>
-          <button className={styles.createButton} onClick={onCreate}><Sparkles aria-hidden="true" />Create Pin</button>
+          <button className={styles.createButton} onClick={onCreate}><Sparkles aria-hidden="true" />{tr("products.opportunities.createPin")}</button>
         </div>
-        <div className={styles.sourceTrail} aria-label="Product and Pinterest links">
-          <a href={item.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "card" })}>Pinterest <ExternalLink aria-hidden="true" /></a>
-          <span aria-hidden="true" /><a href={item.productUrl} target="_blank" rel="noreferrer" onClick={() => track("external_product_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "card" })}>View Product <ExternalLink aria-hidden="true" /></a>
+        <div className={styles.sourceTrail} aria-label={tr("products.opportunities.productLinks")}>
+          <a href={item.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "card" })}>{tr("products.opportunities.pinterest")} <ExternalLink aria-hidden="true" /></a>
+          <span aria-hidden="true" /><a href={item.productUrl} target="_blank" rel="noreferrer" onClick={() => track("external_product_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "card" })}>{tr("products.opportunities.viewProduct")} <ExternalLink aria-hidden="true" /></a>
         </div>
       </div>
     </article>
@@ -154,6 +158,7 @@ function ProductDetail({ item, saved, saving, savedState, mode, detailsLoading, 
   detailsError: string | null;
   onClose: () => void;
 }) {
+  const { t: tr, preferences } = useLocale();
   const showMetrics = metricsEnabled(item);
   const hasMetricFacts = item.savesGained30d != null
     || item.latestPinterestSaves != null
@@ -166,33 +171,33 @@ function ProductDetail({ item, saved, saving, savedState, mode, detailsLoading, 
   }, [onClose]);
   return (
     <div className={styles.modalBackdrop} onMouseDown={onClose}>
-      <section className={styles.modal} role="dialog" aria-modal="true" aria-label={productDetailsLabel(item)} onMouseDown={(event) => event.stopPropagation()}>
-        <button className={styles.closeButton} onClick={onClose} aria-label="Close product details"><X aria-hidden="true" /></button>
+      <section className={styles.modal} role="dialog" aria-modal="true" aria-label={productDetailsLabel(item, tr)} onMouseDown={(event) => event.stopPropagation()}>
+        <button className={styles.closeButton} onClick={onClose} aria-label={tr("products.opportunities.closeDetails")}><X aria-hidden="true" /></button>
         <div className={styles.modalMedia}><ProductImage item={item} large /></div>
         <div className={styles.modalBody}>
           <p className={styles.modalEyebrow}>{item.merchant || item.domain}</p>
           {item.productName?.trim() ? <h2>{item.productName}</h2> : null}
-          <div className={styles.modalTags}><span>{item.productFamily === "digital" ? "Digital product" : "Physical product"}</span>{item.productType ? <span>{item.productType}</span> : null}{categoryLabel(item.category) && categoryLabel(item.category) !== item.productType ? <span>{categoryLabel(item.category)}</span> : null}</div>
+          <div className={styles.modalTags}><span>{item.productFamily === "digital" ? tr("products.opportunities.digitalProduct") : tr("products.opportunities.physicalProduct")}</span>{item.productType ? <span>{item.productType}</span> : null}{categoryLabel(item.category, tr) && categoryLabel(item.category, tr) !== item.productType ? <span>{categoryLabel(item.category, tr)}</span> : null}</div>
           {showMetrics && hasMetricFacts ? <div className={styles.detailSignals}>
-            {item.savesGained30d != null ? <div><span>30-day saves gained</span><strong>+{number(item.savesGained30d)} saves</strong><small>Based on Pinterest saves gained in the last 30 days</small></div> : null}
-            {item.latestPinterestSaves != null ? <div><span>Total Pinterest saves</span><strong>{number(item.latestPinterestSaves)} saves</strong></div> : null}
-            {item.currentSavesGained7d != null ? <div><span>Current 7 days</span><strong>+{number(item.currentSavesGained7d)} saves</strong></div> : null}
-            {item.previousSavesGained7d != null ? <div><span>Previous 7 days</span><strong>+{number(item.previousSavesGained7d)} saves</strong></div> : null}
-            {item.recentMomentum ? <div><span>Recent direction</span><strong><Momentum item={item} /></strong><small>Compares the latest 7 days with the 7 days before</small></div> : null}
-            {item.latestPinterestSnapshotAt ? <div><span>Last updated</span><strong>{dateTime(item.latestPinterestSnapshotAt)}</strong></div> : null}
+            {item.savesGained30d != null ? <div><span>{tr("products.opportunities.saves30dGained")}</span><strong>+{number(item.savesGained30d, preferences.appLanguage)} {tr("products.opportunities.saves")}</strong><small>{tr("products.opportunities.saves30dBasis")}</small></div> : null}
+            {item.latestPinterestSaves != null ? <div><span>{tr("products.opportunities.totalPinterestSaves")}</span><strong>{number(item.latestPinterestSaves, preferences.appLanguage)} {tr("products.opportunities.saves")}</strong></div> : null}
+            {item.currentSavesGained7d != null ? <div><span>{tr("products.opportunities.current7d")}</span><strong>+{number(item.currentSavesGained7d, preferences.appLanguage)} {tr("products.opportunities.saves")}</strong></div> : null}
+            {item.previousSavesGained7d != null ? <div><span>{tr("products.opportunities.previous7d")}</span><strong>+{number(item.previousSavesGained7d, preferences.appLanguage)} {tr("products.opportunities.saves")}</strong></div> : null}
+            {item.recentMomentum ? <div><span>{tr("products.opportunities.recentDirection")}</span><strong><Momentum item={item} /></strong><small>{tr("products.opportunities.momentumBasis")}</small></div> : null}
+            {item.latestPinterestSnapshotAt ? <div><span>{tr("products.opportunities.lastUpdated")}</span><strong>{dateTime(item.latestPinterestSnapshotAt, preferences.appLanguage)}</strong></div> : null}
           </div> : null}
-          <div className={styles.modalLinks}><a href={item.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal", reference: "primary" })}>{item.pinterestEvidenceType === "product_pin" ? "Product Pin on Pinterest" : "Source Pin on Pinterest"} <ExternalLink aria-hidden="true" /></a></div>
-          {detailsLoading ? <p className={styles.referenceStatus}><Loader2 className={styles.spin} aria-hidden="true" />Loading more Pinterest references…</p> : null}
-          {detailsError ? <p className={styles.referenceStatus}>More Pinterest references could not be loaded.</p> : null}
-          {item.additionalPinterestEvidence.length > 0 ? <section className={styles.additionalReferences} aria-label="More Pinterest references">
-            <h3>More Pinterest references</h3>
-            <div>{item.additionalPinterestEvidence.map((reference, index) => <a key={`${reference.pinterestUrl}:${index}`} href={reference.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal", reference: "additional" })}>{reference.pinterestEvidenceType === "product_pin" ? "Product Pin reference" : "Source Pin reference"} <ExternalLink aria-hidden="true" /></a>)}</div>
-            <p>These links help verify the product. Trend figures use only the primary Pinterest reference above.</p>
+          <div className={styles.modalLinks}><a href={item.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal", reference: "primary" })}>{item.pinterestEvidenceType === "product_pin" ? tr("products.opportunities.productPinOnPinterest") : tr("products.opportunities.sourcePinOnPinterest")} <ExternalLink aria-hidden="true" /></a></div>
+          {detailsLoading ? <p className={styles.referenceStatus}><Loader2 className={styles.spin} aria-hidden="true" />{tr("products.opportunities.loadingReferences")}</p> : null}
+          {detailsError ? <p className={styles.referenceStatus}>{tr("products.opportunities.referencesError")}</p> : null}
+          {item.additionalPinterestEvidence.length > 0 ? <section className={styles.additionalReferences} aria-label={tr("products.opportunities.moreReferences")}>
+            <h3>{tr("products.opportunities.moreReferences")}</h3>
+            <div>{item.additionalPinterestEvidence.map((reference, index) => <a key={`${reference.pinterestUrl}:${index}`} href={reference.pinterestUrl} target="_blank" rel="noreferrer" onClick={() => track("pinterest_evidence_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal", reference: "additional" })}>{reference.pinterestEvidenceType === "product_pin" ? tr("products.opportunities.productPinReference") : tr("products.opportunities.sourcePinReference")} <ExternalLink aria-hidden="true" /></a>)}</div>
+            <p>{tr("products.opportunities.additionalEvidenceNote")}</p>
           </section> : null}
-          <div className={styles.modalLinks}><a href={item.productUrl} target="_blank" rel="noreferrer" onClick={() => track("external_product_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal" })}>View product page <ExternalLink aria-hidden="true" /></a></div>
+          <div className={styles.modalLinks}><a href={item.productUrl} target="_blank" rel="noreferrer" onClick={() => track("external_product_clicked", { productOpportunityId: item.id, productFamily: item.productFamily, mode, surface: "modal" })}>{tr("products.opportunities.viewProductPage")} <ExternalLink aria-hidden="true" /></a></div>
           <div className={styles.modalActions}>
-            <button className={`${styles.saveButton} ${savedState === "ready" && saved ? styles.savedButton : ""}`} onClick={onSave} disabled={saving || savedState !== "ready"} aria-pressed={savedState === "ready" ? saved : undefined}>{saving || savedState === "loading" ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}{savedState === "loading" ? "Checking…" : savedState === "error" ? "Check saved items" : saved ? "Saved" : "Save"}</button>
-            <button className={styles.createButton} onClick={onCreate}><Sparkles aria-hidden="true" />Create Pin</button>
+            <button className={`${styles.saveButton} ${savedState === "ready" && saved ? styles.savedButton : ""}`} onClick={onSave} disabled={saving || savedState !== "ready"} aria-pressed={savedState === "ready" ? saved : undefined}>{saving || savedState === "loading" ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}{savedState === "loading" ? tr("products.opportunities.checkingSaved") : savedState === "error" ? tr("products.opportunities.checkSaved") : saved ? tr("products.opportunities.saved") : tr("products.opportunities.save")}</button>
+            <button className={styles.createButton} onClick={onCreate}><Sparkles aria-hidden="true" />{tr("products.opportunities.createPin")}</button>
           </div>
         </div>
       </section>
@@ -203,18 +208,19 @@ function ProductDetail({ item, saved, saving, savedState, mode, detailsLoading, 
 function SavedPlaceholder({ record, removing, onRemove }: {
   record: SavedProductOpportunity; removing: boolean; onRemove: () => void;
 }) {
+  const { t: tr, preferences } = useLocale();
   const upgrade = record.requiresUpgrade;
   const history = record.historyItem;
   return (
     <article className={styles.historyCard} data-testid="saved-product-history-card">
       {history ? <div className={styles.historyImage}><ProductImage item={history} /></div> : <div className={styles.historyIcon}><Heart aria-hidden="true" /></div>}
       <div>
-        <strong>{upgrade ? "Upgrade to view this saved item" : history?.productName?.trim() || "Saved item"}</strong>
-        <p>{upgrade ? "Your saved record is still here. A paid plan restores the product details." : "This product is no longer in the discovery catalog. We kept the product and Pinterest references you saved."}</p>
-        <small>Saved {new Date(record.savedAt).toLocaleDateString()}</small>
-        {history ? <div className={styles.historyLinks}><a href={history.productUrl} target="_blank" rel="noreferrer">Previous product page <ExternalLink aria-hidden="true" /></a><a href={history.pinterestUrl} target="_blank" rel="noreferrer">Pinterest reference <ExternalLink aria-hidden="true" /></a></div> : null}
+        <strong>{upgrade ? tr("products.opportunities.upgradeSaved") : history?.productName?.trim() || tr("products.opportunities.savedItem")}</strong>
+        <p>{upgrade ? tr("products.opportunities.upgradeSavedBody") : tr("products.opportunities.historySavedBody")}</p>
+        <small>{tr("products.opportunities.savedOn")} {new Intl.DateTimeFormat(preferences.appLanguage, { dateStyle: "medium" }).format(new Date(record.savedAt))}</small>
+        {history ? <div className={styles.historyLinks}><a href={history.productUrl} target="_blank" rel="noreferrer">{tr("products.opportunities.previousProductPage")} <ExternalLink aria-hidden="true" /></a><a href={history.pinterestUrl} target="_blank" rel="noreferrer">{tr("products.opportunities.pinterestReference")} <ExternalLink aria-hidden="true" /></a></div> : null}
       </div>
-      <div className={styles.historyActions}>{upgrade ? <Link href="/pricing">View plans <ArrowRight aria-hidden="true" /></Link> : null}<button onClick={onRemove} disabled={removing}>{removing ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}Remove</button></div>
+      <div className={styles.historyActions}>{upgrade ? <Link href="/pricing">{tr("products.opportunities.viewPlans")} <ArrowRight aria-hidden="true" /></Link> : null}<button onClick={onRemove} disabled={removing}>{removing ? <Loader2 className={styles.spin} aria-hidden="true" /> : <Heart aria-hidden="true" />}{tr("products.opportunities.remove")}</button></div>
     </article>
   );
 }
@@ -258,7 +264,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     if (append) setLoadingMore(true);
     else setLoading(true);
     setError(null);
-    setDataState("syncing");
+    setDataState(items.length > 0 ? "syncing" : "loading");
     try {
       const result = await fetchProductOpportunities({
         limit: PAGE_SIZE,
@@ -296,13 +302,13 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   }, [family, filters, items.length, sort]);
 
   const loadSaved = useCallback(async () => {
-    setLoading(true); setSavedState("loading"); setError(null); setDataState("syncing");
+    setLoading(true); setSavedState("loading"); setError(null); setDataState(savedRecordsRef.current.length > 0 ? "syncing" : "loading");
     try {
       const records = await fetchSavedProductOpportunities();
       savedRecordsRef.current = records;
       setSavedRecords(records); setSavedIds(new Set(records.map((record) => record.productOpportunityId)));
       setSavedState("ready");
-      setDataState(records.length > 0 ? "ready" : "catalog-empty");
+      setDataState(records.length > 0 ? "success" : "catalog-empty");
       if (!savedViewTracked.current) {
         savedViewTracked.current = true;
         track("saved_products_viewed", { savedCount: records.length });
@@ -363,7 +369,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       };
       if (next) track("product_saved", analyticsPayload);
       else track("product_unsaved", analyticsPayload);
-      toast.success(next ? "Saved to Saved Products" : "Removed from Saved Products");
+      toast.success(next ? tr("products.opportunities.savedToast") : tr("products.opportunities.removedToast"));
       if (mode === "saved") await loadSaved();
     }
     catch (reason) {
@@ -375,7 +381,7 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       });
       setError(productOpportunityErrorInfo(reason));
     } finally { setSavingIds((current) => { const updated = new Set(current); updated.delete(item.id); return updated; }); }
-  }, [loadSaved, mode, savedIds, savedState, savingIds]);
+  }, [loadSaved, mode, savedIds, savedState, savingIds, tr]);
 
   const removeSavedHistory = useCallback(async (productOpportunityId: string) => {
     if (savingIds.has(productOpportunityId)) return;
@@ -383,14 +389,14 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     try {
       await setProductOpportunitySaved(productOpportunityId, false);
       track("product_unsaved", { productOpportunityId, mode: "saved", surface: "history" });
-      toast.success("Removed from Saved Products");
+      toast.success(tr("products.opportunities.removedToast"));
       await loadSaved();
     } catch (reason) {
       setError(productOpportunityErrorInfo(reason));
     } finally {
       setSavingIds((current) => { const updated = new Set(current); updated.delete(productOpportunityId); return updated; });
     }
-  }, [loadSaved, savingIds]);
+  }, [loadSaved, savingIds, tr]);
 
   const createPin = useCallback(async (item: ProductOpportunityItem) => {
     track("create_pin_from_product_clicked", {
@@ -406,12 +412,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         buildPrefillFromProductOpportunity(item),
         token,
       );
-      toast.success("Product added to Create Pins");
+      toast.success(tr("products.opportunities.addedToCreatePins"));
     } catch {
-      setError(productOpportunityErrorInfo(new Error("This product could not be added to Create Pins. Please try again.")));
-      toast.error("Could not add product to Create Pins");
+      setError(productOpportunityErrorInfo(new Error(tr("products.opportunities.createPinError"))));
+      toast.error(tr("products.opportunities.createPinError"));
     }
-  }, [mode, router]);
+  }, [mode, router, tr]);
   const openDetails = useCallback(async (item: ProductOpportunityItem) => {
     const detailRequestId = ++detailRequestSequence.current;
     track("product_card_opened", { productOpportunityId: item.id, productFamily: item.productFamily, mode });
@@ -425,12 +431,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
       }
     } catch (reason) {
       if (detailRequestId === detailRequestSequence.current) {
-        setDetailsError(reason instanceof Error ? reason.message : "Product details could not be loaded");
+        setDetailsError(reason instanceof Error ? reason.message : tr("products.opportunities.detailsError"));
       }
     } finally {
       if (detailRequestId === detailRequestSequence.current) setDetailsLoading(false);
     }
-  }, [mode]);
+  }, [mode, tr]);
   const catalogRows = mode === "catalog" ? items : visibleSaved.flatMap((record) => record.item ? [record.item] : []);
   const canLoadMore = mode === "catalog" && planAccess === "full" && items.length < accessibleCount;
   const chooseFamily = (value: Family) => {
@@ -477,13 +483,13 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   return (
     <main className={styles.page}>
       <header className={styles.header}>
-        <div><p className={styles.eyebrow}>{mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}</p><h1>{mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}</h1><p className={styles.subtitle}>{mode === "saved" ? tr("products.opportunities.savedSubtitle") : tr("products.opportunities.subtitle")}</p></div>
+        <div><h1>{mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}</h1><p className={styles.subtitle}>{mode === "saved" ? tr("products.opportunities.savedSubtitle") : tr("products.opportunities.subtitle")}</p></div>
         <Link className={styles.headerLink} href={mode === "saved" ? "/app/products" : "/app/products/saved"}>{mode === "saved" ? <PackageOpen aria-hidden="true" /> : <Heart aria-hidden="true" />}{mode === "saved" ? tr("products.opportunities.browse") : tr("products.opportunities.savedTitle")}</Link>
       </header>
       {mode === "catalog" ? <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
-        <div className={styles.familyFilter} role="group" aria-label={tr("products.opportunities.filterProductType")}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div>
+        <div className={styles.familyFilter} role="radiogroup" aria-label={tr("products.opportunities.filterProductType")}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" role="radio" aria-checked={family === value} key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div>
         <label className={styles.searchField}><Search aria-hidden="true" /><input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} placeholder={tr("products.opportunities.searchPlaceholder")} aria-label={tr("products.opportunities.searchLabel")} /></label>
-        <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABEL_KEYS).map(([value, key]) => <option key={value} value={value}>{tr(key)}</option>)}</select></label>
         <label><span>{tr("products.opportunities.platform")}</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder={tr("products.opportunities.allPlatforms")} /></label>
         <datalist id="product-opportunity-platforms">{platformSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
         {metricControls.available ? <label><span>{tr("products.opportunities.demand")}</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">{tr("products.opportunities.allDemand")}</option><option value="high_recent_demand">{tr("products.opportunities.highDemand")}</option></select></label> : null}
@@ -491,16 +497,16 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <label><span>{tr("products.opportunities.sort")}</span><select value={sort} onChange={(event) => { const value = event.target.value; setSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
         <button type="submit">{tr("products.opportunities.apply")}</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}
-      </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><div className={styles.familyFilter}><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div></div>}
+      </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><div className={styles.familyFilter} role="radiogroup"><span>{tr("products.opportunities.productType")}</span><div>{(["all", "physical", "digital"] as const).map((value) => <button type="button" role="radio" aria-checked={family === value} key={value} className={family === value ? styles.activeFilter : ""} onClick={() => chooseFamily(value)}>{value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")}</button>)}</div></div></div>}
       {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>{tr("products.opportunities.retry")}</button></div> : null}
       {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">{tr("products.opportunities.savedCheckError")}<button onClick={() => void loadCatalogSavedState()}>{tr("products.opportunities.retry")}</button></div> : null}
       {showStatusNotice ? <div className={styles.statusNotice} data-testid={`product-state-${dataState}`} role="status">{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : dataState === "stale" ? tr("products.opportunities.stateStale") : dataState === "partial" ? tr("products.opportunities.statePartial") : ""}{lastEvidence ? <small>{tr("products.opportunities.evidenceRequest")} {lastEvidence.requestId} · {tr("products.opportunities.evidenceTime")} {lastEvidence.occurredAt}</small> : null}</div> : null}
-      {loading ? <div className={styles.loading}><Loader2 className={styles.spin} aria-hidden="true" /><span>{tr("products.opportunities.stateSyncing")}</span></div>
+      {loading ? <div className={styles.loading} data-testid={`product-state-${dataState}`} aria-live="polite"><Loader2 className={styles.spin} aria-hidden="true" /><span>{dataState === "syncing" ? tr("products.opportunities.stateSyncing") : tr("products.opportunities.stateLoading")}</span></div>
         : dataRequestFailed && catalogRows.length === 0 ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{dataState === "auth-required" ? tr("products.opportunities.authRequiredTitle") : tr("products.opportunities.apiErrorTitle")}</h2><p>{dataState === "auth-required" ? tr("products.opportunities.authRequiredBody") : tr("products.opportunities.apiErrorBody")}</p></div>
-        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? "No saved products match this product type" : "No saved products yet" : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? "Choose All products to see every saved item." : "Save an opportunity to keep it here for later." : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>
-        : <><section className={styles.grid} aria-label={mode === "saved" ? "Saved products" : "Product opportunities"}>{catalogRows.map((item) => <ProductCard key={item.id} item={item} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)} savedState={savedState} mode={mode} onOpen={() => void openDetails(item)} onSave={() => void toggleSaved(item)} onCreate={() => createPin(item)} />)}</section>{mode === "saved" ? visibleSaved.filter((record) => !record.item).map((record) => <SavedPlaceholder key={record.productOpportunityId} record={record} removing={savingIds.has(record.productOpportunityId)} onRemove={() => void removeSavedHistory(record.productOpportunityId)} />) : null}</>}
-      {hasLockedCatalog && mode === "catalog" ? <aside className={styles.upgradePanel}><div><Heart aria-hidden="true" /><span>Free includes 10 complete Product Opportunities</span></div><p>Paid plans unlock the full catalog while keeping the same real product and trend data.</p><Link href="/pricing">View plans <ArrowRight aria-hidden="true" /></Link></aside> : null}
-      {canLoadMore ? <button className={styles.loadMore} onClick={() => void loadCatalog(true)} disabled={loadingMore}>{loadingMore ? <Loader2 className={styles.spin} aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}{loadingMore ? "Loading…" : "Load more"}</button> : null}
+        : catalogRows.length === 0 && (mode !== "saved" || visibleSaved.length === 0) ? <div className={styles.empty} data-testid={`product-state-${dataState}`}><PackageOpen aria-hidden="true" /><h2>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyTitle") : tr("products.opportunities.savedEmptyTitle") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyTitle") : tr("products.opportunities.catalogEmptyTitle")}</h2><p>{mode === "saved" ? savedFamilyHasNoMatches ? tr("products.opportunities.savedFilteredEmptyBody") : tr("products.opportunities.savedEmptyBody") : dataState === "filtered-empty" || hasCatalogFilters ? tr("products.opportunities.filteredEmptyBody") : tr("products.opportunities.catalogEmptyBody")}</p>{mode === "saved" ? savedFamilyHasNoMatches ? <button type="button" onClick={() => chooseFamily("all")}>{tr("products.opportunities.showAllSaved")}</button> : <Link href="/app/products">{tr("products.opportunities.title")}</Link> : hasCatalogFilters ? <button type="button" onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}</div>
+        : <><section className={styles.grid} aria-label={mode === "saved" ? tr("products.opportunities.savedTitle") : tr("products.opportunities.title")}>{catalogRows.map((item) => <ProductCard key={item.id} item={item} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)} savedState={savedState} mode={mode} onOpen={() => void openDetails(item)} onSave={() => void toggleSaved(item)} onCreate={() => createPin(item)} />)}</section>{mode === "saved" ? visibleSaved.filter((record) => !record.item).map((record) => <SavedPlaceholder key={record.productOpportunityId} record={record} removing={savingIds.has(record.productOpportunityId)} onRemove={() => void removeSavedHistory(record.productOpportunityId)} />) : null}</>}
+      {hasLockedCatalog && mode === "catalog" ? <aside className={styles.upgradePanel}><div><Heart aria-hidden="true" /><span>{tr("products.opportunities.upgradeTitle")}</span></div><p>{tr("products.opportunities.upgradeBody")}</p><Link href="/pricing">{tr("products.opportunities.viewPlans")} <ArrowRight aria-hidden="true" /></Link></aside> : null}
+      {canLoadMore ? <button className={styles.loadMore} onClick={() => void loadCatalog(true)} disabled={loadingMore}>{loadingMore ? <Loader2 className={styles.spin} aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}{loadingMore ? tr("products.opportunities.loadingMore") : tr("products.opportunities.loadMore")}</button> : null}
       {selected ? <ProductDetail item={selected} saved={savedIds.has(selected.id)} saving={savingIds.has(selected.id)} savedState={savedState} mode={mode} detailsLoading={detailsLoading} detailsError={detailsError} onClose={() => { detailRequestSequence.current += 1; setSelected(null); setDetailsLoading(false); setDetailsError(null); }} onOpen={() => undefined} onSave={() => void toggleSaved(selected)} onCreate={() => createPin(selected)} /> : null}
     </main>
   );

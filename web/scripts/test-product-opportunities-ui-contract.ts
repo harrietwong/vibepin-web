@@ -85,9 +85,11 @@ test("Partial, stale, and syncing data stay visible as status, never fabricated 
 
 test("All, Physical, and Digital live in one filter bar", () => {
   assert.match(component, /className=\{styles\.filters\}/);
-  assert.match(component, /All products/);
-  assert.match(component, /Physical/);
-  assert.match(component, /Digital/);
+  assert.match(component, /role="radio"/);
+  assert.match(component, /aria-checked=\{family === value\}/);
+  assert.match(enMessages, /products\.opportunities\.typeAll/);
+  assert.match(zhCNMessages, /products\.opportunities\.typePhysical/);
+  assert.match(zhTWMessages, /products\.opportunities\.typeDigital/);
   assert.doesNotMatch(component, /className=\{styles\.toolbar\}/);
   assert.match(styles, /@media\(max-width:430px\)[\s\S]*filters/);
   assert.match(styles, /\.filters\{display:flex;flex-wrap:nowrap;/);
@@ -166,14 +168,21 @@ async function runBehaviorTests() {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon";
   process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service";
   const { classifyProductOpportunityState } = await import("../src/lib/server/productOpportunities");
-  const { productOpportunityViewState } = await import("../src/lib/productOpportunitiesClient");
+  const {
+    decodeProductOpportunityDetailResponse,
+    decodeProductOpportunityListResponse,
+    decodeSavedProductOpportunitiesResponse,
+    decodeProductOpportunitySaveResponse,
+    productOpportunityViewState,
+  } = await import("../src/lib/productOpportunitiesClient");
+  const { getMessages } = await import("../src/lib/i18n/messages");
   test("State classifier distinguishes empty, filtered-empty, and incomplete-count partial", () => {
     assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: false, totalCount: 0 }), "catalog-empty");
     assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: true, totalCount: 0 }), "filtered-empty");
     assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: null }), "partial");
     assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: 2 }), "ready");
   });
-test("Client state distinguishes auth/api errors, stale, and syncing", () => {
+  test("Client state distinguishes auth/api errors, stale, and syncing", () => {
     const base = {
       message: "Product opportunities could not be loaded",
       method: "GET",
@@ -187,10 +196,98 @@ test("Client state distinguishes auth/api errors, stale, and syncing", () => {
     };
     assert.equal(productOpportunityViewState(null, base, true), "stale");
     assert.equal(productOpportunityViewState(null, base, false), "api-error");
-    assert.equal(productOpportunityViewState(null, { ...base, code: "AUTH_REQUIRED" }, false), "auth-required");
+  assert.equal(productOpportunityViewState(null, { ...base, code: "AUTH_REQUIRED" }, false), "auth-required");
+  assert.equal(productOpportunityViewState(null, null, false), "loading");
+  assert.equal(productOpportunityViewState({
+    items: [], accessibleCount: 0, hasLockedCatalog: false,
+    metricControls: { available: false, family: null, metricVersion: null },
+    planAccess: "full", state: "ready", stateReason: null, evidence: {
+      method: "GET", path: "/api/product-opportunities", status: 200,
+      requestId: "req-test", occurredAt: "2026-09-17T00:00:00.000Z", runtime: null, deployment: null,
+    },
+  }, null, false), "success");
   assert.equal(productOpportunityViewState(null, null, false, true), "syncing");
   assert.match(component, /productOpportunityViewState\(null, info, savedRecordsRef\.current\.length > 0\)/);
 });
+  test("Product opportunity copy is translated in the active locale", () => {
+    const keys = [
+      "products.opportunities.title",
+      "products.opportunities.typeAll",
+      "products.opportunities.createPin",
+      "products.opportunities.catalogEmptyTitle",
+      "products.opportunities.savedFilteredEmptyBody",
+    ] as const;
+    for (const key of keys) {
+      const english = getMessages("en")[key];
+      assert.notEqual(getMessages("zh-CN")[key], english, `zh-CN must translate ${key}`);
+      assert.notEqual(getMessages("zh-TW")[key], english, `zh-TW must translate ${key}`);
+    }
+  });
+  const evidence = {
+    method: "GET",
+    path: "/api/product-opportunities",
+    status: 200,
+    requestId: "req-test",
+    occurredAt: "2026-09-17T00:00:00.000Z",
+    runtime: "caf0ef06d860",
+    deployment: "dpl_test",
+  };
+  const item = {
+    id: "opp-1",
+    productName: "Woven basket",
+    productImageUrl: "https://example.com/product.jpg",
+    productUrl: "https://example.com/product",
+    merchant: "Example",
+    domain: "example.com",
+    category: "home-decor",
+    productType: "basket",
+    productFamily: "physical" as const,
+    pinterestUrl: "https://www.pinterest.com/pin/1",
+    pinterestEvidenceType: "product_pin" as const,
+    additionalPinterestEvidence: [],
+    latestPinterestSaves: null,
+    latestPinterestSnapshotAt: null,
+    savesGained30d: null,
+    currentSavesGained7d: null,
+    previousSavesGained7d: null,
+    highRecentDemand: null,
+    recentMomentum: null,
+    momentumPercent: null,
+  };
+  const listPayload = {
+    items: [item],
+    accessibleCount: 1,
+    hasLockedCatalog: false,
+    metricControls: { available: false, family: null, metricVersion: null },
+    planAccess: "full" as const,
+    state: "ready" as const,
+    stateReason: null,
+    evidence,
+  };
+  test("2xx list/detail/saved payloads are decoded, not cast", () => {
+    assert.deepEqual(decodeProductOpportunityListResponse(listPayload, "/api/product-opportunities", "GET", 200), listPayload);
+    assert.deepEqual(decodeProductOpportunityDetailResponse({ item, evidence: { ...evidence, path: "/api/product-opportunities/opp-1" } }, "/api/product-opportunities/opp-1", "GET", 200).item, item);
+    assert.deepEqual(decodeSavedProductOpportunitiesResponse({ items: [], evidence: { ...evidence, path: "/api/saved-product-opportunities" } }, "/api/saved-product-opportunities", "GET", 200).items, []);
+    assert.deepEqual(decodeProductOpportunitySaveResponse({ saved: true, evidence: { ...evidence, method: "POST", path: "/api/saved-product-opportunities", status: 201 } }, "/api/saved-product-opportunities", "POST", 201).saved, true);
+  });
+  test("invalid 2xx payloads fail closed as INVALID_RESPONSE", () => {
+    assert.throws(
+      () => decodeProductOpportunityListResponse({ ...listPayload, state: undefined }, "/api/product-opportunities?search=secret", "GET", 200),
+      (error: unknown) => error instanceof Error && /invalid response/i.test(error.message) && (error as { info?: { code?: string; path?: string } }).info?.code === "INVALID_RESPONSE" && (error as { info?: { path?: string } }).info?.path === "/api/product-opportunities",
+    );
+    assert.throws(
+      () => decodeProductOpportunityDetailResponse({ item }, "/api/product-opportunities/opp-1?token=secret", "GET", 200),
+      (error: unknown) => error instanceof Error && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+    );
+    assert.throws(
+      () => decodeSavedProductOpportunitiesResponse({ items: {} }, "/api/saved-product-opportunities", "GET", 200),
+      (error: unknown) => error instanceof Error && (error as { info?: { code?: string } }).info?.code === "INVALID_RESPONSE",
+    );
+  });
+  test("evidence is real and request paths never expose query strings", () => {
+    assert.throws(() => decodeProductOpportunityListResponse({ ...listPayload, evidence: { ...evidence, method: "", path: "/api/product-opportunities?secret=1" } }, "/api/product-opportunities", "GET", 200));
+    assert.throws(() => decodeProductOpportunityListResponse({ ...listPayload, evidence: { ...evidence, status: 0 } }, "/api/product-opportunities", "GET", 200));
+  });
   console.log(`\nProduct Opportunities 0905 UI contract: ${passed} passed, 0 failed`);
 }
 

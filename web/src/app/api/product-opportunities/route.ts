@@ -55,7 +55,7 @@ export async function GET(request: Request) {
       { method: request.method, path: url.pathname },
     );
   } catch (error) {
-    console.error("[product-opportunities GET]", error instanceof Error ? error.message : error);
+    console.error(`[product-opportunities GET][${requestId}]`, error instanceof Error ? error.message : "unknown error");
     if (error instanceof ProductMetricControlsNotReadyError) {
       return productApiError(requestId, "METRIC_FILTER_NOT_READY", error.message, 400, evidenceRequest);
     }

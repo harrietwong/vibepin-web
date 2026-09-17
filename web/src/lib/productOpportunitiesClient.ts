@@ -21,6 +21,250 @@ export type ProductOpportunityResponseEvidence = {
   deployment: string | null;
 };
 
+const PRODUCT_CATALOG_STATES = new Set<ProductOpportunityCatalogState>([
+  "ready", "partial", "catalog-empty", "filtered-empty",
+]);
+const PRODUCT_API_ERROR_CODES = new Set<ProductOpportunityApiErrorCode>([
+  "AUTH_REQUIRED", "CATALOG_FORBIDDEN", "METRIC_FILTER_NOT_READY", "PRODUCT_NOT_FOUND",
+  "RATE_LIMITED", "CATALOG_UNAVAILABLE", "NETWORK_ERROR", "REQUEST_TIMEOUT",
+  "INVALID_RESPONSE", "WRONG_ENVIRONMENT",
+]);
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function safeProductOpportunityPath(path: string): string {
+  try {
+    return new URL(path, "http://product-opportunity.local").pathname || "/";
+  } catch {
+    return path.split(/[?#]/, 1)[0] || "/";
+  }
+}
+
+function invalidResponse(
+  path: string,
+  method: string,
+  status: number,
+  requestId: string | null = null,
+): ProductOpportunityClientError {
+  return clientError(
+    "The product service returned an invalid response",
+    safeProductOpportunityPath(path),
+    "INVALID_RESPONSE",
+    status,
+    requestId,
+    method,
+  );
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function decodeEvidence(
+  value: unknown,
+  path: string,
+  method: string,
+  status: number,
+): ProductOpportunityResponseEvidence {
+  const expectedPath = safeProductOpportunityPath(path);
+  if (!isRecord(value)) throw invalidResponse(path, method, status);
+  const evidencePath = value.path;
+  const evidenceMethod = value.method;
+  if (
+    typeof evidenceMethod !== "string"
+    || !/^[A-Z]+$/.test(evidenceMethod)
+    || evidenceMethod !== method.toUpperCase()
+    || typeof evidencePath !== "string"
+    || evidencePath !== expectedPath
+    || /[?#]/.test(evidencePath)
+    || !Number.isInteger(value.status)
+    || (value.status as number) < 100
+    || (value.status as number) > 599
+    || value.status !== status
+    || typeof value.requestId !== "string"
+    || !value.requestId.trim()
+    || !isIsoDate(value.occurredAt)
+    || !(value.runtime === null || typeof value.runtime === "string")
+    || !(value.deployment === null || typeof value.deployment === "string")
+  ) {
+    throw invalidResponse(path, method, status, typeof value.requestId === "string" ? value.requestId : null);
+  }
+  return {
+    method: evidenceMethod,
+    path: evidencePath,
+    status: value.status,
+    requestId: value.requestId,
+    occurredAt: value.occurredAt,
+    runtime: value.runtime,
+    deployment: value.deployment,
+  };
+}
+
+function decodeEvidenceFromPayload(
+  payload: UnknownRecord,
+  path: string,
+  method: string,
+  status: number,
+): ProductOpportunityResponseEvidence {
+  return decodeEvidence(payload.evidence, path, method, status);
+}
+
+function isProductOpportunityItem(value: unknown): value is ProductOpportunityItem {
+  if (!isRecord(value)) return false;
+  const family = value.productFamily;
+  const evidenceType = value.pinterestEvidenceType;
+  const momentum = value.recentMomentum;
+  const additional = value.additionalPinterestEvidence;
+  return typeof value.id === "string" && value.id.trim().length > 0
+    && isNullableString(value.productName)
+    && typeof value.productImageUrl === "string" && value.productImageUrl.trim().length > 0
+    && typeof value.productUrl === "string" && value.productUrl.trim().length > 0
+    && isNullableString(value.merchant) && isNullableString(value.domain)
+    && isNullableString(value.category) && isNullableString(value.productType)
+    && (family === "physical" || family === "digital")
+    && typeof value.pinterestUrl === "string" && value.pinterestUrl.trim().length > 0
+    && (evidenceType === "product_pin" || evidenceType === "source_pin")
+    && Array.isArray(additional)
+    && additional.every((entry) => isRecord(entry)
+      && typeof entry.pinterestUrl === "string" && entry.pinterestUrl.trim().length > 0
+      && (entry.pinterestEvidenceType === "product_pin" || entry.pinterestEvidenceType === "source_pin"))
+    && (value.latestPinterestSaves === null || (typeof value.latestPinterestSaves === "number" && Number.isFinite(value.latestPinterestSaves)))
+    && (value.latestPinterestSnapshotAt === null || isIsoDate(value.latestPinterestSnapshotAt))
+    && (value.savesGained30d === null || (typeof value.savesGained30d === "number" && Number.isFinite(value.savesGained30d)))
+    && (value.currentSavesGained7d === null || (typeof value.currentSavesGained7d === "number" && Number.isFinite(value.currentSavesGained7d)))
+    && (value.previousSavesGained7d === null || (typeof value.previousSavesGained7d === "number" && Number.isFinite(value.previousSavesGained7d)))
+    && (value.highRecentDemand === null || typeof value.highRecentDemand === "boolean")
+    && (momentum === null || momentum === "rising" || momentum === "steady" || momentum === "cooling")
+    && (value.momentumPercent === null || (typeof value.momentumPercent === "number" && Number.isFinite(value.momentumPercent)));
+}
+
+function decodeMetricControls(value: unknown): ProductOpportunityListResult["metricControls"] {
+  if (!isRecord(value)
+    || typeof value.available !== "boolean"
+    || !(value.family === null || value.family === "physical" || value.family === "digital")
+    || !(value.metricVersion === null || (Number.isInteger(value.metricVersion) && (value.metricVersion as number) > 0))
+    || (value.available && (value.family === null || value.metricVersion === null))
+    || (!value.available && (value.family !== null || value.metricVersion !== null))
+  ) throw new Error("metric controls");
+  return {
+    available: value.available,
+    family: value.family as "physical" | "digital" | null,
+    metricVersion: value.metricVersion as number | null,
+  };
+}
+
+function decodeItemOrNull(value: unknown): ProductOpportunityItem | null {
+  return value === null ? null : isProductOpportunityItem(value) ? value : (() => { throw new Error("item"); })();
+}
+
+export function decodeProductOpportunityListResponse(
+  payload: unknown,
+  path: string,
+  method: string,
+  status: number,
+): ProductOpportunityListResponse {
+  if (!isRecord(payload)) throw invalidResponse(path, method, status);
+  let evidence: ProductOpportunityResponseEvidence | undefined;
+  try {
+    evidence = decodeEvidenceFromPayload(payload, path, method, status);
+    if (!Array.isArray(payload.items) || !payload.items.every(isProductOpportunityItem)
+      || !Number.isInteger(payload.accessibleCount) || (payload.accessibleCount as number) < 0
+      || typeof payload.hasLockedCatalog !== "boolean"
+      || !["preview", "full"].includes(payload.planAccess as string)
+      || !PRODUCT_CATALOG_STATES.has(payload.state as ProductOpportunityCatalogState)
+      || !(payload.stateReason === null || payload.stateReason === "incomplete-count")
+      || (payload.state === "partial" ? payload.stateReason !== "incomplete-count" : payload.stateReason !== null)
+    ) throw new Error("list shape");
+    const metricControls = decodeMetricControls(payload.metricControls);
+    return {
+      items: payload.items as ProductOpportunityItem[],
+      accessibleCount: payload.accessibleCount as number,
+      hasLockedCatalog: payload.hasLockedCatalog as boolean,
+      metricControls,
+      planAccess: payload.planAccess as "preview" | "full",
+      state: payload.state as ProductOpportunityCatalogState,
+      stateReason: payload.stateReason as ProductOpportunityPartialReason | null,
+      evidence,
+    };
+  } catch (reason) {
+    if (reason instanceof ProductOpportunityClientError) throw reason;
+    throw invalidResponse(path, method, status, evidence?.requestId ?? null);
+  }
+}
+
+export function decodeProductOpportunityDetailResponse(
+  payload: unknown,
+  path: string,
+  method: string,
+  status: number,
+): { item: ProductOpportunityItem; evidence: ProductOpportunityResponseEvidence } {
+  if (!isRecord(payload)) throw invalidResponse(path, method, status);
+  try {
+    const evidence = decodeEvidenceFromPayload(payload, path, method, status);
+    if (!isProductOpportunityItem(payload.item)) throw new Error("detail shape");
+    return { item: payload.item, evidence };
+  } catch (reason) {
+    if (reason instanceof ProductOpportunityClientError) throw reason;
+    throw invalidResponse(path, method, status);
+  }
+}
+
+export function decodeSavedProductOpportunitiesResponse(
+  payload: unknown,
+  path: string,
+  method: string,
+  status: number,
+): { items: SavedProductOpportunity[]; evidence: ProductOpportunityResponseEvidence } {
+  if (!isRecord(payload)) throw invalidResponse(path, method, status);
+  try {
+    const evidence = decodeEvidenceFromPayload(payload, path, method, status);
+    if (!Array.isArray(payload.items)) throw new Error("saved shape");
+    const items = payload.items.map((value) => {
+      if (!isRecord(value)
+        || typeof value.productOpportunityId !== "string" || !value.productOpportunityId.trim()
+        || !isIsoDate(value.savedAt)
+        || typeof value.requiresUpgrade !== "boolean"
+      ) throw new Error("saved record");
+      return {
+        productOpportunityId: value.productOpportunityId,
+        savedAt: value.savedAt,
+        requiresUpgrade: value.requiresUpgrade,
+        item: decodeItemOrNull(value.item),
+        historyItem: decodeItemOrNull(value.historyItem),
+      };
+    });
+    return { items, evidence };
+  } catch (reason) {
+    if (reason instanceof ProductOpportunityClientError) throw reason;
+    throw invalidResponse(path, method, status);
+  }
+}
+
+export function decodeProductOpportunitySaveResponse(
+  payload: unknown,
+  path: string,
+  method: string,
+  status: number,
+): { saved: boolean; evidence: ProductOpportunityResponseEvidence } {
+  if (!isRecord(payload)) throw invalidResponse(path, method, status);
+  try {
+    const evidence = decodeEvidenceFromPayload(payload, path, method, status);
+    if (typeof payload.saved !== "boolean") throw new Error("save shape");
+    return { saved: payload.saved, evidence };
+  } catch (reason) {
+    if (reason instanceof ProductOpportunityClientError) throw reason;
+    throw invalidResponse(path, method, status);
+  }
+}
+
 export type ProductOpportunityErrorInfo = {
   message: string;
   method: string;
@@ -55,7 +299,7 @@ function clientError(
   evidence?: ProductOpportunityResponseEvidence,
 ): ProductOpportunityClientError {
   return new ProductOpportunityClientError({
-    message, method, path, status, code, requestId,
+    message, method, path: safeProductOpportunityPath(path), status, code, requestId,
     occurredAt: environment.occurredAt ?? new Date().toISOString(),
     runtime: environment.runtime ?? null,
     deployment: environment.deployment ?? null,
@@ -99,32 +343,42 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
   }
 }
 
-async function requireOk(response: Response, path: string, method = "GET"): Promise<Record<string, unknown>> {
+async function requireOk(response: Response, path: string, method = "GET"): Promise<UnknownRecord> {
   const requestId = response.headers.get("x-request-id");
-  let payload: Record<string, unknown>;
+  let payload: unknown;
   try {
-    payload = await response.json() as Record<string, unknown>;
+    payload = await response.json();
   } catch {
     throw clientError("The product service returned an invalid response", path, "INVALID_RESPONSE", response.status, requestId, method);
   }
   if (!response.ok) {
-    const code = typeof payload.code === "string" ? payload.code as ProductOpportunityApiErrorCode : "CATALOG_UNAVAILABLE";
+    const record = isRecord(payload) ? payload : {};
+    const code = typeof record.code === "string" && PRODUCT_API_ERROR_CODES.has(record.code as ProductOpportunityApiErrorCode)
+      ? record.code as ProductOpportunityApiErrorCode
+      : "CATALOG_UNAVAILABLE";
     throw clientError(
-      typeof payload.error === "string" ? payload.error : "Product request failed",
+      typeof record.error === "string" ? record.error : "Product request failed",
       path,
       code,
       response.status,
-      typeof payload.requestId === "string" ? payload.requestId : requestId,
+      typeof record.requestId === "string" ? record.requestId : requestId,
       method,
       {
-        occurredAt: typeof payload.occurredAt === "string" ? payload.occurredAt : undefined,
-        runtime: typeof payload.runtime === "string" ? payload.runtime : null,
-        deployment: typeof payload.deployment === "string" ? payload.deployment : null,
+        occurredAt: typeof record.occurredAt === "string" ? record.occurredAt : undefined,
+        runtime: typeof record.runtime === "string" ? record.runtime : null,
+        deployment: typeof record.deployment === "string" ? record.deployment : null,
       },
-      payload.evidence && typeof payload.evidence === "object"
-        ? payload.evidence as ProductOpportunityResponseEvidence
-        : undefined,
+      (() => {
+        try {
+          return decodeEvidence(record.evidence, path, method, response.status);
+        } catch {
+          return undefined;
+        }
+      })(),
     );
+  }
+  if (!isRecord(payload)) {
+    throw invalidResponse(path, method, response.status, requestId);
   }
   return payload;
 }
@@ -150,7 +404,8 @@ export function productOpportunityViewState(
   if (error) return error.code === "AUTH_REQUIRED"
     ? "auth-required"
     : hasExistingItems ? "stale" : "api-error";
-  return result?.state ?? (hasExistingItems ? "ready" : "catalog-empty");
+  if (!result) return hasExistingItems ? "stale" : "loading";
+  return result.state === "ready" ? "success" : result.state;
 }
 
 export async function fetchProductOpportunities(options: {
@@ -174,21 +429,25 @@ export async function fetchProductOpportunities(options: {
   if (options.demand) params.set("demand", options.demand);
   if (options.trend) params.set("trend", options.trend);
   if (options.sort) params.set("sort", options.sort);
-  const path = `/api/product-opportunities?${params.toString()}`;
-  const payload = await requireOk(await authedFetch(path), path);
-  return payload as ProductOpportunityListResponse;
+  const query = params.toString();
+  const path = query ? `/api/product-opportunities?${query}` : "/api/product-opportunities";
+  const response = await authedFetch(path);
+  const payload = await requireOk(response, path);
+  return decodeProductOpportunityListResponse(payload, path, "GET", response.status);
 }
 
 export async function fetchProductOpportunity(id: string): Promise<ProductOpportunityItem> {
   const path = `/api/product-opportunities/${encodeURIComponent(id)}`;
-  const payload = await requireOk(await authedFetch(path), path);
-  return payload.item as ProductOpportunityItem;
+  const response = await authedFetch(path);
+  const payload = await requireOk(response, path);
+  return decodeProductOpportunityDetailResponse(payload, path, "GET", response.status).item;
 }
 
 export async function fetchSavedProductOpportunities(): Promise<SavedProductOpportunity[]> {
   const path = "/api/saved-product-opportunities";
-  const payload = await requireOk(await authedFetch(path), path);
-  return (payload.items ?? []) as SavedProductOpportunity[];
+  const response = await authedFetch(path);
+  const payload = await requireOk(response, path);
+  return decodeSavedProductOpportunitiesResponse(payload, path, "GET", response.status).items;
 }
 
 export async function setProductOpportunitySaved(
@@ -197,12 +456,10 @@ export async function setProductOpportunitySaved(
 ): Promise<void> {
   const path = "/api/saved-product-opportunities";
   const method = saved ? "POST" : "DELETE";
-  await requireOk(
-    await authedFetch(path, {
+  const response = await authedFetch(path, {
       method,
       body: JSON.stringify({ productOpportunityId }),
-    }),
-    path,
-    method,
-  );
+    });
+  const payload = await requireOk(response, path, method);
+  decodeProductOpportunitySaveResponse(payload, path, method, response.status);
 }
