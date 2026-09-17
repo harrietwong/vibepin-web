@@ -24,6 +24,8 @@ export type CreditE2eRun = {
   accountsPerPlatform: number;
 };
 
+export type CreditE2eReportScenario = Omit<CreditE2eRun, "email">;
+
 export type Evidence = {
   surface: "billing" | "usage" | "create_pin" | "http" | "database";
   status: "PASS" | "FAIL" | "NOT_OBSERVED";
@@ -38,7 +40,7 @@ export type CreditE2eReport = {
   runId: string;
   targetRef: string;
   externalWrites: boolean;
-  rounds: Array<{ round: 1 | 2; scenarios: CreditE2eRun[]; evidence: Evidence[] }>;
+  rounds: Array<{ round: 1 | 2; scenarios: CreditE2eReportScenario[]; evidence: Evidence[] }>;
 };
 
 /** Synthetic-only identities. `runId` is constrained so account names never escape the test namespace. */
@@ -103,13 +105,87 @@ export interface CreditE2eApplyAdapter {
   cleanup(runId: string, userIds: string[]): Promise<void>;
 }
 
+/** Strip apply-only identity material before anything can enter a persisted report. */
+export function reportScenario(input: CreditE2eRun): CreditE2eReportScenario {
+  const { email: _email, ...safe } = input;
+  return safe;
+}
+
+function redactEvidenceText(value: string): string {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[redacted-token]");
+}
+
+function safeEvidence(items: Evidence[]): Evidence[] {
+  return items.map(item => ({
+    ...item,
+    detail: redactEvidenceText(item.detail),
+    ...(item.json ? { json: redactEvidenceText(item.json) } : {}),
+  }));
+}
+
+/**
+ * Execute the state-changing channel through an independently reviewed adapter.
+ * Exactly four identities are provisioned, then reused for near-limit and exhausted
+ * scenarios in two rounds. Cleanup is unconditional and runs after partial failure.
+ */
+export async function applyReport(
+  adapter: CreditE2eApplyAdapter,
+  runId = newRunId(),
+): Promise<CreditE2eReport> {
+  assertStrictTestRef(CREDIT_E2E_TEST_REF);
+  await adapter.assertTarget(CREDIT_E2E_TEST_REF);
+
+  const users = new Map<PlanKey, string>();
+  const createdUserIds: string[] = [];
+  try {
+    for (const plan of CREDIT_E2E_PLANS) {
+      const identity = buildScenario(plan, runId, "limit_minus_one");
+      const { userId } = await adapter.provision(identity, ephemeralPassword());
+      if (!userId) throw new Error(`provision(${plan}) returned no user id`);
+      users.set(plan, userId);
+      createdUserIds.push(userId);
+    }
+
+    const rounds: CreditE2eReport["rounds"] = [];
+    for (const round of [1, 2] as const) {
+      const scenarios: CreditE2eReportScenario[] = [];
+      const evidence: Evidence[] = [];
+      for (const plan of CREDIT_E2E_PLANS) {
+        const userId = users.get(plan);
+        if (!userId) throw new Error(`missing provisioned identity for ${plan}`);
+        for (const scenarioName of ["limit_minus_one", "limit"] as const) {
+          const scenario = buildScenario(plan, runId, scenarioName);
+          await adapter.seedUsage(scenario, userId);
+          evidence.push(...safeEvidence(await adapter.collectEvidence(scenario, userId)));
+          scenarios.push(reportScenario(scenario));
+        }
+      }
+      rounds.push({ round, scenarios, evidence });
+    }
+
+    return {
+      schemaVersion: 1,
+      mode: "apply",
+      runId,
+      targetRef: CREDIT_E2E_TEST_REF,
+      externalWrites: true,
+      rounds,
+    };
+  } finally {
+    await adapter.cleanup(runId, createdUserIds);
+  }
+}
+
 export function dryRunReport(runId = newRunId()): CreditE2eReport {
   const rounds = ([1, 2] as const).map(round => ({
     round,
     scenarios: CREDIT_E2E_PLANS.flatMap(plan => [
       buildScenario(plan, runId, "limit_minus_one"),
       buildScenario(plan, runId, "limit"),
-    ]),
+    ]).map(reportScenario),
     evidence: [{
       surface: "http" as const,
       status: "NOT_OBSERVED" as const,
