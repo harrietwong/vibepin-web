@@ -17,7 +17,7 @@
  */
 
 import assert from "node:assert";
-import { resolveFailureMediaUrl, isDegenerateDataUrl, type FailureMediaDraft } from "../src/lib/studio/failureMedia";
+import { resolveFailureMediaUrl, isDegenerateDataUrl, isQaFixtureMediaId, classifyLoadedMedia, reduceMediaCursor, resolveFailureMediaCandidates, failureMediaRenderModel, type FailureMediaDraft } from "../src/lib/studio/failureMedia";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -34,6 +34,191 @@ function draft(partial: Partial<FailureMediaDraft>): FailureMediaDraft {
     ...partial,
   };
 }
+
+const LEGACY_MEDIA_URL = "https://cdn.example.test/history/pin.jpg";
+const PRODUCT_SOLID_PINK = "https://cdn.example.test/products/solid-pink.jpg";
+const REFERENCE_SOLID = "https://cdn.example.test/references/solid-gray.jpg";
+const media = (id: string, url: string, source: "legacy" | "product" | "ai" | "upload" = "legacy", width?: number, height?: number) => ({
+  id, kind: "image" as const, url, source, ...(width === undefined ? {} : { width }), ...(height === undefined ? {} : { height }),
+});
+
+// ── Historical pink placeholder identity ───────────────────────────────────────
+
+test("only strict QA fixture ids are identity signals, never URL words or colors", () => {
+  assert.equal(isQaFixtureMediaId("qa-slide-1"), true);
+  assert.equal(isQaFixtureMediaId("qa-slide-01"), true);
+  assert.equal(isQaFixtureMediaId("catalog-pink-product"), false);
+  assert.equal(isQaFixtureMediaId("qa-slide-one"), false);
+});
+
+test("legacy placeholder advances to the persisted product input", () => {
+  const d = draft({
+    imageUrl: LEGACY_MEDIA_URL,
+    source: "legacy_placeholder",
+    assetError: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL)],
+    setupSnapshot: { selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }] } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), PRODUCT_SOLID_PINK);
+});
+
+test("legacy placeholder advances product placeholder to the persisted reference", () => {
+  const d = draft({
+    imageUrl: LEGACY_MEDIA_URL,
+    source: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL), media("qa-slide-1", PRODUCT_SOLID_PINK)],
+    setupSnapshot: {
+      selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }],
+      selectedReferences: [{ imageUrl: REFERENCE_SOLID }],
+    } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), REFERENCE_SOLID);
+});
+
+test("legacy placeholder at every persisted step ends in the neutral fallback", () => {
+  const d = draft({
+    imageUrl: LEGACY_MEDIA_URL,
+    sourceImageUrl: LEGACY_MEDIA_URL,
+    source: "legacy_placeholder",
+    assetError: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL), media("qa-slide-1", PRODUCT_SOLID_PINK), media("qa-slide-2", REFERENCE_SOLID)],
+    setupSnapshot: {
+      selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }],
+      selectedReferences: [{ imageUrl: REFERENCE_SOLID }],
+    } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), null);
+});
+
+test("valid remote solid-color product art is never rejected by color or average pixels", () => {
+  const d = draft({ imageUrl: PRODUCT_SOLID_PINK, source: "uploaded_image", media: [media("catalog-pink", PRODUCT_SOLID_PINK, "product", 1200, 1200)] });
+  assert.equal(resolveFailureMediaUrl(d), PRODUCT_SOLID_PINK);
+  assert.equal(classifyLoadedMedia({
+    id: "catalog-pink", width: 1200, height: 1200, provenance: "product",
+  }), "valid");
+});
+
+test("known 1x1 and 2x2 media advance without inspecting color", () => {
+  for (const dimensions of [[1, 1], [2, 2], [1, 2], [2, 1]] as const) {
+    assert.equal(classifyLoadedMedia({
+      id: "catalog-tiny", width: dimensions[0], height: dimensions[1], provenance: "product",
+    }), "tiny", `${dimensions.join("x")} should advance`);
+  }
+});
+
+test("larger single-color images remain valid even when their pixels are uniform", () => {
+  assert.equal(classifyLoadedMedia({
+    id: "catalog-pink", width: 2_000, height: 2_000, provenance: "product",
+  }), "valid");
+});
+
+test("QA fixture identity advances while valid legacy/product media remain renderable", () => {
+  assert.equal(classifyLoadedMedia({
+    id: "qa-slide-1", width: 1200, height: 1200, provenance: "qa",
+  }), "placeholder");
+  assert.equal(classifyLoadedMedia({
+    id: "legacy-pink", width: 1200, height: 1200, provenance: "legacy",
+  }), "valid");
+  assert.equal(classifyLoadedMedia({
+    id: "catalog-pink", width: 1200, height: 1200, provenance: "product",
+  }), "valid");
+});
+
+test("generation-failed, publish-failed, and healthy cards share the same safe media contract", () => {
+  const generationFailed = draft({
+    imageUrl: LEGACY_MEDIA_URL, failureType: "generation", generationStatus: "failed", source: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL)],
+    setupSnapshot: { selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }] } as never,
+  });
+  const publishFailed = draft({
+    imageUrl: LEGACY_MEDIA_URL, failureType: "publish", postedAt: undefined, source: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL)],
+    setupSnapshot: { selectedReferences: [{ imageUrl: REFERENCE_SOLID }] } as never,
+  });
+  const healthy = draft({ imageUrl: PRODUCT_SOLID_PINK, generationStatus: "completed" });
+  assert.equal(resolveFailureMediaUrl(generationFailed), PRODUCT_SOLID_PINK);
+  assert.equal(resolveFailureMediaUrl(publishFailed), REFERENCE_SOLID);
+  assert.equal(resolveFailureMediaUrl(healthy), PRODUCT_SOLID_PINK);
+});
+
+test("media cursor state machine resets A→B→A even when B never advances", () => {
+  let state = { identity: "A", index: 0 };
+  state = reduceMediaCursor(state, { type: "advance" });
+  assert.deepEqual(state, { identity: "A", index: 1 });
+  state = reduceMediaCursor(state, { type: "sync", identity: "B" });
+  assert.deepEqual(state, { identity: "B", index: 0 });
+  state = reduceMediaCursor(state, { type: "sync", identity: "A" });
+  assert.deepEqual(state, { identity: "A", index: 0 });
+});
+
+test("draft-level legacy marker drops only the marked primary and preserves real sourceImageUrl", () => {
+  const d = draft({
+    imageUrl: LEGACY_MEDIA_URL,
+    sourceImageUrl: "https://cdn.example.test/source/real-parent.png",
+    source: "legacy_placeholder",
+    assetError: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL)],
+  });
+  assert.equal(resolveFailureMediaUrl(d), "https://cdn.example.test/source/real-parent.png");
+  assert.deepEqual(resolveFailureMediaCandidates(d).map(candidate => candidate.url), [
+    "https://cdn.example.test/source/real-parent.png",
+  ]);
+});
+
+test("candidate chain dedupes one bad URL across different provenance and roles", () => {
+  const repeated = "https://CDN.example.test/source/real-parent.png#same-resource";
+  const d = draft({
+    imageUrl: repeated,
+    sourceImageUrl: " https://cdn.example.test/source/real-parent.png ",
+    source: "uploaded_image",
+    setupSnapshot: { selectedProducts: [{ imageUrl: repeated }] } as never,
+  });
+  const candidates = resolveFailureMediaCandidates(d);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].url, repeated);
+});
+
+test("persisted media metadata matches canonical URL identities on both sides", () => {
+  const persistedPlaceholder = "https://CDN.example.test/media/placeholder.png#fixture";
+  const d = draft({
+    imageUrl: "https://cdn.example.test/media/placeholder.png",
+    source: "uploaded_image",
+    media: [media("qa-slide-1", persistedPlaceholder, "legacy", 1200, 1200)],
+    setupSnapshot: { selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }] } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), PRODUCT_SOLID_PINK);
+});
+
+test("qa slot identity does not reject a real product/generated replacement", () => {
+  assert.equal(classifyLoadedMedia({ id: "qa-slide-1", width: 1200, height: 1200, provenance: "product" }), "valid");
+  assert.equal(classifyLoadedMedia({ id: "qa-slide-1", width: 1200, height: 1200, provenance: "generated" }), "valid");
+  const d = draft({
+    imageUrl: PRODUCT_SOLID_PINK,
+    source: "uploaded_image",
+    media: [media("qa-slide-1", PRODUCT_SOLID_PINK, "product", 1200, 1200)],
+  });
+  assert.equal(resolveFailureMediaUrl(d), PRODUCT_SOLID_PINK);
+  const generated = draft({
+    imageUrl: PRODUCT_SOLID_PINK,
+    source: "legacy_placeholder",
+    assetError: "legacy_placeholder",
+    media: [media("qa-slide-2", PRODUCT_SOLID_PINK, "ai", 1200, 1200)],
+  });
+  assert.equal(resolveFailureMediaUrl(generated), PRODUCT_SOLID_PINK);
+});
+
+test("render model marks the product fallback after primary filtering from candidate role", () => {
+  const d = draft({
+    imageUrl: LEGACY_MEDIA_URL,
+    source: "legacy_placeholder",
+    assetError: "legacy_placeholder",
+    media: [media("legacy-main", LEGACY_MEDIA_URL)],
+    setupSnapshot: { selectedProducts: [{ imageUrl: PRODUCT_SOLID_PINK }] } as never,
+  });
+  const model = failureMediaRenderModel(d, 0);
+  assert.equal(model.current?.url, PRODUCT_SOLID_PINK);
+  assert.equal(model.showOriginalBadge, true);
+});
 
 // ── Step 1: draft.imageUrl wins when present and usable ─────────────────────────
 

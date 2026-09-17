@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { toProxyUrl } from "@/lib/imageProxy";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { NeutralMediaFallback, SelectedAssetImage } from "@/components/media/ResilientMediaImage";
 
 export type SelectedAssetPreviewItem = {
   imageUrl: string;
@@ -57,6 +58,7 @@ export function SelectedAssetPreview({
   imageStyle,
   testId = "selected-asset-thumbnail",
 }: Props) {
+  const { t: tr } = useLocale();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -93,6 +95,10 @@ export function SelectedAssetPreview({
 
   const metaTitle = item.title?.trim();
   const metaSource = assetSource(item);
+  const previewFallback = (
+    <NeutralMediaFallback label={tr("studioBoard.card.pinImageUnavailable")}
+      style={{ minHeight: 48, padding: 8, boxSizing: "border-box" }} />
+  );
 
   const canPortal = typeof document !== "undefined";
 
@@ -116,8 +122,7 @@ export function SelectedAssetPreview({
       }}
     >
       <div style={{ width: "100%", maxHeight: 280, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", borderRadius: 8, background: "rgba(255,255,255,0.04)" }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={toProxyUrl(item.imageUrl)} alt="" style={{ maxWidth: "100%", maxHeight: 280, width: "auto", height: "auto", objectFit: "contain", display: "block" }} />
+        <SelectedAssetImage item={item} imageTestId="selected-asset-hover-image" fallback={previewFallback} style={{ maxWidth: "100%", maxHeight: 280, width: "auto", height: "auto", objectFit: "contain" }} />
       </div>
       <p style={{ margin: "8px 0 0", fontSize: 11, fontWeight: 800, color: "var(--app-text, #E2E8F0)" }}>
         {labelFor(kind, index, total)}
@@ -170,8 +175,7 @@ export function SelectedAssetPreview({
           {allItems.map((galleryItem, galleryIndex) => (
             <div key={`${galleryItem.imageUrl}-${galleryIndex}`} style={{ minWidth: 0 }}>
               <div style={{ height: 180, borderRadius: 9, background: "rgba(255,255,255,0.04)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--app-border, rgba(255,255,255,0.08))" }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={toProxyUrl(galleryItem.imageUrl)} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
+                <SelectedAssetImage item={galleryItem} imageTestId="selected-asset-gallery-image" fallback={previewFallback} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
               </div>
               <p style={{ margin: "7px 0 0", fontSize: 11, fontWeight: 800, color: "var(--app-text, #E2E8F0)" }}>
                 {labelFor(kind, galleryIndex, total)}
@@ -217,12 +221,7 @@ export function SelectedAssetPreview({
           flexShrink: 0,
         }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={toProxyUrl(item.imageUrl)}
-          alt=""
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", ...imageStyle }}
-        />
+        <SelectedAssetImage item={item} imageTestId={testId + "-image"} fallback={previewFallback} style={{ width: "100%", height: "100%", objectFit: "cover", ...imageStyle }} />
       </button>
       {hoverPreview}
       {gallery}

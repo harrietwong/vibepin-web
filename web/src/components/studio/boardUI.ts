@@ -19,7 +19,7 @@ export const BUI = {
   warning:   "#D97706",
   info:      "#2563EB",
   scheduled: "#6366F1",
-  mediaFallback:       "#20242B",
+  mediaFallback:       "radial-gradient(circle at 15% 12%, color-mix(in srgb, var(--app-surface) 16%, transparent), transparent 42%), linear-gradient(135deg, var(--app-surface-3) 0%, var(--app-surface-2) 52%, var(--app-surface-3) 100%)",
   mediaFallbackBorder: "rgba(255,255,255,0.08)",
   mediaFallbackIcon:   "#8B93A1",
   mediaFallbackText:   "#AAB1BC",

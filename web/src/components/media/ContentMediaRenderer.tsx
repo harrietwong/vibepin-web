@@ -2,7 +2,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { ContentImageMedia, ContentMedia } from "@/lib/contentDraftModel";
-import { toProxyUrl } from "@/lib/imageProxy";
+import { NeutralMediaFallback, ResilientMediaImage } from "./ResilientMediaImage";
 
 type Props = {
   media: ContentMedia | null | undefined;
@@ -43,8 +43,8 @@ function MediaFallback({ media, failed, style, fallback }: Pick<Props, "media" |
   const error = media?.kind === "video" && failed ? "Video preview could not be loaded." : "Media unavailable";
   return <div role="status" aria-live="polite" style={{ width: "100%", height: "100%", position: "relative" }}>
     {fallback ?? (
-      <div data-testid="content-media-fallback"
-        style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "var(--app-surface-3, #0f172a)", color: "var(--app-text-muted, #94a3b8)", fontSize: 12, ...style }}>{error}</div>
+      <NeutralMediaFallback testId="content-media-fallback" label={error}
+        style={{ fontSize: 12, ...style }} />
     )}
     {media?.kind === "video" && failed && fallback && <span data-testid="content-media-error"
       style={{ position: "absolute", left: 6, right: 6, bottom: 6, padding: "4px 6px", borderRadius: 4, background: "var(--app-surface, #161D2E)", color: "var(--app-text, #E2E8F0)", fontSize: 12, lineHeight: 1.3 }}>{error}</span>}
@@ -73,9 +73,14 @@ function MediaResource({ media, alt = "", className, style, loading = "lazy", im
     );
   }
   if (renderImage) return <>{renderImage(media)}</>;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img data-testid={imageTestId} src={toProxyUrl(media.url)} alt={alt} loading={loading} onError={() => setFailed(true)} className={className}
-      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", ...style }} />
-  );
+  return <ResilientMediaImage
+    src={media.url}
+    alt={alt}
+    loading={loading}
+    imageTestId={imageTestId}
+    className={className}
+    candidate={media}
+    fallback={fallback ?? <MediaFallback media={media} failed style={style} />}
+    style={{ width: "100%", height: "100%", objectFit: "cover", ...style }}
+  />;
 }
