@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { PGlite } from "../../backend/tests/pglite_v37/node_modules/@electric-sql/pglite";
 import { buildDueVideoReceipt } from "../src/lib/server/publish/v76PinterestVideoBindings";
 
 const root = resolve(process.cwd(), "..");
+type LocalDb = {
+  exec(sql: string): Promise<void>;
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  close(): Promise<void>;
+};
+const { PGlite } = createRequire(resolve(root, "backend/tests/pglite_v37/package.json"))("@electric-sql/pglite") as {
+  PGlite: new () => LocalDb;
+};
 const load = (path: string) => readFileSync(resolve(root, path), "utf8").replace(/\r\n?/g, "\n");
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER_OWNER = "22222222-2222-4222-8222-222222222222";
@@ -24,8 +32,6 @@ const baseMigrations = [
   "backend/db/migrate_v77_video_media.sql",
   "backend/db/migrate_v78_video_publish_recovery.sql",
 ] as const;
-
-type LocalDb = InstanceType<typeof PGlite>;
 
 async function createDb(applyV79 = true): Promise<LocalDb> {
   const db = new PGlite();
