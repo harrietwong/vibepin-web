@@ -281,6 +281,7 @@ export const productsMessages = {
   "products.opportunities.fastestGrowing": "Fastest Growing",
   "products.opportunities.apply": "Apply",
   "products.opportunities.clear": "Clear",
+  "products.opportunities.filtersPending": "Changes not applied",
   "products.opportunities.retry": "Try again",
   "products.opportunities.stateSyncing": "Refreshing verified products…",
   "products.opportunities.stateLoading": "Loading verified products…",

@@ -2979,6 +2979,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "products.opportunities.fastestGrowing": "增長最快",
   "products.opportunities.apply": "套用",
   "products.opportunities.clear": "清除",
+  "products.opportunities.filtersPending": "變更尚未套用",
   "products.opportunities.retry": "重試",
   "products.opportunities.stateSyncing": "正在重新整理已驗證商品…",
   "products.opportunities.stateLoading": "正在載入已驗證商品…",

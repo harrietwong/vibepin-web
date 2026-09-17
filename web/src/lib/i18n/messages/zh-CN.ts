@@ -2976,6 +2976,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "products.opportunities.fastestGrowing": "增长最快",
   "products.opportunities.apply": "应用",
   "products.opportunities.clear": "清除",
+  "products.opportunities.filtersPending": "更改尚未应用",
   "products.opportunities.retry": "重试",
   "products.opportunities.stateSyncing": "正在刷新已验证商品…",
   "products.opportunities.stateLoading": "正在加载已验证商品…",

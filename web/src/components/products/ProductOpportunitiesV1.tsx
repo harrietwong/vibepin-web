@@ -29,7 +29,9 @@ import {
 } from "@/lib/productOpportunityAccessibility";
 import {
   DEFAULT_PRODUCT_OPPORTUNITY_FILTERS,
+  metricFiltersAvailableForDraft,
   parseProductOpportunityFilterQuery,
+  productOpportunityFiltersEqual,
   serializeProductOpportunityFilterQuery,
   type ProductOpportunityFilters,
 } from "@/lib/productOpportunityFilters";
@@ -561,14 +563,15 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
     if (draftTrend) {
       track("trend_filter_used", { productFamily: family, trend: draftTrend });
     }
+    const metricsAllowed = metricFiltersAvailableForDraft(draftFamily, family, metricControls);
     const next: ProductOpportunityFilters = {
       family: draftFamily,
       search: draftSearch.trim(),
       category: draftCategory.trim(),
       platform: draftPlatform.trim(),
-      demand: draftDemand,
-      trend: draftTrend,
-      sort: draftSort,
+      demand: metricsAllowed ? draftDemand : "",
+      trend: metricsAllowed ? draftTrend : "",
+      sort: metricsAllowed || draftSort !== "fastest_growing" ? draftSort : "most_saved",
     };
     setMetricControls({ available: false, family: null, metricVersion: null });
     applyProductFilters(next, true);
@@ -580,6 +583,19 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
   const hasCatalogFilters = family !== "all"
     || sort !== "most_saved"
     || Boolean(filters.search || filters.category || filters.platform || filters.demand || filters.trend);
+  const draftMetricControlsAvailable = metricFiltersAvailableForDraft(draftFamily, family, metricControls);
+  const filtersDirty = !productOpportunityFiltersEqual(
+    { family, ...filters, sort },
+    {
+      family: draftFamily,
+      search: draftSearch.trim(),
+      category: draftCategory.trim(),
+      platform: draftPlatform.trim().toLowerCase(),
+      demand: draftMetricControlsAvailable ? draftDemand : "",
+      trend: draftMetricControlsAvailable ? draftTrend : "",
+      sort: draftMetricControlsAvailable || draftSort !== "fastest_growing" ? draftSort : "most_saved",
+    },
+  );
   const savedFamilyHasNoMatches = mode === "saved"
     && family !== "all"
     && savedRecords.length > 0
@@ -599,11 +615,12 @@ export function ProductOpportunitiesV1({ mode = "catalog" }: { mode?: Mode }) {
         <label><span>{tr("products.opportunities.category")}</span><select value={draftCategory} onChange={(event) => setDraftCategory(event.target.value)}><option value="">{tr("products.opportunities.allCategories")}</option>{Object.entries(CATEGORY_LABEL_KEYS).map(([value, key]) => <option key={value} value={value}>{tr(key)}</option>)}</select></label>
         <label><span>{tr("products.opportunities.platform")}</span><input list="product-opportunity-platforms" value={draftPlatform} onChange={(event) => setDraftPlatform(event.target.value)} placeholder={tr("products.opportunities.allPlatforms")} /></label>
         <datalist id="product-opportunity-platforms">{platformSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
-        {metricControls.available ? <label><span>{tr("products.opportunities.demand")}</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">{tr("products.opportunities.allDemand")}</option><option value="high_recent_demand">{tr("products.opportunities.highDemand")}</option></select></label> : null}
-        {metricControls.available ? <label><span>{tr("products.opportunities.trend")}</span><select value={draftTrend} onChange={(event) => { const value = event.target.value; setDraftTrend(value === "rising" || value === "steady" || value === "cooling" ? value : ""); }}><option value="">{tr("products.opportunities.allTrends")}</option><option value="rising">{tr("products.opportunities.rising")}</option><option value="steady">{tr("products.opportunities.steady")}</option><option value="cooling">{tr("products.opportunities.cooling")}</option></select></label> : null}
-        <label><span>{tr("products.opportunities.sort")}</span><select value={draftSort} onChange={(event) => { const value = event.target.value; setDraftSort(value === "newest" || (value === "fastest_growing" && metricControls.available) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{metricControls.available ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
+        {draftMetricControlsAvailable ? <label><span>{tr("products.opportunities.demand")}</span><select value={draftDemand} onChange={(event) => setDraftDemand(event.target.value === "high_recent_demand" ? "high_recent_demand" : "")}><option value="">{tr("products.opportunities.allDemand")}</option><option value="high_recent_demand">{tr("products.opportunities.highDemand")}</option></select></label> : null}
+        {draftMetricControlsAvailable ? <label><span>{tr("products.opportunities.trend")}</span><select value={draftTrend} onChange={(event) => { const value = event.target.value; setDraftTrend(value === "rising" || value === "steady" || value === "cooling" ? value : ""); }}><option value="">{tr("products.opportunities.allTrends")}</option><option value="rising">{tr("products.opportunities.rising")}</option><option value="steady">{tr("products.opportunities.steady")}</option><option value="cooling">{tr("products.opportunities.cooling")}</option></select></label> : null}
+        <label><span>{tr("products.opportunities.sort")}</span><select value={draftSort} onChange={(event) => { const value = event.target.value; setDraftSort(value === "newest" || (value === "fastest_growing" && draftMetricControlsAvailable) ? value : "most_saved"); }}><option value="most_saved">{tr("products.opportunities.mostSaved")}</option><option value="newest">{tr("products.opportunities.newest")}</option>{draftMetricControlsAvailable ? <option value="fastest_growing">{tr("products.opportunities.fastestGrowing")}</option> : null}</select></label>
         <button type="submit">{tr("products.opportunities.apply")}</button>
         {hasCatalogFilters ? <button type="button" className={styles.clearFilters} onClick={clearFilters}>{tr("products.opportunities.clear")}</button> : null}
+        {filtersDirty ? <span className={styles.filterPending} role="status">{tr("products.opportunities.filtersPending")}</span> : null}
       </form> : <div className={styles.filters} role="group" aria-label={tr("products.opportunities.filterProductType")}><ProductFamilyRadioGroup family={family} onChange={chooseFamily} groupLabel={tr("products.opportunities.filterProductType")} label={(value) => value === "all" ? tr("products.opportunities.typeAll") : value === "physical" ? tr("products.opportunities.typePhysical") : tr("products.opportunities.typeDigital")} /></div>}
       {error ? <div className={styles.error} role="alert"><ErrorEvidence error={error} /><button onClick={() => mode === "saved" ? void loadSaved() : void loadCatalog(false)}>{tr("products.opportunities.retry")}</button></div> : null}
       {mode === "catalog" && savedState === "error" ? <div className={styles.error} role="alert">{tr("products.opportunities.savedCheckError")}<button onClick={() => void loadCatalogSavedState()}>{tr("products.opportunities.retry")}</button></div> : null}

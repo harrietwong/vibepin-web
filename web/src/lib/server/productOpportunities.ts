@@ -458,7 +458,14 @@ async function countAccessibleCatalog(
   }
   const { error, count } = await query.range(0, 0);
   if (error) throw new Error(`accessible product catalog count failed: ${error.message}`);
-  return count ?? 0;
+  return requireExactProductCatalogCount(count);
+}
+
+export function requireExactProductCatalogCount(count: number | null): number {
+  if (!Number.isInteger(count) || (count as number) < 0) {
+    throw new Error("accessible product catalog exact count is unavailable");
+  }
+  return count as number;
 }
 
 export async function listProductOpportunities(

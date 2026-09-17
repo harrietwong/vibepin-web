@@ -23,6 +23,30 @@ export const DEFAULT_PRODUCT_OPPORTUNITY_FILTERS: ProductOpportunityFilters = {
   sort: "most_saved",
 };
 
+export function productOpportunityFiltersEqual(
+  left: ProductOpportunityFilters,
+  right: ProductOpportunityFilters,
+): boolean {
+  return left.family === right.family
+    && left.search === right.search
+    && left.category === right.category
+    && left.platform === right.platform
+    && left.demand === right.demand
+    && left.trend === right.trend
+    && left.sort === right.sort;
+}
+
+export function metricFiltersAvailableForDraft(
+  draftFamily: ProductOpportunityFamilyFilter,
+  appliedFamily: ProductOpportunityFamilyFilter,
+  controls: { available: boolean; family: "physical" | "digital" | null },
+): boolean {
+  return controls.available
+    && draftFamily !== "all"
+    && draftFamily === appliedFamily
+    && controls.family === draftFamily;
+}
+
 function bounded(value: string | null, max: number): string {
   return (value ?? "").trim().slice(0, max);
 }

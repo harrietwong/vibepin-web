@@ -167,9 +167,14 @@ async function runBehaviorTests() {
   process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon";
   process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service";
-  const { classifyProductOpportunityState } = await import("../src/lib/server/productOpportunities");
   const {
+    classifyProductOpportunityState,
+    requireExactProductCatalogCount,
+  } = await import("../src/lib/server/productOpportunities");
+  const {
+    metricFiltersAvailableForDraft,
     parseProductOpportunityFilterQuery,
+    productOpportunityFiltersEqual,
     serializeProductOpportunityFilterQuery,
   } = await import("../src/lib/productOpportunityFilters");
   const {
@@ -191,6 +196,19 @@ async function runBehaviorTests() {
     assert.equal(classifyProductOpportunityState({ itemCount: 0, filtered: true, totalCount: 0, baseCatalogCount: 7 }), "filtered-empty");
     assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: null, baseCatalogCount: 2 }), "partial");
     assert.equal(classifyProductOpportunityState({ itemCount: 2, filtered: false, totalCount: 2, baseCatalogCount: 2 }), "ready");
+    assert.throws(() => requireExactProductCatalogCount(null), /exact count/i);
+    assert.equal(requireExactProductCatalogCount(0), 0);
+  });
+  test("Draft family invalidates stale metric controls and exposes unapplied changes", () => {
+    const controls = { available: true, family: "physical" as const, metricVersion: 7 };
+    assert.equal(metricFiltersAvailableForDraft("physical", "physical", controls), true);
+    assert.equal(metricFiltersAvailableForDraft("all", "physical", controls), false);
+    assert.equal(metricFiltersAvailableForDraft("digital", "physical", controls), false);
+    assert.equal(productOpportunityFiltersEqual(
+      { family: "physical", search: "", category: "", platform: "", demand: "", trend: "", sort: "most_saved" },
+      { family: "digital", search: "", category: "", platform: "", demand: "", trend: "", sort: "most_saved" },
+    ), false);
+    assert.match(component, /products\.opportunities\.filtersPending/);
   });
   test("Product filter query parser is allowlisted, normalized, and round-trips Back/Forward state", () => {
     const parsed = parseProductOpportunityFilterQuery("?family=digital&q= planner &category=digital-products&platform=etsy.com&sort=newest&token=secret&selection=private");
