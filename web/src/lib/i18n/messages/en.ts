@@ -20,6 +20,7 @@ import { studioModalsMessages } from "./en/studioModals";
 import { trendChartMessages } from "./en/trendChart";
 import { trendsMessages } from "./en/trends";
 import { workspaceMessages } from "./en/workspace";
+import { publicPricingEn, type PublicPricingMessageKey } from "./publicPricing";
 
 const en = {
   // ── Sidebar / nav ──
@@ -150,6 +151,7 @@ const en = {
   "public.pricing.yearly": "Yearly",
   "public.pricing.save": "Save 20%",
   "public.pricing.getStarted": "Get started",
+  ...publicPricingEn,
   "contact.success.title": "Message sent",
   "contact.success.description": "Thanks — we got your message and will reply within 1–2 business days.",
   "contact.success.home": "Back to home",
@@ -704,5 +706,5 @@ const en = {
   ...workspaceMessages,
 } as const;
 
-export type MessageKey = keyof typeof en;
+export type MessageKey = keyof typeof en | PublicPricingMessageKey;
 export default en;

@@ -23,6 +23,16 @@ const englishBlocked: MessageKey[] = [
   "page.products.heading",
 ];
 
+// UI-A10's public-pricing promise is deliberately limited to English, Simplified
+// Chinese, and Traditional Chinese. Other app locales retain the documented
+// English fallback for this new public namespace; they must not copy English
+// strings into their own catalogs and be presented as translated coverage.
+const PUBLIC_FALLBACK_PREFIXES = ["public.pricing.", "public.landing.pricing.", "public.landing.faq.", "public.footer."];
+const PUBLIC_PRICING_LOCALES = new Set<LanguageCode>(["en", "zh-CN", "zh-TW"]);
+function usesDocumentedPublicFallback(language: LanguageCode, key: MessageKey): boolean {
+  return !PUBLIC_PRICING_LOCALES.has(language) && PUBLIC_FALLBACK_PREFIXES.some(prefix => key.startsWith(prefix));
+}
+
 function placeholders(value: string): string[] {
   return [...value.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map(m => m[1]).sort();
 }
@@ -45,6 +55,7 @@ for (const language of ALL_APP_LANGUAGES.map(l => l.code)) {
   for (const key of englishKeys) {
     const value = catalog[key];
     if (typeof value !== "string") {
+      if (usesDocumentedPublicFallback(language, key)) continue;
       errors.push(`${language}.${key}: missing key`);
       continue;
     }

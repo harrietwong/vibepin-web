@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, Check } from "lucide-react";
 import { PRICING_TIERS, type PricingTier } from "@/lib/pricingPlans";
 import { CONTAINER, GradientText, SECTION, SectionLabel, VibeBtn } from "./shared";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
@@ -25,6 +26,7 @@ function planCtaHref(plan: PricingTier): string {
 /** Light pricing preview for the landing page. The real pricing page lives at
  *  /pricing — this section only shows the tiers and links there. */
 export function PricingSection() {
+  const { t } = useLocale();
   return (
     <section
       className={SECTION}
@@ -32,14 +34,12 @@ export function PricingSection() {
     >
       <div className={CONTAINER}>
         <div className="text-center max-w-[720px] mx-auto mb-12">
-          <SectionLabel>SIMPLE PRICING</SectionLabel>
+          <SectionLabel>{t("public.landing.pricing.eyebrow")}</SectionLabel>
           <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight leading-[1.08] mb-4">
-            Start free. <GradientText>Create more when you&apos;re ready.</GradientText>
+            {t("public.landing.pricing.title")} <GradientText>{t("public.landing.pricing.titleAccent")}</GradientText>
           </h2>
           <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
-            Explore high-save products, trending Pins, and keyword ideas for free. Upgrade when you
-            need more AI generation, scheduling, and publishing across Pinterest, Instagram,
-            and Facebook.
+            {t("public.landing.pricing.description")}
           </p>
         </div>
 
@@ -67,36 +67,37 @@ export function PricingSection() {
                   className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[10px] font-bold text-white tracking-wide"
                   style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}
                 >
-                  {plan.badge}
+                  {t(`public.pricing.plan.${plan.id}.badge` as never)}
                 </span>
               )}
               <p
                 className="text-[12px] font-bold uppercase tracking-widest mb-3"
                 style={{ color: "#9097A0" }}
               >
-                {plan.name}
+                {t(`public.pricing.plan.${plan.id}.name` as never)}
               </p>
               <div className="flex items-end gap-1 mb-3">
                 <span className="text-4xl font-black text-white" style={MONO}>
                   ${plan.priceMonthly}
                 </span>
                 <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
-                  /mo
+                  {t("public.pricing.checkout.perMonth")}
                 </span>
               </div>
               <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "#8B93A1" }}>
-                {plan.description}
+                {t(`public.pricing.plan.${plan.id}.description` as never)}
               </p>
               <ul className="flex-1 space-y-2.5 mb-6">
-                {plan.previewBullets.map(f => (
-                  <li key={f} className="flex items-start gap-2.5 text-[12px]">
+                {plan.previewBullets.map((_, index) => {
+                  const bullet = t(`public.pricing.plan.${plan.id}.previewBullet.${index}` as never);
+                  return <li key={bullet} className="flex items-start gap-2.5 text-[12px]">
                     <Check
                       className="mt-0.5 h-3.5 w-3.5 shrink-0"
                       style={{ color: plan.highlighted ? "#A855F7" : "#10B981" }}
                     />
-                    <span style={{ color: "#C8CDD6" }}>{f}</span>
-                  </li>
-                ))}
+                    <span style={{ color: "#C8CDD6" }}>{bullet}</span>
+                  </li>;
+                })}
               </ul>
               <Link
                 href={planCtaHref(plan)}
@@ -109,7 +110,7 @@ export function PricingSection() {
                     : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
                 }
               >
-                {plan.cta}
+                {t(`public.pricing.plan.${plan.id}.cta` as never)}
               </Link>
             </div>
           ))}
@@ -121,7 +122,7 @@ export function PricingSection() {
             className="inline-flex items-center gap-2 rounded-full border px-7 py-3 text-[13px] font-bold transition-colors hover:text-white hover:border-white/30"
             style={{ borderColor: "rgba(255,255,255,0.16)", color: "#C8CDD6" }}
           >
-            View full pricing <ArrowRight className="w-3.5 h-3.5" />
+            {t("public.landing.pricing.viewFullPricing")} <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
       </div>

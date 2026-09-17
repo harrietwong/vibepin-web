@@ -5,10 +5,16 @@
   },
   "files": [
     "next-env.d.ts",
+    "src/app/pricing/pricing-client.tsx",
     "src/app/login/page.tsx",
     "src/app/signup/page.tsx",
+    "src/components/LegalEntityNotice.tsx",
+    "src/components/landing/conversion/FaqSection.tsx",
+    "src/components/landing/conversion/LandingFooter.tsx",
+    "src/components/landing/conversion/PricingSection.tsx",
     "src/components/public/PublicLocaleSummary.tsx",
     "src/components/public/publicLocaleCopy.ts",
+    "src/lib/i18n/messages/publicPricing.ts",
     "scripts/test-public-locale-routes.ts"
   ],
   "include": []

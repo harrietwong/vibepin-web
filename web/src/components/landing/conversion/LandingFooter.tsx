@@ -2,42 +2,43 @@ import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
 import { LegalEntityNotice } from "@/components/LegalEntityNotice";
 import { CONTAINER } from "./shared";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const FOOTER_COLUMNS = [
   {
-    title: "Product",
+    id: "product",
     links: [
-      { label: "Intelligence", href: "#create" },
-      { label: "Pin Ideas", href: "/app/discover" },
-      { label: "Product Opportunities", href: "/app/products" },
-      { label: "Create Pins", href: "/app/studio" },
-      { label: "Weekly Plan", href: "/app/plan" },
-      { label: "Pricing", href: "/pricing" },
+      { id: "intelligence", href: "#create" },
+      { id: "pinIdeas", href: "/app/discover" },
+      { id: "productOpportunities", href: "/app/products" },
+      { id: "createPins", href: "/app/studio" },
+      { id: "weeklyPlan", href: "/app/plan" },
+      { id: "pricing", href: "/pricing" },
     ],
   },
   {
-    title: "Resources",
+    id: "resources",
     links: [
-      { label: "Help Center", href: "/app/help" },
-      { label: "How we use Pinterest", href: "/pinterest-app" },
+      { id: "helpCenter", href: "/app/help" },
+      { id: "howWeUsePinterest", href: "/pinterest-app" },
     ],
   },
   {
-    title: "Company",
+    id: "company",
     links: [
-      { label: "About", href: "/about" },
-      { label: "Careers", href: "/careers" },
-      { label: "Contact", href: "/contact" },
+      { id: "about", href: "/about" },
+      { id: "careers", href: "/careers" },
+      { id: "contact", href: "/contact" },
     ],
   },
   {
-    title: "Legal",
+    id: "legal",
     links: [
-      { label: "Privacy Policy", href: "/privacy" },
-      { label: "Terms of Service", href: "/terms" },
-      { label: "Acceptable Use Policy", href: "/acceptable-use-policy" },
-      { label: "Refund Policy", href: "/refund-policy" },
-      { label: "Pinterest App", href: "/pinterest-app" },
+      { id: "privacyPolicy", href: "/privacy" },
+      { id: "termsOfService", href: "/terms" },
+      { id: "acceptableUsePolicy", href: "/acceptable-use-policy" },
+      { id: "refundPolicy", href: "/refund-policy" },
+      { id: "pinterestApp", href: "/pinterest-app" },
     ],
   },
 ] as const;
@@ -71,6 +72,7 @@ function FooterLink({ href, label }: { href: string; label: string }) {
 }
 
 export function LandingFooter() {
+  const { t } = useLocale();
   return (
     <footer
       className="border-t pt-14 pb-8"
@@ -83,8 +85,7 @@ export function LandingFooter() {
             <span className="font-black text-white text-sm tracking-tight">VibePin</span>
           </div>
           <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#4B5563" }}>
-            Pinterest growth intelligence for creators, sellers, affiliate marketers, and
-            Pinterest teams.
+            {t("public.footer.description")}
           </p>
           <a
             href="mailto:support@vibepin.co"
@@ -95,17 +96,17 @@ export function LandingFooter() {
           </a>
         </div>
         {FOOTER_COLUMNS.map(col => (
-          <div key={col.title}>
+          <div key={col.id}>
             <p
               className="text-[10px] font-bold uppercase tracking-widest mb-3"
               style={{ color: "#4B5563" }}
             >
-              {col.title}
+              {t(`public.footer.column.${col.id}` as never)}
             </p>
             <ul className="space-y-2.5">
               {col.links.map(link => (
-                <li key={link.label}>
-                  <FooterLink href={link.href} label={link.label} />
+                <li key={link.id}>
+                  <FooterLink href={link.href} label={t(`public.footer.link.${link.id}` as never)} />
                 </li>
               ))}
             </ul>
@@ -117,8 +118,8 @@ export function LandingFooter() {
         style={{ borderColor: "rgba(255,255,255,0.06)", color: "#374151" }}
       >
         <div className="flex flex-col sm:flex-row justify-between gap-2">
-          <p>© 2026 VibePin. All rights reserved.</p>
-          <p>VibePin is not affiliated with or endorsed by Pinterest.</p>
+          <p>{t("public.footer.copyright")}</p>
+          <p>{t("public.footer.pinterestDisclaimer")}</p>
         </div>
         <LegalEntityNotice />
       </div>

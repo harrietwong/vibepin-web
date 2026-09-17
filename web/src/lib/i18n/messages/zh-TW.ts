@@ -1,4 +1,5 @@
 import type { MessageKey } from "./en";
+import { publicPricingZhTW } from "./publicPricing";
 
 const zhTW: Partial<Record<MessageKey, string>> = {
   "nav.home": "首頁",
@@ -3141,6 +3142,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "products.opportunities.upgradeBody": "付費方案可解鎖完整目錄，數據仍來自真實商品和趨勢。",
   "products.opportunities.loadingMore": "正在載入…",
   "products.opportunities.loadMore": "載入更多",
+  ...publicPricingZhTW,
 };
 
 export default zhTW;

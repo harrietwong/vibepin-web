@@ -1,4 +1,5 @@
 import type { MessageKey } from "./en";
+import { publicPricingZhCN } from "./publicPricing";
 
 const zhCN: Partial<Record<MessageKey, string>> = {
   "nav.home": "首页",
@@ -3138,6 +3139,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "products.opportunities.upgradeBody": "付费套餐可解锁完整目录，数据仍来自真实商品和趋势。",
   "products.opportunities.loadingMore": "正在加载…",
   "products.opportunities.loadMore": "加载更多",
+  ...publicPricingZhCN,
 };
 
 export default zhCN;

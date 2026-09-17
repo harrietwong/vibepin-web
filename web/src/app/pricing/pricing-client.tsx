@@ -8,14 +8,11 @@ import { ArrowRight, Check, Minus } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import {
-  ACCOUNTS_HELPER_TEXT,
-  EXTRA_ACCOUNT_HELPER_TEXT,
   COMPARISON_SECTIONS,
   ENTERPRISE_PLAN,
   PRICING_FAQ,
   PRICING_REASSURANCE,
   PRICING_TIERS,
-  SCHEDULED_POST_COUNTING_TEXT,
   type PlanKey,
 } from "@/lib/pricingPlans";
 import {
@@ -39,16 +36,15 @@ const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
 };
 
-function isAccountsPerPlatformFeature(value: string): boolean {
-  return /\baccounts? per platform\b/i.test(value);
-}
+const ACCOUNT_BULLET_INDEX: Record<PlanKey, number> = { free: 2, starter: 0, pro: 0, business: 0 };
 
 function PricingPlatformIcons() {
+  const { t } = useLocale();
   const accessibleNames = VISIBLE_SOCIAL_PROVIDERS.map(provider => PLATFORMS[provider].name).join(", ");
 
   return (
     <>
-      <span className="sr-only">Supported platforms: {accessibleNames}.</span>
+      <span className="sr-only">{t("public.pricing.compare.supportedPlatforms")} {accessibleNames}.</span>
       <span
         aria-hidden="true"
         data-pricing-platform-icons="true"
@@ -124,6 +120,7 @@ function PlanCards({
   pendingPlanId: PlanKey | null;
   billingEnabled: boolean;
 }) {
+  const { t } = useLocale();
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
       {PRICING_TIERS.map(plan => {
@@ -162,14 +159,14 @@ function PlanCards({
                 className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[10px] font-bold text-white tracking-wide"
                 style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}
               >
-                {plan.badge}
+                {t(`public.pricing.plan.${plan.id}.badge` as never)}
               </span>
             )}
             <p
               className="text-[12px] font-bold uppercase tracking-widest mb-3"
               style={{ color: "#9097A0" }}
             >
-              {plan.name}
+              {t(`public.pricing.plan.${plan.id}.name` as never)}
             </p>
 
             <div className="flex items-end gap-1 mb-1">
@@ -177,23 +174,24 @@ function PlanCards({
                 ${staticPrice}
               </span>
               <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
-                /mo
+                {t("public.pricing.checkout.perMonth")}
               </span>
             </div>
             <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
               {plan.priceMonthly > 0
                 ? yearly
-                  ? "billed annually"
-                  : `$${plan.priceYearly}/mo billed annually`
-                : "free forever"}
+                  ? t("public.pricing.checkout.billedAnnually")
+                  : `$${plan.priceYearly}${t("public.pricing.checkout.perMonth")} ${t("public.pricing.checkout.billedAnnually")}`
+                : t("public.pricing.checkout.freeForever")}
             </p>
 
             <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "#8B93A1" }}>
-              {plan.description}
+              {t(`public.pricing.plan.${plan.id}.description` as never)}
             </p>
             <ul className="flex-1 space-y-2.5 mb-6">
-              {plan.bullets.map(f => (
-                <li key={f} className="flex items-start gap-2.5 text-[12px]">
+              {plan.bullets.map((_, index) => {
+                const bullet = t(`public.pricing.plan.${plan.id}.bullet.${index}` as never);
+                return <li key={bullet} className="flex items-start gap-2.5 text-[12px]">
                   <Check
                     className="mt-0.5 h-3.5 w-3.5 shrink-0"
                     style={{ color: plan.highlighted ? "#A855F7" : "#10B981" }}
@@ -202,11 +200,11 @@ function PlanCards({
                     className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
                     style={{ color: "#C8CDD6" }}
                   >
-                    <span>{f}</span>
-                    {isAccountsPerPlatformFeature(f) && <PricingPlatformIcons />}
+                    <span>{bullet}</span>
+                    {index === ACCOUNT_BULLET_INDEX[plan.id] && <PricingPlatformIcons />}
                   </span>
-                </li>
-              ))}
+                </li>;
+              })}
             </ul>
 
             {purchasable && !billingEnabled ? (
@@ -224,7 +222,7 @@ function PlanCards({
                   plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
                 }
               >
-                Coming soon
+                {t("public.pricing.checkout.comingSoon")}
               </button>
             ) : purchasable ? (
               <button
@@ -238,7 +236,7 @@ function PlanCards({
                   plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
                 }
               >
-                {pendingPlanId === plan.id ? "Loading…" : plan.cta}
+                {pendingPlanId === plan.id ? t("public.pricing.checkout.loading") : t(`public.pricing.plan.${plan.id}.cta` as never)}
               </button>
             ) : (
               <Link
@@ -250,7 +248,7 @@ function PlanCards({
                   plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
                 }
               >
-                {plan.cta}
+                {t(`public.pricing.plan.${plan.id}.cta` as never)}
               </Link>
             )}
           </div>
@@ -261,6 +259,7 @@ function PlanCards({
 }
 
 function EnterpriseBanner() {
+  const { t } = useLocale();
   return (
     <div
       className="rounded-2xl border p-6 sm:p-7 flex flex-col lg:flex-row lg:items-center gap-5"
@@ -271,17 +270,17 @@ function EnterpriseBanner() {
     >
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: "#A855F7" }}>
-          Enterprise / Agency
+          {t("public.pricing.enterprise.eyebrow")}
         </p>
-        <p className="text-[16px] font-black text-white mb-1.5">{ENTERPRISE_PLAN.title}</p>
+        <p className="text-[16px] font-black text-white mb-1.5">{t("public.pricing.enterprise.title")}</p>
         <p className="text-[13px] leading-relaxed mb-4" style={{ color: "#8B93A1" }}>
-          {ENTERPRISE_PLAN.description}
+          {t("public.pricing.enterprise.description")}
         </p>
         <div className="flex flex-wrap gap-x-5 gap-y-2">
-          {ENTERPRISE_PLAN.bullets.map(b => (
-            <span key={b} className="flex items-center gap-1.5 text-[12px]" style={{ color: "#C8CDD6" }}>
+          {ENTERPRISE_PLAN.bullets.map((_, index) => (
+            <span key={index} className="flex items-center gap-1.5 text-[12px]" style={{ color: "#C8CDD6" }}>
               <Check className="w-3 h-3 shrink-0" style={{ color: "#A855F7" }} />
-              {b}
+              {t(`public.pricing.enterprise.bullet.${index}` as never)}
             </span>
           ))}
         </div>
@@ -291,29 +290,30 @@ function EnterpriseBanner() {
         className="shrink-0 rounded-full border px-7 py-3 text-[13px] font-bold text-center transition-colors hover:text-white hover:border-white/30"
         style={{ borderColor: "rgba(255,255,255,0.16)", color: "#C8CDD6" }}
       >
-        {ENTERPRISE_PLAN.cta}
+        {t("public.pricing.enterprise.cta")}
       </Link>
     </div>
   );
 }
 
 function CellValue({ value, highlighted }: { value: string; highlighted: boolean }) {
+  const { t } = useLocale();
   if (value === "✓") {
     return (
       <Check
-        aria-label="Included"
+        aria-label={t("public.pricing.compare.included")}
         className="h-4 w-4 mx-auto"
         style={{ color: highlighted ? "#A855F7" : "#10B981" }}
       />
     );
   }
   if (value === "—") {
-    return <Minus aria-label="Not included" className="h-4 w-4 mx-auto" style={{ color: "#374151" }} />;
+    return <Minus aria-label={t("public.pricing.compare.notIncluded")} className="h-4 w-4 mx-auto" style={{ color: "#374151" }} />;
   }
   if (value === "Limited" || value === "Basic") {
     return (
       <span className="text-[11px] font-semibold" style={{ color: "#8B93A1" }}>
-        {value}
+        {value === "Limited" ? t("public.pricing.compare.limited") : t("public.pricing.compare.basic")}
       </span>
     );
   }
@@ -325,13 +325,14 @@ function CellValue({ value, highlighted }: { value: string; highlighted: boolean
 }
 
 function ComparisonTable({ yearly }: { yearly: boolean }) {
+  const { t } = useLocale();
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
       <table className="w-full min-w-[760px] border-collapse" style={{ background: "var(--surface-2)" }}>
         <thead>
           <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
             <th className="text-left px-5 py-4 text-[12px] font-bold uppercase tracking-widest w-[32%]" style={{ color: "#6B7280" }}>
-              Features
+              {t("public.pricing.compare.features")}
             </th>
             {PRICING_TIERS.map(plan => {
               const displayedPrice = yearly ? plan.priceYearly : plan.priceMonthly;
@@ -341,16 +342,16 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
                   className="px-4 py-4 text-center w-[17%]"
                   style={plan.highlighted ? { background: "rgba(124,58,237,0.10)" } : undefined}
                 >
-                  <span className="block text-[13px] font-black text-white">{plan.name}</span>
+                  <span className="block text-[13px] font-black text-white">{t(`public.pricing.plan.${plan.id}.name` as never)}</span>
                   <span className="block text-[11px] mt-0.5" style={{ color: "#6B7280", ...MONO }}>
-                    ${displayedPrice}/mo
+                    ${displayedPrice}{t("public.pricing.checkout.perMonth")}
                   </span>
                 </th>
               );
             })}
           </tr>
         </thead>
-        {COMPARISON_SECTIONS.map(section => (
+        {COMPARISON_SECTIONS.map((section, sectionIndex) => (
           <tbody key={section.title}>
             <tr>
               <td
@@ -358,19 +359,19 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
                 className="px-5 pt-6 pb-2 text-[11px] font-bold uppercase tracking-[0.16em]"
                 style={{ color: "#A855F7" }}
               >
-                {section.title}
+                {t(`public.pricing.compare.section.${sectionIndex}` as never)}
               </td>
             </tr>
-            {section.rows.map(row => (
+            {section.rows.map((row, rowIndex) => (
               <tr key={row.label} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                 <td className="px-5 py-3 text-[13px]" style={{ color: "#C8CDD6" }}>
                   <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span>{row.label}</span>
-                    {isAccountsPerPlatformFeature(row.label) && <PricingPlatformIcons />}
+                    <span>{t(`public.pricing.compare.row.${sectionIndex}.${rowIndex}` as never)}</span>
+                    {sectionIndex === 0 && rowIndex === 0 && <PricingPlatformIcons />}
                   </span>
                   {row.note && (
                     <span className="block text-[11px] mt-0.5" style={{ color: "#6B7280" }}>
-                      {row.note}
+                      {t(`public.pricing.compare.note.${sectionIndex}.${rowIndex}` as never)}
                     </span>
                   )}
                 </td>
@@ -654,12 +655,10 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
                 color: "#C8CDD6",
               }}
             >
-              Paid plans are coming soon — checkout isn&apos;t open just yet. Want early
-              access? {" "}
+              {t("public.pricing.checkout.comingSoonNotice")} {" "}
               <Link href="mailto:support@vibepin.co" className="underline hover:opacity-80">
-                Contact us
+                {t("public.pricing.checkout.contactUs")}
               </Link>
-              .
             </div>
           )}
           {checkoutUnavailable && (
@@ -672,13 +671,11 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
                 color: "#E5C9F5",
               }}
             >
-              Checkout is temporarily unavailable — please try again in a moment or{" "}
+              {t("public.pricing.checkout.unavailable")} {" "}
               <Link href="mailto:support@vibepin.co" className="underline hover:opacity-80">
-                contact support
+                {t("public.pricing.checkout.contactSupport")}
               </Link>
-              . We&apos;ve kept your{" "}
-              {selectedPlanId ? PRICING_TIERS.find(t => t.id === selectedPlanId)?.name ?? "plan" : "plan"}{" "}
-              selection below — just click it again once ready.
+              {" "}{t("public.pricing.checkout.selectedPlan").replace("{plan}", selectedPlanId ? t(`public.pricing.plan.${selectedPlanId}.name` as never) : t("public.pricing.checkout.plan"))}
             </div>
           )}
           <div className="text-center max-w-[760px] mx-auto mb-12">
@@ -706,10 +703,10 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mb-8">
-            {PRICING_REASSURANCE.map(t => (
-              <span key={t} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}>
+            {PRICING_REASSURANCE.map((_, index) => (
+              <span key={index} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}>
                 <Check className="w-3 h-3 shrink-0" style={{ color: "#10B981" }} />
-                {t}
+                {t(`public.pricing.reassurance.${index}` as never)}
               </span>
             ))}
           </div>
@@ -722,26 +719,25 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
       <section className="py-16 lg:py-20 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
         <div className={CONTAINER}>
           <div className="text-center max-w-[720px] mx-auto mb-10">
-            <SectionLabel>COMPARE PLANS</SectionLabel>
+            <SectionLabel>{t("public.pricing.compare.eyebrow")}</SectionLabel>
             <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight leading-[1.08] mb-4">
-              Everything in every plan, <GradientText>side by side.</GradientText>
+              {t("public.pricing.compare.title")} <GradientText>{t("public.pricing.compare.titleAccent")}</GradientText>
             </h2>
             <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
-              Discover high-save products, trending Pins, and keyword ideas. Generate content with
-              AI. Publish to Pinterest, Instagram, and Facebook.
+              {t("public.pricing.compare.description")}
             </p>
           </div>
           <ComparisonTable yearly={yearly} />
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-5" style={{ color: "#C8CDD6" }}>
-            {SCHEDULED_POST_COUNTING_TEXT}
+            {t("public.pricing.footnote.scheduledPosts")}
           </p>
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#6B7280" }}>
-            {ACCOUNTS_HELPER_TEXT}
+            {t("public.pricing.footnote.accounts")}
           </p>
           {/* The add-on, stated where the account numbers are: someone reading
               "1 account per platform" is exactly who needs to know it can be raised. */}
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#8B93A1" }}>
-            {EXTRA_ACCOUNT_HELPER_TEXT}
+            {t("public.pricing.footnote.extraAccounts")}
           </p>
         </div>
       </section>
@@ -751,28 +747,27 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
         <div className={CONTAINER}>
           <div className="grid lg:grid-cols-[35%_1fr] gap-10 lg:gap-16 items-start">
             <div>
-              <SectionLabel>PRICING FAQ</SectionLabel>
+              <SectionLabel>{t("public.pricing.faq.eyebrow")}</SectionLabel>
               <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight leading-[1.08] mb-4">
-                Questions about <GradientText>plans and limits.</GradientText>
+                {t("public.pricing.faq.title")} <GradientText>{t("public.pricing.faq.titleAccent")}</GradientText>
               </h2>
               <p className="text-[14px] leading-relaxed mb-6" style={{ color: "#8B93A1" }}>
-                How AI image credits, scheduled posts, accounts per platform, and discovery
-                features work across plans.
+                {t("public.pricing.faq.description")}
               </p>
               <Link
                 href="mailto:support@vibepin.co"
                 className="inline-flex items-center gap-1.5 text-[13px] font-bold transition-opacity hover:opacity-80"
                 style={{ color: "#E879F9" }}
               >
-                Contact support <ArrowRight className="w-3.5 h-3.5" />
+                {t("public.pricing.faq.contact")} <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
             <div className="space-y-2.5">
               {PRICING_FAQ.map((item, i) => (
                 <FaqAccordionItem
-                  key={item.question}
-                  question={item.question}
-                  answer={item.answer}
+                  key={i}
+                  question={t(`public.pricing.faq.item.${i}.question` as never)}
+                  answer={t(`public.pricing.faq.item.${i}.answer` as never)}
                   defaultOpen={i === 0}
                 />
               ))}
@@ -785,15 +780,14 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
       <section className="py-16 lg:py-20 border-t text-center" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
         <div className={CONTAINER}>
           <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight leading-[1.08] mb-4">
-            Create more content. <GradientText>Publish everywhere.</GradientText>
+            {t("public.pricing.finalCta.title")} <GradientText>{t("public.pricing.finalCta.titleAccent")}</GradientText>
           </h2>
           <p className="text-[14px] leading-relaxed max-w-[560px] mx-auto mb-8" style={{ color: "#8B93A1" }}>
-            Discover products and Pin ideas, generate content with AI, and publish to Pinterest,
-            Instagram, and Facebook.
+            {t("public.pricing.finalCta.description")}
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Link href="/signup?plan=free" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
-              Get started free <ArrowRight className="w-4 h-4" />
+              {t("public.pricing.finalCta.free")} <ArrowRight className="w-4 h-4" />
             </Link>
             {!billingEnabled ? (
               // Same first-paint "coming soon" treatment as the paid cards.
@@ -804,7 +798,7 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
                 className="rounded-full border px-8 py-3.5 text-[14px] font-semibold opacity-60 cursor-not-allowed"
                 style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
               >
-                Coming soon
+                {t("public.pricing.finalCta.comingSoon")}
               </button>
             ) : (
               <button
@@ -814,7 +808,7 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
                 className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
                 style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
               >
-                {(pendingPlanId ?? pendingIntent?.planId) === "pro" ? "Loading…" : "Start Pro"}
+                {(pendingPlanId ?? pendingIntent?.planId) === "pro" ? t("public.pricing.checkout.loading") : t("public.pricing.finalCta.pro")}
               </button>
             )}
           </div>

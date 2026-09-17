@@ -24,6 +24,7 @@
 /** Fast node-only unit/contract tests. `npm test` runs every one of these. */
 export const CORE: string[] = [
   "test-i18n",
+  "test-public-pricing-i18n",
   "test-public-locale-routes",
   "test-public-shell-runtime",
   "test-shared-pin-details",
@@ -129,6 +130,7 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-plan-entitlements",
+  "test-pricing-auth-header",
   "test-pricing-auth-p0p1",
   "test-usage-period-math",
   "test-billing-usage-api",

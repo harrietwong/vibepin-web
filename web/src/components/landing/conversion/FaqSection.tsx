@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { FAQ_ITEMS } from "@/lib/landing/conversionData";
 import { CONTAINER, GradientText, SECTION, SectionLabel } from "./shared";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export function FaqAccordionItem({
   question,
@@ -57,34 +58,34 @@ export function FaqAccordionItem({
 }
 
 export function FaqSection() {
+  const { t } = useLocale();
   return (
     <section className={SECTION} style={{ borderColor: "rgba(255,255,255,0.06)" }}>
       <div className={CONTAINER}>
         <div className="grid lg:grid-cols-[35%_1fr] gap-10 lg:gap-16 items-start">
           <div>
-            <SectionLabel>FREQUENTLY ASKED QUESTIONS</SectionLabel>
+            <SectionLabel>{t("public.landing.faq.eyebrow")}</SectionLabel>
             <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight leading-[1.08] mb-4">
-              Everything you need <GradientText>to start with confidence.</GradientText>
+              {t("public.landing.faq.title")} <GradientText>{t("public.landing.faq.titleAccent")}</GradientText>
             </h2>
             <p className="text-[14px] leading-relaxed mb-6" style={{ color: "#8B93A1" }}>
-              Learn how VibePin finds opportunities, uses Pinterest signals, creates Pins, and
-              turns them into scheduled publishing plans.
+              {t("public.landing.faq.description")}
             </p>
             <Link
               href="/app/help"
               className="inline-flex items-center gap-1.5 text-[13px] font-bold transition-opacity hover:opacity-80"
               style={{ color: "#E879F9" }}
             >
-              Visit Help Center <ArrowRight className="w-3.5 h-3.5" />
+              {t("public.landing.faq.contact")} <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
           <div className="space-y-2.5">
             {FAQ_ITEMS.map((item, i) => (
               <FaqAccordionItem
-                key={item.question}
-                question={item.question}
-                answer={item.answer}
-                note={item.note}
+                key={i}
+                question={t(`public.landing.faq.item.${i}.question` as never)}
+                answer={t(`public.landing.faq.item.${i}.answer` as never)}
+                note={item.note ? t(`public.landing.faq.item.${i}.note` as never) : undefined}
                 defaultOpen={i === 0}
               />
             ))}
