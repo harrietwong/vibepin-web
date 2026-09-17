@@ -49,7 +49,8 @@ export const metadata: Metadata = {
 // globals.css) — it never reads/writes the /app theme state above, and vice
 // versa. Mirrors lib/admin/adminTheme.ts (ADMIN_THEME_STORAGE_KEY, DEFAULT_ADMIN_THEME="light").
 const THEME_INIT_SCRIPT = `(function(){try{
-  if(!location.pathname.startsWith('/admin')){
+  var isPublicShellPath=/^(\\/|\\/(pricing|contact|about|careers|privacy|terms|refund-policy|acceptable-use-policy|data-deletion-status|pinterest-app|welcome|login|signup)\\/?$/.test(location.pathname);
+  if(location.pathname.startsWith('/app')||isPublicShellPath){
     var t=localStorage.getItem('vp:appearance_theme:v1');
     var r=t==='light'?'light':t==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):'dark';
     document.documentElement.setAttribute('data-theme',r);

@@ -13,7 +13,7 @@
  * so this route is never intercepted by the login guard.
  */
 
-import { PublicShell } from "@/components/public/PublicShell";
+import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
 
 export const metadata = {
   title: "Data Deletion Status — VibePin",
@@ -29,6 +29,7 @@ export default async function DataDeletionStatusPage({
 
   return (
     <PublicShell>
+    <PublicAuthHeader />
     <main
       style={{
         minHeight: "100vh",
@@ -36,8 +37,8 @@ export default async function DataDeletionStatusPage({
         alignItems: "center",
         justifyContent: "center",
         padding: 24,
-        background: "#0B0F1A",
-        color: "#E2E8F0",
+        background: "var(--public-bg)",
+        color: "var(--public-text)",
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
       }}
     >
@@ -47,20 +48,20 @@ export default async function DataDeletionStatusPage({
           textAlign: "center",
           padding: "32px 28px",
           borderRadius: 16,
-          border: "1px solid rgba(255,255,255,0.10)",
-          background: "#161D2E",
+          border: "1px solid var(--public-border)",
+          background: "var(--public-surface)",
         }}
       >
         <h1 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 12px" }}>
           Data deletion request received
         </h1>
         {confirmationCode ? (
-          <p style={{ fontSize: 14, lineHeight: 1.6, color: "#8892A4", margin: 0 }}>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--public-text-muted)", margin: 0 }}>
             Your data deletion request has been received and processed. Confirmation code:{" "}
-            <strong style={{ color: "#E2E8F0" }}>{confirmationCode}</strong>
+            <strong style={{ color: "var(--public-text)" }}>{confirmationCode}</strong>
           </p>
         ) : (
-          <p style={{ fontSize: 14, lineHeight: 1.6, color: "#8892A4", margin: 0 }}>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--public-text-muted)", margin: 0 }}>
             No confirmation code was provided. If you requested data deletion via Facebook,
             please allow a few minutes and check the link Facebook provided again.
           </p>

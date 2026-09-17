@@ -23,6 +23,8 @@ import {
   startCreemCheckout,
 } from "@/lib/billing/creemCheckoutClient";
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
+import { PublicLanguageTheme, PublicNavLinks } from "@/components/public/PublicShell";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 import { PLATFORMS, VISIBLE_SOCIAL_PROVIDERS } from "@/lib/social/platforms";
@@ -67,14 +69,15 @@ function isPaidPlan(id: PlanKey): id is PaidPlan {
 }
 
 function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: boolean) => void }) {
+  const { t } = useLocale();
   return (
     <div
       className="inline-flex items-center gap-1 rounded-full border p-1.5"
       style={{ background: "#080C12", borderColor: "rgba(255,255,255,0.08)" }}
     >
       {[
-        { label: "Monthly", val: false },
-        { label: "Yearly", val: true },
+        { label: t("public.pricing.monthly"), val: false },
+        { label: t("public.pricing.yearly"), val: true },
       ].map(o => (
         <button
           key={o.label}
@@ -93,7 +96,7 @@ function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: bo
               className="rounded-full px-2 py-0.5 text-[10px] font-bold text-white"
               style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}
             >
-              Save 20%
+              {t("public.pricing.save")}
             </span>
           )}
         </button>
@@ -384,6 +387,7 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
 }
 
 function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
+  const { t } = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -582,20 +586,19 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
             <span className="font-black text-white tracking-tight text-[17px]">VibePin</span>
           </Link>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
-            <Link href="/#create" className="hover:text-white transition-colors">How it works</Link>
-            <Link href="/app/products" className="hover:text-white transition-colors">Product Opportunities</Link>
-            <span className="text-white font-semibold">Pricing</span>
+            <PublicNavLinks active="pricing" />
           </div>
           <div className="flex items-center gap-2.5">
+            <PublicLanguageTheme />
             <Link
               href="/login?next=/pricing"
               className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white"
               style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}
             >
-              Log in
+              {t("public.nav.logIn")}
             </Link>
             <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
-              Get started <ArrowRight className="w-3.5 h-3.5" />
+              {t("public.pricing.getStarted")} <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
         </div>
@@ -646,16 +649,15 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
             </div>
           )}
           <div className="text-center max-w-[760px] mx-auto mb-12">
-            <SectionLabel>PRICING</SectionLabel>
+            <SectionLabel>{t("public.pricing.eyebrow")}</SectionLabel>
             <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-[1.08] mb-4">
-              Simple pricing for{" "}
+              {t("public.pricing.title")}{" "}
               <GradientText>
-                product discovery, AI content creation, and multi-platform publishing.
+                {t("public.pricing.titleAccent")}
               </GradientText>
             </h1>
             <p className="text-[15px] leading-relaxed mb-7" style={{ color: "#8B93A1" }}>
-              Start free. Upgrade when you need more AI generation, more scheduled posts, and more
-              accounts per platform.
+              {t("public.pricing.description")}
             </p>
             <BillingToggle yearly={yearly} onChange={setYearly} />
           </div>

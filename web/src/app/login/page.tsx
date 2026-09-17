@@ -5,7 +5,7 @@ import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import BrandLogo from "@/components/BrandLogo";
 import { authUiErrorMessage, safeNextPath } from "@/lib/authRedirects";
-import { PublicShell } from "@/components/public/PublicShell";
+import { PublicAuthHeader, PublicShell } from "@/components/public/PublicShell";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -65,7 +65,9 @@ function LoginContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA] px-4">
+    <div className="public-auth-page min-h-screen flex flex-col" style={{ background: "var(--public-bg)" }}>
+      <PublicAuthHeader />
+      <main className="flex flex-1 items-center justify-center px-4 py-8">
       <div className="w-full max-w-[400px]">
 
         {/* Logo */}
@@ -161,6 +163,7 @@ function LoginContent() {
           </Link>
         </p>
       </div>
+      </main>
     </div>
   );
 }
@@ -169,7 +172,7 @@ export default function LoginPage() {
   return (
     <PublicShell>
       <Suspense fallback={
-        <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA]">
+        <div className="public-auth-page min-h-screen flex items-center justify-center" style={{ background: "var(--public-bg)" }}>
           <div className="h-8 w-8 rounded-xl animate-pulse" style={{ background: "linear-gradient(135deg,#FF4D8D,#7C3AED)" }} />
         </div>
       }>

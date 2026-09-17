@@ -14,7 +14,8 @@ import { SupportedNichesStrip } from "@/components/landing/conversion/SupportedN
 import { PricingSection } from "@/components/landing/conversion/PricingSection";
 import { FaqSection } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
-import { PublicShell } from "@/components/public/PublicShell";
+import { PublicLanguageTheme, PublicNavLinks, PublicShell } from "@/components/public/PublicShell";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const scoreColor = (s: number) => (s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : "#EF4444");
@@ -481,6 +482,7 @@ function WorkflowTimelineStep({ n, title, copy, bullets, mock, icon }: { n: numb
 }
 
 export default function HomePage() {
+  const { t } = useLocale();
   // Curated Boho Living Room landing assets (single source of truth in the manifest).
   const pinSamples = bohoReferences;
   const products = bohoProducts;
@@ -498,14 +500,12 @@ export default function HomePage() {
         <div className="max-w-[1240px] mx-auto px-5 h-[60px] flex items-center justify-between">
           <div className="flex items-center gap-2"><BrandLogo size={36} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
-            <a href="#create" className="hover:text-white transition-colors">How it works</a>
-            <Link href="/app/products" className="hover:text-white transition-colors">Product Opportunities</Link>
-            <Link href="/app/studio" className="hover:text-white transition-colors">Create Pins</Link>
-            <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
+            <PublicNavLinks />
           </div>
           <div className="flex items-center gap-2.5">
-            <Link href="/login" className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}>Log in</Link>
-            <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>Build my next 7 Pins <ArrowRight className="w-3.5 h-3.5" /></Link>
+            <PublicLanguageTheme />
+            <Link href="/login" className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}>{t("public.nav.logIn")}</Link>
+            <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>{t("public.nav.getStarted")} <ArrowRight className="w-3.5 h-3.5" /></Link>
           </div>
         </div>
       </nav>
@@ -515,12 +515,12 @@ export default function HomePage() {
         <div className="pointer-events-none absolute -top-32 right-[-8%] h-[460px] w-[460px] rounded-full blur-3xl" style={{ background: "radial-gradient(circle, rgba(217,70,239,0.16), transparent 70%)" }} />
         <div className="max-w-[1240px] mx-auto px-5 grid grid-cols-1 lg:grid-cols-[0.92fr_1.18fr] gap-10 lg:gap-12 items-center relative">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 mb-6" style={{ background: "rgba(217,70,239,0.08)", borderColor: "rgba(217,70,239,0.25)" }}><Sparkles className="w-3 h-3" style={{ color: "#E879F9" }} /><span className="text-[11px] font-semibold tracking-wide" style={{ color: "#E879F9" }}>Pinterest Growth Intelligence</span></div>
-            <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">Pinterest growth starts with signals.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin turns evidence into content.</span></h1>
-            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin connects real product pages with auditable Pinterest evidence, shows Pin formats supported by real engagement, then turns those inputs into ready-to-publish Pins and a weekly content plan.</p>
+            <div className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 mb-6" style={{ background: "rgba(217,70,239,0.08)", borderColor: "rgba(217,70,239,0.25)" }}><Sparkles className="w-3 h-3" style={{ color: "#E879F9" }} /><span className="text-[11px] font-semibold tracking-wide" style={{ color: "#E879F9" }}>{t("public.landing.eyebrow")}</span></div>
+            <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">{t("public.landing.title")}<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{t("public.landing.titleAccent")}</span></h1>
+            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>{t("public.landing.description")}</p>
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
-              <Link href="/app/studio" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
-              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>Explore Product Opportunities</Link>
+              <Link href="/app/studio" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>{t("public.landing.primaryCta")} <ArrowRight className="w-4 h-4" /></Link>
+              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>{t("public.landing.secondaryCta")}</Link>
             </div>
             <div className="flex items-center gap-3 mb-5">
               <div className="flex -space-x-2">{["#FF4D8D", "#D946EF", "#A855F7", "#7C3AED"].map((g, i) => <span key={i} className="h-8 w-8 rounded-full border-2" style={{ borderColor: "var(--bg)", background: `linear-gradient(135deg,${g},#0C1018)` }} />)}</div>

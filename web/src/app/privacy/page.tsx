@@ -2,7 +2,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 import { LEGAL_ENTITY_NAME } from "@/lib/legalEntity";
-import { PublicShell } from "@/components/public/PublicShell";
+import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
 
 const CONTACT = "support@vibepin.co";
 const UPDATED = "August 8, 2026";
@@ -15,7 +15,7 @@ export const metadata = {
 export default function PrivacyPage() {
   return (
     <PublicShell>
-    <div className="min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
+    <div className="public-page-content min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md"
@@ -28,11 +28,12 @@ export default function PrivacyPage() {
               <span className="font-black text-white text-[15px] tracking-tight">VibePin</span>
             </Link>
           </div>
-          <div className="flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
+          <div className="public-page-nav-links flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
             <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
             <Link href="/acceptable-use-policy" className="hover:text-white transition-colors">Acceptable Use</Link>
             <Link href="/pinterest-app" className="hover:text-white transition-colors">Pinterest App</Link>
           </div>
+          <PublicLanguageTheme />
         </div>
       </nav>
 

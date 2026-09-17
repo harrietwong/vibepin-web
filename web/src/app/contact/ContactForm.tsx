@@ -1,12 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CheckCircle } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const CONTACT = "support@vibepin.co";
+
+const CONTACT_REASONS = [
+  ["contact.reason.product.title", "contact.reason.product.description"],
+  ["contact.reason.billing.title", "contact.reason.billing.description"],
+  ["contact.reason.partnership.title", "contact.reason.partnership.description"],
+] as const;
+
+export function ContactDetails() {
+  const { t } = useLocale();
+
+  return (
+    <div>
+      <div className="rounded-2xl border p-6 mb-5" style={{ background: "var(--public-surface)", borderColor: "var(--public-border)" }}>
+        <p className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: "var(--public-text-muted)" }}>{t("contact.emailLabel")}</p>
+        <a href={`mailto:${CONTACT}`} className="text-xl font-black hover:opacity-80 transition-opacity" style={{ color: "var(--public-text)" }}>{CONTACT}</a>
+        <p className="text-[12px] mt-2" style={{ color: "var(--public-text-muted)" }}>{t("contact.emailHint")}</p>
+      </div>
+      <div className="space-y-3">
+        {CONTACT_REASONS.map(([title, description]) => (
+          <div key={title} className="rounded-xl border p-4" style={{ background: "var(--public-surface)", borderColor: "var(--public-border)" }}>
+            <p className="text-[13px] font-bold mb-1" style={{ color: "var(--public-text)" }}>{t(title)}</p>
+            <p className="text-[12px] leading-relaxed" style={{ color: "var(--public-text-muted)" }}>{t(description)}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -16,18 +44,11 @@ export default function ContactForm() {
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [subject, setSubject] = useState("");
+  const [subject, setSubject] = useState(() => searchParams.get("subject") ?? "");
   const [message, setMessage] = useState("");
   const [website, setWebsite] = useState(""); // honeypot — real users never fill this
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const initialSubject = searchParams.get("subject");
-    if (initialSubject) setSubject(initialSubject);
-    // Only seed from the URL once on mount — the field stays fully editable afterward.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,12 +57,12 @@ export default function ContactForm() {
 
     if (!email.trim() || !email.includes("@")) {
       setStatus("error");
-      setError("Please enter a valid email address.");
+      setError(t("contact.invalidEmail"));
       return;
     }
     if (!message.trim()) {
       setStatus("error");
-      setError("Please enter a message.");
+      setError(t("contact.missingMessage"));
       return;
     }
 
@@ -60,10 +81,10 @@ export default function ContactForm() {
       }
 
       setStatus("error");
-      setError(data?.error || "Something went wrong. Please try again.");
+      setError(data?.error || t("contact.genericError"));
     } catch {
       setStatus("error");
-      setError("Network error. Please check your connection and try again.");
+      setError(t("contact.networkError"));
     }
   }
 
@@ -112,7 +133,7 @@ export default function ContactForm() {
       className="rounded-2xl border p-6 sm:p-7"
       style={{ background: "var(--public-surface)", borderColor: "var(--public-border)", boxShadow: "0 12px 32px rgba(15,23,42,0.10)" }}
     >
-      <p className="text-[15px] font-black text-white mb-4">Send us a message</p>
+      <p className="text-[15px] font-black mb-4" style={{ color: "var(--public-text)" }}>{t("contact.formTitle")}</p>
 
       {/* Honeypot — invisible to real users, catches bots that fill every field */}
       <input
@@ -127,20 +148,20 @@ export default function ContactForm() {
       />
 
       <div className="grid sm:grid-cols-2 gap-3 mb-3">
-        <Field label="Name" name="name" placeholder="Your name" value={name} onChange={setName} />
-        <Field label="Email" name="email" type="email" placeholder="you@example.com" value={email} onChange={setEmail} />
+        <Field label={t("contact.name")} name="name" placeholder={t("contact.namePlaceholder")} value={name} onChange={setName} />
+        <Field label={t("contact.email")} name="email" type="email" placeholder={t("contact.emailPlaceholder")} value={email} onChange={setEmail} />
       </div>
-      <Field label="Subject" name="subject" placeholder="How can we help?" value={subject} onChange={setSubject} />
+      <Field label={t("contact.subject")} name="subject" placeholder={t("contact.subjectPlaceholder")} value={subject} onChange={setSubject} />
       <div className="mt-3">
-        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "#9097A0" }}>Message</label>
+        <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{t("contact.message")}</label>
         <textarea
           name="message"
           rows={5}
-          placeholder="Tell us a bit more…"
+          placeholder={t("contact.messagePlaceholder")}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           className="w-full rounded-lg px-3 py-2.5 text-[13px] outline-none focus:border-fuchsia-500/50 transition-colors"
-          style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.10)", color: "#E5E7EB", resize: "vertical" }}
+          style={{ background: "var(--public-bg)", border: "1px solid var(--public-border)", color: "var(--public-text)", resize: "vertical" }}
         />
       </div>
 
@@ -155,15 +176,29 @@ export default function ContactForm() {
         disabled={status === "submitting"}
         className="btn-cta w-full mt-5 rounded-full py-3 text-[14px] font-bold text-white transition-transform hover:scale-[1.02] disabled:opacity-60 disabled:hover:scale-100"
       >
-        {status === "submitting" ? "Sending…" : "Send message"}
+        {status === "submitting" ? t("contact.sending") : t("contact.send")}
       </button>
-      <p className="text-[11px] text-center mt-3" style={{ color: "#4B5563" }}>
+      <p className="text-[11px] text-center mt-3" style={{ color: "var(--public-text-muted)" }}>
         Prefer email? Write to{" "}
-        <a href={`mailto:${CONTACT}`} className="hover:text-white" style={{ color: "#A855F7" }}>
+        <a href={`mailto:${CONTACT}`} className="hover:opacity-80" style={{ color: "var(--public-accent-strong)" }}>
           {CONTACT}
         </a>.
       </p>
     </form>
+  );
+}
+
+export function ContactPageIntro() {
+  const { t } = useLocale();
+  return (
+    <>
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#0E7490" }}>{t("contact.eyebrow")}</p>
+      <h1 className="text-4xl sm:text-5xl font-black tracking-tight leading-[1.05] mb-4" style={{ color: "var(--public-text)" }}>
+        {t("contact.title")} {" "}
+        <span style={{ background: "linear-gradient(100deg,#0891B2,#0F766E)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{t("contact.titleAccent")}</span>
+      </h1>
+      <p className="text-[15px] leading-relaxed mb-12 max-w-[560px]" style={{ color: "var(--public-text-muted)" }}>{t("contact.description")}</p>
+    </>
   );
 }
 
@@ -184,7 +219,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "#9097A0" }}>{label}</label>
+      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "var(--public-text-muted)" }}>{label}</label>
       <input
         type={type}
         name={name}
@@ -192,7 +227,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-lg px-3 py-2.5 text-[13px] outline-none focus:border-fuchsia-500/50 transition-colors"
-        style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.10)", color: "#E5E7EB" }}
+        style={{ background: "var(--public-bg)", border: "1px solid var(--public-border)", color: "var(--public-text)" }}
       />
     </div>
   );

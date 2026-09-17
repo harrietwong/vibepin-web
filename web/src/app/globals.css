@@ -129,10 +129,8 @@ body::-webkit-scrollbar { width: 12px; }
   --public-accent-soft: rgba(56, 189, 248, 0.12);
 }
 .public-shell-controls {
-  position: fixed;
-  top: 12px;
-  right: max(16px, env(safe-area-inset-right));
-  z-index: 80;
+  position: relative;
+  z-index: 10;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -142,13 +140,15 @@ body::-webkit-scrollbar { width: 12px; }
   background: color-mix(in srgb, var(--public-surface) 90%, transparent);
   box-shadow: 0 8px 26px rgba(15, 23, 42, 0.10);
   backdrop-filter: blur(12px);
+  min-height: 52px;
+  flex: 0 0 auto;
 }
 .public-shell-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 32px;
+  min-height: 44px;
   min-width: 44px;
   padding: 0 9px;
   border: 1px solid transparent;
@@ -163,6 +163,14 @@ body::-webkit-scrollbar { width: 12px; }
 .public-shell-control:hover,
 .public-shell-control[aria-expanded="true"] { background: var(--public-accent-soft); }
 .public-shell-control--icon { min-width: 32px; padding: 0; }
+.public-nav-link { min-height: 44px; display: inline-flex; align-items: center; }
+.public-auth-header {
+  min-height: 60px;
+  padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
 .public-shell-menu-row:hover { background: var(--public-accent-soft) !important; }
 .public-shell a,
 .public-shell button,
@@ -170,9 +178,45 @@ body::-webkit-scrollbar { width: 12px; }
 .public-shell textarea,
 .public-shell select { max-width: 100%; }
 
+/* The public pages predate the shared shell and still carry a few dark-first
+   utility classes/inline tokens. Keep those pages legible in light mode
+   without changing the dedicated app/admin surfaces. */
+[data-theme="light"] .public-page-content [style*="#0A0C14"],
+[data-theme="light"] .public-page-content [style*="#0B0F1A"],
+[data-theme="light"] .public-page-content [style*="#0C1018"],
+[data-theme="light"] .public-page-content [style*="#080C12"],
+[data-theme="light"] .public-page-content [style*="#120E1E"],
+[data-theme="light"] .public-page-content [style*="#161D2E"] {
+  background: var(--public-surface) !important;
+}
+[data-theme="light"] .public-page-content > nav {
+  background: color-mix(in srgb, var(--public-surface) 92%, transparent) !important;
+  border-color: var(--public-border) !important;
+}
+[data-theme="light"] .public-page-content [style*="rgba(255,255,255"] {
+  border-color: var(--public-border) !important;
+}
+[data-theme="light"] .public-page-content .text-white {
+  color: var(--public-text) !important;
+}
+[data-theme="light"] .public-page-content .btn-cta,
+[data-theme="light"] .public-page-content .btn-cta .text-white,
+[data-theme="light"] .public-page-content nav .text-white {
+  color: #fff !important;
+}
+[data-theme="light"] .public-page-content [style*="#8B93A1"],
+[data-theme="light"] .public-page-content [style*="#8B9E97"],
+[data-theme="light"] .public-page-content [style*="#9097A0"],
+[data-theme="light"] .public-page-content [style*="#6B7280"],
+[data-theme="light"] .public-page-content [style*="#5B6472"],
+[data-theme="light"] .public-page-content [style*="#4B5563"],
+[data-theme="light"] .public-page-content [style*="#4D5E58"] {
+  color: var(--public-text-muted) !important;
+}
+
 @media (max-width: 390px) {
-  .public-shell-controls { top: 8px; right: max(8px, env(safe-area-inset-right)); }
-  .public-shell-control { min-height: 40px; min-width: 42px; }
+  .public-shell-controls { gap: 4px; }
+  .public-page-nav-links { display: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
-import { PublicShell } from "@/components/public/PublicShell";
+import { PublicLanguageTheme, PublicShell } from "@/components/public/PublicShell";
 
 const CONTACT = "support@vibepin.co";
 const UPDATED = "July 13, 2026";
@@ -14,7 +14,7 @@ export const metadata = {
 export default function RefundPolicyPage() {
   return (
     <PublicShell>
-    <div className="min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
+    <div className="public-page-content min-h-screen antialiased" style={{ background: "var(--public-bg)", color: "var(--public-text)" }}>
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md"
@@ -27,11 +27,12 @@ export default function RefundPolicyPage() {
               <span className="font-black text-white text-[15px] tracking-tight">VibePin</span>
             </Link>
           </div>
-          <div className="flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
+          <div className="public-page-nav-links flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
             <Link href="/about" className="hover:text-white transition-colors">About</Link>
             <Link href="/privacy" className="hover:text-white transition-colors">Privacy</Link>
             <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
           </div>
+          <PublicLanguageTheme />
         </div>
       </nav>
 

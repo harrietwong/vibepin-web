@@ -2,10 +2,16 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Monitor, Moon, Sun } from "lucide-react";
+import Link from "next/link";
 import { LocaleProvider, useLocale } from "@/lib/i18n/LocaleProvider";
 import { ALL_APP_LANGUAGES, appLanguageShortLabel, type LanguageCode } from "@/lib/i18n/config";
 import { ThemeProvider, useTheme } from "@/lib/theme/ThemeProvider";
 import type { ThemePreference } from "@/lib/theme/themeStore";
+import {
+  closePublicMenuOnEscape,
+  isPublicHeaderCompact,
+  PUBLIC_CONTROL_MIN_SIZE,
+} from "./publicShellContract";
 
 const MENU_STYLE: React.CSSProperties = {
   position: "absolute",
@@ -41,7 +47,7 @@ function PublicMenuRow({
         alignItems: "center",
         gap: 9,
         width: "100%",
-        minHeight: 36,
+        minHeight: PUBLIC_CONTROL_MIN_SIZE,
         padding: "8px 10px",
         border: 0,
         borderRadius: 8,
@@ -70,10 +76,7 @@ function useEscapeClose(
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
+      closePublicMenuOnEscape(event.key, () => setOpen(false), () => triggerRef.current?.focus());
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -109,6 +112,7 @@ function PublicLanguageControl() {
         title={t("public.controls.language")}
         onClick={() => setOpen(!open)}
         className="public-shell-control focus-visible:outline-2 focus-visible:outline-offset-2"
+        style={{ minHeight: PUBLIC_CONTROL_MIN_SIZE, minWidth: PUBLIC_CONTROL_MIN_SIZE }}
       >
         <span>{appLanguageShortLabel(current)}</span>
         <ChevronDown aria-hidden="true" size={13} />
@@ -157,6 +161,7 @@ function PublicThemeControl() {
         title={t("public.controls.theme")}
         onClick={() => setOpen(!open)}
         className="public-shell-control public-shell-control--icon focus-visible:outline-2 focus-visible:outline-offset-2"
+        style={{ minHeight: PUBLIC_CONTROL_MIN_SIZE, minWidth: PUBLIC_CONTROL_MIN_SIZE }}
       >
         <CurrentIcon aria-hidden="true" size={15} />
       </button>
@@ -176,11 +181,58 @@ function PublicThemeControl() {
 }
 
 export function PublicLanguageTheme() {
+  const { t } = useLocale();
+  const [compact, setCompact] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 390px)");
+    const update = () => setCompact(isPublicHeaderCompact(window.innerWidth));
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
   return (
-    <div data-testid="public-language-theme" className="public-shell-controls" aria-label="Public appearance controls">
+    <div
+      data-testid="public-language-theme"
+      data-compact={compact || undefined}
+      className="public-shell-controls"
+      role="group"
+      aria-label={t("public.controls.appearance")}
+    >
       <PublicLanguageControl />
       <PublicThemeControl />
     </div>
+  );
+}
+
+export function PublicNavLinks({ active, compact = false }: { active?: "pricing" | "about" | "careers" | "contact"; compact?: boolean }) {
+  const { t } = useLocale();
+  const linkClass = "public-nav-link hover:text-[var(--public-text)] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2";
+  if (compact) {
+    return (
+      <>
+        <Link href="/about" className={linkClass}>{t("public.nav.about")}</Link>
+        <Link href="/privacy" className={linkClass}>{t("public.nav.privacy")}</Link>
+        <Link href="/terms" className={linkClass}>{t("public.nav.terms")}</Link>
+      </>
+    );
+  }
+  return (
+    <>
+      <Link href="/#create" className={linkClass}>{t("public.nav.howItWorks")}</Link>
+      <Link href="/app/products" className={linkClass}>{t("public.nav.productOpportunities")}</Link>
+      <Link href="/app/studio" className={linkClass}>{t("public.nav.createPins")}</Link>
+      <Link href="/pricing" aria-current={active === "pricing" ? "page" : undefined} className={active === "pricing" ? `${linkClass} font-semibold` : linkClass}>{t("public.nav.pricing")}</Link>
+    </>
+  );
+}
+
+export function PublicAuthHeader() {
+  return (
+    <header className="public-auth-header">
+      <PublicLanguageTheme />
+    </header>
   );
 }
 
@@ -189,7 +241,6 @@ export function PublicShell({ children }: { children: ReactNode }) {
     <ThemeProvider>
       <LocaleProvider>
         <div className="public-shell min-h-screen min-w-0 overflow-x-clip">
-          <PublicLanguageTheme />
           {children}
         </div>
       </LocaleProvider>

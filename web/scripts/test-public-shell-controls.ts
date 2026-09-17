@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readLocalTheme, writeLocalTheme } from "../src/lib/theme/themeStore";
+import { normalizeLocalePreferences } from "../src/lib/i18n/config";
+import {
+  PUBLIC_CONTROL_MIN_SIZE,
+  isPublicShellRoute,
+  isPublicHeaderCompact,
+  closePublicMenuOnEscape,
+} from "../src/components/public/publicShellContract";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -52,7 +60,7 @@ test("Public controls use the same preference stores and expose keyboard-safe me
     'data-testid="public-language-menu"',
     'data-testid="public-theme-menu"',
     "onKeyDown",
-    'event.key === "Escape"',
+    "closePublicMenuOnEscape(event.key",
     "focus-visible",
   ]) {
     assert.match(shell, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), marker);
@@ -68,8 +76,49 @@ test("Public shell stays contained at narrow mobile widths and respects reduced 
 });
 
 test("The shared anti-FOUC theme bootstrap covers public routes", () => {
-  assert.match(rootLayout, /if\(!location\.pathname\.startsWith\('\/admin'\)\)/);
-  assert.doesNotMatch(rootLayout, /if\(location\.pathname\.startsWith\('\/app'\)\)/);
+  assert.match(rootLayout, /location\.pathname\.startsWith\('\/app'\)/);
+  assert.match(rootLayout, /isPublicShellPath/);
+  assert.match(rootLayout, /acceptable-use-policy/);
+  assert.match(rootLayout, /location\.pathname\.startsWith\('\/app'\)\|\|isPublicShellPath/);
+});
+
+test("Public route allowlist excludes admin and unrelated root routes", () => {
+  assert.equal(isPublicShellRoute("/"), true);
+  assert.equal(isPublicShellRoute("/contact"), true);
+  assert.equal(isPublicShellRoute("/app/studio"), false);
+  assert.equal(isPublicShellRoute("/admin"), false);
+  assert.equal(isPublicShellRoute("/products"), false);
+});
+
+test("Theme and locale preferences use the same persisted contract as the workspace", () => {
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { matchMedia: () => ({ matches: false }) } });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) },
+  });
+  writeLocalTheme("light");
+  assert.equal(readLocalTheme(), "light");
+  assert.equal(normalizeLocalePreferences({ appLanguage: "zh-CN" }).appLanguage, "zh-CN");
+});
+
+test("Escape closes the real public menu and restores its trigger focus", () => {
+  let closed = false;
+  let focused = false;
+  assert.equal(closePublicMenuOnEscape("Enter", () => { closed = true; }, () => { focused = true; }), false);
+  assert.equal(closePublicMenuOnEscape("Escape", () => { closed = true; }, () => { focused = true; }), true);
+  assert.equal(closed, true);
+  assert.equal(focused, true);
+});
+
+test("Public controls preserve a 44px minimum hit target", () => {
+  assert.equal(PUBLIC_CONTROL_MIN_SIZE, 44);
+});
+
+test("The shared header enters its compact layout at a 390px viewport", () => {
+  assert.equal(isPublicHeaderCompact(391), false);
+  assert.equal(isPublicHeaderCompact(390), true);
+  assert.equal(isPublicHeaderCompact(320), true);
 });
 
 test("Public routes are wrapped without adding a second provider layer", () => {
@@ -92,6 +141,12 @@ test("Shell labels and Contact actions have English, Simplified Chinese, Traditi
     "contact.success.description",
     "contact.success.home",
     "contact.success.another",
+    "contact.reason.product.title",
+    "contact.reason.product.description",
+    "contact.reason.billing.title",
+    "contact.reason.billing.description",
+    "contact.reason.partnership.title",
+    "contact.reason.partnership.description",
   ];
   for (const key of keys) {
     for (const catalog of [en, zhCN, zhTW, vi]) {
