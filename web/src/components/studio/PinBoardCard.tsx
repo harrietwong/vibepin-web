@@ -191,6 +191,7 @@ export type PinBoardCardProps = {
   onSelectedChange?: (id: string, selected: boolean) => void;
   active: boolean;
   onSetActive: (id: string | null) => void;
+  onAiCopyBusyChange: (id: string, busy: boolean) => void;
   boards: PinterestBoard[];
   boardsLoading?: boolean;
   disconnected?: boolean;
@@ -762,6 +763,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
       disabled={publishing}
       onBeforeGenerate={flush}
+      onBusyChange={(busy) => props.onAiCopyBusyChange(draft.id, busy)}
       onApplyCopy={applyCopy}
     />
   );

@@ -18,6 +18,7 @@ import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { runWithBusyGuard } from "@/lib/ai-copy/runWithBusyGuard";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
@@ -89,6 +90,8 @@ export type PinAICopyPanelProps = {
   compact?: boolean;
   /** Called just before a generate run — e.g. to flush pending manual edits. */
   onBeforeGenerate?: () => void;
+  /** Reports the request lifetime to a host that must prevent remounting this panel. */
+  onBusyChange?: (busy: boolean) => void;
   onApplyCopy: (result: PinAICopyResult) => void;
   /**
    * Sibling action rendered in the SAME row as Generate copy (e.g. Create Pins'
@@ -149,82 +152,80 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const willReplaceExisting = !!props.title?.trim() && !!props.description?.trim();
 
   const runGenerate = useCallback(async (confirmedReplace: boolean) => {
-    if (busyRef.current || props.disabled) return;
-    busyRef.current = true;
-    setErrorMsg("");
-    props.onBeforeGenerate?.();
-    try {
-      const language = props.language ?? readResolvedContentLanguage();
-      const res = await generatePinterestPinCopy({
-        draftId: props.draftId,
-        imageUrl: props.imageUrl,
-        title: props.title,
-        description: props.description,
-        boardId: props.boardId,
-        boardName: props.boardName,
-        category: props.category,
-        keyword: props.keyword,
-        destinationUrl: props.destinationUrl,
-        setupSnapshot: props.setupSnapshot,
-        promptSnapshot: props.promptSnapshot,
-        opportunity: props.opportunity,
-        recommendedKeywords: props.recommendedKeywords,
-        boards: props.boards,
-        language,
-        length: FIXED_LENGTH,
-        mode: isRegen ? "regenerate" : "initial",
-        onStage: setStage,
-      });
-      props.onApplyCopy({
-        title: res.fields.title,
-        description: res.fields.description,
-        altText: res.fields.altText,
-        tags: res.tags,
-        destinationUrl: res.fields.destinationUrl,
-        metadataDraft: res.metadataDraft,
-        context: res.context,
-        confirmedReplace,
-      });
-      setResult({
-        summary: res.context.contextSummary,
-        imageSummary: res.context.imageSummary,
-        recommendedKeywords: res.context.recommendedKeywords ?? [],
-        boardName: res.context.boardName ?? undefined,
-        aiCopyV2: res.context.aiCopyV2,
-      });
-      setStage("done");
-      setGeneratedThisSession(true);
-      toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
-    } catch (err) {
-      const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
-      setErrorMsg(msg);
-      setStage("error");
-      // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user
-      // did anything wrong to cause. Softened to the NEUTRAL toast severity, matching
-      // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
-      // Reuses the existing rate-limit strings (translated in all 20 locales) rather
-      // than the raw server message.
-      if (isTextLimitReachedError(err)) {
-        // The plan's AI text allowance is spent (PRD v3.2 §6.4). Waiting does not fix
-        // it, so this gets the PRD's upgrade sentence and a Billing link rather than
-        // the "service busy" wording used for the 429 below. Neutral severity: the
-        // user did nothing wrong. Shown ONCE per attempt, like every other branch here.
-        const limitMsg = tr("studioBoard.limit.text.allUsed");
-        setErrorMsg(limitMsg);
-        toast.message(limitMsg, {
-          action: {
-            label: tr("studioBoard.limit.upgradeCta"),
-            onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
-          },
+    if (props.disabled) return;
+    await runWithBusyGuard(busyRef, props.onBusyChange, props.onBeforeGenerate, async () => {
+      setErrorMsg("");
+      try {
+        const language = props.language ?? readResolvedContentLanguage();
+        const res = await generatePinterestPinCopy({
+          draftId: props.draftId,
+          imageUrl: props.imageUrl,
+          title: props.title,
+          description: props.description,
+          boardId: props.boardId,
+          boardName: props.boardName,
+          category: props.category,
+          keyword: props.keyword,
+          destinationUrl: props.destinationUrl,
+          setupSnapshot: props.setupSnapshot,
+          promptSnapshot: props.promptSnapshot,
+          opportunity: props.opportunity,
+          recommendedKeywords: props.recommendedKeywords,
+          boards: props.boards,
+          language,
+          length: FIXED_LENGTH,
+          mode: isRegen ? "regenerate" : "initial",
+          onStage: setStage,
         });
-      } else if (isRateLimitError(err)) {
-        toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
-      } else {
-        toast.error(msg);
+        props.onApplyCopy({
+          title: res.fields.title,
+          description: res.fields.description,
+          altText: res.fields.altText,
+          tags: res.tags,
+          destinationUrl: res.fields.destinationUrl,
+          metadataDraft: res.metadataDraft,
+          context: res.context,
+          confirmedReplace,
+        });
+        setResult({
+          summary: res.context.contextSummary,
+          imageSummary: res.context.imageSummary,
+          recommendedKeywords: res.context.recommendedKeywords ?? [],
+          boardName: res.context.boardName ?? undefined,
+          aiCopyV2: res.context.aiCopyV2,
+        });
+        setStage("done");
+        setGeneratedThisSession(true);
+        toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
+      } catch (err) {
+        const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
+        setErrorMsg(msg);
+        setStage("error");
+        // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user
+        // did anything wrong to cause. Softened to the NEUTRAL toast severity, matching
+        // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
+        // Reuses the existing rate-limit strings (translated in all 20 locales) rather
+        // than the raw server message.
+        if (isTextLimitReachedError(err)) {
+          // The plan's AI text allowance is spent (PRD v3.2 §6.4). Waiting does not fix
+          // it, so this gets the PRD's upgrade sentence and a Billing link rather than
+          // the "service busy" wording used for the 429 below. Neutral severity: the
+          // user did nothing wrong. Shown ONCE per attempt, like every other branch here.
+          const limitMsg = tr("studioBoard.limit.text.allUsed");
+          setErrorMsg(limitMsg);
+          toast.message(limitMsg, {
+            action: {
+              label: tr("studioBoard.limit.upgradeCta"),
+              onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
+            },
+          });
+        } else if (isRateLimitError(err)) {
+          toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
+        } else {
+          toast.error(msg);
+        }
       }
-    } finally {
-      busyRef.current = false;
-    }
+    });
   }, [isRegen, props, tr]);
 
   // Entry point used by the button + the imperative handle. Gates on the fill-in-

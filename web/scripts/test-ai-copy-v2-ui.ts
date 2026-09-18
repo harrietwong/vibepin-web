@@ -10,8 +10,21 @@ import {
   shouldConfirmAICopyV2Overwrite,
 } from "../src/lib/ai-copy/generatePinCopyV2";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "../src/lib/ai-copy/generatePinCopy";
+import { runWithBusyGuard } from "../src/lib/ai-copy/runWithBusyGuard";
 
 async function main() {
+  const busyRef = { current: false };
+  const busyEvents: boolean[] = [];
+  let guardedRuns = 0;
+  await assert.rejects(
+    runWithBusyGuard(busyRef, busy => busyEvents.push(busy), () => { throw new Error("flush failed"); }, async () => { guardedRuns += 1; }),
+    /flush failed/,
+  );
+  assert.equal(busyRef.current, false, "a throwing pre-run flush releases the synchronous busy guard");
+  await runWithBusyGuard(busyRef, busy => busyEvents.push(busy), undefined, async () => { guardedRuns += 1; });
+  assert.equal(guardedRuns, 1, "a pre-run failure does not permanently block the next generation");
+  assert.deepEqual(busyEvents, [true, false, true, false], "the host lock is released after both failed and successful guarded runs");
+
   assert.equal(isAICopyV2ClientEnabled("true"), true);
   assert.equal(isAICopyV2ClientEnabled("false"), false);
   assert.equal(isAICopyV2ClientEnabled(undefined), false);

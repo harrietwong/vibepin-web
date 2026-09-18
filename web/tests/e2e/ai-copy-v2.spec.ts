@@ -96,7 +96,7 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
   expect(discover.status()).toBe(200);
 });
 
-test("in-flight AI copy prevents a scheduled card shape change and duplicate generation", async ({ page }) => {
+test("in-flight AI copy blocks local, cross-card, and parent-driven card shape changes", async ({ page }) => {
   let analyzeCount = 0;
   let generateCount = 0;
   let releaseGenerate: () => void = () => {};
@@ -117,6 +117,17 @@ test("in-flight AI copy prevents a scheduled card shape change and duplicate gen
         imageAnalysisStatus: "ready", keywordStatus: "ready", imageSummary: "A white reading lamp beside a chair",
         visibleObjects: ["lamp", "chair"], colors: ["white"], style: "minimal", ocrText: "", imageCategory: "home-decor",
         recommendedKeywords: ["reading corner ideas"], keywordSource: "pinterest_high_search",
+      },
+      "v2-e2e-scheduled-b": {
+        id: "v2-e2e-scheduled-b", imageUrl: pixel, keyword: "desk lamp", category: "home-decor",
+        title: "B".repeat(101), description: "Second scheduled description", altText: "Second scheduled alt",
+        destinationUrl: "", boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "e2e-b",
+        scheduledDate: tomorrow, scheduledTime: "11:00", addedToPlanAt: now,
+        status: "ready", source: "uploaded_image", planningStatus: "ready",
+        createdAt: now, updatedAt: now,
+        imageAnalysisStatus: "ready", keywordStatus: "ready", imageSummary: "A black desk lamp",
+        visibleObjects: ["lamp"], colors: ["black"], style: "minimal", ocrText: "", imageCategory: "home-decor",
+        recommendedKeywords: ["desk lamp ideas"], keywordSource: "pinterest_high_search",
       },
     } }));
     sessionStorage.setItem("vp:studio:filter", "scheduled");
@@ -151,6 +162,8 @@ test("in-flight AI copy prevents a scheduled card shape change and duplicate gen
   const card = page.getByTestId("pin-board-card").first();
   await expect(card).toBeVisible({ timeout: 20_000 });
   await expect(card).toHaveAttribute("data-active", "false");
+  const otherCard = page.getByTestId("pin-board-card").nth(1);
+  await expect(otherCard).toBeVisible();
 
   await card.getByTestId("ai-copy-generate").click();
   await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
@@ -177,6 +190,19 @@ test("in-flight AI copy prevents a scheduled card shape change and duplicate gen
   await page.getByTestId("ai-copy-replace-confirm-btn").click();
   await expect.poll(() => generateCount).toBe(2);
   await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
+
+  await otherCard.getByTestId("card-edit").click();
+  await expect(card).toHaveAttribute("data-active", "true");
+  await expect(otherCard).toHaveAttribute("data-active", "false");
+  await card.getByTestId("title-ai-copy-generate").dblclick();
+  expect(analyzeCount).toBe(2);
+  expect(generateCount).toBe(2);
+
+  await otherCard.getByTestId("card-publish").click();
+  await expect(card).toHaveAttribute("data-active", "true");
+  await expect(otherCard).toHaveAttribute("data-active", "false");
+  expect(analyzeCount).toBe(2);
+  expect(generateCount).toBe(2);
 
   await card.getByTestId("card-collapse").click();
   await expect(card).toHaveAttribute("data-active", "true");

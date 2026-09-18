@@ -362,7 +362,19 @@ export function StudioBoard() {
   const videoQueueItemSequenceRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveIdState] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const aiCopyBusyDraftIdsRef = useRef(new Set<string>());
+  const setActiveId = useCallback((nextId: string | null) => {
+    const currentId = activeIdRef.current;
+    if (currentId && currentId !== nextId && aiCopyBusyDraftIdsRef.current.has(currentId)) return;
+    activeIdRef.current = nextId;
+    setActiveIdState(nextId);
+  }, []);
+  const handleAiCopyBusyChange = useCallback((draftId: string, busy: boolean) => {
+    if (busy) aiCopyBusyDraftIdsRef.current.add(draftId);
+    else aiCopyBusyDraftIdsRef.current.delete(draftId);
+  }, []);
   const [publishConfirmation, setPublishConfirmation] = useState<PublishConfirmationSnapshot | null>(null);
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   // Drawer state is ephemeral and must never cross a verified owner/workspace
@@ -1102,7 +1114,7 @@ export function StudioBoard() {
     } else {
       toast.error(result.toast);
     }
-  }, [announceScheduled, noBoardAccess, tr]);
+  }, [announceScheduled, noBoardAccess, setActiveId, tr]);
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
   // Gating and toasts live here (they are card UI); the publish ITSELF is
@@ -1133,7 +1145,7 @@ export function StudioBoard() {
     // Opening the dialog is read-only. It exposes missing/invalid destinations in the
     // disabled-reason area instead of silently repairing them with a default account.
     setPublishConfirmation(buildPublishConfirmation(draft, { onlyPending: options?.onlyPending ?? true }));
-  }, [tr]);
+  }, [setActiveId, tr]);
 
   const handlePublish = useCallback(async (receipt: ConfirmedPublishReceipt) => {
     setPublishConfirmation(null);
@@ -1193,7 +1205,7 @@ export function StudioBoard() {
         action: { label: tr("studioBoard.toast.openInPlan"), onClick: () => { window.location.href = planDeepLink(id); } },
       });
     }
-  }, [announceScheduled, flashSaved, noBoardAccess, tr]);
+  }, [announceScheduled, flashSaved, noBoardAccess, setActiveId, tr]);
 
   // ── Product → Pin / attach product ─────────────────────────────────────────
   // A product selected from My Products, Product Opportunities, Shopify, Etsy or a
@@ -2035,6 +2047,7 @@ export function StudioBoard() {
                   return next;
                 })}
                 active={activeId === draft.id} onSetActive={setActiveId}
+                onAiCopyBusyChange={handleAiCopyBusyChange}
                 boards={customerBoards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}

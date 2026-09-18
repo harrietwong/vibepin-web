@@ -52,13 +52,28 @@ That was the real compact-to-expanded remount race. After adding the synchronous
 
 The final browser contract covers both directions in one scheduled-card flow. While each response is held, a shape-change click cannot remount the panel and the analyze/generate counters remain exactly one per requested run. Once the response settles, the same shape transition succeeds. The original compact action and the expanded Title shortcut both remain present.
 
+### Fix round 2 — cross-card and parent active transitions
+
+The single-card guards did not cover the shared `StudioBoard.activeId`: while card A was expanded and generating, card B could request Edit and deactivate/remount A. The real two-card Chromium test first failed at that boundary:
+
+```text
+Expected A data-active: "true"
+Received: "false"
+```
+
+`StudioBoard` now owns one ref-only set of busy draft ids and one central `setActiveId` gate. `PinAICopyPanel` reports its actual request lifetime through `PinBoardCard`; the board stores no request, result, stage, or render state. Every active-id source calls the same gate: card Edit/Collapse/Sync Review and the parent Schedule/Custom Schedule/Publish validation paths. A synchronous ref makes the decision immediate without a render race.
+
+The final E2E holds A's expanded generation response, then exercises both B Edit and B Publish with an over-limit field (the parent validation path). A stays expanded, B stays compact, and rapid activation of A's Title shortcut leaves analyze/generate at exactly two total requests for the two intentional runs. Both transitions work again after the held response settles.
+
+The pre-run flush also moved under a tested exclusive-run `try/finally`. Its unit test first failed with `busyRef.current` still `true` after `flush failed`; GREEN proves the synchronous guard and host lock both emit release, then a subsequent run executes normally.
+
 ## Verification
 
 All commands ran from `web/` unless noted.
 
 ```text
 npx playwright test tests/e2e/ai-copy-v2.spec.ts --project=chromium --reporter=list
-  2 passed (39.7s)
+  2 passed (28.0s)
 
 npx tsx scripts/test-ai-copy-v2-ui.ts
   AI Copy v2 UI/client tests passed
@@ -88,7 +103,7 @@ npm run validate:i18n
   passed — 2932 English keys, 18 locale catalogs
 ```
 
-Focused ESLint completed with zero errors and two existing hook warnings at unchanged `PinBoardCard.tsx` lines. `validate:i18n-coverage` remains red on the branch's broad pre-existing locale backlog (including many unrelated Studio/publish keys); this task adds no key and `validate:i18n` confirms catalog integrity.
+Focused ESLint completed with zero errors and two existing hook warnings at unchanged `PinBoardCard.tsx` lines. `StudioBoard.tsx` is clean with its unrelated pre-existing `prefer-const` finding at line 882 disabled for the focused check; running the default rule exposes only that unchanged line. `validate:i18n-coverage` remains red on the branch's broad pre-existing locale backlog (including many unrelated Studio/publish keys); this task adds no key and `validate:i18n` confirms catalog integrity.
 
 ## E2E environment and limitations
 
@@ -99,6 +114,9 @@ Focused ESLint completed with zero errors and two existing hook warnings at unch
 - `web/src/components/pins/PinFieldsForm.tsx`
 - `web/src/components/pins/PinAICopyPanel.tsx`
 - `web/src/components/studio/PinBoardCard.tsx`
+- `web/src/components/studio/StudioBoard.tsx`
+- `web/src/lib/ai-copy/runWithBusyGuard.ts`
+- `web/scripts/test-ai-copy-v2-ui.ts`
 - `web/tests/e2e/ai-copy-v2.spec.ts`
 - `.superpowers/sdd/2026-09-17-video-upload-cover-ai-p0/task-4-report.md`
 
