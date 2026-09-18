@@ -12,6 +12,8 @@
  * token, secret, database URL, or any credential-adjacent value.
  */
 
+import { resolveBuildSha } from "../../../../lib/server/buildIdentity";
+
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
@@ -32,7 +34,7 @@ export async function GET(req: Request) {
     origin: forwardedHost ? `${forwardedProto ?? "https"}://${forwardedHost}` : url.origin,
     vercelEnv: process.env.VERCEL_ENV ?? "local",
     vercelUrl: process.env.VERCEL_URL ?? null,
-    gitCommitSha: (process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7) || null,
+    gitCommitSha: resolveBuildSha()?.slice(0, 7) ?? null,
     deploymentId: process.env.VERCEL_DEPLOYMENT_ID ?? null,
     buildTimestamp: process.env.VERCEL_BUILD_TIMESTAMP ?? null,
     serverTime: new Date().toISOString(),

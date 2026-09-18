@@ -8,6 +8,7 @@
  */
 
 import pkg from "../../../../package.json";
+import { resolveBuildSha } from "../../../lib/server/buildIdentity";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ export async function GET() {
   return Response.json(
     {
       appVersion: typeof pkg?.version === "string" ? pkg.version : null,
-      buildSha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      buildSha: resolveBuildSha(),
       buildRef: process.env.VERCEL_GIT_COMMIT_REF ?? null,
       deploymentId: process.env.VERCEL_DEPLOYMENT_ID ?? null,
       environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? null,

@@ -10,6 +10,8 @@
  * secret, user id, or request body beyond the caller-supplied traceId.
  */
 
+import { resolveBuildSha } from "../../../../lib/server/buildIdentity";
+
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
@@ -33,7 +35,7 @@ export async function POST(req: Request) {
     host: req.headers.get("x-forwarded-host") ?? req.headers.get("host"),
     path,
     vercelEnv: process.env.VERCEL_ENV ?? "local",
-    gitCommitSha: (process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7) || null,
+    gitCommitSha: resolveBuildSha()?.slice(0, 7) ?? null,
     deploymentId: process.env.VERCEL_DEPLOYMENT_ID ?? null,
     timestamp: new Date().toISOString(),
   };
