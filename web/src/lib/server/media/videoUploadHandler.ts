@@ -85,6 +85,11 @@ export async function handleVideoUploadPrepare(req: Request, deps: VideoUploadHa
   if (!body || typeof body.idempotencyKey !== "string" || !SAFE_ID.test(body.idempotencyKey) || !Array.isArray(body.files)) return error("invalid_video_upload", id, 400);
   if (body.files.length === 0) return error("invalid_video_upload", id, 400);
   if (body.files.length > MAX_VIDEO_UPLOAD_ITEMS) return error("batch_limit_exceeded", id, 413);
+  if (body.files.some(file => {
+    if (!file || typeof file !== "object") return false;
+    const byteSize = (file as Record<string, unknown>).byteSize;
+    return typeof byteSize === "number" && byteSize > MAX_VIDEO_UPLOAD_BYTES;
+  })) return error("video_too_large", id, 413);
   const files = body.files.map(descriptorFrom);
   if (files.some((file): file is null => !file)) return error("invalid_video_upload", id, 400);
   const descriptors = files as Descriptor[];

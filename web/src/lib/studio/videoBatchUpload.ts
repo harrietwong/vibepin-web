@@ -458,6 +458,10 @@ export function safeVideoBatchError(value: unknown, fallback = "video_upload_fai
   return requestId ? { code, requestId } : { code };
 }
 
+export function videoBatchErrorMessage(code: string): string | undefined {
+  return code === "video_too_large" ? "Video exceeds the Preview 50 MiB limit." : undefined;
+}
+
 function descriptorFor(item: VideoBatchItem, attemptNumber: number): VideoUploadDescriptor {
   const inspection = item.inspection;
   if (!inspection) throw Object.assign(new Error("video_decode_failed"), { code: "video_decode_failed" });

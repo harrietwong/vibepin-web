@@ -11,7 +11,7 @@ const MP4_FTYP = new Uint8Array([
 ]);
 
 let passed = 0;
-const EXPECTED_TESTS = 32;
+const EXPECTED_TESTS = 34;
 let completed = false;
 process.once("beforeExit", () => {
   if (!completed || passed !== EXPECTED_TESTS) {
@@ -217,12 +217,21 @@ async function main() {
       createSignedUpload: async () => { signed++; return { token: "secret-token", signedUrl: "https://storage.test/secret" }; },
     };
     for (const files of [[], Array.from({ length: 21 }, (_, ordinal) => descriptor(ordinal)), [descriptor(0, { contentType: "video/webm" })],
-      [descriptor(0, { byteSize: 104857601 })], [descriptor(0, { durationMs: 3_999 })], [descriptor(0, { durationMs: 300_001 })], [descriptor(0), descriptor(0)]]) {
+      [descriptor(0, { byteSize: 50 * 1024 * 1024 + 1 })], [descriptor(0, { durationMs: 3_999 })], [descriptor(0, { durationMs: 300_001 })], [descriptor(0), descriptor(0)]]) {
       const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_1", files }), deps);
-      assert.equal(response.status, files.length === 21 ? 413 : 400);
-      assert.equal((await response.json() as { code: string }).code, files.length === 21 ? "batch_limit_exceeded" : "invalid_video_upload");
+      assert.equal(response.status, files.length === 21 || files[0]?.byteSize === 50 * 1024 * 1024 + 1 ? 413 : 400);
+      assert.equal((await response.json() as { code: string }).code, files.length === 21 ? "batch_limit_exceeded" : files[0]?.byteSize === 50 * 1024 * 1024 + 1 ? "video_too_large" : "invalid_video_upload");
     }
     assert.equal(signed, 0);
+  });
+
+  await test("prepare accepts exactly the 50 MiB shared storage limit", async () => {
+    const response = await handleVideoUploadPrepare(request("https://app.test/prepare", { idempotencyKey: "batch_limit", files: [descriptor(0, { byteSize: 50 * 1024 * 1024 })] }), {
+      getUserId: async () => OWNER, enabled: true, configured: true,
+      store: storeStub({ prepareBatch: async () => ({ batchId: "11111111-1111-4111-8111-111111111111" }), findItem: async () => null }),
+      createSignedUpload: async () => ({ token: "secret-token", signedUrl: "https://storage.test/secret" }),
+    });
+    assert.equal(response.status, 200);
   });
 
   await test("prepare creates owner-scoped paths, uses upsert false, and never puts a token in an error", async () => {
@@ -839,6 +848,18 @@ async function main() {
       fetchImpl: async () => { puts++; return new Response("unauthorized", { status: 401 }); },
     }), (error: unknown) => (error as { code?: string }).code === "video_upload_failed");
     assert.equal(puts, 1, "signed Storage PUTs must never be replayed by the internal API auth recovery path");
+  });
+
+  await test("a signed storage PUT that returns 413 is classified as video_too_large", async () => {
+    const { uploadVideoToSignedStorage } = await import("../src/lib/studio/videoDirectUpload");
+    const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
+    let puts = 0;
+    await assert.rejects(() => uploadVideoToSignedStorage({ ordinal: 0, path: `${OWNER}/videos/too-large.mp4`, token: "signed-token",
+      signedUrl: `https://storage.test/object/upload/sign/generated-private/${OWNER}/videos/too-large.mp4?token=signed-token`, contentType: "video/mp4", upsert: false }, file, {
+      batchId: preparedItem().batchId,
+      fetchImpl: async () => { puts++; return new Response("provider limit", { status: 413, headers: { "x-request-id": "provider-secret" } }); },
+    }), (error: unknown) => (error as { code?: string }).code === "video_too_large");
+    assert.equal(puts, 1, "a rejected signed Storage PUT must not be replayed");
   });
 
   await test("browser upload deadline and caller abort have distinct stable codes and never call normal finalize", async () => {

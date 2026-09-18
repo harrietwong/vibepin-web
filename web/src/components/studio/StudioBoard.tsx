@@ -43,6 +43,7 @@ import {
   isVideoCandidate,
   runVideoBatch,
   safeVideoBatchError,
+  videoBatchErrorMessage,
   selectVisibleVideoQueueItems,
   summarizeVideoBatch,
   summarizeVideoUploadQueue,
@@ -1847,7 +1848,7 @@ export function StudioBoard() {
             return (
               <div role="listitem" key={item.id} data-testid={`video-upload-item-${item.id}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
-                  {item.file.name} · {item.state}{item.state === "failed" ? ` · Code: ${item.error?.code ?? "video_upload_failed"}${item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}` : ""}
+                  {item.file.name} · {item.state}{item.state === "failed" ? ` · ${videoBatchErrorMessage(item.error?.code ?? "") ?? `Code: ${item.error?.code ?? "video_upload_failed"}`}${item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}` : ""}
                 </span>
                 {retryable ? (
                   <button type="button" data-testid={index === 0 ? "video-upload-retry" : `video-upload-retry-${item.id}`} onClick={() => retryVideoItem(item.id)}

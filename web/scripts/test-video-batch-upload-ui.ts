@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createVideoBatchState, selectVisibleVideoQueueItems, type VideoBatchItem } from "../src/lib/studio/videoBatchUpload";
+import { createVideoBatchState, selectVisibleVideoQueueItems, videoBatchErrorMessage, type VideoBatchItem } from "../src/lib/studio/videoBatchUpload";
 
 const source = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
 let passed = 0;
@@ -49,6 +49,11 @@ test("retry and cancel are per-item queue actions and display only safe error fi
   assert.match(source, /item\.error\?\.requestId/);
   assert.doesNotMatch(source, /signedUrl.*video-batch|video-batch.*signedUrl/);
   assert.doesNotMatch(source, /privatePath.*video-batch|video-batch.*privatePath/);
+});
+
+test("the Studio gives video_too_large a clear Preview size-limit message", () => {
+  assert.match(source, /videoBatchErrorMessage/);
+  assert.equal(videoBatchErrorMessage("video_too_large"), "Video exceeds the Preview 50 MiB limit.");
 });
 
 test("later terminal rows remain reachable in an accessible bounded queue region", () => {

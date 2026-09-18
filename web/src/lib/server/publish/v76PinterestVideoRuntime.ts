@@ -9,6 +9,7 @@ import {
   createV76RpcVideoPublishDependencies,
   videoPublishSourceIdentityFingerprint,
 } from "./v76PinterestVideoPublish";
+import { MAX_VIDEO_UPLOAD_BYTES } from "@/lib/videoUploadLimits";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PinterestVideoPublishResult } from "@/lib/server/pinterest/videoPinAdapter";
 
@@ -157,7 +158,7 @@ export async function materializePrivateVideoSources(
         || provenance.mediaKind !== "video"
         || !VIDEO_TYPES.has(provenance.contentType)
         || !Number.isSafeInteger(provenance.byteSize)
-        || provenance.byteSize <= 0 || provenance.byteSize > 100 * 1024 * 1024
+        || provenance.byteSize <= 0 || provenance.byteSize > MAX_VIDEO_UPLOAD_BYTES
         || !checksumProvenanceReady
         || !Number.isSafeInteger(provenance.width) || (provenance.width ?? 0) <= 0
         || !Number.isSafeInteger(provenance.height) || (provenance.height ?? 0) <= 0

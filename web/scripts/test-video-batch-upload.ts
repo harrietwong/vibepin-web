@@ -16,6 +16,7 @@ import { probeVideoFile } from "../src/lib/studio/videoBrowserMedia";
 import { sha256 } from "../src/lib/studio/videoDirectUpload";
 import { listVideoRecovery, removeVideoRecovery, saveVideoRecovery } from "../src/lib/studio/videoBatchRecovery";
 import { handleStudioUploadCleanup } from "../src/app/api/studio/upload/handler";
+import { MAX_VIDEO_UPLOAD_BYTES } from "../src/lib/videoUploadLimits";
 
 type FakeFile = { name: string; type: string; size: number };
 const video = (name: string, type = "video/mp4", size = 1024): FakeFile => ({ name, type, size });
@@ -285,12 +286,16 @@ async function main() {
     assert.equal(mixed.draftMode, "separate");
   });
 
-  await test("selection rejects the twenty-first file, unsafe container, and oversize video before prepare", () => {
+  await test("selection accepts the 50 MiB boundary and rejects the next byte before prepare", () => {
+    assert.equal(validateVideoBatchSelection([video("limit.mp4", "video/mp4", MAX_VIDEO_UPLOAD_BYTES) as File], true).error, undefined);
+    assert.equal(validateVideoBatchSelection([video("over-limit.mp4", "video/mp4", MAX_VIDEO_UPLOAD_BYTES + 1) as File], true).error?.code, "video_too_large");
+  });
+
+  await test("selection rejects the twenty-first file and unsafe container before prepare", () => {
     const tooMany = validateVideoBatchSelection(Array.from({ length: 21 }, (_, index) => video(`${index}.mp4`) as File), true);
     assert.equal(tooMany.error?.code, "batch_limit_exceeded");
     assert.equal(validateVideoBatchSelection([video("clip.avi", "video/x-msvideo") as File], true).error?.code, "invalid_video_type");
     assert.equal(validateVideoBatchSelection([video("disguised.avi", "video/mp4") as File], true).error?.code, "invalid_video_type");
-    assert.equal(validateVideoBatchSelection([video("huge.mp4", "video/mp4", 100 * 1024 * 1024 + 1) as File], true).error?.code, "video_too_large");
   });
 
   await test("a successful item creates exactly one draft even if completion is observed twice", async () => {

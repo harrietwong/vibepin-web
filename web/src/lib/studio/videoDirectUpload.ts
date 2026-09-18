@@ -69,7 +69,10 @@ export async function uploadVideoToSignedStorage(upload: SignedVideoUpload, file
     const response = await fetchImpl(signedUrl, {
       method: "PUT", headers: { "x-upsert": "false" }, body, signal: controller.signal,
     });
-    if (!response.ok) throw Object.assign(new Error("video_upload_failed"), { code: "video_upload_failed" });
+    if (!response.ok) {
+      const code = response.status === 413 ? "video_too_large" : "video_upload_failed";
+      throw Object.assign(new Error(code), { code });
+    }
   } catch (cause) {
     if (!controller.signal.aborted) throw cause;
     const code = timedOut ? "video_upload_timeout" : "video_upload_aborted";
