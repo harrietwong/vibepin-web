@@ -6,6 +6,7 @@ import {
   queueFailedVideoItems,
   reduceVideoBatch,
   runVideoBatch,
+  selectVisibleVideoQueueItems,
   selectRetryableVideoItems,
   summarizeVideoBatch,
   validateVideoBatchSelection,
@@ -183,6 +184,90 @@ async function main() {
     assert.equal(prepares, 1);
     assert.equal(uploads, 1);
     assert.equal(drafts, 1);
+  });
+
+  await test("disposing a queue aborts eligible work, never pumps pending work, and lets finalization settle", async () => {
+    const finalizing = deferred();
+    const started: string[] = [];
+    const aborted: string[] = [];
+    const queue = createAppendableVideoUploadQueue("dispose-lifecycle", {
+      runItem: async (current, signal, onState) => {
+        started.push(current.id);
+        if (current.id === "finalizing") {
+          onState({ ...current, state: "uploading", attempt: { id: "attempt", batchId: "batch", ordinal: 0, phase: "finalize_pending" } });
+          await finalizing.promise;
+          return { ...current, state: "succeeded" };
+        }
+        await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+          aborted.push(current.id);
+          reject(Object.assign(new Error("aborted"), { code: "video_upload_aborted" }));
+        }, { once: true }));
+        return { ...current, state: "succeeded" };
+      },
+    });
+    const settled = queue.append([item("finalizing"), item("active-a"), item("active-b"), item("never-started")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    queue.dispose();
+    assert.deepEqual(started, ["finalizing", "active-a", "active-b"]);
+    assert.deepEqual(aborted.sort(), ["active-a", "active-b"]);
+    assert.equal(queue.getState().items.find(current => current.id === "never-started")?.state, "cancelled");
+    finalizing.resolve();
+    await settled;
+    assert.deepEqual(started, ["finalizing", "active-a", "active-b"], "disposed pending work must never pump");
+    assert.equal(queue.getState().items.find(current => current.id === "finalizing")?.state, "succeeded");
+  });
+
+  await test("an old finalization keeps its global slot across dispose and remount", async () => {
+    const oldFinalize = deferred();
+    const oldStarted: string[] = [];
+    const replacementStarted: string[] = [];
+    const replacementGates = new Map<string, ReturnType<typeof deferred>>();
+    const oldQueue = createAppendableVideoUploadQueue("old-owner-queue", {
+      runItem: async (current, signal, onState) => {
+        oldStarted.push(current.id);
+        if (current.id === "old-finalizing") {
+          onState({ ...current, state: "uploading", attempt: { id: "attempt", batchId: "batch", ordinal: 0, phase: "finalize_pending" } });
+          await oldFinalize.promise;
+          return { ...current, state: "succeeded" };
+        }
+        await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { code: "video_upload_aborted" })), { once: true }));
+        return { ...current, state: "succeeded" };
+      },
+    });
+    const oldSettled = oldQueue.append([item("old-finalizing"), item("old-a"), item("old-b")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(oldStarted.length, 3);
+    oldQueue.dispose();
+
+    const replacement = createAppendableVideoUploadQueue("replacement-owner-queue", {
+      runItem: async current => {
+        replacementStarted.push(current.id);
+        const gate = deferred();
+        replacementGates.set(current.id, gate);
+        await gate.promise;
+        return { ...current, state: "succeeded" };
+      },
+    });
+    const replacementSettled = replacement.append([item("new-a"), item("new-b"), item("new-c")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(replacementStarted.length, 2, "the settling old finalize still owns one of the three global slots");
+    oldFinalize.resolve();
+    await oldSettled;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(replacementStarted.length, 3);
+    for (const gate of replacementGates.values()) gate.resolve();
+    await replacementSettled;
+  });
+
+  await test("all later terminal queue rows remain reachable after the eighth item", () => {
+    const state = createVideoBatchState("visible-terminal-rows", Array.from({ length: 12 }, (_, index) => ({
+      ...item(`terminal-${index}`, index % 2 ? "cancelled" : "failed"),
+      error: index % 2 ? undefined : { code: "video_upload_failed" },
+    })));
+    const visible = selectVisibleVideoQueueItems(state);
+    assert.equal(visible.length, 12);
+    assert.equal(visible.at(-1)?.id, "terminal-11");
   });
 
   await test("flag-off selection keeps video out of the image-only input contract", () => {

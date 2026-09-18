@@ -38,7 +38,7 @@ function callbacks(overrides: Record<string, unknown> = {}, mutate?: (source: st
   const videoQueueRef: { current: { scope: typeof A; queue: batch.AppendableVideoUploadQueue } | null } = { current: null };
   const context = {
     ...batch, ...recovery, useCallback: (fn: unknown) => fn, useEffect: (fn: () => void | (() => void)) => { effects.push(fn); },
-    videoQueueRef, videoQueueOrdinalRef: { current: 0 }, ownerScopeKey: A.ownerUserId,
+    videoQueueRef, videoQueueItemSequenceRef: { current: 0 }, ownerScopeKey: A.ownerUserId,
     setUploading: () => {}, setVideoBatch: (s: batch.VideoBatchState) => { current = s; }, setUploadProgress: () => {},
     prepareVideoDirectUpload: async (_key: string, ds: batch.VideoUploadDescriptor[]) => prepare(ds),
     uploadVideoToSignedStorage: async () => {}, finalizeVideoDirectUpload: finalize,
@@ -50,7 +50,7 @@ function callbacks(overrides: Record<string, unknown> = {}, mutate?: (source: st
     track: () => {}, processFiles: async () => {}, videoBatch: undefined, uploading: false, ...overrides,
   };
   let text = source.slice(begin, end); if (mutate) text = mutate(text);
-  const js = ts.transpileModule(text + "\nreturn { executeVideoBatch, startVideoBatch, processMixedVideoSelection, retryVideoItem, cancelVideoItem, cancelVideoBatch };", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const js = ts.transpileModule(text + "\nreturn { executeVideoBatch, getVideoQueue, startVideoBatch, processMixedVideoSelection, retryVideoItem, cancelVideoItem, cancelVideoBatch };", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const methods = new Function(...Object.keys(context), js)(...Object.values(context));
   return { ...methods, state: () => current, videoQueueRef, recover: async () => { effects.forEach(fn => fn()); await flush(); await flush(); } };
 }
@@ -114,6 +114,87 @@ async function main() {
     assert.equal(transfers, 2, "both videos start without waiting for the mixed selection's image");
     image.resolve(); transfer.resolve(); await Promise.all([mixed, second]);
     assert.equal(ui.state()?.items.length, 2);
+  });
+  await check("R3 more than twenty lifetime selections reuse singleton transport ordinal zero", async () => {
+    reset(); const ordinals: number[] = []; const cancelledProbe = deferred();
+    const ui = callbacks({
+      prepareVideoDirectUpload: async (_key: string, descriptors: batch.VideoUploadDescriptor[]) => {
+        ordinals.push(descriptors[0].ordinal);
+        return prepare(descriptors);
+      },
+      probeVideoFile: async (candidate: File) => {
+        if (candidate.name === "cancelled.mp4") await cancelledProbe.promise;
+        return inspection;
+      },
+    });
+    for (let index = 0; index < 21; index++) await ui.startVideoBatch([file(`valid-${index}.mp4`)]);
+    await ui.startVideoBatch([file("invalid.mp4")], { code: "invalid_video_type" });
+    const cancelled = ui.startVideoBatch([file("cancelled.mp4")]);
+    await flush();
+    const cancelledId = ui.state()!.items.at(-1)!.id;
+    ui.cancelVideoItem(cancelledId);
+    cancelledProbe.resolve();
+    await cancelled;
+    await ui.startVideoBatch([file("valid-21.mp4")]);
+    await ui.startVideoBatch([file("valid-22.mp4")]);
+    assert.equal(ordinals.length, 23, "invalid and cancelled items must not consume a server transport slot");
+    assert.ok(ordinals.every(ordinal => ordinal === 0), `singleton transport ordinals must stay zero: ${ordinals.join(",")}`);
+  });
+  await check("R3 finalize-pending queue retry preserves poster and skips browser preflight", async () => {
+    reset(); let probes = 0; let hashes = 0; let finalizes = 0;
+    const posterUrl = `/api/storage-image?path=studio%2Fuploads%2F${A.ownerUserId}%2Fcover.jpg`;
+    const ui = callbacks({
+      probeVideoFile: async () => { probes++; return { ...inspection, posterFile: photo() }; },
+      sha256: async () => { hashes++; return inspection.checksumSha256; },
+      finalizeVideoDirectUpload: async (id: string, ordinal: number) => {
+        if (++finalizes === 1) throw err("network_error");
+        return finalize(id, ordinal);
+      },
+    });
+    await ui.startVideoBatch([file("finalize-replay.mp4")]);
+    const failed = ui.state()!.items[0];
+    assert.equal(failed.attempt?.phase, "finalize_pending");
+    assert.equal(failed.inspection?.posterUrl, posterUrl);
+    await ui.videoQueueRef.current!.queue.retry(failed.id);
+    assert.equal(probes, 1); assert.equal(hashes, 1);
+    assert.equal(ui.state()!.items[0].inspection?.posterUrl, posterUrl);
+    assert.equal(store.getAllDrafts()[0].media?.[0].kind, "video");
+    assert.equal(store.getAllDrafts()[0].imageUrl, posterUrl);
+  });
+  await check("R3 finalized receipt queue retry preserves poster and skips browser preflight", async () => {
+    reset(); let probes = 0; let hashes = 0; quotaDraft = true;
+    const posterUrl = `/api/storage-image?path=studio%2Fuploads%2F${A.ownerUserId}%2Fcover.jpg`;
+    const ui = callbacks({
+      probeVideoFile: async () => { probes++; return { ...inspection, posterFile: photo() }; },
+      sha256: async () => { hashes++; return inspection.checksumSha256; },
+    });
+    await ui.startVideoBatch([file("finalized-replay.mp4")]);
+    const failed = ui.state()!.items[0];
+    assert.ok(failed.finalized);
+    assert.equal(failed.inspection?.posterUrl, posterUrl);
+    quotaDraft = false;
+    await ui.videoQueueRef.current!.queue.retry(failed.id);
+    assert.equal(probes, 1); assert.equal(hashes, 1);
+    assert.equal(ui.state()!.items[0].inspection?.posterUrl, posterUrl);
+  });
+  await check("R4 A-to-B-to-A replacement rejects stale publications from the old A queue", async () => {
+    reset(); const oldFinalizeEntered = deferred(); const releaseOldFinalize = deferred(); let finalizeCalls = 0;
+    const ui = callbacks({ finalizeVideoDirectUpload: async (id: string, ordinal: number) => {
+      if (finalizeCalls++ === 0) { oldFinalizeEntered.resolve(); await releaseOldFinalize.promise; }
+      return finalize(id, ordinal);
+    } });
+    const oldA = ui.startVideoBatch([file("old-a.mp4")]);
+    await oldFinalizeEntered.promise;
+    store.setPinDraftOwnerScope(B.ownerUserId);
+    await ui.startVideoBatch([file("owner-b.mp4")]);
+    store.setPinDraftOwnerScope(A.ownerUserId);
+    await ui.startVideoBatch([file("new-a.mp4")]);
+    const currentId = ui.state()!.items[0].id;
+    assert.equal(ui.state()!.items[0].file.name, "new-a.mp4");
+    releaseOldFinalize.resolve();
+    await oldA;
+    assert.equal(ui.state()!.items[0].id, currentId);
+    assert.equal(ui.state()!.items[0].file.name, "new-a.mp4");
   });
   await check("R4 owner switch after finalize cannot write B immediately or through Retry", async () => {
     reset(); const ui = callbacks({ finalizeVideoDirectUpload: async (id: string, n: number) => { store.setPinDraftOwnerScope(B.ownerUserId); return finalize(id, n); } });

@@ -38,6 +38,7 @@ import {
   isVideoCandidate,
   runVideoBatch,
   safeVideoBatchError,
+  selectVisibleVideoQueueItems,
   summarizeVideoBatch,
   summarizeVideoUploadQueue,
   validateVideoBatchSelection,
@@ -358,7 +359,7 @@ export function StudioBoard() {
   const [uploadRetry, setUploadRetry] = useState<{ files: File[]; mode: MultiUploadMode } | null>(null);
   const [videoBatch, setVideoBatch] = useState<VideoBatchState | null>(null);
   const videoQueueRef = useRef<{ scope: VideoRecoveryScope; queue: AppendableVideoUploadQueue } | null>(null);
-  const videoQueueOrdinalRef = useRef(0);
+  const videoQueueItemSequenceRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -432,10 +433,16 @@ export function StudioBoard() {
     const holder = videoQueueRef.current;
     const currentScope = pinDraftStore.getPinDraftOwnerScope();
     if (!holder || videoRecoveryScopeEquals(holder.scope, currentScope)) return;
-    holder.queue.cancelAll();
     videoQueueRef.current = null;
+    holder.queue.dispose();
     setVideoBatch(null);
   }, [ownerScopeKey]);
+
+  useEffect(() => () => {
+    const holder = videoQueueRef.current;
+    videoQueueRef.current = null;
+    holder?.queue.dispose();
+  }, []);
 
   const presentGenerationAttempt = useCallback((summary: GenerationAttemptSummary) => {
     const command = generationToastCommand(summary);
@@ -856,35 +863,44 @@ export function StudioBoard() {
   const getVideoQueue = useCallback((scope: VideoRecoveryScope) => {
     const existing = videoQueueRef.current;
     if (existing && videoRecoveryScopeEquals(existing.scope, scope)) return existing.queue;
-    existing?.queue.cancelAll();
+    videoQueueRef.current = null;
+    existing?.queue.dispose();
     const clientBatchId = `video_queue_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`;
-    const queue = createAppendableVideoUploadQueue(clientBatchId, {
+    let queue: AppendableVideoUploadQueue;
+    queue = createAppendableVideoUploadQueue(clientBatchId, {
       ownerScope: scope,
       onState: next => {
+        if (videoQueueRef.current?.queue !== queue) return;
         if (!videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
         setVideoBatch(next);
       },
       runItem: async (queued, signal, onItemState) => {
         if (signal.aborted) return { ...queued, state: "cancelled" };
-        const selection = validateVideoBatchSelection([queued.file], true);
-        if (selection.kind === "rejected") return {
-          ...queued,
-          state: "failed",
-          error: selection.error ?? { code: "invalid_video_upload" },
-        };
         try {
-          const [probe, checksumSha256] = await Promise.all([probeVideoFile(queued.file, signal), sha256(queued.file, signal)]);
-          if (signal.aborted) return { ...queued, state: "cancelled" };
-          if (!videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) {
-            return { ...queued, state: "failed", error: { code: "video_owner_changed" } };
+          const hasReplayableReceipt = Boolean(queued.finalized || queued.attempt?.phase === "finalize_pending");
+          let inspected = queued;
+          if (hasReplayableReceipt) {
+            if (!queued.inspection) return { ...queued, state: "failed", error: { code: "video_decode_failed" } };
+          } else {
+            const selection = validateVideoBatchSelection([queued.file], true);
+            if (selection.kind === "rejected") return {
+              ...queued,
+              state: "failed",
+              error: selection.error ?? { code: "invalid_video_upload" },
+            };
+            const [probe, checksumSha256] = await Promise.all([probeVideoFile(queued.file, signal), sha256(queued.file, signal)]);
+            if (signal.aborted) return { ...queued, state: "cancelled" };
+            if (!videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) {
+              return { ...queued, state: "failed", error: { code: "video_owner_changed" } };
+            }
+            const { posterFile, ...observed } = probe;
+            inspected = {
+              ...queued,
+              state: "queued",
+              inspection: { ...observed, checksumSha256 },
+              ...(posterFile ? { posterFile } : {}),
+            };
           }
-          const { posterFile, ...observed } = probe;
-          const inspected: VideoBatchItem = {
-            ...queued,
-            state: "queued",
-            inspection: { ...observed, checksumSha256 },
-            ...(posterFile ? { posterFile } : {}),
-          };
           onItemState({ ...inspected, state: "uploading" });
           const result = await executeVideoBatch(
             { ...createVideoBatchState(clientBatchId, [inspected]), ownerScope: scope },
@@ -908,11 +924,13 @@ export function StudioBoard() {
     if (!scope) { toast.error("Sign in before uploading video"); return; }
     const queue = getVideoQueue(scope);
     const items = files.map(file => {
-      const ordinal = videoQueueOrdinalRef.current++;
-      const nonce = globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? `${Date.now()}_${ordinal}`;
+      const sequence = videoQueueItemSequenceRef.current++;
+      const nonce = globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? `${Date.now()}_${sequence}`;
       return {
         id: `video_item_${nonce}`,
-        ordinal,
+        // Every Studio task creates an isolated one-item server batch. FIFO order
+        // lives in the appendable scheduler; transport ordinal is therefore 0.
+        ordinal: 0,
         file,
         state: rejectedError ? "failed" as const : "queued" as const,
         ...(rejectedError ? { error: rejectedError } : {}),
@@ -1757,6 +1775,7 @@ export function StudioBoard() {
     </span>
   );
   const videoQueueSummary = videoBatch ? summarizeVideoUploadQueue(videoBatch) : null;
+  const visibleVideoQueueItems = videoBatch ? selectVisibleVideoQueueItems(videoBatch) : [];
   const cancellableVideoItems = videoBatch?.items.filter(item =>
     (item.state === "queued" || item.state === "uploading")
       && !item.finalized
@@ -1782,13 +1801,15 @@ export function StudioBoard() {
             Video uploads · Active {videoQueueSummary?.active ?? 0} · Queued {videoQueueSummary?.queued ?? 0} · Completed {videoQueueSummary?.completed ?? 0} · Failed {videoQueueSummary?.failed ?? 0}
             {videoQueueSummary?.cancelled ? ` · Cancelled ${videoQueueSummary.cancelled}` : ""}
           </strong>
-          {videoBatch.items.filter(item => item.state !== "succeeded").slice(0, 8).map((item, index) => {
+          <div role="list" aria-label="Video uploads needing attention"
+            style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 240, overflowY: "auto" }}>
+          {visibleVideoQueueItems.map((item, index) => {
             const retryable = item.state === "failed" && Boolean(item.inspection || item.finalized);
             const cancellable = (item.state === "queued" || item.state === "uploading")
               && !item.finalized
               && item.attempt?.phase !== "finalize_pending";
             return (
-              <div key={item.id} data-testid={`video-upload-item-${item.id}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <div role="listitem" key={item.id} data-testid={`video-upload-item-${item.id}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
                   {item.file.name} · {item.state}{item.state === "failed" ? ` · Code: ${item.error?.code ?? "video_upload_failed"}${item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}` : ""}
                 </span>
@@ -1807,6 +1828,7 @@ export function StudioBoard() {
               </div>
             );
           })}
+          </div>
           {cancellableVideoItems.length > 1 ? (
             <button type="button" data-testid="video-upload-cancel-all" onClick={cancelVideoBatch}
               style={{ alignSelf: "flex-start", marginTop: 3, padding: "6px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>

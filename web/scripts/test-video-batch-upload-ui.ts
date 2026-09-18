@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createVideoBatchState, selectVisibleVideoQueueItems, type VideoBatchItem } from "../src/lib/studio/videoBatchUpload";
 
 const source = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
 let passed = 0;
@@ -48,6 +49,27 @@ test("retry and cancel are per-item queue actions and display only safe error fi
   assert.match(source, /item\.error\?\.requestId/);
   assert.doesNotMatch(source, /signedUrl.*video-batch|video-batch.*signedUrl/);
   assert.doesNotMatch(source, /privatePath.*video-batch|video-batch.*privatePath/);
+});
+
+test("later terminal rows remain reachable in an accessible bounded queue region", () => {
+  const items = Array.from({ length: 11 }, (_, index): VideoBatchItem => ({
+    id: `terminal-${index}`,
+    ordinal: 0,
+    file: { name: `terminal-${index}.mp4`, type: "video/mp4", size: 1 } as File,
+    state: index % 2 ? "cancelled" : "failed",
+    ...(index % 2 ? {} : { error: { code: "video_upload_failed" } }),
+  }));
+  assert.equal(selectVisibleVideoQueueItems(createVideoBatchState("ui-reachability", items)).length, 11);
+  assert.match(source, /selectVisibleVideoQueueItems\(videoBatch\)/);
+  assert.match(source, /aria-label="Video uploads needing attention"/);
+  assert.match(source, /overflowY: "auto"/);
+  assert.doesNotMatch(source, /filter\(item => item\.state !== "succeeded"\)\.slice\(0, 8\)/);
+});
+
+test("queue ownership disposes on replacement and unmount and gates state by queue identity", () => {
+  assert.match(source, /existing\?\.queue\.dispose\(\)/);
+  assert.match(source, /holder\?\.queue\.dispose\(\)/);
+  assert.match(source, /videoQueueRef\.current\?\.queue !== queue/);
 });
 
 console.log(`\n${passed} Studio video batch UI checks passed.\n`);
