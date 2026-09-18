@@ -43,6 +43,8 @@ export type ExistingDraft = {
   draftId: string;
   status: string;
   scheduledAt: string | null;
+  updatedAt: string;
+  publishClaimedAt: string | null;
   payload: DraftPayload;
 };
 
@@ -58,7 +60,7 @@ export type Match = {
 export type ReviewPatch = {
   operation: "update_existing_pin_draft";
   draftId: string;
-  expected: { userId: string; status: string; scheduled_at: string | null; mediaId: string; mediaUrl: string };
+  expected: { userId: string; status: string; scheduled_at: string | null; updatedAt: string; mediaId: string; mediaUrl: string };
   media: NonNullable<DraftPayload["media"]>[number];
   set: {
     status: "ready";
@@ -128,7 +130,7 @@ export function buildReviewPatch(match: Match, connectionId = CONNECTION_ID, acc
   return {
     operation: "update_existing_pin_draft",
     draftId: match.draftId,
-    expected: { userId: match.current.userId, status: match.current.status, scheduled_at: match.current.scheduledAt, mediaId: match.mediaId, mediaUrl: String(match.media.url) },
+    expected: { userId: match.current.userId, status: match.current.status, scheduled_at: match.current.scheduledAt, updatedAt: match.current.updatedAt, mediaId: match.mediaId, mediaUrl: String(match.media.url) },
     media: match.media,
     set: {
       status: "ready",
@@ -157,21 +159,33 @@ export function assertApplyInvocation(argv: readonly string[]): void {
   }
 }
 
-export function mergeApplyPayload(current: DraftPayload, patch: ReviewPatch["set"]["payload"]): DraftPayload {
+export function mergeApplyPayload(current: DraftPayload, patch: ReviewPatch["set"]["payload"], updatedAt?: string): DraftPayload {
   const forbidden = new Set(["sourceVideoSha256", "sourceMappingId", "sourceLocalFileName"]);
   const next = { ...current };
   for (const [key, value] of Object.entries(patch)) if (!forbidden.has(key)) next[key] = value;
+  if (updatedAt) next.updatedAt = updatedAt;
   return next;
 }
 
 export function validateApplyPreflight(patch: ReviewPatch, current: ExistingDraft): string | null {
+  if (isAlreadyApplied(patch, current)) return "already_applied";
   if (current.userId !== patch.expected.userId) return `${patch.draftId}: user_id_mismatch`;
   if (current.status !== patch.expected.status) return `${patch.draftId}: status_mismatch`;
   if (current.scheduledAt !== patch.expected.scheduled_at) return `${patch.draftId}: scheduled_at_mismatch`;
+  if (current.publishClaimedAt !== null) return `${patch.draftId}: publish_claimed`;
   if (classifyExistingDraft(current) !== "draft") return `${patch.draftId}: posted_or_failed`;
   const media = current.payload.media?.find((item) => item.id === patch.expected.mediaId);
   if (!media || media.id !== patch.expected.mediaId || media.url !== patch.expected.mediaUrl) return `${patch.draftId}: media_cas_mismatch`;
   return null;
+}
+
+export function isAlreadyApplied(patch: ReviewPatch, current: ExistingDraft): boolean {
+  const target = patch.set.payload;
+  return current.status === "ready" && current.scheduledAt === patch.set.scheduled_at && current.publishClaimedAt === null
+    && current.payload.targetConnectionId === target.targetConnectionId && current.payload.targetAccountLabel === target.targetAccountLabel
+    && current.payload.boardId === target.boardId && current.payload.boardName === target.boardName
+    && current.payload.title === target.title && current.payload.description === target.description
+    && current.payload.destinationUrl === target.destinationUrl;
 }
 
 export function validateApplyResultCount(count: number, draftId: string): void {

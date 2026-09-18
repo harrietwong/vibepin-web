@@ -26,13 +26,15 @@ const row = (n: number, overrides: Partial<ManifestRow> = {}): ManifestRow => ({
   ...overrides,
 });
 
-const existing = (n: number, overrides: Partial<ExistingDraft> = {}): ExistingDraft => {
+  const existing = (n: number, overrides: Partial<ExistingDraft> = {}): ExistingDraft => {
   const source = row(n);
   return {
     userId: "user-1",
     draftId: `draft-${n}`,
     status: "ready",
     scheduledAt: null,
+    updatedAt: "2026-09-18T20:00:00.000Z",
+    publishClaimedAt: null,
     payload: {
       title: source.title,
       description: source.description,
@@ -60,6 +62,7 @@ assert.equal(matched.items[0].boardId, BOARD_IDS["Home & Kitchen Finds"]);
 const patch = buildReviewPatch(matched.items[0], "a273f91c-4589-4fce-b19c-e24f2bdf6c99", "cheerishh");
 assert.equal(patch.draftId, "draft-1");
 assert.equal(patch.expected.userId, "user-1");
+assert.equal(patch.expected.updatedAt, "2026-09-18T20:00:00.000Z");
 assert.equal(patch.expected.mediaUrl, "/api/storage-media?path=1");
 assert.deepEqual(patch.media, { id: "media-1", kind: "video", url: "/api/storage-media?path=1" });
 assert.equal(patch.set.scheduled_at, "2026-09-20T10:01:00-04:00");
@@ -85,8 +88,16 @@ assert.match(validateApplyPreflight(patch, { ...matched.items[0].current, userId
 assert.match(validateApplyPreflight(patch, { ...matched.items[0].current, payload: { ...matched.items[0].current.payload, media: [{ id: "media-1", url: "changed" }] } })!, /media_cas_mismatch/);
 assert.throws(() => validateApplyResultCount(0, "draft-1"), /update_returned_0_rows/);
 assert.doesNotThrow(() => validateApplyResultCount(1, "draft-1"));
+const alreadyApplied = { ...matched.items[0].current, status: "ready", scheduledAt: patch.set.scheduled_at, payload: { ...matched.items[0].current.payload, ...patch.set.payload }, publishClaimedAt: null };
+assert.equal(validateApplyPreflight(patch, alreadyApplied), "already_applied");
+assert.match(validateApplyPreflight(patch, { ...matched.items[0].current, publishClaimedAt: "2026-09-18T21:00:00.000Z" })!, /publish_claimed/);
+assert.equal((mergeApplyPayload(matched.items[0].current.payload, patch.set.payload)).updatedAt, undefined);
+const appliedPayload = mergeApplyPayload(matched.items[0].current.payload, patch.set.payload, "2026-09-18T21:00:00.000Z");
+assert.equal(appliedPayload.updatedAt, "2026-09-18T21:00:00.000Z");
 const applySource = readFileSync("scripts/reconcile-cheerish-drafts.ts", "utf8");
 assert.doesNotMatch(applySource, /\.insert\(|\.upsert\(/, "apply must never create drafts");
+assert.match(applySource, /\.eq\("updated_at",\s*patch\.expected\.updatedAt\)/);
+assert.match(applySource, /publish_claimed_at/);
 
 const ambiguous = reconcileDrafts([row(1)], [existing(1), existing(1, { draftId: "draft-duplicate" })]);
 assert.equal(ambiguous.ok, false);

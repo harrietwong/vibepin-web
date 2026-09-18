@@ -87,9 +87,9 @@ async function main() {
   const connection = await db.from("social_connections").select("id,user_id,provider,provider_account_username,provider_account_name,connection_status,needs_reconnect,disconnected_at").eq("id", CONNECTION_ID).maybeSingle();
   if (connection.error) throw connection.error;
   if (!connection.data || connection.data.provider !== "pinterest" || connection.data.connection_status !== "connected" || connection.data.needs_reconnect || connection.data.disconnected_at || ![connection.data.provider_account_username, connection.data.provider_account_name].some((value) => String(value ?? "").replace(/^@/, "").toLowerCase() === ACCOUNT_LABEL)) throw new Error("pinterest_connection_identity_mismatch");
-  const result = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,payload").eq("vibepin_user_id", connection.data.user_id).is("deleted_at", null).limit(500);
+  const result = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,updated_at,publish_claimed_at,payload").eq("vibepin_user_id", connection.data.user_id).is("deleted_at", null).limit(500);
   if (result.error) throw result.error;
-  const existing = (result.data ?? []).map((item) => ({ userId: String(item.vibepin_user_id), draftId: String(item.draft_id), status: String(item.status ?? ""), scheduledAt: item.scheduled_at ? String(item.scheduled_at) : null, payload: (item.payload ?? {}) as ExistingDraft["payload"] }));
+  const existing = (result.data ?? []).map((item) => ({ userId: String(item.vibepin_user_id), draftId: String(item.draft_id), status: String(item.status ?? ""), scheduledAt: item.scheduled_at ? String(item.scheduled_at) : null, updatedAt: String(item.updated_at ?? ""), publishClaimedAt: item.publish_claimed_at ? String(item.publish_claimed_at) : null, payload: (item.payload ?? {}) as ExistingDraft["payload"] }));
   if (command === "apply") {
     const document = JSON.parse(readFileSync(patchPath, "utf8")) as { mode?: string; writesPerformed?: boolean; patches?: ReturnType<typeof buildReviewPatch>[] };
     if (document.mode !== "dry-run" || document.writesPerformed !== false || !Array.isArray(document.patches) || document.patches.length !== 62) throw new Error("invalid_dry_run_patch");
@@ -100,7 +100,7 @@ async function main() {
       const current = byId.get(patch.draftId);
       if (!current) { failures.push(`${patch.draftId}: missing_on_preflight`); continue; }
       const failure = validateApplyPreflight(patch, current);
-      if (failure) failures.push(failure);
+      if (failure && failure !== "already_applied") failures.push(failure);
       preflightRows.push(current);
     }
     if (new Set(document.patches.map((patch) => patch.draftId)).size !== document.patches.length) failures.push("duplicate_patch_draft_id");
@@ -109,20 +109,22 @@ async function main() {
     const updateResults: Array<{ draftId: string; updatedAt: string }> = [];
     for (const patch of document.patches) {
       const current = byId.get(patch.draftId)!;
+      const alreadyApplied = validateApplyPreflight(patch, current) === "already_applied";
+      if (alreadyApplied) continue;
       const updatedAt = new Date().toISOString();
-      const mergedPayload = mergeApplyPayload(current.payload, patch.set.payload);
-      const updated = await db.from("pin_drafts").update({ payload: mergedPayload, status: "ready", updated_at: updatedAt, scheduled_at: patch.set.scheduled_at, publish_claimed_at: null }).eq("vibepin_user_id", current.userId).eq("draft_id", patch.draftId).is("scheduled_at", null).select("draft_id");
+      const mergedPayload = mergeApplyPayload(current.payload, patch.set.payload, updatedAt);
+      const updated = await db.from("pin_drafts").update({ payload: mergedPayload, status: "ready", updated_at: updatedAt, scheduled_at: patch.set.scheduled_at, publish_claimed_at: null }).eq("vibepin_user_id", current.userId).eq("draft_id", patch.draftId).eq("updated_at", patch.expected.updatedAt).eq("status", patch.expected.status).is("scheduled_at", null).select("draft_id");
       if (updated.error) throw updated.error;
       validateApplyResultCount(updated.data?.length ?? 0, patch.draftId);
       updateResults.push({ draftId: patch.draftId, updatedAt });
     }
-    const after = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,payload").eq("vibepin_user_id", connection.data.user_id).in("draft_id", document.patches.map((patch) => patch.draftId));
+    const after = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,updated_at,publish_claimed_at,payload").eq("vibepin_user_id", connection.data.user_id).in("draft_id", document.patches.map((patch) => patch.draftId));
     if (after.error) throw after.error;
     const afterById = new Map((after.data ?? []).map((item) => [String(item.draft_id), item]));
     const verifyFailures: string[] = [];
     for (const patch of document.patches) {
       const item = afterById.get(patch.draftId); const payload = item?.payload as ExistingDraft["payload"] | undefined;
-      if (!item || String(item.status) !== "ready" || String(item.scheduled_at ?? "") !== patch.set.scheduled_at || payload?.targetConnectionId !== CONNECTION_ID || payload?.targetAccountLabel !== ACCOUNT_LABEL || payload?.boardId !== patch.set.payload.boardId || payload?.boardName !== patch.set.payload.boardName || payload?.title !== patch.set.payload.title || payload?.description !== patch.set.payload.description || payload?.destinationUrl !== patch.set.payload.destinationUrl) verifyFailures.push(`${patch.draftId}: post_apply_mismatch`);
+      if (!item || String(item.status) !== "ready" || item.publish_claimed_at !== null || String(item.scheduled_at ?? "") !== patch.set.scheduled_at || payload?.updatedAt !== item.updated_at || payload?.targetConnectionId !== CONNECTION_ID || payload?.targetAccountLabel !== ACCOUNT_LABEL || payload?.boardId !== patch.set.payload.boardId || payload?.boardName !== patch.set.payload.boardName || payload?.title !== patch.set.payload.title || payload?.description !== patch.set.payload.description || payload?.destinationUrl !== patch.set.payload.destinationUrl) verifyFailures.push(`${patch.draftId}: post_apply_mismatch`);
     }
     writeFileSync(executionPath, `# Cheerish Preview apply execution\n\n- Confirmation: exact\n- Writes performed: ${updateResults.length}\n- Post-apply failures: ${verifyFailures.length}\n- Before snapshot: ${beforePath}\n\n${verifyFailures.length ? verifyFailures.map((failure) => `- ${failure}`).join("\n") : "All 62 rows re-read and verified."}\n`, "utf8");
     console.log(JSON.stringify({ ok: verifyFailures.length === 0, mode: "apply", writesPerformed: updateResults.length, verifyFailures, beforePath, executionPath }, null, 2));
