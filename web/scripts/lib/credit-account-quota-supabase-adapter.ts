@@ -112,14 +112,21 @@ export async function executeSyntheticCleanupSteps(
 ): Promise<Array<{ resource: string; status: "PASS" | "FAIL"; detail: string }>> {
   const actions: Array<{ resource: string; status: "PASS" | "FAIL"; detail: string }> = [];
   for (const step of steps) {
-    try {
-      const result = await step.remove();
-      actions.push(result.error
-        ? { resource: step.resource, status: "FAIL", detail: "synthetic state delete failed" }
-        : { resource: step.resource, status: "PASS", detail: "synthetic state deleted" });
-    } catch {
-      actions.push({ resource: step.resource, status: "FAIL", detail: "synthetic state delete threw" });
+    let lastFailure = "synthetic state delete failed";
+    let deleted = false;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const result = await step.remove();
+        if (!result.error) {
+          actions.push({ resource: step.resource, status: "PASS", detail: `synthetic state deleted after ${attempt} attempt(s)` });
+          deleted = true;
+          break;
+        }
+      } catch {
+        lastFailure = "synthetic state delete threw";
+      }
     }
+    if (!deleted) actions.push({ resource: step.resource, status: "FAIL", detail: `${lastFailure} after 3 attempts` });
   }
   return actions;
 }

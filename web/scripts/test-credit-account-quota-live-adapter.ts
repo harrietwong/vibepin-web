@@ -110,16 +110,37 @@ for (const round of [1, 2] as const) {
     }), /state/);
   });
 
-  await test(`round ${round}: cleanup is sequential and continues after a failed child delete`, async () => {
+  await test(`round ${round}: cleanup retries a transient child delete in order before moving to the next step`, async () => {
     const order: string[] = [];
+    let customerAttempts = 0;
     const actions = await executeSyntheticCleanupSteps([
       { resource: "subscription", remove: async () => { order.push("subscription"); return { error: null }; } },
-      { resource: "customer", remove: async () => { order.push("customer"); return { error: { code: "23503" } }; } },
+      { resource: "customer", remove: async () => {
+        customerAttempts += 1;
+        order.push(`customer:${customerAttempts}`);
+        return { error: customerAttempts === 1 ? { code: "23503" } : null };
+      } },
       { resource: "social", remove: async () => { order.push("social"); return { error: null }; } },
       { resource: "auth", remove: async () => { order.push("auth"); return { error: null }; } },
     ]);
-    assert.deepEqual(order, ["subscription", "customer", "social", "auth"]);
-    assert.deepEqual(actions.map(item => item.status), ["PASS", "FAIL", "PASS", "PASS"]);
+    assert.deepEqual(order, ["subscription", "customer:1", "customer:2", "social", "auth"]);
+    assert.deepEqual(actions.map(item => item.status), ["PASS", "PASS", "PASS", "PASS"]);
+  });
+
+  await test(`round ${round}: cleanup records exactly three persistent failures then still deletes later state`, async () => {
+    const order: string[] = [];
+    let customerAttempts = 0;
+    const actions = await executeSyntheticCleanupSteps([
+      { resource: "customer", remove: async () => {
+        customerAttempts += 1;
+        order.push(`customer:${customerAttempts}`);
+        return { error: { code: "23503" } };
+      } },
+      { resource: "social", remove: async () => { order.push("social"); return { error: null }; } },
+      { resource: "auth", remove: async () => { order.push("auth"); return { error: null }; } },
+    ]);
+    assert.deepEqual(order, ["customer:1", "customer:2", "customer:3", "social", "auth"]);
+    assert.deepEqual(actions.map(item => item.status), ["FAIL", "PASS", "PASS"]);
   });
 }
 
