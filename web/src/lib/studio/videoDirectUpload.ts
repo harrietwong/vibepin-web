@@ -2,7 +2,7 @@
 
 import { sha256Blob } from "./incrementalSha256";
 import { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
-import { authedInternalRequest } from "./authedInternalRequest";
+import { authedInternalRequest, type InternalApiPath } from "./authedInternalRequest";
 
 export { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
 
@@ -15,7 +15,7 @@ function requestId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()
 export async function sha256(file: Blob): Promise<string> {
   return sha256Blob(file);
 }
-async function api<T>(url: string, body: unknown, id: string, fetchImpl: typeof fetch = fetch): Promise<T> {
+async function api<T>(url: InternalApiPath, body: unknown, id: string, fetchImpl: typeof fetch = fetch): Promise<T> {
   const response = await authedInternalRequest(url, {
     method: "POST", headers: { "content-type": "application/json", "x-request-id": id }, body: JSON.stringify(body),
   }, fetchImpl);

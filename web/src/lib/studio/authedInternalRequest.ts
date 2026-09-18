@@ -2,7 +2,7 @@
 
 import { freshAccessToken, refreshSessionOnce } from "@/lib/supabaseBrowser";
 
-type InternalApiPath = `/api/${string}`;
+export type InternalApiPath = `/api/${string}`;
 
 function rejectInvalidRequest(): never {
   throw Object.assign(new Error("internal_api_request_invalid"), { code: "internal_api_request_invalid" });
