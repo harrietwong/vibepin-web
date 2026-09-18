@@ -8,6 +8,7 @@ Implemented on accepted Task 3 base `9127d2b1` in `D:/vp-tmp/wt-video-pin-p0-091
 - Both title actions call only `aiRef.current?.generate()`. `PinAICopyPanel` remains the sole owner of generation stage, overwrite confirmation, request state, quota/rate-limit behavior, evidence, and `onApplyCopy`; no parent AI state, route, hook, prompt, or result path was added.
 - The shortcut reuses the existing localized `pinForm.generateCopy` key for visible text, `title`, and accessible name. Catalog validation confirms the key resolves rather than leaking a raw key. The control is a 24px-minimum compact button with the browser's normal keyboard focus treatment.
 - Busy feedback remains authoritative in the visible shared panel action: it disables and shows the existing progress state. The title shortcut deliberately does not mirror panel state; activations during a request reach the panel handle and are rejected by its existing busy guard.
+- The panel handle also exposes the panel's real synchronous busy state. Card Edit/Collapse transitions consult that handle and remain in their current compact/expanded shape until the request settles, so the conditionally rendered panel cannot remount mid-request. This adds no parent-owned request or result state.
 - Image drafts still use the established image path. Video drafts still pass through `generatePinterestPinCopy`'s persisted-media boundary: a selected video cover resolves the durable poster, the client omits the video URL from v2 input, and the server analyzes only bounded owned poster bytes. A video without a usable poster degrades to `video_cover_unavailable` and makes zero image-provider calls.
 
 ## TDD evidence
@@ -38,13 +39,26 @@ An earlier attempt failed at an obsolete `card-edit` step because current Draft 
 
 The first post-implementation run reached all Task 4 assertions but timed out compiling the unrelated legacy `/app/trends` route at the test's final check. A warmed rerun completed: `1 passed (24.2s)`.
 
+### Fix round 1 — card-shape race
+
+The review found that the compact and expanded panels live under different conditional parent trees. The focused scheduled-card E2E first held the generate response in flight, clicked Edit, and failed on the requested invariant:
+
+```text
+Expected data-active: "false"
+Received: "true"
+```
+
+That was the real compact-to-expanded remount race. After adding the synchronous panel busy handle and guarding Edit, the test passed. The same test was then extended in strict RED/GREEN order for the reverse direction: after starting generation from the expanded Title shortcut, Collapse incorrectly changed `data-active` from `true` to `false`; adding the same guard to Collapse/Stop Editing made it pass.
+
+The final browser contract covers both directions in one scheduled-card flow. While each response is held, a shape-change click cannot remount the panel and the analyze/generate counters remain exactly one per requested run. Once the response settles, the same shape transition succeeds. The original compact action and the expanded Title shortcut both remain present.
+
 ## Verification
 
 All commands ran from `web/` unless noted.
 
 ```text
 npx playwright test tests/e2e/ai-copy-v2.spec.ts --project=chromium --reporter=list
-  1 passed
+  2 passed (39.7s)
 
 npx tsx scripts/test-ai-copy-v2-ui.ts
   AI Copy v2 UI/client tests passed
@@ -83,6 +97,7 @@ Focused ESLint completed with zero errors and two existing hook warnings at unch
 ## Changed files
 
 - `web/src/components/pins/PinFieldsForm.tsx`
+- `web/src/components/pins/PinAICopyPanel.tsx`
 - `web/src/components/studio/PinBoardCard.tsx`
 - `web/tests/e2e/ai-copy-v2.spec.ts`
 - `.superpowers/sdd/2026-09-17-video-upload-cover-ai-p0/task-4-report.md`

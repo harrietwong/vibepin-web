@@ -95,3 +95,96 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
   expect(trends.status()).toBe(200);
   expect(discover.status()).toBe(200);
 });
+
+test("in-flight AI copy prevents a scheduled card shape change and duplicate generation", async ({ page }) => {
+  let analyzeCount = 0;
+  let generateCount = 0;
+  let releaseGenerate: () => void = () => {};
+  let generateGate = new Promise<void>(resolve => { releaseGenerate = resolve; });
+
+  await page.addInitScript(({ pixel }) => {
+    const now = new Date().toISOString();
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    localStorage.setItem("vibepin-locale-prefs", JSON.stringify({ appLanguage: "en", contentLanguage: "same", pinterestRegion: "US" }));
+    localStorage.setItem("vp:pin_drafts:v1", JSON.stringify({ drafts: {
+      "v2-e2e-scheduled": {
+        id: "v2-e2e-scheduled", imageUrl: pixel, keyword: "reading corner", category: "home-decor",
+        title: "Scheduled title", description: "Scheduled description", altText: "Scheduled alt",
+        destinationUrl: "", boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "e2e",
+        scheduledDate: tomorrow, scheduledTime: "10:00", addedToPlanAt: now,
+        status: "ready", source: "uploaded_image", planningStatus: "ready",
+        createdAt: now, updatedAt: now,
+        imageAnalysisStatus: "ready", keywordStatus: "ready", imageSummary: "A white reading lamp beside a chair",
+        visibleObjects: ["lamp", "chair"], colors: ["white"], style: "minimal", ocrText: "", imageCategory: "home-decor",
+        recommendedKeywords: ["reading corner ideas"], keywordSource: "pinterest_high_search",
+      },
+    } }));
+    sessionStorage.setItem("vp:studio:filter", "scheduled");
+  }, { pixel: PIXEL });
+
+  await page.route("**/rest/v1/**", route => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+  await page.route("**/api/pin-drafts**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ drafts: [], nextCursor: null, accepted: [] }) }));
+  await page.route("**/api/user-store**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ documents: [], nextCursor: null, accepted: [] }) }));
+  await page.route("**/api/pinterest/boards**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], bookmark: null }) }));
+  await page.route("**/api/pinterest/status**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ connected: false }) }));
+  await page.route("**/api/ai-copy/v2/analyze", async route => {
+    analyzeCount += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ok: true, sessionId: "scheduled-session",
+      factCard: { version: "fact-card-v1", sessionId: "scheduled-session", draftId: "v2-e2e-scheduled", locale: "en", facts: [] },
+      keywordEvidence: { keywordSetId: "scheduled-ks", sessionId: "scheduled-session", draftId: "v2-e2e-scheduled", candidates: [], selectedKeywordIds: [], degradedMode: "no_keyword_demand_data" },
+    }) });
+  });
+  await page.route("**/api/ai-copy/v2/generate", async route => {
+    generateCount += 1;
+    await generateGate;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ok: true, result: {
+        generationId: "scheduled-generation", sessionId: "scheduled-session", draftId: "v2-e2e-scheduled", angleId: "default", keywordSetId: "scheduled-ks",
+        title: "Updated scheduled title", description: "Updated scheduled description", altText: "Updated scheduled alt",
+        usedKeywordIds: [], factSummary: [], degradedMode: "no_keyword_demand_data", validationReport: { valid: true, issues: [] },
+      },
+    }) });
+  });
+
+  await page.goto("/app/studio", { waitUntil: "networkidle" });
+  const card = page.getByTestId("pin-board-card").first();
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card).toHaveAttribute("data-active", "false");
+
+  await card.getByTestId("ai-copy-generate").click();
+  await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
+  await page.getByTestId("ai-copy-replace-confirm-btn").click();
+  await expect.poll(() => generateCount).toBe(1);
+  await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
+
+  await card.getByTestId("card-edit").click();
+  await expect(card).toHaveAttribute("data-active", "false");
+  expect(analyzeCount).toBe(1);
+  expect(generateCount).toBe(1);
+
+  releaseGenerate();
+  await expect(card.getByTestId("ai-copy-generate")).toBeEnabled();
+  await card.getByTestId("card-edit").click();
+  await expect(card).toHaveAttribute("data-active", "true");
+  await expect(card.getByTestId("title-ai-copy-generate")).toBeVisible();
+  expect(analyzeCount).toBe(1);
+  expect(generateCount).toBe(1);
+
+  generateGate = new Promise<void>(resolve => { releaseGenerate = resolve; });
+  await card.getByTestId("title-ai-copy-generate").click();
+  await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
+  await page.getByTestId("ai-copy-replace-confirm-btn").click();
+  await expect.poll(() => generateCount).toBe(2);
+  await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
+
+  await card.getByTestId("card-collapse").click();
+  await expect(card).toHaveAttribute("data-active", "true");
+  expect(analyzeCount).toBe(2);
+  expect(generateCount).toBe(2);
+
+  releaseGenerate();
+  await expect(card.getByTestId("ai-copy-generate")).toBeEnabled();
+  await card.getByTestId("card-collapse").click();
+  await expect(card).toHaveAttribute("data-active", "false");
+});

@@ -14,7 +14,7 @@
  * so chips are labeled "Recommended Pinterest keywords" — NEVER "Trending".
  */
 
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
@@ -99,7 +99,7 @@ export type PinAICopyPanelProps = {
 };
 
 /** Imperative handle so a host (e.g. per-field regen buttons) can trigger a run. */
-export type PinAICopyPanelHandle = { generate: () => void };
+export type PinAICopyPanelHandle = { generate: () => void; isBusy: () => boolean };
 
 type Stage = "idle" | "analyzing" | "generating" | "checking" | "done" | "error";
 
@@ -123,6 +123,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [generatedThisSession, setGeneratedThisSession] = useState(false);
+  const busyRef = useRef(false);
 
   const busy = stage === "analyzing" || stage === "generating" || stage === "checking";
   const isRegen = props.hasGeneratedBefore || generatedThisSession || stage === "done";
@@ -148,6 +149,8 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const willReplaceExisting = !!props.title?.trim() && !!props.description?.trim();
 
   const runGenerate = useCallback(async (confirmedReplace: boolean) => {
+    if (busyRef.current || props.disabled) return;
+    busyRef.current = true;
     setErrorMsg("");
     props.onBeforeGenerate?.();
     try {
@@ -219,6 +222,8 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
       } else {
         toast.error(msg);
       }
+    } finally {
+      busyRef.current = false;
     }
   }, [isRegen, props, tr]);
 
@@ -226,7 +231,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   // the-blank rule: if both title and description already have text, ask first
   // instead of silently overwriting what the user wrote.
   const generate = useCallback(() => {
-    if (busy || props.disabled) return;
+    if (busyRef.current || busy || props.disabled) return;
     if (willReplaceExisting) { setConfirmOpen(true); return; }
     void runGenerate(false);
   }, [busy, props.disabled, willReplaceExisting, runGenerate]);
@@ -236,7 +241,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
     void runGenerate(true);
   }, [runGenerate]);
 
-  useImperativeHandle(ref, () => ({ generate }), [generate]);
+  useImperativeHandle(ref, () => ({ generate, isBusy: () => busyRef.current || busy }), [generate, busy]);
 
   const showPreStrip = (stage === "idle") && (props.analysisStatus === "pending" || props.analysisStatus === "ready");
 

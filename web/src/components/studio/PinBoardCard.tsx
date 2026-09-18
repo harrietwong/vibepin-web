@@ -290,6 +290,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [hoveredKw, setHoveredKw] = useState<string | null>(null);
   const [copiedKw, setCopiedKw] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiRef = useRef<PinAICopyPanelHandle>(null);
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
@@ -516,10 +517,24 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     flush();
     props.onPublish(draft.id, options);
   }, [flush, props, draft.id, destinationError]);
-  const collapse = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
+  const collapse = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    flush();
+    setEditing(false);
+    props.onSetActive(null);
+  }, [flush, props]);
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
-  const startEditing = useCallback(() => { setEditing(true); props.onSetActive(draft.id); }, [props, draft.id]);
-  const stopEditing = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
+  const startEditing = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    setEditing(true);
+    props.onSetActive(draft.id);
+  }, [props, draft.id]);
+  const stopEditing = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    flush();
+    setEditing(false);
+    props.onSetActive(null);
+  }, [flush, props]);
   const publishEntryNotice = props.publishEntryIssue ? (
     <div data-testid="card-publish-entry-issue" role="alert" data-code={props.publishEntryIssue}
       style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: "#fffbeb", color: "#92400e" }}>
@@ -662,7 +677,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // the confirm copy talks about title/description only. Compares against `fields`
   // (the on-screen values the panel itself was seeded with), not the possibly-stale
   // `draft`, so this agrees with what the panel used for its own fill-state check.
-  const aiRef = useRef<PinAICopyPanelHandle>(null);
   const applyCopy = useCallback((r: PinAICopyResult) => {
     const prevTitle = fields.title;
     const prevDescription = fields.description;
