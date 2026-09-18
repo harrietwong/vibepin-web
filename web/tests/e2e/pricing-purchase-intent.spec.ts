@@ -90,7 +90,7 @@ const STALE_HINT_SKIP_REASON = "needs explicit NEXT_PUBLIC_SUPABASE_URL for the 
 
 function buildPricingSessionCookie(supabaseRef: string): { name: string; value: string } {
   const session = {
-    access_token: "e2e-pricing-stale-hint-access-token",
+    access_token: "e2e-pricing-stale-hint-access-token", // scan-secrets: allow — inert test fixture
     refresh_token: "e2e-pricing-stale-hint-refresh-token",
     token_type: "bearer",
     expires_at: Math.floor(Date.now() / 1000) + 3600,

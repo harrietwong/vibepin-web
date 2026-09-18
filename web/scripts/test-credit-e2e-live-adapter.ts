@@ -48,7 +48,7 @@ const validAdapterOptions = {
 
 for (const round of [1, 2]) {
   test(`round ${round}: Preview bypass is isolated to Preview requests and browser context`, () => {
-    const secret = "test-vercel-bypass-secret";
+    const secret = "test-vercel-bypass-secret"; // scan-secrets: allow — inert test fixture
     assert.deepEqual(buildPreviewRequestHeaders(validAdapterOptions.baseUrl, {
       VERCEL_AUTOMATION_BYPASS_SECRET: secret,
     }), { "x-vercel-protection-bypass": secret });
