@@ -31,7 +31,7 @@ import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type Media
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
-import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
+import { PinFieldsForm, TitleAICopyButton, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
@@ -679,7 +679,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       metadataDraft: r.metadataDraft,
     });
   }, [props, draft.id, draft.destinationUrl, draft.tags, fields.title, fields.description, fields.altText]);
-
   // A "failed" card is either a PUBLISH failure (had a real schedule attempt) or a
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
@@ -734,6 +733,24 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     ? tr(isPublishFailure ? "studioBoard.card.publishFailedBadge" : "studioBoard.card.generationFailedBadge")
     : status.label;
   const publishing = props.publishing;
+  const aiCopyPanel = (
+    <PinAICopyPanel
+      ref={aiRef}
+      compact
+      draftId={draft.id} imageUrl={draft.imageUrl}
+      title={fields.title} description={fields.description} altText={fields.altText}
+      boardId={draft.boardId} boardName={draft.boardName}
+      category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
+      setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
+      imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
+      boards={boards}
+      analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
+      hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
+      disabled={publishing}
+      onBeforeGenerate={flush}
+      onApplyCopy={applyCopy}
+    />
+  );
   const posted = lifecycle === "posted";
   const failed = lifecycle === "failed";
   const needsAttention = failed || hasFailedDestination(draft);
@@ -1040,7 +1057,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             thumbnail — which is the cover, since setCoverMedia moves it to media[0].
             Never regenerates the whole set. */}
         {!generating && !posted && (
-          <div style={{ padding: "6px 12px 0", display: "flex" }}>
+          <div data-testid="card-ai-tools" style={{ padding: "6px 12px 0", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            {aiCopyPanel}
             <button type="button" data-testid="card-regenerate-image" onClick={doGenerateAiImage} disabled={publishing}
               style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
@@ -1077,12 +1095,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
           <>
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
-            {tr("studioBoard.card.fields.title")}
-            <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+              <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
+              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} />
+            </div>
+            <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
               style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700 }} />
-          </label>
+          </div>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.description")}
             <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
@@ -1340,22 +1361,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </button>
           </div>
           <div data-testid="card-ai-tools" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            <PinAICopyPanel
-              ref={aiRef}
-              compact
-              draftId={draft.id} imageUrl={draft.imageUrl}
-              title={fields.title} description={fields.description} altText={fields.altText}
-              boardId={draft.boardId} boardName={draft.boardName}
-              category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
-              setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
-              imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
-              boards={boards}
-              analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
-              hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-              disabled={publishing}
-              onBeforeGenerate={flush}
-              onApplyCopy={applyCopy}
-            />
+            {aiCopyPanel}
             <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
@@ -1373,6 +1379,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           boardFieldError={props.boardFieldError}
           titleFieldError={props.titleFieldError} descriptionFieldError={props.descriptionFieldError}
           disabled={publishing} onChange={handleChange}
+          onGenerateCopy={() => aiRef.current?.generate()}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 
         <PublishDestinations

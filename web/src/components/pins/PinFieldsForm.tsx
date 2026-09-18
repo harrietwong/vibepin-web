@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, Search, ChevronDown } from "lucide-react";
+import { RefreshCw, Search, ChevronDown, Sparkles } from "lucide-react";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -45,6 +45,8 @@ export type PinFieldsFormProps = {
   descriptionFieldError?: string;
   disabled?: boolean;
   onChange: (patch: Partial<PinFieldsValue>) => void;
+  /** Runs the host card's single shared AI-copy panel from the Title field. */
+  onGenerateCopy?: () => void;
   onRegenerateField?: (field: "title" | "description") => void;
   onConnect?: () => void;
 };
@@ -59,12 +61,27 @@ function RegenBtn({ title, onClick, disabled }: { title: string; onClick?: () =>
   );
 }
 
-function FieldLabel({ text, hint, onRegen }: { text: string; hint?: string; onRegen?: () => void }) {
+export function TitleAICopyButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  const { t: tr } = useLocale();
+  const label = tr("pinForm.generateCopy");
+  return (
+    <button type="button" data-testid="title-ai-copy-generate" title={label} aria-label={label}
+      onClick={onClick} disabled={disabled}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, minHeight: 24, padding: "3px 6px", borderRadius: 7, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.purple, cursor: disabled ? "default" : "pointer", fontSize: 10.5, fontWeight: 750, fontFamily: "inherit", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap", flexShrink: 0 }}>
+      <Sparkles aria-hidden="true" style={{ width: 12, height: 12 }} /> {label}
+    </button>
+  );
+}
+
+function FieldLabel({ text, hint, onRegen, onGenerateCopy, disabled }: { text: string; hint?: string; onRegen?: () => void; onGenerateCopy?: () => void; disabled?: boolean }) {
   const { t: tr } = useLocale();
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
       <span style={{ ...labelStyle, margin: 0 }}>{text}{hint && <span style={{ color: BUI.textMuted, fontWeight: 600 }}> · {hint}</span>}</span>
-      <RegenBtn title={`${tr("pinForm.regenerateLabelPrefix")}${text.toLowerCase()}`} onClick={onRegen} />
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {onGenerateCopy && <TitleAICopyButton onClick={onGenerateCopy} disabled={disabled} />}
+        <RegenBtn title={`${tr("pinForm.regenerateLabelPrefix")}${text.toLowerCase()}`} onClick={onRegen} disabled={disabled} />
+      </div>
     </div>
   );
 }
@@ -126,7 +143,7 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
 export function PinFieldsForm({
   value, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards, boardFieldError,
   titleFieldError, descriptionFieldError, disabled,
-  onChange, onRegenerateField, onConnect,
+  onChange, onGenerateCopy, onRegenerateField, onConnect,
 }: PinFieldsFormProps) {
   const { t: tr } = useLocale();
   const regen = (f: "title" | "description") =>
@@ -135,7 +152,7 @@ export function PinFieldsForm({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
       <div>
-        <FieldLabel text={tr("pinForm.pinTitle")} onRegen={regen("title")} />
+        <FieldLabel text={tr("pinForm.pinTitle")} onGenerateCopy={onGenerateCopy} onRegen={regen("title")} disabled={disabled} />
         <input data-testid="board-field-title" value={value.title} disabled={disabled} maxLength={100}
           onChange={e => onChange({ title: e.target.value })} placeholder={tr("pinForm.pinTitlePlaceholder")} style={fieldStyle} />
         {titleFieldError && (

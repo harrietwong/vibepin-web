@@ -4,6 +4,10 @@ const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcS
 
 test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", async ({ page }) => {
   let analyzeBody: Record<string, unknown> = {};
+  let analyzeCount = 0;
+  let generateCount = 0;
+  let releaseGenerate: () => void = () => {};
+  const generateGate = new Promise<void>(resolve => { releaseGenerate = resolve; });
 
   await page.addInitScript(({ pixel }) => {
     const now = new Date().toISOString();
@@ -29,6 +33,7 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
   await page.route("**/api/pinterest/boards**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], bookmark: null }) }));
   await page.route("**/api/pinterest/status**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ connected: false }) }));
   await page.route("**/api/ai-copy/v2/analyze", async route => {
+    analyzeCount += 1;
     analyzeBody = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       ok: true, sessionId: "session-e2e",
@@ -41,26 +46,41 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
       ], selectedKeywordIds: ["kw-used", "kw-unused"], degradedMode: "none" },
     }) });
   });
-  await page.route("**/api/ai-copy/v2/generate", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-    ok: true, result: {
-      generationId: "generation-e2e", sessionId: "session-e2e", draftId: "v2-e2e-draft", angleId: "default", keywordSetId: "ks-e2e",
-      title: "Reading Corner Ideas", description: "Create a calm reading nook around a white lamp and chair.", altText: "White lamp beside a reading chair",
-      usedKeywordIds: ["kw-used"], factSummary: [{ factId: "fact-1", key: "image_summary", value: "A white reading lamp beside a chair", source: "image_observed", trustLevel: "observed" }],
-      degradedMode: "none", validationReport: { valid: true, issues: [] },
-    },
-  }) }));
+  await page.route("**/api/ai-copy/v2/generate", async route => {
+    generateCount += 1;
+    await generateGate;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ok: true, result: {
+        generationId: "generation-e2e", sessionId: "session-e2e", draftId: "v2-e2e-draft", angleId: "default", keywordSetId: "ks-e2e",
+        title: "Reading Corner Ideas", description: "Create a calm reading nook around a white lamp and chair.", altText: "White lamp beside a reading chair",
+        usedKeywordIds: ["kw-used"], factSummary: [{ factId: "fact-1", key: "image_summary", value: "A white reading lamp beside a chair", source: "image_observed", trustLevel: "observed" }],
+        degradedMode: "none", validationReport: { valid: true, issues: [] },
+      },
+    }) });
+  });
 
-  await page.goto("/app/studio", { waitUntil: "domcontentloaded" });
+  await page.goto("/app/studio", { waitUntil: "networkidle" });
   await expect(page.getByTestId("nav-keyword-trends")).toHaveCount(0);
   await expect(page.getByTestId("nav-viral-pins")).toHaveCount(0);
 
   const card = page.getByTestId("pin-board-card").first();
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await card.getByTestId("card-edit").click();
-  await card.getByTestId("ai-copy-generate").click();
+  const shortcut = card.getByTestId("title-ai-copy-generate");
+  await expect(shortcut).toHaveAccessibleName("Generate copy");
+  await expect(card.getByTestId("ai-copy-generate")).toBeVisible();
+  await shortcut.click();
   await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
   await page.getByTestId("ai-copy-replace-confirm-btn").click();
-  await expect(card.getByTestId("board-field-title")).toHaveValue("Reading Corner Ideas");
+  await expect.poll(() => generateCount).toBe(1);
+  await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
+  // The shortcut delegates to the panel's existing busy guard. Rapid extra
+  // activations while the shared request is in flight must not start new calls.
+  await shortcut.dblclick();
+  await expect.poll(() => generateCount).toBe(1);
+  releaseGenerate();
+  await expect(card.getByTestId("board-card-title")).toHaveValue("Reading Corner Ideas");
+  expect(analyzeCount).toBe(1);
+  expect(generateCount).toBe(1);
   expect(analyzeBody.country).toBe("DE");
 
   await card.getByTestId("ai-copy-context-toggle").click();
