@@ -1,11 +1,20 @@
 "use client";
 
-import { freshAccessToken, refreshSessionOnce } from "@/lib/supabaseBrowser";
+import {
+  currentSessionIdentity,
+  freshSessionIdentity,
+  refreshSessionIdentityOnce,
+  type BrowserSessionIdentity,
+} from "@/lib/supabaseBrowser";
 
 export type InternalApiPath = `/api/${string}`;
 
 function rejectInvalidRequest(): never {
   throw Object.assign(new Error("internal_api_request_invalid"), { code: "internal_api_request_invalid" });
+}
+
+function rejectInvalidOwner(): never {
+  throw Object.assign(new Error("internal_api_auth_owner_invalid"), { code: "internal_api_auth_owner_invalid" });
 }
 
 function assertReplayableInternalRequest(input: unknown, init: RequestInit): asserts input is InternalApiPath {
@@ -21,6 +30,13 @@ function withBearer(init: RequestInit, token: string | null): RequestInit {
   return { ...init, headers };
 }
 
+function isSameOwner(
+  identity: BrowserSessionIdentity | null,
+  ownerUserId: string,
+): identity is BrowserSessionIdentity {
+  return identity?.ownerUserId === ownerUserId;
+}
+
 /**
  * Dispatch one same-origin app request with the shared browser session. A 401 gets
  * exactly one shared refresh-and-replay; signed Storage capability PUTs do not use
@@ -32,14 +48,27 @@ export async function authedInternalRequest(
   fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   assertReplayableInternalRequest(input, init);
-  const originalToken = await freshAccessToken();
-  let response = await fetchImpl(input, withBearer(init, originalToken));
+  const requestIdentity = await currentSessionIdentity();
+  if (!requestIdentity) rejectInvalidOwner();
+
+  const originalIdentity = await freshSessionIdentity();
+  if (!isSameOwner(originalIdentity, requestIdentity.ownerUserId)) rejectInvalidOwner();
+
+  let response = await fetchImpl(input, withBearer(init, originalIdentity.accessToken));
   if (response.status !== 401) return response;
 
-  const currentToken = await freshAccessToken();
-  const retryToken = currentToken && currentToken !== originalToken
-    ? currentToken
-    : await refreshSessionOnce();
-  if (retryToken) response = await fetchImpl(input, withBearer(init, retryToken));
+  const currentIdentity = await currentSessionIdentity();
+  if (!isSameOwner(currentIdentity, requestIdentity.ownerUserId)) return response;
+
+  let retryIdentity = currentIdentity;
+  if (currentIdentity.accessToken === originalIdentity.accessToken) {
+    const refreshedIdentity = await refreshSessionIdentityOnce();
+    if (!isSameOwner(refreshedIdentity, requestIdentity.ownerUserId)) return response;
+    const postRefreshIdentity = await currentSessionIdentity();
+    if (!isSameOwner(postRefreshIdentity, requestIdentity.ownerUserId)) return response;
+    retryIdentity = postRefreshIdentity;
+  }
+
+  response = await fetchImpl(input, withBearer(init, retryIdentity.accessToken));
   return response;
 }

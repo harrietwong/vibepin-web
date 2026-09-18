@@ -580,12 +580,31 @@ async function main() {
     let clientCreations = 0;
     let refreshes = 0;
     let sessionReads = 0;
-    let accessToken = "access-token"; // scan-secrets: allow — deliberate fake browser session token
+    let accessToken: string | null = "access-token"; // scan-secrets: allow — deliberate fake browser session token
+    let sessionOwner: string | null = OWNER;
     let refreshedToken = "refreshed-access-token";
+    let refreshedOwner: string | null = OWNER;
+    let afterRefreshSessionMutation: (() => void) | null = null;
     const fakeClient = {
       auth: {
-        getSession: async () => { sessionReads++; return { data: { session: { access_token: accessToken, expires_at: 4_102_444_800 } } }; }, // scan-secrets: allow — deliberate fake browser session token
-        refreshSession: async () => { refreshes++; await new Promise(resolve => setTimeout(resolve, 5)); accessToken = refreshedToken; return { data: { session: { access_token: refreshedToken } } }; }, // scan-secrets: allow — deliberate fake refreshed browser session token
+        getSession: async () => {
+          sessionReads++;
+          return { data: { session: accessToken === null ? null : {
+            access_token: accessToken,
+            expires_at: 4_102_444_800,
+            user: sessionOwner === null ? undefined : { id: sessionOwner },
+          } } };
+        }, // scan-secrets: allow — deliberate fake browser session token
+        refreshSession: async () => {
+          refreshes++;
+          await new Promise(resolve => setTimeout(resolve, 5));
+          accessToken = refreshedOwner === null ? null : refreshedToken;
+          sessionOwner = refreshedOwner;
+          const refreshedSession = accessToken === null ? null : { access_token: accessToken, user: { id: sessionOwner } };
+          afterRefreshSessionMutation?.();
+          afterRefreshSessionMutation = null;
+          return { data: { session: refreshedSession } };
+        }, // scan-secrets: allow — deliberate fake refreshed browser session token
       },
     };
     const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
@@ -649,6 +668,115 @@ async function main() {
       assert.deepEqual(apiCalls.map(call => call.authorization), ["Bearer access-token", "Bearer access-token", "Bearer refreshed-access-token", "Bearer refreshed-access-token"]);
 
       const { authedInternalRequest } = await import("../src/lib/studio/authedInternalRequest");
+
+      accessToken = "owner-a-old-token"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedToken = "owner-a-new-token"; // scan-secrets: allow — deliberate fake refreshed browser session token
+      refreshedOwner = OWNER;
+      const sameOwnerCalls: string[] = [];
+      const refreshesBeforeSameOwner = refreshes;
+      const sameOwnerResponse = await authedInternalRequest("/api/owner-bound-refresh", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: "workspace-a", ownerUserId: OWNER }),
+      }, async (_input, init) => {
+        const authorization = new Headers(init?.headers).get("authorization");
+        sameOwnerCalls.push(authorization ?? "");
+        return new Response(authorization === "Bearer owner-a-new-token" ? "ok" : "expired", {
+          status: authorization === "Bearer owner-a-new-token" ? 200 : 401,
+        });
+      });
+      assert.equal(sameOwnerResponse.status, 200);
+      assert.equal(refreshes - refreshesBeforeSameOwner, 1, "the same owner may refresh once after a 401");
+      assert.deepEqual(sameOwnerCalls, ["Bearer owner-a-old-token", "Bearer owner-a-new-token"]);
+
+      accessToken = "owner-a-still-unauthorized-old"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedToken = "owner-a-still-unauthorized-new"; // scan-secrets: allow — deliberate fake refreshed browser session token
+      refreshedOwner = OWNER;
+      let persistent401Calls = 0;
+      const persistent401Response = await authedInternalRequest("/api/owner-bound-still-unauthorized", { method: "POST" }, async () => {
+        persistent401Calls++;
+        return new Response("unauthorized", { status: 401 });
+      });
+      assert.equal(persistent401Response.status, 401);
+      assert.equal(persistent401Calls, 2, "a same-owner replay that still returns 401 must not make a third attempt");
+
+      accessToken = "owner-a-before-switch"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedOwner = OWNER;
+      const crossOwnerBody = JSON.stringify({ workspaceId: "workspace-a", ownerUserId: OWNER });
+      const crossOwnerCalls: Array<{ authorization: string | null; body: BodyInit | null | undefined }> = [];
+      const crossOwnerResponse = await authedInternalRequest("/api/owner-bound-switch", {
+        method: "POST",
+        body: crossOwnerBody,
+      }, async (_input, init) => {
+        crossOwnerCalls.push({ authorization: new Headers(init?.headers).get("authorization"), body: init?.body });
+        accessToken = "owner-b-after-switch"; // scan-secrets: allow — deliberate fake browser session token
+        sessionOwner = "22222222-2222-4222-8222-222222222222";
+        return new Response("unauthorized", { status: 401 });
+      });
+      assert.equal(crossOwnerResponse.status, 401);
+      assert.deepEqual(crossOwnerCalls, [{ authorization: "Bearer owner-a-before-switch", body: crossOwnerBody }],
+        "an A-owned workspace body must never replay with B's token");
+
+      accessToken = "owner-a-before-logout"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedOwner = OWNER;
+      let logoutCalls = 0;
+      const refreshesBeforeLogout = refreshes;
+      const logoutResponse = await authedInternalRequest("/api/owner-bound-logout", { method: "POST" }, async () => {
+        logoutCalls++;
+        accessToken = null;
+        sessionOwner = null;
+        return new Response("unauthorized", { status: 401 });
+      });
+      assert.equal(logoutResponse.status, 401);
+      assert.equal(logoutCalls, 1, "logout after the first dispatch must prevent replay");
+      assert.equal(refreshes, refreshesBeforeLogout, "logout must not resurrect a session through refresh");
+
+      accessToken = "owner-a-before-cross-owner-refresh"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedToken = "owner-b-refreshed-token"; // scan-secrets: allow — deliberate fake refreshed browser session token
+      refreshedOwner = "22222222-2222-4222-8222-222222222222";
+      let crossOwnerRefreshCalls = 0;
+      const refreshesBeforeCrossOwner = refreshes;
+      const crossOwnerRefreshResponse = await authedInternalRequest("/api/owner-bound-refresh-switch", { method: "POST" }, async () => {
+        crossOwnerRefreshCalls++;
+        return new Response("unauthorized", { status: 401 });
+      });
+      assert.equal(crossOwnerRefreshResponse.status, 401);
+      assert.equal(refreshes - refreshesBeforeCrossOwner, 1, "the cross-owner refresh result must be inspected, not skipped");
+      assert.equal(crossOwnerRefreshCalls, 1, "a refresh result owned by B must not replay A's request");
+
+      accessToken = "owner-a-before-post-refresh-logout"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedToken = "owner-a-before-session-disappears"; // scan-secrets: allow — deliberate fake refreshed browser session token
+      refreshedOwner = OWNER;
+      afterRefreshSessionMutation = () => {
+        accessToken = null;
+        sessionOwner = null;
+      };
+      let postRefreshLogoutCalls = 0;
+      const postRefreshLogoutResponse = await authedInternalRequest("/api/owner-bound-post-refresh-logout", { method: "POST" }, async () => {
+        postRefreshLogoutCalls++;
+        return new Response("unauthorized", { status: 401 });
+      });
+      assert.equal(postRefreshLogoutResponse.status, 401);
+      assert.equal(postRefreshLogoutCalls, 1, "refresh must be followed by a fresh same-owner session check before replay");
+
+      accessToken = "ownerless-token"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = null;
+      refreshedOwner = OWNER;
+      let ownerlessDispatches = 0;
+      await assert.rejects(() => authedInternalRequest("/api/owner-bound-missing", { method: "POST" }, async () => {
+        ownerlessDispatches++;
+        return new Response("unexpected");
+      }), (error: unknown) => (error as { code?: string }).code === "internal_api_auth_owner_invalid");
+      assert.equal(ownerlessDispatches, 0, "a request without a verifiable session owner must fail before fetch");
+
+      accessToken = "owner-a-restored"; // scan-secrets: allow — deliberate fake browser session token
+      sessionOwner = OWNER;
+      refreshedOwner = OWNER;
       const readsBeforeUnsafeInput = sessionReads;
       let unsafeDispatches = 0;
       await assert.rejects(() => authedInternalRequest("https://attacker.invalid/api/studio/upload" as never, { method: "POST" }, async () => {
