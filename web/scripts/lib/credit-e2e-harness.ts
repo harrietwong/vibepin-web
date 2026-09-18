@@ -20,6 +20,7 @@ export type CreditE2eRun = {
   emailFingerprint: string;
   scenario: CreditE2eScenario;
   aiImages: { used: number; limit: number };
+  aiTextGenerations: { used: number; limit: number };
   scheduledPosts: { used: number; limit: number | null };
   accountsPerPlatform: number;
 };
@@ -105,6 +106,8 @@ export function buildScenario(plan: PlanKey, runId: string, scenario: CreditE2eS
   const aiLimit = entitlement.monthlyAiImages;
   if (aiLimit === null) throw new Error(`${plan} must have a finite AI image allowance`);
   const postLimit = entitlement.monthlyScheduledPosts;
+  const aiTextLimit = entitlement.monthlyAiTextGenerations;
+  if (aiTextLimit === null) throw new Error(`${plan} must have a finite AI text allowance`);
   const email = syntheticEmail(plan, runId);
   return {
     runId,
@@ -113,6 +116,7 @@ export function buildScenario(plan: PlanKey, runId: string, scenario: CreditE2eS
     emailFingerprint: redactEmail(email),
     scenario,
     aiImages: { used: usedAt(aiLimit, scenario), limit: aiLimit },
+    aiTextGenerations: { used: usedAt(aiTextLimit, scenario), limit: aiTextLimit },
     scheduledPosts: { used: usedAt(postLimit, scenario), limit: postLimit },
     accountsPerPlatform: entitlement.connectedAccountsPerPlatform ?? 0,
   };
@@ -320,12 +324,12 @@ export function reportMarkdown(report: CreditE2eReport): string {
     "",
   ];
   for (const round of report.rounds) {
-    lines.push(`## Round ${round.round}`, "", "| Plan | AI images | Scheduled posts | Accounts/platform | Identity |", "| --- | --- | --- | --- | --- |");
+    lines.push(`## Round ${round.round}`, "", "| Plan | AI images | AI text | Scheduled posts | Accounts/platform | Identity |", "| --- | --- | --- | --- | --- | --- |");
     for (const scenario of round.scenarios) {
       const posts = scenario.scheduledPosts.limit === null
         ? `${scenario.scheduledPosts.used}/Unlimited`
         : `${scenario.scheduledPosts.used}/${scenario.scheduledPosts.limit}`;
-      lines.push(`| ${scenario.plan} (${scenario.scenario}) | ${scenario.aiImages.used}/${scenario.aiImages.limit} | ${posts} | ${scenario.accountsPerPlatform} | ${scenario.emailFingerprint} |`);
+      lines.push(`| ${scenario.plan} (${scenario.scenario}) | ${scenario.aiImages.used}/${scenario.aiImages.limit} | ${scenario.aiTextGenerations.used}/${scenario.aiTextGenerations.limit} | ${posts} | ${scenario.accountsPerPlatform} | ${scenario.emailFingerprint} |`);
     }
     lines.push("", "### Evidence", "");
     for (const item of round.evidence) {

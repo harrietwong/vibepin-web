@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { PLAN_ENTITLEMENTS } from "../../src/lib/server/planEntitlements";
 import {
   CREDIT_E2E_PLANS,
   CREDIT_E2E_TEST_REF,
@@ -154,7 +153,6 @@ export type UsageAccountSeed = {
 
 export function buildUsageAccountRow(input: CreditE2eRun, userId: string, now = new Date()): UsageAccountSeed {
   const end = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000);
-  const entitlement = PLAN_ENTITLEMENTS[input.plan];
   return {
     user_id: userId,
     plan_key: input.plan,
@@ -163,11 +161,11 @@ export function buildUsageAccountRow(input: CreditE2eRun, userId: string, now = 
     period_anchor: now.toISOString(),
     review_required: false,
     ai_images_limit: input.aiImages.limit,
-    ai_text_generations_limit: entitlement.monthlyAiTextGenerations,
+    ai_text_generations_limit: input.aiTextGenerations.limit,
     scheduled_posts_limit: input.scheduledPosts.limit,
     ai_images_used: input.aiImages.used,
     ai_images_reserved: 0,
-    ai_text_generations_used: 0,
+    ai_text_generations_used: input.aiTextGenerations.used,
     ai_text_generations_reserved: 0,
     scheduled_posts_used: input.scheduledPosts.used,
     scheduled_posts_reserved: 0,
@@ -182,6 +180,7 @@ type UsageSnapshot = {
   state?: unknown;
   metered?: unknown;
   aiImages?: { used?: unknown; limit?: unknown; included?: unknown };
+  aiTextGenerations?: { used?: unknown; limit?: unknown; included?: unknown };
   scheduledPosts?: { used?: unknown; limit?: unknown; included?: unknown };
 };
 
@@ -193,6 +192,12 @@ export function validateUsageSnapshot(value: UsageSnapshot, input: CreditE2eRun)
   }
   if (value.aiImages?.limit !== input.aiImages.limit || value.aiImages?.included !== input.aiImages.limit) {
     throw new Error("AI image limit/included mismatch");
+  }
+  if (value.aiTextGenerations?.used !== input.aiTextGenerations.used) {
+    throw new Error(`AI text used mismatch: expected ${input.aiTextGenerations.used}, received ${String(value.aiTextGenerations?.used)}`);
+  }
+  if (value.aiTextGenerations?.limit !== input.aiTextGenerations.limit || value.aiTextGenerations?.included !== input.aiTextGenerations.limit) {
+    throw new Error("AI text limit/included mismatch");
   }
   if (value.scheduledPosts?.used !== input.scheduledPosts.used) {
     throw new Error(`Scheduled-post used mismatch: expected ${input.scheduledPosts.used}, received ${String(value.scheduledPosts?.used)}`);
@@ -271,6 +276,7 @@ function planLabel(plan: CreditE2eRun["plan"]): string {
 export function expectedBillingUi(input: CreditE2eRun): {
   plan: string;
   aiImages: string[];
+  aiTextGenerations: string[];
   scheduledPosts: string[];
 } {
   const aiRemaining = Math.max(0, input.aiImages.limit - input.aiImages.used);
@@ -284,6 +290,11 @@ export function expectedBillingUi(input: CreditE2eRun): {
   return {
     plan: planLabel(input.plan),
     aiImages: ["AI images", `${input.aiImages.used} / ${input.aiImages.limit} used`, `${aiRemaining} remaining`],
+    aiTextGenerations: [
+      "AI text generations",
+      `${input.aiTextGenerations.used} / ${input.aiTextGenerations.limit} used`,
+      `${Math.max(0, input.aiTextGenerations.limit - input.aiTextGenerations.used)} remaining`,
+    ],
     scheduledPosts,
   };
 }
@@ -378,6 +389,7 @@ export function validateBillingUiText(sections: BillingUiSections, input: Credit
     throw new Error("Billing UI is missing expected semantic: Usage this period");
   }
   assertCappedBucket(usageLines, "AI images", input.aiImages.used, input.aiImages.limit);
+  assertCappedBucket(usageLines, "AI text generations", input.aiTextGenerations.used, input.aiTextGenerations.limit);
   if (input.scheduledPosts.limit === null) {
     assertUnlimitedBucket(usageLines, "Scheduled posts", input.scheduledPosts.used);
   } else {
@@ -416,6 +428,70 @@ export function buildScreenshotMaskLocators(page: Page, syntheticEmail: string):
 }
 
 export type CleanupStep = { resource: string; run: () => Promise<void> };
+
+/** Retry a cleanup mutation a bounded number of times for transient transport failures. */
+export async function runBoundedCleanupStep(run: () => Promise<void>, maxAttempts = 3): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await run();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) throw error;
+    }
+  }
+  throw lastError;
+}
+
+type ExhaustedReservationResult = { ok?: unknown; reason?: unknown } | null;
+
+/** The ledger must refuse an exhausted bucket without silently accepting a reservation. */
+export function validateExhaustedUsageReserve(
+  value: ExhaustedReservationResult,
+  usageType: "ai_image" | "ai_text_generation",
+): void {
+  if (value?.ok !== false || value.reason !== "insufficient_capacity") {
+    throw new Error(`${usageType} exhaustion must return insufficient_capacity`);
+  }
+}
+
+type ScheduledConsumeResult = {
+  ok?: unknown;
+  reason?: unknown;
+  usage_type?: unknown;
+  available?: unknown;
+  unlimited?: unknown;
+  scheduled_posts_used?: unknown;
+} | null;
+
+/** Check the distinct finite-cap refusal and Business unlimited consume contracts. */
+export function validateScheduledConsumeResult(
+  value: ScheduledConsumeResult,
+  expectation: { limited: boolean; expectedUsed: number },
+): void {
+  if (expectation.limited) {
+    if (
+      value?.ok !== false
+      || value.reason !== "insufficient_capacity"
+      || value.usage_type !== "scheduled_post"
+      || value.available !== 0
+    ) {
+      throw new Error("finite scheduled-post exhaustion must return insufficient_capacity with zero available");
+    }
+    return;
+  }
+  if (value?.ok !== true || value.unlimited !== true || value.scheduled_posts_used !== expectation.expectedUsed) {
+    throw new Error("unlimited scheduled-post consumption must succeed and return the exact used count");
+  }
+}
+
+/** The readback after the probe must prove a finite refusal did not increment usage. */
+export function validateScheduledPostReadback(actualUsed: unknown, expectedUsed: number, plan: string): void {
+  if (actualUsed !== expectedUsed) {
+    throw new Error(`${plan} scheduled-post readback mismatch: expected ${expectedUsed}, received ${String(actualUsed)}`);
+  }
+}
 
 export async function runCleanupSteps(steps: CleanupStep[]): Promise<CleanupReceipt> {
   const actions: CleanupReceipt["actions"] = [];
@@ -740,17 +816,25 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
   async collectEvidence(input: CreditE2eRun, userId: string, context?: { round: 1 | 2 }): Promise<Evidence[]> {
     const { data: row, error: rowError } = await this.service
       .from("usage_accounts")
-      .select("plan_key,ai_images_used,ai_images_limit,scheduled_posts_used,scheduled_posts_limit,ai_images_reserved,bonus_images_balance")
+      .select("plan_key,ai_images_used,ai_images_limit,ai_text_generations_used,ai_text_generations_limit,scheduled_posts_used,scheduled_posts_limit,ai_images_reserved,ai_text_generations_reserved,bonus_images_balance")
       .eq("user_id", userId)
       .single();
     if (rowError || !row) throw new Error(`Could not read back ${input.plan} usage`);
     if (row.plan_key !== input.plan || row.ai_images_used !== input.aiImages.used || row.ai_images_limit !== input.aiImages.limit) {
       throw new Error(`${input.plan} database usage readback mismatch`);
     }
+    if (
+      row.ai_text_generations_used !== input.aiTextGenerations.used
+      || row.ai_text_generations_limit !== input.aiTextGenerations.limit
+    ) {
+      throw new Error(`${input.plan} database AI text usage readback mismatch`);
+    }
     if (row.scheduled_posts_used !== input.scheduledPosts.used || row.scheduled_posts_limit !== input.scheduledPosts.limit) {
       throw new Error(`${input.plan} scheduled-post readback mismatch`);
     }
-    if (row.ai_images_reserved !== 0 || row.bonus_images_balance !== 0) throw new Error(`${input.plan} seed has unexpected reserved/bonus usage`);
+    if (row.ai_images_reserved !== 0 || row.ai_text_generations_reserved !== 0 || row.bonus_images_balance !== 0) {
+      throw new Error(`${input.plan} seed has unexpected reserved/bonus usage`);
+    }
 
     const token = await this.accessToken(userId);
     const response = await this.fetchImpl(`${this.baseUrl}/api/billing/usage`, {
@@ -763,8 +847,8 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     validateUsageSnapshot(snapshot, input);
 
     const evidence: Evidence[] = [
-      { surface: "database", status: "PASS", detail: `${input.plan} ${input.scenario}: exact usage counters and zero reserved/bonus read back` },
-      { surface: "http", status: "PASS", detail: `${input.plan} ${input.scenario}: authenticated usage API matched plan, used, limit, and included` },
+      { surface: "database", status: "PASS", detail: `${input.plan} ${input.scenario}: exact AI image, AI text, and scheduled-post counters plus zero reserved/bonus read back` },
+      { surface: "http", status: "PASS", detail: `${input.plan} ${input.scenario}: authenticated usage API matched plan, AI image, AI text, scheduled-post used/limit/included truth` },
     ];
 
     if (input.scenario === "limit") {
@@ -800,9 +884,93 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
         detail: `${input.plan} exhausted: usage_reserve returned insufficient_capacity and the reservation row count was unchanged; this is RPC-only evidence`,
         json: JSON.stringify({ ok: false, reason: "insufficient_capacity" }),
       });
+
+      const textBefore = after;
+      const textKey = `credit-e2e:${input.runId}:${context?.round ?? 0}:${input.plan}:text:${randomUUID()}`;
+      const { data: textData, error: textError } = await this.service.rpc("usage_reserve", {
+        p_user_id: userId,
+        p_usage_type: "ai_text_generation",
+        p_slot_keys: [`${textKey}:slot`],
+        p_request_key: textKey,
+        p_operation: "credit_e2e_exhausted_text_probe",
+        p_reference_id: textKey,
+        p_metadata: { credit_e2e: true },
+      });
+      if (textError) throw new Error(`${input.plan} exhausted AI text reserve probe failed (${textError.code ?? "unknown"})`);
+      validateExhaustedUsageReserve(textData as ExhaustedReservationResult, "ai_text_generation");
+      const { count: textAfter, error: textAfterError } = await this.service
+        .from("usage_reservations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      if (textAfterError || textBefore !== textAfter) throw new Error(`${input.plan} exhausted AI text probe created a reservation`);
+      evidence.push({
+        surface: "rpc",
+        status: "PASS",
+        caseId: "CRED-17",
+        detail: `${input.plan} exhausted AI text: usage_reserve returned insufficient_capacity and the reservation row count was unchanged; this is RPC-only evidence`,
+        json: JSON.stringify({ ok: false, reason: "insufficient_capacity", usageType: "ai_text_generation" }),
+      });
     }
 
     evidence.push(...await this.collectBillingUiEvidence(input, userId, context?.round ?? 1));
+    if (input.scenario === "limit") {
+      const scheduleKey = `credit-e2e:${input.runId}:${context?.round ?? 0}:${input.plan}:scheduled:${randomUUID()}`;
+      const { data: scheduledData, error: scheduledError } = await this.service.rpc("usage_consume_scheduled_post", {
+        p_user_id: userId,
+        p_idempotency_key: scheduleKey,
+        p_quantity: 1,
+        p_reference_id: scheduleKey,
+        p_metadata: { credit_e2e: true },
+      });
+      if (scheduledError) throw new Error(`${input.plan} scheduled-post probe failed (${scheduledError.code ?? "unknown"})`);
+      const scheduled = scheduledData as ScheduledConsumeResult;
+      const limited = input.scheduledPosts.limit !== null;
+      const expectedConsumedUsed = input.scheduledPosts.used + 1;
+      let restoreBusinessCount = !limited && scheduled?.ok === true;
+      try {
+        validateScheduledConsumeResult(
+          scheduled,
+          { limited, expectedUsed: limited ? input.scheduledPosts.used : expectedConsumedUsed },
+        );
+        const { data: postRow, error: postReadError } = await this.service
+          .from("usage_accounts")
+          .select("scheduled_posts_used")
+          .eq("user_id", userId)
+          .single();
+        if (postReadError || !postRow) throw new Error(`${input.plan} scheduled-post post-probe readback failed`);
+        const expectedReadback = limited ? input.scheduledPosts.used : expectedConsumedUsed;
+        validateScheduledPostReadback(postRow.scheduled_posts_used, expectedReadback, input.plan);
+        evidence.push({
+          surface: "rpc",
+          status: "PASS",
+          caseId: limited ? "CRED-18" : "CRED-19",
+          detail: limited
+            ? `${input.plan} exhausted scheduled posts: usage_consume_scheduled_post returned insufficient_capacity and scheduled_posts_used remained ${input.scheduledPosts.used}`
+            : `${input.plan} unlimited scheduled posts: usage_consume_scheduled_post succeeded and scheduled_posts_used reached ${expectedConsumedUsed}`,
+          json: JSON.stringify(limited
+            ? { ok: false, reason: "insufficient_capacity", usageType: "scheduled_post", used: input.scheduledPosts.used }
+            : { ok: true, unlimited: true, usageType: "scheduled_post", used: expectedConsumedUsed }),
+        });
+      } finally {
+        if (restoreBusinessCount) {
+          const { error: restoreError } = await this.service
+            .from("usage_accounts")
+            .update({ scheduled_posts_used: input.scheduledPosts.used })
+            .eq("user_id", userId);
+          if (restoreError) throw new Error(`${input.plan} unlimited scheduled-post probe could not restore seeded counter`);
+          const { data: restored, error: restoredError } = await this.service
+            .from("usage_accounts")
+            .select("scheduled_posts_used")
+            .eq("user_id", userId)
+            .single();
+          if (restoredError) {
+            throw new Error(`${input.plan} unlimited scheduled-post restore readback failed`);
+          }
+          validateScheduledPostReadback(restored?.scheduled_posts_used, input.scheduledPosts.used, input.plan);
+          restoreBusinessCount = false;
+        }
+      }
+    }
     evidence.push(...this.notExecutedProductEvidence(input));
     return evidence;
   }
@@ -855,14 +1023,18 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
       const fixture = this.fixtureIdentities.get(userId) ?? derivedFixture;
       if (fixture?.subscriptionId) {
         steps.push({ resource: `${owner} billing subscription`, run: async () => {
-          const { error } = await this.service.from("creem_subscriptions").delete().eq("creem_subscription_id", fixture.subscriptionId as string);
-          if (error) throw error;
+          await runBoundedCleanupStep(async () => {
+            const { error } = await this.service.from("creem_subscriptions").delete().eq("creem_subscription_id", fixture.subscriptionId as string);
+            if (error) throw error;
+          });
         } });
       }
       if (fixture?.customerId) {
         steps.push({ resource: `${owner} billing customer`, run: async () => {
-          const { error } = await this.service.from("creem_customers").delete().eq("creem_customer_id", fixture.customerId as string);
-          if (error) throw error;
+          await runBoundedCleanupStep(async () => {
+            const { error } = await this.service.from("creem_customers").delete().eq("creem_customer_id", fixture.customerId as string);
+            if (error) throw error;
+          });
         } });
       }
       steps.push(

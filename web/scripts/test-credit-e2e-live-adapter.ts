@@ -13,11 +13,15 @@ import {
   buildSyntheticAppMetadata,
   buildUsageAccountRow,
   expectedBillingUi,
+  runBoundedCleanupStep,
   runCleanupSteps,
   SupabaseCreditE2eAdapter,
   validateBillingUiText,
   validateBuildIdentity,
+  validateExhaustedUsageReserve,
   validatePreviewIdentity,
+  validateScheduledConsumeResult,
+  validateScheduledPostReadback,
   validateTestSupabaseBinding,
   validateUsageSnapshot,
 } from "./lib/credit-e2e-supabase-adapter";
@@ -223,6 +227,8 @@ async function main(): Promise<void> {
     assert.equal(row.plan_key, "pro");
     assert.equal(row.ai_images_used, 799);
     assert.equal(row.ai_images_limit, 800);
+    assert.equal(row.ai_text_generations_used, 1999);
+    assert.equal(row.ai_text_generations_limit, 2000);
     assert.equal(row.scheduled_posts_used, 299);
     assert.equal(row.scheduled_posts_limit, 300);
     assert.equal(row.ai_images_reserved, 0);
@@ -237,6 +243,7 @@ async function main(): Promise<void> {
       state: "metered",
       metered: true,
       aiImages: { used: 10, limit: 10, included: 10 },
+      aiTextGenerations: { used: 20, limit: 20, included: 20 },
       scheduledPosts: { used: 5, limit: 5, included: 5 },
     }, scenario));
     assert.throws(() => validateUsageSnapshot({
@@ -244,8 +251,46 @@ async function main(): Promise<void> {
       state: "metered",
       metered: true,
       aiImages: { used: 9, limit: 10, included: 10 },
+      aiTextGenerations: { used: 20, limit: 20, included: 20 },
       scheduledPosts: { used: 5, limit: 5, included: 5 },
     }, scenario), /AI image used/i);
+    assert.throws(() => validateUsageSnapshot({
+      plan: "free",
+      state: "metered",
+      metered: true,
+      aiImages: { used: 10, limit: 10, included: 10 },
+      aiTextGenerations: { used: 19, limit: 20, included: 20 },
+      scheduledPosts: { used: 5, limit: 5, included: 5 },
+    }, scenario), /AI text used/i);
+  });
+
+  test(`round ${round}: exhausted image and text reservations require an exact refusal`, () => {
+    assert.doesNotThrow(() => validateExhaustedUsageReserve({ ok: false, reason: "insufficient_capacity" }, "ai_image"));
+    assert.doesNotThrow(() => validateExhaustedUsageReserve({ ok: false, reason: "insufficient_capacity" }, "ai_text_generation"));
+    assert.throws(() => validateExhaustedUsageReserve({ ok: false, reason: "wrong_reason" }, "ai_text_generation"), /ai_text_generation.*insufficient_capacity/i);
+    assert.throws(() => validateExhaustedUsageReserve({ ok: true, reason: "insufficient_capacity" }, "ai_image"), /ai_image.*insufficient_capacity/i);
+  });
+
+  test(`round ${round}: scheduled exhaustion refuses finite plans and meters unlimited Business`, () => {
+    assert.doesNotThrow(() => validateScheduledConsumeResult(
+      { ok: false, reason: "insufficient_capacity", usage_type: "scheduled_post", available: 0 },
+      { expectedUsed: 5, limited: true },
+    ));
+    assert.doesNotThrow(() => validateScheduledConsumeResult(
+      { ok: true, unlimited: true, scheduled_posts_used: 3 },
+      { expectedUsed: 3, limited: false },
+    ));
+    assert.throws(() => validateScheduledConsumeResult(
+      { ok: true, unlimited: true, scheduled_posts_used: 3 },
+      { expectedUsed: 2, limited: true },
+    ), /finite scheduled-post exhaustion/i);
+    assert.throws(() => validateScheduledConsumeResult(
+      { ok: false, reason: "insufficient_capacity", usage_type: "scheduled_post", available: 0 },
+      { expectedUsed: 3, limited: false },
+    ), /unlimited scheduled-post consumption/i);
+    assert.doesNotThrow(() => validateScheduledPostReadback(5, 5, "free"));
+    assert.doesNotThrow(() => validateScheduledPostReadback(3, 3, "business"));
+    assert.throws(() => validateScheduledPostReadback(6, 5, "free"), /free.*scheduled-post.*expected 5/i);
   });
 
   test(`round ${round}: billing fixture makes paid plan truth readable without payment/provider`, () => {
@@ -268,8 +313,8 @@ async function main(): Promise<void> {
       "Usage this period",
       "AI images 10 / 10 used",
       "0 remaining",
-      "AI text generations 0 / 10 used",
-      "10 remaining",
+      "AI text generations 20 / 20 used",
+      "0 remaining",
       "Scheduled posts 5 / 5 used",
       "0 remaining",
     ].join("\n");
@@ -288,6 +333,7 @@ async function main(): Promise<void> {
     assert.deepEqual(proExpected, {
       plan: "Pro",
       aiImages: ["AI images", "799 / 800 used", "1 remaining"],
+      aiTextGenerations: ["AI text generations", "1999 / 2000 used", "1 remaining"],
       scheduledPosts: ["Scheduled posts", "299 / 300 used", "1 remaining"],
     });
     const proCurrentPlan = "Current plan\nPro\nActive";
@@ -295,8 +341,8 @@ async function main(): Promise<void> {
       "Usage this period",
       "AI images 799 / 800 used",
       "1 remaining",
-      "AI text generations 0 / 250 used",
-      "250 remaining",
+      "AI text generations 1999 / 2000 used",
+      "1 remaining",
       "Scheduled posts 299 / 300 used",
       "1 remaining",
     ].join("\n");
@@ -321,7 +367,7 @@ async function main(): Promise<void> {
     const usageDomFixture = createElement("section", { "data-testid": "billing-usage-period" },
       createElement("h3", null, "Usage this period"),
       createElement("div", null, createElement("span", null, "AI images"), createElement("span", null, "3000 / 3000 used"), createElement("p", null, "0 remaining")),
-      createElement("div", null, createElement("span", null, "AI text generations"), createElement("span", null, "0 / 1000 used"), createElement("p", null, "1000 remaining")),
+      createElement("div", null, createElement("span", null, "AI text generations"), createElement("span", null, "10000 / 10000 used"), createElement("p", null, "0 remaining")),
       createElement("div", null, createElement("span", null, "Scheduled posts"), createElement("span", null, "2 used"), createElement("p", null, "No monthly limit")),
     );
     assert.doesNotThrow(() => validateBillingUiText({
@@ -342,7 +388,7 @@ async function main(): Promise<void> {
     }, business), /Scheduled posts used.*mismatch/i);
     assert.deepEqual(expectedBillingUi(business).scheduledPosts, ["Scheduled posts", "2 used", "No monthly limit"]);
     assert.throws(() => validateBillingUiText(
-      "Current plan Business Couldn't sync billing data AI images 3000 / 3000 used 0 remaining Scheduled posts 2 used No monthly limit",
+      "Current plan Business Couldn't sync billing data AI images 3000 / 3000 used 0 remaining AI text generations 10000 / 10000 used 0 remaining Scheduled posts 2 used No monthly limit",
       business,
     ), /sync error/i);
   });
@@ -467,6 +513,24 @@ await (async () => {
   assert.match(JSON.stringify(receipt), /zero-residual auth/i);
   passed += 1;
   console.log("  PASS lost createUser response is recovered by restricted run discovery and deleted");
+})();
+
+await (async () => {
+  let attempts = 0;
+  await runBoundedCleanupStep(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary transport failure");
+  });
+
+  assert.equal(attempts, 2, "a one-off fixture DELETE failure retries once");
+  let exhaustedAttempts = 0;
+  await assert.rejects(() => runBoundedCleanupStep(async () => {
+    exhaustedAttempts += 1;
+    throw new Error("persistent failure");
+  }), /persistent failure/);
+  assert.equal(exhaustedAttempts, 3, "fixture cleanup retries are bounded");
+  passed += 1;
+  console.log("  PASS bounded cleanup retry recovers one transient failure and never retries indefinitely");
 })();
 
 await (async () => {

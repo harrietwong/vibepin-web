@@ -14,10 +14,10 @@ import {
 } from "./lib/credit-e2e-harness";
 
 const expected = {
-  free: { images: 10, posts: 5, accounts: 1 },
-  starter: { images: 150, posts: 150, accounts: 1 },
-  pro: { images: 800, posts: 300, accounts: 2 },
-  business: { images: 3000, posts: null, accounts: 3 },
+  free: { images: 10, text: 20, posts: 5, accounts: 1 },
+  starter: { images: 150, text: 500, posts: 150, accounts: 1 },
+  pro: { images: 800, text: 2000, posts: 300, accounts: 2 },
+  business: { images: 3000, text: 10000, posts: null, accounts: 3 },
 } as const;
 
 let passed = 0;
@@ -43,10 +43,14 @@ for (const round of [1, 2]) {
       assert.equal(near.email, syntheticEmail(plan, "credit-unit-run"));
       assert.match(near.email, /^e2e-credit-(free|starter|pro|business)-credit-unit-run@vibepin\.test$/);
       assert.equal(near.aiImages.limit, expected[plan].images);
+      assert.equal(near.aiTextGenerations.limit, expected[plan].text);
       assert.equal(initial.aiImages.used, 0);
+      assert.equal(initial.aiTextGenerations.used, 0);
       assert.equal(initial.scheduledPosts.used, 0);
       assert.equal(near.aiImages.used, expected[plan].images - 1);
       assert.equal(exhausted.aiImages.used, expected[plan].images);
+      assert.equal(near.aiTextGenerations.used, expected[plan].text - 1);
+      assert.equal(exhausted.aiTextGenerations.used, expected[plan].text);
       assert.equal(near.accountsPerPlatform, expected[plan].accounts);
       assert.equal(near.scheduledPosts.limit, expected[plan].posts);
       if (expected[plan].posts === null) {
