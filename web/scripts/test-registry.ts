@@ -279,6 +279,7 @@ export const STUDIO: string[] = [
   "test-video-batch-safety-round3",
   "test-video-batch-runtime",
   "test-video-batch-upload-ui",
+  "test-image-upload-batch-state",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */

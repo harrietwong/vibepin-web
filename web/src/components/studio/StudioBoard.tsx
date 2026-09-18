@@ -33,6 +33,11 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { requestPinImageCleanup, uploadPinImage, UploadPinImageError } from "@/lib/studio/uploadPinImage";
 import {
+  beginImageUploadBatch,
+  completeImageUploadBatch,
+  createImageUploadBatchState,
+} from "@/lib/studio/imageUploadBatchState";
+import {
   createAppendableVideoUploadQueue,
   createVideoBatchState,
   isVideoCandidate,
@@ -352,11 +357,13 @@ export function StudioBoard() {
     try { window.localStorage.setItem(PLAN_PINNED_STORAGE_KEY, String(next)); } catch { /* in-memory preference still works */ }
   }, []);
 
-  const [uploading, setUploading] = useState(false);
+  const [standaloneVideoUploading, setUploading] = useState(false);
+  const [imageUploadState, setImageUploadState] = useState(createImageUploadBatchState);
+  const uploading = standaloneVideoUploading || imageUploadState.activeBatchIds.length > 0;
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
-  const [uploadFailures, setUploadFailures] = useState<Array<{ fileName: string; detail: CreativeRequestError }>>([]);
-  const [uploadRetry, setUploadRetry] = useState<{ files: File[]; mode: MultiUploadMode } | null>(null);
+  const uploadFailures = imageUploadState.failures;
+  const uploadRetries = imageUploadState.retries;
   const [videoBatch, setVideoBatch] = useState<VideoBatchState | null>(null);
   const videoQueueRef = useRef<{ scope: VideoRecoveryScope; queue: AppendableVideoUploadQueue } | null>(null);
   const videoQueueItemSequenceRef = useRef(0);
@@ -618,86 +625,89 @@ export function StudioBoard() {
   }, [flashSaved]);
 
   // ── Upload → one Content with N media, or N separate Contents ──────────────
-  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode) => {
+  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode, retryBatchId?: string) => {
     if (!arr.length) return;
     const seedDestinations = defaultDestinationsForNewContent();
-    setUploading(true);
-    setUploadFailures([]);
-    setUploadRetry(null);
-    setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setImageUploadState(current => beginImageUploadBatch(current, { batchId, retryBatchId }));
+    setUploadProgress({ done: 0, total: arr.length });
     let ok = 0;
     const failedNames: string[] = [];
     const failedFiles: File[] = [];
     const failedDetails: Array<{ fileName: string; detail: CreativeRequestError }> = [];
     const uploaded: Array<{ publicUrl: string; file: File; index: number; width?: number; height?: number }> = [];
-    for (let i = 0; i < arr.length; i++) {
-      try {
-        const { publicUrl, requestId } = await uploadPinImage(arr[i]);
-        track("creative_upload_succeeded", { requestId, stage: "upload", bytes: arr[i].size, mediaType: arr[i].type });
-        // Measured from the File while we still hold the bytes — the hosted URL
-        // cannot be measured without a second network round trip, and without
-        // dimensions the carousel ratio rules can only say "unverified".
-        const { width, height } = await measureImageFile(arr[i]);
-        uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
-        ok++;
-      } catch (error) {
-        // A failed file never blocks or rolls back the successful ones.
-        failedNames.push(arr[i].name);
-        failedFiles.push(arr[i]);
-        const detail = error instanceof UploadPinImageError
-          ? error.detail
-          : { stage: "upload" as const, code: "other", requestId: `upload-${batchId}-${i}` };
-        failedDetails.push({ fileName: arr[i].name, detail });
-        track("creative_upload_failed", {
-          requestId: detail.requestId,
-          stage: detail.stage,
-          code: detail.code,
-          httpStatus: detail.httpStatus ?? null,
-          retryAfterSeconds: detail.retryAfter ?? null,
-        });
+    try {
+      for (let i = 0; i < arr.length; i++) {
+        try {
+          const { publicUrl, requestId } = await uploadPinImage(arr[i]);
+          track("creative_upload_succeeded", { requestId, stage: "upload", bytes: arr[i].size, mediaType: arr[i].type });
+          // Measured from the File while we still hold the bytes — the hosted URL
+          // cannot be measured without a second network round trip, and without
+          // dimensions the carousel ratio rules can only say "unverified".
+          const { width, height } = await measureImageFile(arr[i]);
+          uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
+          ok++;
+        } catch (error) {
+          // A failed file never blocks or rolls back the successful ones.
+          failedNames.push(arr[i].name);
+          failedFiles.push(arr[i]);
+          const detail = error instanceof UploadPinImageError
+            ? error.detail
+            : { stage: "upload" as const, code: "other", requestId: `upload-${batchId}-${i}` };
+          failedDetails.push({ fileName: arr[i].name, detail });
+          track("creative_upload_failed", {
+            requestId: detail.requestId,
+            stage: detail.stage,
+            code: detail.code,
+            httpStatus: detail.httpStatus ?? null,
+            retryAfterSeconds: detail.retryAfter ?? null,
+          });
+        }
+        setUploadProgress({ done: i + 1, total: arr.length });
       }
-      setUploadProgress({ done: i + 1, total: arr.length });
-    }
-    if (mode === "together" && uploaded.length) {
-      const first = uploaded[0];
-      const created = pinDraftStore.createBoardDraft({
-        imageUrl: first.publicUrl,
-        media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
-          id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
-          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
-        })),
-        source: "uploaded_image", idempotencyKey: `${batchId}:content`,
-        title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
-        defaultDestinations: seedDestinations,
-      });
-      void startImageAnalysis(created.id);
-    } else {
-      uploaded.forEach(({ publicUrl, file, index, width, height }) => {
+      if (mode === "together" && uploaded.length) {
+        const first = uploaded[0];
         const created = pinDraftStore.createBoardDraft({
-          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
-          // Explicit single-item media: the imageUrl-only path lets the store
-          // synthesize a media item, and that synthetic item has nowhere to carry
-          // the dimensions we just measured.
-          media: [{
+          imageUrl: first.publicUrl,
+          media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
             id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
             altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
-          }],
-          title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+          })),
+          source: "uploaded_image", idempotencyKey: `${batchId}:content`,
+          title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
           defaultDestinations: seedDestinations,
         });
         void startImageAnalysis(created.id);
-      });
-    }
-    setUploading(false);
-    setUploadProgress(null);
-    setUploadFailures(failedDetails);
-    if (failedFiles.length) setUploadRetry({ files: failedFiles, mode });
-    if (ok) { toast.success(ok === 1 ? tr("studioBoard.toast.uploadedOne") : tr("studioBoard.toast.uploadedMany").replace("{n}", String(ok))); flashSaved(); }
-    if (failedNames.length) {
-      const shown = failedNames.slice(0, 3).join(", ");
-      const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
-      toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
+      } else {
+        uploaded.forEach(({ publicUrl, file, index, width, height }) => {
+          const created = pinDraftStore.createBoardDraft({
+            imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
+            // Explicit single-item media: the imageUrl-only path lets the store
+            // synthesize a media item, and that synthetic item has nowhere to carry
+            // the dimensions we just measured.
+            media: [{
+              id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+              altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
+            }],
+            title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+            defaultDestinations: seedDestinations,
+          });
+          void startImageAnalysis(created.id);
+        });
+      }
+      if (ok) { toast.success(ok === 1 ? tr("studioBoard.toast.uploadedOne") : tr("studioBoard.toast.uploadedMany").replace("{n}", String(ok))); flashSaved(); }
+      if (failedNames.length) {
+        const shown = failedNames.slice(0, 3).join(", ");
+        const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
+        toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
+      }
+    } finally {
+      setUploadProgress(null);
+      setImageUploadState(current => completeImageUploadBatch(current, {
+        batchId,
+        failures: failedDetails,
+        ...(failedFiles.length ? { retry: { files: failedFiles, mode } } : {}),
+      }));
     }
   }, [defaultDestinationsForNewContent, flashSaved, tr]);
 
@@ -1860,13 +1870,13 @@ export function StudioBoard() {
               {fileName} · Stage: upload · Code: {detail.code}{detail.httpStatus != null ? ` · HTTP ${detail.httpStatus}` : ""} · Request {detail.requestId}
             </span>
           ))}
-          {uploadRetry && (
-            <button type="button" data-testid="upload-retry" disabled={uploading}
-              onClick={() => { const retry = uploadRetry; setUploadRetry(null); void processFiles(retry.files, retry.mode); }}
+          {uploadRetries.map((retry, index) => (
+            <button key={retry.batchId} type="button" data-testid={index === 0 ? "upload-retry" : `upload-retry-${retry.batchId}`} disabled={uploading}
+              onClick={() => { void processFiles(retry.files, retry.mode, retry.batchId); }}
               style={{ alignSelf: "flex-start", marginTop: 3, padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: uploading ? "default" : "pointer" }}>
               Retry failed uploads
             </button>
-          )}
+          ))}
         </section>
       )}
 
