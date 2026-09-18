@@ -48,6 +48,35 @@ function exactHttpsOrigin(value: string, label: string): URL {
   return parsed;
 }
 
+type PreviewProcessEnv = Pick<NodeJS.ProcessEnv, "VERCEL_AUTOMATION_BYPASS_SECRET">;
+
+function isVercelPreviewOrigin(value: URL): boolean {
+  return value.hostname === "vercel.app" || value.hostname.endsWith(".vercel.app");
+}
+
+/**
+ * Returns the optional Vercel SSO bypass header for a Vercel Preview origin.
+ * The secret is deliberately read only at the call site and is never included
+ * in evidence, reports, or Supabase client configuration.
+ */
+export function buildPreviewRequestHeaders(
+  baseUrl: string,
+  env: PreviewProcessEnv = process.env,
+): Record<string, string> {
+  const origin = exactHttpsOrigin(baseUrl, "Preview base URL");
+  if (!isVercelPreviewOrigin(origin)) return {};
+  const secret = env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  return secret ? { "x-vercel-protection-bypass": secret } : {};
+}
+
+export function buildPreviewBrowserContextOptions(
+  baseUrl: string,
+  env: PreviewProcessEnv = process.env,
+): { extraHTTPHeaders?: Record<string, string> } {
+  const headers = buildPreviewRequestHeaders(baseUrl, env);
+  return Object.keys(headers).length > 0 ? { extraHTTPHeaders: headers } : {};
+}
+
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} is missing`);
   return value.trim();
@@ -453,10 +482,11 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     if (ref !== this.options.config.projectRef || ref !== CREDIT_E2E_TEST_REF) {
       throw new Error("Test project identity disagreement");
     }
+    const previewHeaders = buildPreviewRequestHeaders(this.baseUrl);
     const response = await this.fetchImpl(`${this.baseUrl}/api/debug/deployment`, {
       method: "GET",
       cache: "no-store",
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...previewHeaders },
     });
     if (!response.ok) throw new Error(`Preview identity endpoint failed with HTTP ${response.status}`);
     const previewIdentity = await response.json() as PreviewIdentity;
@@ -464,7 +494,7 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     const versionResponse = await this.fetchImpl(`${this.baseUrl}/api/version`, {
       method: "GET",
       cache: "no-store",
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...previewHeaders },
     });
     if (!versionResponse.ok) throw new Error(`Build identity endpoint failed with HTTP ${versionResponse.status}`);
     const buildIdentity = await versionResponse.json() as BuildIdentity;
@@ -588,6 +618,7 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
       viewport: { width: 1440, height: 900 },
       colorScheme: "light",
       locale: "en-US",
+      ...buildPreviewBrowserContextOptions(this.baseUrl),
     });
     let evidencePage: Page | null = null;
     let stage: "session" | "billing" = "session";
@@ -722,7 +753,7 @@ export class SupabaseCreditE2eAdapter implements CreditE2eApplyAdapter {
     const response = await this.fetchImpl(`${this.baseUrl}/api/billing/usage`, {
       method: "GET",
       cache: "no-store",
-      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}`, ...buildPreviewRequestHeaders(this.baseUrl) },
     });
     if (!response.ok) throw new Error(`${input.plan} usage API returned HTTP ${response.status}`);
     const snapshot = await response.json() as UsageSnapshot;

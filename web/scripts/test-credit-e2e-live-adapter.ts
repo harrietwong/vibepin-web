@@ -8,6 +8,8 @@ import {
   assertScreenshotDomSafe,
   buildBillingFixtureRows,
   buildScreenshotMaskLocators,
+  buildPreviewBrowserContextOptions,
+  buildPreviewRequestHeaders,
   buildSyntheticAppMetadata,
   buildUsageAccountRow,
   expectedBillingUi,
@@ -39,6 +41,29 @@ const validAdapterOptions = {
     serviceRoleKey: "test-service",
   },
 };
+
+for (const round of [1, 2]) {
+  test(`round ${round}: Preview bypass is isolated to Preview requests and browser context`, () => {
+    const secret = "test-vercel-bypass-secret";
+    assert.deepEqual(buildPreviewRequestHeaders(validAdapterOptions.baseUrl, {
+      VERCEL_AUTOMATION_BYPASS_SECRET: secret,
+    }), { "x-vercel-protection-bypass": secret });
+    assert.deepEqual(buildPreviewRequestHeaders(validAdapterOptions.baseUrl, {}), {});
+    assert.deepEqual(buildPreviewBrowserContextOptions(validAdapterOptions.baseUrl, {
+      VERCEL_AUTOMATION_BYPASS_SECRET: secret,
+    }), {
+      extraHTTPHeaders: { "x-vercel-protection-bypass": secret },
+    });
+    assert.deepEqual(buildPreviewBrowserContextOptions(validAdapterOptions.baseUrl, {}), {});
+    assert.deepEqual(buildPreviewRequestHeaders("https://snulmwprsahzqvdbyenc.supabase.co", {
+      VERCEL_AUTOMATION_BYPASS_SECRET: secret,
+    }), {});
+    assert.deepEqual(buildPreviewRequestHeaders("https://vibepin.co", {
+      VERCEL_AUTOMATION_BYPASS_SECRET: secret,
+    }), {});
+    assert.doesNotMatch(JSON.stringify({ detail: "request completed" }), /test-vercel-bypass-secret/);
+  });
+}
 
 function visibleTextFromFixture(node: ReturnType<typeof createElement>): string {
   return renderToStaticMarkup(node)
