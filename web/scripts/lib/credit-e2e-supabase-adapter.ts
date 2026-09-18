@@ -49,6 +49,7 @@ function exactHttpsOrigin(value: string, label: string): URL {
 }
 
 type PreviewProcessEnv = {
+  readonly [key: string]: string | undefined;
   readonly VERCEL_AUTOMATION_BYPASS_SECRET?: string;
 };
 
