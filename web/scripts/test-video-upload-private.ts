@@ -579,10 +579,13 @@ async function main() {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     let clientCreations = 0;
     let refreshes = 0;
+    let sessionReads = 0;
+    let accessToken = "access-token";
+    let refreshedToken = "refreshed-access-token";
     const fakeClient = {
       auth: {
-        getSession: async () => ({ data: { session: { access_token: "access-token", expires_at: 4_102_444_800 } } }), // scan-secrets: allow — deliberate fake browser session token
-        refreshSession: async () => { refreshes++; await new Promise(resolve => setTimeout(resolve, 5)); return { data: { session: { access_token: "refreshed-access-token" } } }; }, // scan-secrets: allow — deliberate fake refreshed browser session token
+        getSession: async () => { sessionReads++; return { data: { session: { access_token: accessToken, expires_at: 4_102_444_800 } } }; }, // scan-secrets: allow — deliberate fake browser session token
+        refreshSession: async () => { refreshes++; await new Promise(resolve => setTimeout(resolve, 5)); accessToken = refreshedToken; return { data: { session: { access_token: refreshedToken } } }; }, // scan-secrets: allow — deliberate fake refreshed browser session token
       },
     };
     const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
@@ -644,6 +647,55 @@ async function main() {
       assert.equal(refreshes, 1, "concurrent internal 401 responses must share one refreshSession call");
       assert.equal(apiCalls.length, 4, "each internal request must replay exactly once after its 401");
       assert.deepEqual(apiCalls.map(call => call.authorization), ["Bearer access-token", "Bearer access-token", "Bearer refreshed-access-token", "Bearer refreshed-access-token"]);
+
+      const { authedInternalRequest } = await import("../src/lib/studio/authedInternalRequest");
+      const readsBeforeUnsafeInput = sessionReads;
+      let unsafeDispatches = 0;
+      await assert.rejects(() => authedInternalRequest("https://attacker.invalid/api/studio/upload" as never, { method: "POST" }, async () => {
+        unsafeDispatches++;
+        return new Response("unexpected");
+      }), /internal_api_request_invalid/);
+      await assert.rejects(() => authedInternalRequest("//attacker.invalid/api/studio/upload" as never, { method: "POST" }, async () => {
+        unsafeDispatches++;
+        return new Response("unexpected");
+      }), /internal_api_request_invalid/);
+      assert.equal(unsafeDispatches, 0, "unsafe request targets must be rejected before fetch");
+      assert.equal(sessionReads, readsBeforeUnsafeInput, "unsafe request targets must be rejected before token lookup");
+
+      const readsBeforeStream = sessionReads;
+      await assert.rejects(() => authedInternalRequest("/api/studio/upload", { method: "POST", body: new ReadableStream() }, async () => {
+        unsafeDispatches++;
+        return new Response("unexpected");
+      }), /internal_api_request_invalid/);
+      assert.equal(unsafeDispatches, 0, "one-shot request bodies must be rejected before fetch");
+      assert.equal(sessionReads, readsBeforeStream, "one-shot request bodies must be rejected before token lookup");
+
+      accessToken = "staggered-old-token";
+      refreshedToken = "staggered-new-token";
+      const refreshesBeforeStagger = refreshes;
+      let markAReplayed!: () => void;
+      const aReplayed = new Promise<void>(resolve => { markAReplayed = resolve; });
+      const staggeredCalls: Array<{ path: string; authorization: string | null }> = [];
+      const staggeredFetch: typeof fetch = async (input, init) => {
+        const path = String(input);
+        const authorization = new Headers(init?.headers).get("authorization");
+        staggeredCalls.push({ path, authorization });
+        if (path === "/api/stagger-a") {
+          if (authorization === "Bearer staggered-old-token") return new Response("expired", { status: 401 });
+          markAReplayed();
+          return new Response("ok", { status: 200 });
+        }
+        if (authorization === "Bearer staggered-old-token") {
+          await aReplayed;
+          return new Response("expired", { status: 401 });
+        }
+        return new Response("ok", { status: 200 });
+      };
+      const b = authedInternalRequest("/api/stagger-b", { method: "POST" }, staggeredFetch);
+      const a = authedInternalRequest("/api/stagger-a", { method: "POST" }, staggeredFetch);
+      await Promise.all([a, b]);
+      assert.equal(refreshes - refreshesBeforeStagger, 1, "a staggered 401 must reuse the token rotated by the first request");
+      assert.deepEqual(staggeredCalls.map(call => call.authorization), ["Bearer staggered-old-token", "Bearer staggered-old-token", "Bearer staggered-new-token", "Bearer staggered-new-token"]);
     } finally {
       (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
     }
