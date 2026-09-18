@@ -228,12 +228,13 @@ export function createV76RpcVideoPublishDependencies(
     async settleAttempt(input, status, attempt, provider) {
       const succeeded = status === "succeeded" ? provider?.evidence : undefined;
       const remoteUrl = canonicalPinterestUrl(succeeded?.pinId, succeeded?.pinUrl);
+      const providerEvidence = provider?.evidence;
       await boundary.rpc("publish_provider_attempt_settle_v78", {
         p_user_id: input.uid,
         p_attempt_id: attempt.attemptId,
         p_claim_token: attempt.claimToken,
         p_status: status,
-        p_provider_status: status === "succeeded" ? 201 : null,
+        p_provider_status: providerEvidence?.providerStatus ?? (status === "succeeded" ? 201 : null),
         p_remote_id: succeeded?.pinId ?? null,
         p_remote_url: remoteUrl ?? null,
         p_evidence: {

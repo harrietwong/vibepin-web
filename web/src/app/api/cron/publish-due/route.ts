@@ -78,6 +78,7 @@ import {
 import {
   CLAIM_BUDGET_MS,
   RUN_DEADLINE_MS,
+  dueLimitFromEnv,
   staleClaimCutoffIso,
   payloadToPublishInput,
   publishMediaUrls,
@@ -93,7 +94,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const TABLE = "pin_drafts";
-const DUE_LIMIT = 20; // ≤ 20 per run so one invocation stays comfortably under maxDuration.
+const DUE_LIMIT = dueLimitFromEnv(process.env.PUBLISH_DUE_LIMIT);
 /** Pause before the single persist retry — long enough for a transient blip, short
  *  enough that it cannot itself push the run past maxDuration. */
 const PERSIST_RETRY_DELAY_MS = 500;

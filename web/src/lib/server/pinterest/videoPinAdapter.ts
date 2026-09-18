@@ -44,6 +44,8 @@ export type PinterestVideoEvidence = {
   pinId?: string;
   pinUrl?: string;
   requestId?: string;
+  providerStatus?: number;
+  providerCode?: string;
 };
 
 export type PinterestVideoPublishResult =
@@ -88,6 +90,12 @@ function safeEvidenceId(value: unknown, sensitiveValues: ReadonlySet<string>): s
   return id && !containsSensitiveValue(id, sensitiveValues) ? id : undefined;
 }
 
+function safeProviderCode(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+  const code = typeof value === "number" && Number.isFinite(value) ? String(value) : cleanText(value);
+  return code.length > 0 && code.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(code)
+    && !containsSensitiveValue(code, sensitiveValues) ? code : undefined;
+}
+
 function safeRequestId(response: Response, sensitiveValues: ReadonlySet<string>): string | undefined {
   return safeEvidenceId(
     response.headers.get("x-pinterest-rid")
@@ -113,6 +121,8 @@ function evidence(
   const mediaId = safeEvidenceId(values.mediaId, sensitiveValues);
   const pinId = safeEvidenceId(values.pinId, sensitiveValues);
   const requestId = safeEvidenceId(values.requestId, sensitiveValues);
+  const providerCode = safeProviderCode(values.providerCode, sensitiveValues);
+  const providerStatus = values.providerStatus;
   const pinUrl = safePinUrl(values.pinUrl, pinId, sensitiveValues);
   return {
     stage,
@@ -121,6 +131,9 @@ function evidence(
     ...(pinId ? { pinId } : {}),
     ...(pinUrl ? { pinUrl } : {}),
     ...(requestId ? { requestId } : {}),
+    ...(typeof providerStatus === "number" && Number.isInteger(providerStatus) && providerStatus >= 100 && providerStatus <= 599
+      ? { providerStatus } : {}),
+    ...(providerCode ? { providerCode } : {}),
   };
 }
 
@@ -128,18 +141,21 @@ function validationResult(): PinterestVideoPublishResult {
   return { outcome: "failed", evidence: evidence("validated", "definite_validation") };
 }
 
-function responseResult(
+async function responseResult(
   response: Response,
   stage: PinterestVideoEvidence["stage"],
   mediaId?: string,
   sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
-): PinterestVideoPublishResult {
+): Promise<PinterestVideoPublishResult> {
   const classification = response.status >= 400 && response.status < 500 ? "definite_rejection" : "unknown";
+  const body = await safeJson(response);
   return {
     outcome: classification === "definite_rejection" ? "failed" : "unknown",
     evidence: evidence(stage, classification, {
       ...(mediaId ? { mediaId } : {}),
       ...(safeRequestId(response, sensitiveValues) ? { requestId: safeRequestId(response, sensitiveValues) } : {}),
+      providerStatus: response.status,
+      ...(safeProviderCode(body?.code, sensitiveValues) ? { providerCode: safeProviderCode(body?.code, sensitiveValues) } : {}),
     }, sensitiveValues),
   };
 }
@@ -250,7 +266,7 @@ export async function publishPinterestVideo(
       headers: authenticatedHeaders(token, true),
       body: JSON.stringify({ media_type: "video" }),
     });
-    if (!registerResponse.ok) return responseResult(registerResponse, "registered", undefined, tokenSensitiveValues);
+    if (!registerResponse.ok) return await responseResult(registerResponse, "registered", undefined, tokenSensitiveValues);
     const body = await safeJson(registerResponse);
     const mediaId = safeId(body?.media_id);
     const uploadUrl = cleanText(body?.upload_url);
@@ -281,7 +297,7 @@ export async function publishPinterestVideo(
     for (const [key, value] of registered.uploadParameters) form.append(key, value);
     form.append("file", input.file, cleanText(input.fileName) || "video.mp4");
     const uploadResponse = await deps.fetch(registered.uploadUrl, { method: "POST", body: form });
-    if (uploadResponse.status !== 204) return responseResult(uploadResponse, "uploaded", registered.mediaId, registered.sensitiveValues);
+    if (uploadResponse.status !== 204) return await responseResult(uploadResponse, "uploaded", registered.mediaId, registered.sensitiveValues);
   } catch {
     return { outcome: "unknown", evidence: evidence("uploaded", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
   }
@@ -301,7 +317,7 @@ export async function publishPinterestVideo(
     } catch {
       return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
     }
-    if (!pollResponse.ok) return responseResult(pollResponse, "polled", registered.mediaId, registered.sensitiveValues);
+    if (!pollResponse.ok) return await responseResult(pollResponse, "polled", registered.mediaId, registered.sensitiveValues);
     let pollBody: Record<string, unknown> | null;
     try {
       // Keep the fetch's controller alive through body consumption: a body timeout
@@ -322,6 +338,8 @@ export async function publishPinterestVideo(
         outcome: "failed",
         evidence: evidence("polled", "definite_rejection", {
           mediaId: registered.mediaId,
+          providerStatus: pollResponse.status,
+          ...(safeProviderCode(pollBody?.code, registered.sensitiveValues) ? { providerCode: safeProviderCode(pollBody?.code, registered.sensitiveValues) } : {}),
           ...(safeRequestId(pollResponse, registered.sensitiveValues) ? { requestId: safeRequestId(pollResponse, registered.sensitiveValues) } : {}),
         }, registered.sensitiveValues),
       };
@@ -361,7 +379,7 @@ export async function publishPinterestVideo(
       headers: authenticatedHeaders(token, true),
       body: JSON.stringify(createBody),
     });
-    if (createResponse.status !== 201) return responseResult(createResponse, "created", registered.mediaId, registered.sensitiveValues);
+    if (createResponse.status !== 201) return await responseResult(createResponse, "created", registered.mediaId, registered.sensitiveValues);
     const body = await safeJson(createResponse);
     const pinId = safeId(body?.id);
     if (!pinId) return {

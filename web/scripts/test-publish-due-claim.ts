@@ -17,6 +17,7 @@ import {
   CLAIM_STALE_MS,
   RUN_DEADLINE_MS,
   DESTINATION_RESERVE_MS,
+  dueLimitFromEnv,
   isClaimable,
   staleClaimCutoffIso,
   payloadToPublishInput,
@@ -577,6 +578,15 @@ test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
   // Enough room for the slowest single row (an Instagram container poll, ~45s).
   assert.ok(ceilingMs - CLAIM_BUDGET_MS >= 45_000,
     "too little headroom: the row being published when the budget runs out could still be killed");
+});
+
+test("dueLimitFromEnv defaults to 20 and clamps operator overrides", () => {
+  assert.equal(dueLimitFromEnv(undefined), 20);
+  assert.equal(dueLimitFromEnv("1"), 1);
+  assert.equal(dueLimitFromEnv("7"), 7);
+  assert.equal(dueLimitFromEnv("0"), 1);
+  assert.equal(dueLimitFromEnv("99"), 20);
+  assert.equal(dueLimitFromEnv("not-a-number"), 20);
 });
 
 test("the budget is checked BEFORE each claim, not after", () => {

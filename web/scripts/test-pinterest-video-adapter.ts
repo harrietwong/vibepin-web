@@ -187,7 +187,7 @@ async function main(): Promise<void> {
       new Response("accepted", { status: 202 }),
     ]);
     const result = await publishPinterestVideo(input(), deps);
-    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "uploaded", classification: "unknown", mediaId: "media-1" } });
+    assert.deepEqual(result, { outcome: "unknown", evidence: { stage: "uploaded", classification: "unknown", mediaId: "media-1", providerStatus: 202 } });
   });
 
   await test("treats malformed registration as unknown and redacts presigned URL and upload parameters", async () => {
@@ -221,7 +221,7 @@ async function main(): Promise<void> {
   await test("definitely rejects provider 4xx and explicit failed poll states", async () => {
     const register4xx = dependencies([response({ secret: "provider body" }, 401)]);
     const rejected = await publishPinterestVideo(input(), register4xx.deps);
-    assert.deepEqual(rejected, { outcome: "failed", evidence: { stage: "registered", classification: "definite_rejection" } });
+    assert.deepEqual(rejected, { outcome: "failed", evidence: { stage: "registered", classification: "definite_rejection", providerStatus: 401 } });
     assert.ok(!JSON.stringify(rejected).includes("provider body"));
 
     const explicitFailure = dependencies([
@@ -230,8 +230,83 @@ async function main(): Promise<void> {
       response({ status: "failed", diagnostic: "do not leak" }),
     ]);
     const failedPoll = await publishPinterestVideo(input(), explicitFailure.deps);
-    assert.deepEqual(failedPoll, { outcome: "failed", evidence: { stage: "polled", classification: "definite_rejection", mediaId: "media-1" } });
+    assert.deepEqual(failedPoll, { outcome: "failed", evidence: { stage: "polled", classification: "definite_rejection", mediaId: "media-1", providerStatus: 200 } });
     assert.ok(!JSON.stringify(failedPoll).includes("diagnostic"));
+  });
+
+  await test("preserves redacted provider status evidence and stable codes for 4xx failures", async () => {
+    const register = dependencies([
+      response({ code: "bad.media", message: "do not persist", token: TOKEN }, 400, { "x-request-id": "req-register" }),
+    ]);
+    assert.deepEqual(await publishPinterestVideo(input(), register.deps), {
+      outcome: "failed",
+      evidence: {
+        stage: "registered",
+        classification: "definite_rejection",
+        providerStatus: 400,
+        providerCode: "bad.media",
+        requestId: "req-register",
+      },
+    });
+
+    const poll = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      response({ code: 422, message: "do not persist", upload_url: "https://private.invalid" }, 422, { "x-pinterest-rid": "req-poll" }),
+    ]);
+    assert.deepEqual(await publishPinterestVideo(input(), poll.deps), {
+      outcome: "failed",
+      evidence: {
+        stage: "polled",
+        classification: "definite_rejection",
+        mediaId: "media-1",
+        providerStatus: 422,
+        providerCode: "422",
+        requestId: "req-poll",
+      },
+    });
+
+    const create = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      response({ status: "succeeded" }),
+      response({ code: "board.invalid", message: "do not persist", access_token: TOKEN }, 400, { "x-request-id": "req-create" }),
+    ]);
+    assert.deepEqual(await publishPinterestVideo(input(), create.deps), {
+      outcome: "failed",
+      evidence: {
+        stage: "created",
+        classification: "definite_rejection",
+        mediaId: "media-1",
+        providerStatus: 400,
+        providerCode: "board.invalid",
+        requestId: "req-create",
+      },
+    });
+
+    const failedPoll = dependencies([
+      response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+      new Response(null, { status: 204 }),
+      response({ status: "failed", code: "processing.failed", message: "do not persist", body: { secret: "do not persist" } }, 200, { "x-request-id": "req-failed" }),
+    ]);
+    const failed = await publishPinterestVideo(input(), failedPoll.deps);
+    assert.deepEqual(failed, {
+      outcome: "failed",
+      evidence: {
+        stage: "polled",
+        classification: "definite_rejection",
+        mediaId: "media-1",
+        providerStatus: 200,
+        providerCode: "processing.failed",
+        requestId: "req-failed",
+      },
+    });
+    const serialized = JSON.stringify({ register: await publishPinterestVideo(input(), dependencies([
+      response({ code: "unsafe.code", message: "secret-message", raw: TOKEN }, 400),
+    ]).deps), failed });
+    for (const forbidden of ["secret-message", TOKEN, "private.invalid", "upload_url", "raw"]) {
+      assert.ok(!serialized.includes(forbidden), `provider evidence leaked ${forbidden}`);
+    }
   });
 
   await test("network, provider 5xx, and poll deadline are unknown rather than safe-to-retry failures", async () => {
@@ -242,7 +317,7 @@ async function main(): Promise<void> {
 
     const serverError = dependencies([response({ message: "untrusted provider detail" }, 503)]);
     assert.deepEqual(await publishPinterestVideo(input(), serverError.deps), {
-      outcome: "unknown", evidence: { stage: "registered", classification: "unknown" },
+      outcome: "unknown", evidence: { stage: "registered", classification: "unknown", providerStatus: 503 },
     });
 
     const deadline = dependencies([
@@ -364,7 +439,7 @@ async function main(): Promise<void> {
       response({ id: "pin-1" }, 200),
     ]);
     assert.deepEqual(await publishPinterestVideo(input(), deps), {
-      outcome: "unknown", evidence: { stage: "created", classification: "unknown", mediaId: "media-1" },
+      outcome: "unknown", evidence: { stage: "created", classification: "unknown", mediaId: "media-1", providerStatus: 200 },
     });
   });
 
@@ -387,7 +462,7 @@ async function main(): Promise<void> {
     ]);
     const result = await publishPinterestVideo(input(), create5xx.deps);
     assert.deepEqual(result, {
-      outcome: "unknown", evidence: { stage: "created", classification: "unknown", mediaId: "media-1" },
+      outcome: "unknown", evidence: { stage: "created", classification: "unknown", mediaId: "media-1", providerStatus: 503 },
     });
     assert.ok(!JSON.stringify(result).includes("never-return"));
   });
@@ -396,7 +471,7 @@ async function main(): Promise<void> {
     const token = "secret-token-123";
     const registerRejection = dependencies([response({}, 401, { "x-pinterest-rid": token })]);
     const rejected = await publishPinterestVideo(input({ accessToken: token }), registerRejection.deps);
-    assert.deepEqual(rejected, { outcome: "failed", evidence: { stage: "registered", classification: "definite_rejection" } });
+    assert.deepEqual(rejected, { outcome: "failed", evidence: { stage: "registered", classification: "definite_rejection", providerStatus: 401 } });
 
     const echoed = dependencies([
       response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { policy: "upload-secret-456" } }),

@@ -184,6 +184,7 @@ export const CORE: string[] = [
   "test-media-offload",
   "test-media-privacy-architecture",
   "test-video-upload-private",
+  "test-cheerish-video-schedule",
   // Shopify
   "test-connection-limit",
   "test-settle-generation-job",

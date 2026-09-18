@@ -49,6 +49,19 @@ export const CLAIM_STALE_MS = 10 * 60 * 1000; // 10 minutes
 export const CLAIM_BUDGET_MS = 200_000;
 
 /**
+ * Per-run row cap. The default preserves the production batch size, while preview
+ * operators can force one video per local scheduler tick so a slow Pinterest media
+ * poll cannot consume the whole invocation window. Invalid values fail back to the
+ * established default; numeric values are clamped to the route's safe 1..20 range.
+ */
+export function dueLimitFromEnv(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return 20;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 20;
+  return Math.min(20, Math.max(1, parsed));
+}
+
+/**
  * The run's HARD deadline and the room reserved for one destination.
  *
  * Defined in publishRules (the fan-out enforces them destination by destination) and
