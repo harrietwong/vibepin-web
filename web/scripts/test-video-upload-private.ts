@@ -580,7 +580,7 @@ async function main() {
     let clientCreations = 0;
     let refreshes = 0;
     let sessionReads = 0;
-    let accessToken = "access-token";
+    let accessToken = "access-token"; // scan-secrets: allow — deliberate fake browser session token
     let refreshedToken = "refreshed-access-token";
     const fakeClient = {
       auth: {
@@ -670,7 +670,7 @@ async function main() {
       assert.equal(unsafeDispatches, 0, "one-shot request bodies must be rejected before fetch");
       assert.equal(sessionReads, readsBeforeStream, "one-shot request bodies must be rejected before token lookup");
 
-      accessToken = "staggered-old-token";
+      accessToken = "staggered-old-token"; // scan-secrets: allow — deliberate fake expired browser session token
       refreshedToken = "staggered-new-token";
       const refreshesBeforeStagger = refreshes;
       let markAReplayed!: () => void;
