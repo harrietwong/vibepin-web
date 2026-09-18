@@ -1,8 +1,8 @@
 "use client";
 
-import { createBrowserClient } from "@supabase/ssr";
 import { sha256Blob } from "./incrementalSha256";
 import { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
+import { authedInternalRequest } from "./authedInternalRequest";
 
 export { VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } from "@/lib/videoUploadLimits";
 
@@ -10,16 +10,15 @@ export type VideoUploadDescriptor = { ordinal: number; idempotencyKey: string; f
 export type SignedVideoUpload = { ordinal: number; path: string; token: string; signedUrl: string; contentType: string; upsert: false };
 type PrepareResponse = { batchId: string; uploads: SignedVideoUpload[]; requestId: string };
 
-let client: ReturnType<typeof createBrowserClient> | null = null;
-function browser() { return client ??= createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!); }
-async function authHeaders(): Promise<Record<string, string>> { const { data: { session } } = await browser().auth.getSession(); return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}; }
 function requestId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
 export async function sha256(file: Blob): Promise<string> {
   return sha256Blob(file);
 }
 async function api<T>(url: string, body: unknown, id: string, fetchImpl: typeof fetch = fetch): Promise<T> {
-  const response = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json", "x-request-id": id, ...(await authHeaders()) }, body: JSON.stringify(body) });
+  const response = await authedInternalRequest(url, {
+    method: "POST", headers: { "content-type": "application/json", "x-request-id": id }, body: JSON.stringify(body),
+  }, fetchImpl);
   const payload = await response.json().catch(() => ({})) as T & { code?: string };
   if (!response.ok) throw Object.assign(new Error(payload.code ?? "video_upload_failed"), { code: payload.code, requestId: id });
   return payload;

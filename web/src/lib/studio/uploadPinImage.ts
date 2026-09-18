@@ -7,27 +7,12 @@
  * multipart boundary.
  */
 
-import { createBrowserClient } from "@supabase/ssr";
 import {
   creativeRequestErrorFromResponse,
   creativeRequestErrorFromThrown,
   type CreativeRequestError,
 } from "./recommendationRequest";
-
-let _client: ReturnType<typeof createBrowserClient> | null = null;
-function browser() {
-  if (_client) return _client;
-  _client = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  );
-  return _client;
-}
-
-async function bearer(): Promise<Record<string, string>> {
-  const { data: { session } } = await browser().auth.getSession();
-  return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-}
+import { authedInternalRequest } from "./authedInternalRequest";
 
 export type UploadedPinImage = {
   path: string;
@@ -59,9 +44,9 @@ export async function uploadPinImage(file: File, posterOperation?: VideoPosterOp
     fd.append("videoOrdinal", String(posterOperation.ordinal));
   }
   try {
-    const res = await fetch("/api/studio/upload", {
+    const res = await authedInternalRequest("/api/studio/upload", {
       method: "POST",
-      headers: { ...(await bearer()), "X-Request-Id": requestId },
+      headers: { "X-Request-Id": requestId },
       body: fd,
     });
     const body = await res.json().catch(() => ({})) as UploadedPinImage & { code?: unknown; error?: unknown };
@@ -79,9 +64,9 @@ export async function uploadPinImage(file: File, posterOperation?: VideoPosterOp
 export async function requestPinImageCleanup(path: string): Promise<void> {
   const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   try {
-    const response = await fetch("/api/studio/upload/cleanup", {
+    const response = await authedInternalRequest("/api/studio/upload/cleanup", {
       method: "POST",
-      headers: { "content-type": "application/json", "X-Request-Id": requestId, ...(await bearer()) },
+      headers: { "content-type": "application/json", "X-Request-Id": requestId },
       body: JSON.stringify({ path }),
     });
     if (!response.ok) throw new Error("poster_cleanup_failed");

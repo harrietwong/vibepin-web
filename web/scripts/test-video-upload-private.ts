@@ -11,7 +11,7 @@ const MP4_FTYP = new Uint8Array([
 ]);
 
 let passed = 0;
-const EXPECTED_TESTS = 31;
+const EXPECTED_TESTS = 32;
 let completed = false;
 process.once("beforeExit", () => {
   if (!completed || passed !== EXPECTED_TESTS) {
@@ -577,16 +577,22 @@ async function main() {
 
   await test("production browser client mirrors signed upload protocol with an abortable deadline", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    let clientCreations = 0;
+    let refreshes = 0;
     const fakeClient = {
-      auth: { getSession: async () => ({ data: { session: { access_token: "access-token" } } }) }, // scan-secrets: allow — deliberate fake browser session token
+      auth: {
+        getSession: async () => ({ data: { session: { access_token: "access-token", expires_at: 4_102_444_800 } } }), // scan-secrets: allow — deliberate fake browser session token
+        refreshSession: async () => { refreshes++; await new Promise(resolve => setTimeout(resolve, 5)); return { data: { session: { access_token: "refreshed-access-token" } } }; }, // scan-secrets: allow — deliberate fake refreshed browser session token
+      },
     };
     const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
     (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = function(this: unknown, request: string, parent: unknown, isMain: boolean) {
-      if (request === "@supabase/ssr") return { createBrowserClient: () => fakeClient };
+      if (request === "@supabase/ssr") return { createBrowserClient: () => { clientCreations++; return fakeClient; } };
       return originalLoad.call(this, request, parent, isMain);
     } as never;
     try {
-      const { uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
+      const { prepareVideoDirectUpload, uploadVideoToSignedStorage, VIDEO_UPLOAD_MAX_IN_FLIGHT_MS } = await import("../src/lib/studio/videoDirectUpload");
+      const { uploadPinImage } = await import("../src/lib/studio/uploadPinImage");
       const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
       let timeoutMs = 0; let cleared = false;
       const signedUrl = `https://storage.test/object/upload/sign/generated-private/${OWNER}/videos/a.mp4?token=signed-token`;
@@ -611,9 +617,48 @@ async function main() {
         batchId: preparedItem().batchId, fetchImpl: async () => { throw new Error("must not dispatch"); },
       }), (error: unknown) => (error as { code?: string }).code === "video_upload_invalid_capability");
       assert.equal(calls.length, 1, "a mismatched path/token capability never dispatches");
+
+      const originalFetch = globalThis.fetch;
+      const originalFlag = process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD;
+      const apiCalls: Array<{ path: string; authorization: string | null }> = [];
+      process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD = "true";
+      (globalThis as { fetch: typeof fetch }).fetch = async (input, init) => {
+        const headers = new Headers(init?.headers);
+        const authorization = headers.get("authorization");
+        apiCalls.push({ path: String(input), authorization });
+        return authorization === "Bearer refreshed-access-token"
+          ? new Response(JSON.stringify(String(input).includes("video-upload") ? { batchId: "batch", uploads: [], requestId: "server-request" } : { path: "studio/uploads/owner/cover.png", proxyUrl: "/api/storage-image?path=cover", publicUrl: "/api/storage-image?path=cover" }), { status: 200, headers: { "content-type": "application/json" } })
+          : new Response(JSON.stringify({ code: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
+      };
+      try {
+        await Promise.all([
+          prepareVideoDirectUpload("batch-key", []),
+          uploadPinImage(new File(["poster"], "poster.png", { type: "image/png" })),
+        ]);
+      } finally {
+        (globalThis as { fetch: typeof fetch }).fetch = originalFetch;
+        if (originalFlag === undefined) delete process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD;
+        else process.env.NEXT_PUBLIC_VIDEO_PIN_UPLOAD = originalFlag;
+      }
+      assert.equal(clientCreations, 1, "Studio upload helpers must reuse the one shared Supabase browser client");
+      assert.equal(refreshes, 1, "concurrent internal 401 responses must share one refreshSession call");
+      assert.equal(apiCalls.length, 4, "each internal request must replay exactly once after its 401");
+      assert.deepEqual(apiCalls.map(call => call.authorization), ["Bearer access-token", "Bearer access-token", "Bearer refreshed-access-token", "Bearer refreshed-access-token"]);
     } finally {
       (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
     }
+  });
+
+  await test("a signed storage PUT that returns 401 remains a single failed transfer", async () => {
+    const { uploadVideoToSignedStorage } = await import("../src/lib/studio/videoDirectUpload");
+    const file = new File([MP4_FTYP], "clip.mp4", { type: "video/mp4" });
+    let puts = 0;
+    await assert.rejects(() => uploadVideoToSignedStorage({ ordinal: 0, path: `${OWNER}/videos/one-put.mp4`, token: "signed-token",
+      signedUrl: `https://storage.test/object/upload/sign/generated-private/${OWNER}/videos/one-put.mp4?token=signed-token`, contentType: "video/mp4", upsert: false }, file, {
+      batchId: preparedItem().batchId,
+      fetchImpl: async () => { puts++; return new Response("unauthorized", { status: 401 }); },
+    }), (error: unknown) => (error as { code?: string }).code === "video_upload_failed");
+    assert.equal(puts, 1, "signed Storage PUTs must never be replayed by the internal API auth recovery path");
   });
 
   await test("browser upload deadline and caller abort have distinct stable codes and never call normal finalize", async () => {
