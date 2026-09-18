@@ -77,13 +77,51 @@ export function validateReconnectStartResponse(input: {
   }
   if (input.status !== 200) throw new Error(`Expected reconnect start HTTP 200, received ${input.status}`);
   const url = typeof input.body?.url === "string" ? input.body.url : "";
-  if (!url.startsWith("/api/auth/pinterest/connect?")) {
-    throw new Error("Reconnect response must return a local start URL; provider redirects are never followed");
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Reconnect response must return an absolute Pinterest authorize URL");
   }
-  const parsed = new URL(url, "https://preview.example.test");
-  if (parsed.searchParams.get("reconnect") !== input.requestedReconnectId) {
-    throw new Error("Reconnect start URL lost its requested connection id");
+  if (parsed.protocol !== "https:" || parsed.hostname !== "www.pinterest.com" || !/^\/oauth\/?$/.test(parsed.pathname)) {
+    throw new Error("Reconnect response must return an allowed Pinterest HTTPS authorize URL");
   }
+  if (!parsed.searchParams.get("client_id")) {
+    throw new Error("Reconnect Pinterest authorize URL is missing client_id");
+  }
+  if (!parsed.searchParams.get("state")) {
+    throw new Error("Reconnect Pinterest authorize URL is missing state");
+  }
+  // The reconnect identity is sealed into the state cookie by the route; do not
+  // attempt to derive it from the external URL and never request this URL.
+  void input.requestedReconnectId;
+}
+
+export type SyntheticCleanupStep = {
+  resource: string;
+  // Supabase query builders are PromiseLike rather than native Promises.
+  remove: () => PromiseLike<{ error: unknown | null }>;
+};
+
+/**
+ * Deletes are deliberately serial: subscription -> customer -> social -> Auth.
+ * A failed child delete is recorded but cannot stop later cleanup/residual checks.
+ */
+export async function executeSyntheticCleanupSteps(
+  steps: SyntheticCleanupStep[],
+): Promise<Array<{ resource: string; status: "PASS" | "FAIL"; detail: string }>> {
+  const actions: Array<{ resource: string; status: "PASS" | "FAIL"; detail: string }> = [];
+  for (const step of steps) {
+    try {
+      const result = await step.remove();
+      actions.push(result.error
+        ? { resource: step.resource, status: "FAIL", detail: "synthetic state delete failed" }
+        : { resource: step.resource, status: "PASS", detail: "synthetic state deleted" });
+    } catch {
+      actions.push({ resource: step.resource, status: "FAIL", detail: "synthetic state delete threw" });
+    }
+  }
+  return actions;
 }
 
 type AdapterOptions = {
@@ -341,16 +379,18 @@ export class SupabaseAccountQuotaAdapter implements AccountQuotaApplyAdapter {
             subscriptionId: `account-quota-e2e:${runId}:${plan}:subscription`,
           }
         : undefined);
-      const results = await Promise.all([
-        this.service.from("social_connections").delete().eq("user_id", userId),
-        fixture ? this.service.from("creem_subscriptions").delete().eq("creem_subscription_id", fixture.subscriptionId) : Promise.resolve({ error: null }),
-        fixture ? this.service.from("creem_customers").delete().eq("creem_customer_id", fixture.customerId) : Promise.resolve({ error: null }),
-      ]);
-      if (results.some(result => result.error)) actions.push({ resource: "synthetic social/billing", status: "FAIL", detail: "one or more synthetic state deletes failed" });
-      else actions.push({ resource: "synthetic social/billing", status: "PASS", detail: "synthetic connections and billing fixtures deleted" });
-      const { error: authError } = await this.service.auth.admin.deleteUser(userId);
-      if (authError) actions.push({ resource: "synthetic Auth", status: "FAIL", detail: "synthetic Auth deletion failed" });
-      else actions.push({ resource: "synthetic Auth", status: "PASS", detail: "synthetic account deleted" });
+      const deleteSteps: SyntheticCleanupStep[] = [];
+      if (fixture) {
+        deleteSteps.push(
+          { resource: "synthetic billing subscription", remove: () => this.service.from("creem_subscriptions").delete().eq("creem_subscription_id", fixture.subscriptionId) },
+          { resource: "synthetic billing customer", remove: () => this.service.from("creem_customers").delete().eq("creem_customer_id", fixture.customerId) },
+        );
+      }
+      deleteSteps.push(
+        { resource: "synthetic social connections", remove: () => this.service.from("social_connections").delete().eq("user_id", userId) },
+        { resource: "synthetic Auth", remove: () => this.service.auth.admin.deleteUser(userId) },
+      );
+      actions.push(...await executeSyntheticCleanupSteps(deleteSteps));
       const { count, error } = await this.service.from("social_connections").select("id", { count: "exact", head: true }).eq("user_id", userId);
       if (error || count !== 0) actions.push({ resource: "synthetic social residual", status: "FAIL", detail: "social connection residual remains" });
       else actions.push({ resource: "synthetic social residual", status: "PASS", detail: "zero social connection residual verified" });

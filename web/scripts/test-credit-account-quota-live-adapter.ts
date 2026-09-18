@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import {
   buildSyntheticSocialConnectionRows,
+  executeSyntheticCleanupSteps,
   normalizeSeededConnections,
   SupabaseAccountQuotaAdapter,
   validateAtLimitConnectResponse,
@@ -10,14 +11,15 @@ import {
 import { buildAccountQuotaScenario } from "./lib/credit-account-quota-harness";
 
 let passed = 0;
-function test(name: string, fn: () => void): void {
-  fn();
+async function test(name: string, fn: () => void | Promise<void>): Promise<void> {
+  await fn();
   passed += 1;
   console.log(`  PASS ${name}`);
 }
 
+async function main(): Promise<void> {
 for (const round of [1, 2] as const) {
-  test(`round ${round}: malformed Test Supabase binding is rejected before a service client exists`, () => {
+  await test(`round ${round}: malformed Test Supabase binding is rejected before a service client exists`, () => {
     let factoryCalls = 0;
     assert.throws(() => new SupabaseAccountQuotaAdapter({
       baseUrl: "https://vibepin-fb-preview.vercel.app",
@@ -37,7 +39,7 @@ for (const round of [1, 2] as const) {
     assert.equal(factoryCalls, 0);
   });
 
-  test(`round ${round}: seed rows hold the exact cap without writing any provider token`, () => {
+  await test(`round ${round}: seed rows hold the exact cap without writing any provider token`, () => {
     const scenario = buildAccountQuotaScenario("business", "quota-live-unit");
     const rows = buildSyntheticSocialConnectionRows(scenario, "00000000-0000-4000-8000-000000000001");
     assert.equal(rows.length, 3);
@@ -48,7 +50,7 @@ for (const round of [1, 2] as const) {
     assert.doesNotMatch(JSON.stringify(rows), /access_token|refresh_token|oauth|secret/i);
   });
 
-  test(`round ${round}: database connection_status maps to the quota lifecycle without a false reconnect target`, () => {
+  await test(`round ${round}: database connection_status maps to the quota lifecycle without a false reconnect target`, () => {
     assert.deepEqual(normalizeSeededConnections([
       { id: "one", connection_status: "connected" },
       { id: "two", connection_status: "not_connected" },
@@ -59,7 +61,7 @@ for (const round of [1, 2] as const) {
     assert.throws(() => normalizeSeededConnections([{ id: "bad", connection_status: "expired" }]), /unexpected/);
   });
 
-  test(`round ${round}: a full plan rejection requires 403 limit_reached, stable rows, and no OAuth state cookie`, () => {
+  await test(`round ${round}: a full plan rejection requires 403 limit_reached, stable rows, and no OAuth state cookie`, () => {
     assert.doesNotThrow(() => validateAtLimitConnectResponse({
       status: 403,
       body: { code: "limit_reached" },
@@ -90,10 +92,10 @@ for (const round of [1, 2] as const) {
     }), /row count/);
   });
 
-  test(`round ${round}: reconnect start is allowed at cap but never follows a provider URL`, () => {
+  await test(`round ${round}: reconnect start is allowed at cap but never follows a provider URL`, () => {
     assert.doesNotThrow(() => validateReconnectStartResponse({
       status: 200,
-      body: { url: "/api/auth/pinterest/connect?next=%2Fapp%2Fsettings%2Fsocial&reconnect=00000000-0000-4000-8000-000000000001" },
+      body: { url: "https://www.pinterest.com/oauth/?response_type=code&client_id=synthetic-client&redirect_uri=https%3A%2F%2Fpreview.example.test%2Fapi%2Fauth%2Fpinterest%2Fcallback&state=sealed-state" },
       requestedReconnectId: "00000000-0000-4000-8000-000000000001",
     }));
     assert.throws(() => validateReconnectStartResponse({
@@ -103,10 +105,28 @@ for (const round of [1, 2] as const) {
     }), /must not be blocked/);
     assert.throws(() => validateReconnectStartResponse({
       status: 200,
-      body: { url: "https://www.pinterest.com/oauth/?state=would-follow" },
+      body: { url: "https://www.pinterest.com/oauth/?client_id=synthetic-client" },
       requestedReconnectId: "00000000-0000-4000-8000-000000000001",
-    }), /local start URL/);
+    }), /state/);
+  });
+
+  await test(`round ${round}: cleanup is sequential and continues after a failed child delete`, async () => {
+    const order: string[] = [];
+    const actions = await executeSyntheticCleanupSteps([
+      { resource: "subscription", remove: async () => { order.push("subscription"); return { error: null }; } },
+      { resource: "customer", remove: async () => { order.push("customer"); return { error: { code: "23503" } }; } },
+      { resource: "social", remove: async () => { order.push("social"); return { error: null }; } },
+      { resource: "auth", remove: async () => { order.push("auth"); return { error: null }; } },
+    ]);
+    assert.deepEqual(order, ["subscription", "customer", "social", "auth"]);
+    assert.deepEqual(actions.map(item => item.status), ["PASS", "FAIL", "PASS", "PASS"]);
   });
 }
 
 console.log(`\nCredit account quota live adapter: ${passed} passed, 0 failed`);
+}
+
+void main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
