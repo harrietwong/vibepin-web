@@ -12,8 +12,8 @@ type PrepareResponse = { batchId: string; uploads: SignedVideoUpload[]; requestI
 
 function requestId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
-export async function sha256(file: Blob): Promise<string> {
-  return sha256Blob(file);
+export async function sha256(file: Blob, signal?: AbortSignal): Promise<string> {
+  return sha256Blob(file, signal);
 }
 async function api<T>(url: InternalApiPath, body: unknown, id: string, fetchImpl: typeof fetch = fetch): Promise<T> {
   const response = await authedInternalRequest(url, {

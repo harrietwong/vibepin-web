@@ -35,10 +35,10 @@ function callbacks(overrides: Record<string, unknown> = {}, mutate?: (source: st
   const end = source.indexOf("  const handleFiles = useCallback", begin);
   const effects: Array<() => void | (() => void)> = [];
   let current: batch.VideoBatchState | undefined;
-  const operationRef = { current: null };
+  const videoQueueRef: { current: { scope: typeof A; queue: batch.AppendableVideoUploadQueue } | null } = { current: null };
   const context = {
     ...batch, ...recovery, useCallback: (fn: unknown) => fn, useEffect: (fn: () => void | (() => void)) => { effects.push(fn); },
-    videoBatchAbortRef: { current: null }, videoOperationRef: operationRef, ownerScopeKey: A.ownerUserId,
+    videoQueueRef, videoQueueOrdinalRef: { current: 0 }, ownerScopeKey: A.ownerUserId,
     setUploading: () => {}, setVideoBatch: (s: batch.VideoBatchState) => { current = s; }, setUploadProgress: () => {},
     prepareVideoDirectUpload: async (_key: string, ds: batch.VideoUploadDescriptor[]) => prepare(ds),
     uploadVideoToSignedStorage: async () => {}, finalizeVideoDirectUpload: finalize,
@@ -50,9 +50,9 @@ function callbacks(overrides: Record<string, unknown> = {}, mutate?: (source: st
     track: () => {}, processFiles: async () => {}, videoBatch: undefined, uploading: false, ...overrides,
   };
   let text = source.slice(begin, end); if (mutate) text = mutate(text);
-  const js = ts.transpileModule(text + "\nreturn { executeVideoBatch, startVideoBatch, processMixedVideoSelection, cancelVideoBatch };", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const js = ts.transpileModule(text + "\nreturn { executeVideoBatch, startVideoBatch, processMixedVideoSelection, retryVideoItem, cancelVideoItem, cancelVideoBatch };", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const methods = new Function(...Object.keys(context), js)(...Object.values(context));
-  return { ...methods, state: () => current, operationRef, recover: async () => { effects.forEach(fn => fn()); await flush(); await flush(); } };
+  return { ...methods, state: () => current, videoQueueRef, recover: async () => { effects.forEach(fn => fn()); await flush(); await flush(); } };
 }
 const results: Array<{ name: string; okay: boolean; evidence?: string }> = [];
 async function check(name: string, fn: () => Promise<void> | void) {
@@ -97,20 +97,23 @@ async function main() {
     recovery.saveVideoRecovery({ ...common, logicalId: "done", draftIdempotencyKey: "done", finalized: await finalize("b", 1) });
     await callbacks().recover(); assert.equal(store.getAllDrafts().length, 1);
   });
-  await check("R3 video-only second entry is blocked and preflight cancel starts no transfers", async () => {
+  await check("R3 video-only second entry appends and cancel-all stops both preflights", async () => {
     reset(); const probe = deferred(); let transfers = 0;
     const ui = callbacks({ probeVideoFile: async () => { await probe.promise; return inspection; }, uploadVideoToSignedStorage: async () => { transfers++; } });
-    const first = ui.startVideoBatch([file()]); await ui.startVideoBatch([file("second.mp4")]); ui.cancelVideoBatch(); probe.resolve(); await first;
+    const first = ui.startVideoBatch([file()]); const second = ui.startVideoBatch([file("second.mp4")]);
+    await flush(); ui.cancelVideoBatch(); probe.resolve(); await Promise.all([first, second]);
     assert.equal(transfers, 0); assert.equal(store.getAllDrafts().length, 0);
+    assert.equal(ui.state()?.items.length, 2); assert(ui.state()?.items.every((candidate: batch.VideoBatchItem) => candidate.state === "cancelled"));
   });
-  await check("R3 mixed selection owns lock before image await and never silently drops its video", async () => {
+  await check("R3 mixed selection enqueues video before image await and a later video also appends", async () => {
     reset(); const image = deferred(); const transfer = deferred(); let transfers = 0;
     const ui = callbacks({ processFiles: async () => image.promise, uploadVideoToSignedStorage: async () => { transfers++; await transfer.promise; } });
     const mixed = ui.processMixedVideoSelection([photo(), file("mixed.mp4")]);
-    const lockedBeforeImage = Boolean(ui.operationRef.current);
-    const second = ui.startVideoBatch([file("second.mp4")]); image.resolve(); transfer.resolve(); await Promise.all([mixed, second]);
-    assert.ok(lockedBeforeImage, "mixed operation must lock before waiting on image upload");
-    assert.equal(transfers, 1);
+    await flush();
+    const second = ui.startVideoBatch([file("second.mp4")]); await flush();
+    assert.equal(transfers, 2, "both videos start without waiting for the mixed selection's image");
+    image.resolve(); transfer.resolve(); await Promise.all([mixed, second]);
+    assert.equal(ui.state()?.items.length, 2);
   });
   await check("R4 owner switch after finalize cannot write B immediately or through Retry", async () => {
     reset(); const ui = callbacks({ finalizeVideoDirectUpload: async (id: string, n: number) => { store.setPinDraftOwnerScope(B.ownerUserId); return finalize(id, n); } });

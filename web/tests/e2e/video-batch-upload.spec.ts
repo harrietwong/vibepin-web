@@ -215,7 +215,7 @@ test.describe("video batch upload (fully mocked)", () => {
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([video("alpha.mp4"), video("beta.mp4")]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("completed", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
     const cards = page.getByTestId("pin-board-card");
     await expect(cards).toHaveCount(2, { timeout: 20_000 });
     await expect(cards.nth(0).getByTestId("content-media-video").first()).toBeVisible();
@@ -240,13 +240,13 @@ test.describe("video batch upload (fully mocked)", () => {
       video("needs-retry.mp4"),
     ]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("partial", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 1 · Failed 1", { timeout: 30_000 });
     await expect(page.getByTestId("video-upload-retry")).toBeVisible();
     await expect(page.getByTestId("pin-board-card")).toHaveCount(2, { timeout: 20_000 });
     expect(state.uploadCalls).toEqual(expect.arrayContaining([0, 1]));
 
     await page.getByTestId("video-upload-retry").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("completed", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(3, { timeout: 20_000 });
   });
 
@@ -257,9 +257,23 @@ test.describe("video batch upload (fully mocked)", () => {
     await page.getByTestId("board-upload-input").setInputFiles([video("cancel-me.mp4")]);
     await expect(page.getByTestId("video-upload-cancel")).toBeVisible({ timeout: 30_000 });
     await page.getByTestId("video-upload-cancel").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("cancelled", { timeout: 15_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 1", { timeout: 15_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
     expect(state.finalizeCalls).toEqual([]);
+  });
+
+  test("keeps the picker enabled and appends a later selection while uploads are active", async ({ page }) => {
+    await installVideoMocks(page, { hangUpload: true });
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    const input = page.getByTestId("board-upload-input");
+    await input.setInputFiles([video("first.mp4")]);
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 1", { timeout: 30_000 });
+    await expect(input).toBeEnabled();
+    await input.setInputFiles([video("second.mp4")]);
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 2", { timeout: 30_000 });
+    await page.getByTestId("video-upload-cancel-all").click();
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 2", { timeout: 15_000 });
   });
 
   test("reload recovers a finalized receipt into its original owner draft", async ({ page }) => {

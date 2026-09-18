@@ -29,11 +29,23 @@ test("the Studio creates a single discriminated video draft only after private f
   assert.doesNotMatch(source, /imageUrl:\s*finalized\.proxyUrl/);
 });
 
-test("retry and cancel use the batch state machine and display only safe error fields", () => {
-  assert.match(source, /queueFailedVideoItems\(videoBatch\)/);
-  assert.match(source, /videoBatchAbortRef\.current\?\.abort\(\)/);
+test("the active queue keeps picker entry points enabled and reports aggregate counts", () => {
+  assert.match(source, /Video uploads · Active \{videoQueueSummary\?\.active/);
+  assert.match(source, /Queued \{videoQueueSummary\?\.queued/);
+  assert.match(source, /Completed \{videoQueueSummary\?\.completed/);
+  assert.match(source, /Failed \{videoQueueSummary\?\.failed/);
+  assert.doesNotMatch(source, /data-testid="board-upload-more"[^>]*disabled=\{uploading\}/);
+  assert.doesNotMatch(source, /data-testid="board-upload-primary"[^>]*disabled=\{uploading\}/);
+});
+
+test("retry and cancel are per-item queue actions and display only safe error fields", () => {
+  assert.match(source, /queue\.retry\(id\)/);
+  assert.match(source, /queue\.cancel\(id\)/);
+  assert.match(source, /data-testid=\{index === 0 \? "video-upload-retry"/);
+  assert.match(source, /data-testid=\{index === 0 \? "video-upload-cancel"/);
+  assert.match(source, /data-testid="video-upload-cancel-all"/);
   assert.match(source, /item\.error\?\.code/);
-  assert.match(source, /item\.error\.requestId/);
+  assert.match(source, /item\.error\?\.requestId/);
   assert.doesNotMatch(source, /signedUrl.*video-batch|video-batch.*signedUrl/);
   assert.doesNotMatch(source, /privatePath.*video-batch|video-batch.*privatePath/);
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   VIDEO_BATCH_UPLOAD_CONCURRENCY,
+  createAppendableVideoUploadQueue,
   createVideoBatchState,
   queueFailedVideoItems,
   reduceVideoBatch,
@@ -11,6 +12,7 @@ import {
   type VideoBatchItem,
 } from "../src/lib/studio/videoBatchUpload";
 import { probeVideoFile } from "../src/lib/studio/videoBrowserMedia";
+import { sha256 } from "../src/lib/studio/videoDirectUpload";
 import { listVideoRecovery, removeVideoRecovery, saveVideoRecovery } from "../src/lib/studio/videoBatchRecovery";
 import { handleStudioUploadCleanup } from "../src/app/api/studio/upload/handler";
 
@@ -32,8 +34,156 @@ function item(id: string, state: VideoBatchItem["state"] = "queued"): VideoBatch
   };
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(resolvePromise => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 async function main() {
   console.log("\nVideo batch upload orchestration\n");
+
+  await test("later selections append to one FIFO queue with at most three complete tasks active", async () => {
+    assert.equal(VIDEO_BATCH_UPLOAD_CONCURRENCY, 3);
+    const releases = new Map<string, ReturnType<typeof deferred>>();
+    const started: string[] = [];
+    let active = 0;
+    let peak = 0;
+    const queue = createAppendableVideoUploadQueue("append-fifo", {
+      runItem: async current => {
+        started.push(current.id);
+        active++;
+        peak = Math.max(peak, active);
+        const gate = deferred();
+        releases.set(current.id, gate);
+        await gate.promise;
+        active--;
+        return { ...current, state: "succeeded" };
+      },
+    });
+
+    const first = queue.append([item("0"), item("1"), item("2")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const second = queue.append([item("3"), item("4")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(started, ["0", "1", "2"]);
+    assert.equal(peak, 3);
+    assert.deepEqual(queue.getSummary(), { active: 3, queued: 2, completed: 0, failed: 0, cancelled: 0, total: 5 });
+
+    releases.get("1")!.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(started, ["0", "1", "2", "3"], "the first item from the appended selection starts in FIFO order");
+    releases.get("0")!.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(started, ["0", "1", "2", "3", "4"]);
+    for (const id of ["2", "3", "4"]) releases.get(id)!.resolve();
+    await Promise.all([first, second]);
+    assert.equal(queue.getSummary().completed, 5);
+  });
+
+  await test("one item failure does not pause siblings or later appended work", async () => {
+    const completed: string[] = [];
+    const queue = createAppendableVideoUploadQueue("isolated-failure", {
+      runItem: async current => {
+        if (current.id === "bad") throw Object.assign(new Error("private detail"), { code: "video_upload_failed", requestId: "req_bad" });
+        completed.push(current.id);
+        return { ...current, state: "succeeded" };
+      },
+    });
+    await queue.append([item("good-1"), item("bad"), item("good-2"), item("later")]);
+    assert.deepEqual(completed, ["good-1", "good-2", "later"]);
+    assert.equal(queue.getState().items.find(current => current.id === "bad")?.error?.code, "video_upload_failed");
+    assert.deepEqual(queue.getSummary(), { active: 0, queued: 0, completed: 3, failed: 1, cancelled: 0, total: 4 });
+  });
+
+  await test("retry requeues only one failed item with its stable draft key and a fresh transport attempt", async () => {
+    const seen: Array<{ id: string; draftKey?: string; attemptId?: string }> = [];
+    const queue = createAppendableVideoUploadQueue("independent-retry", {
+      runItem: async current => {
+        seen.push({ id: current.id, draftKey: current.draftIdempotencyKey, attemptId: current.attempt?.id });
+        if (seen.length === 1) return {
+          ...current,
+          state: "failed",
+          attempt: { id: "attempt_1", batchId: "batch_1", ordinal: current.ordinal, phase: "prepared" },
+          error: { code: "video_upload_failed" },
+        };
+        return {
+          ...current,
+          state: "succeeded",
+          attempt: { id: "attempt_2", batchId: "batch_2", ordinal: current.ordinal, phase: "finalize_pending" },
+          error: undefined,
+        };
+      },
+    });
+    await queue.append([item("retry-me")]);
+    const before = queue.getState().items[0];
+    await queue.retry("retry-me");
+    const after = queue.getState().items[0];
+    assert.equal(after.state, "succeeded");
+    assert.equal(after.draftIdempotencyKey, before.draftIdempotencyKey);
+    assert.deepEqual(seen.map(value => value.attemptId), [undefined, undefined], "a terminal pre-finalize attempt is not replayed");
+    assert.equal(after.attempt?.id, "attempt_2");
+  });
+
+  await test("per-item cancel aborts pending or transfer work without cancelling siblings", async () => {
+    const gates = new Map<string, ReturnType<typeof deferred>>();
+    const aborted: string[] = [];
+    const queue = createAppendableVideoUploadQueue("independent-cancel", {
+      runItem: async (current, signal) => {
+        const gate = deferred();
+        gates.set(current.id, gate);
+        await Promise.race([
+          gate.promise,
+          new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+            aborted.push(current.id);
+            reject(Object.assign(new Error("aborted"), { code: "video_upload_aborted" }));
+          }, { once: true })),
+        ]);
+        return { ...current, state: "succeeded" };
+      },
+    });
+    const settled = queue.append([item("keep-a"), item("cancel-active"), item("keep-b"), item("cancel-pending")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(queue.cancel("cancel-pending"), true);
+    assert.equal(queue.cancel("cancel-active"), true);
+    gates.get("keep-a")!.resolve();
+    gates.get("keep-b")!.resolve();
+    await settled;
+    assert.deepEqual(aborted, ["cancel-active"]);
+    assert.equal(queue.getState().items.find(current => current.id === "cancel-active")?.state, "cancelled");
+    assert.equal(queue.getState().items.find(current => current.id === "cancel-pending")?.state, "cancelled");
+    assert.equal(queue.getSummary().completed, 2);
+  });
+
+  await test("per-item cancel lets finalize-pending and finalized recovery settle", async () => {
+    let prepares = 0;
+    let uploads = 0;
+    let drafts = 0;
+    const finalizing = deferred();
+    const queue = createAppendableVideoUploadQueue("finalize-settle", {
+      runItem: (current, signal, onState) => runVideoBatch(createVideoBatchState("finalize-settle", [{ ...current, state: "queued" }]), {
+        signal,
+        prepare: async descriptors => { prepares++; return { batchId: "server-finalize", uploads: descriptors.map(descriptor => ({ ordinal: descriptor.ordinal, path: `owner/${descriptor.ordinal}.mp4`, token: "redacted", signedUrl: "https://storage.test/signed", contentType: descriptor.contentType, upsert: false as const })) }; },
+        upload: async () => { uploads++; },
+        onAttempt: async (candidate, attempt) => {
+          onState({ ...candidate, state: "uploading", attempt });
+          if (attempt.phase === "finalize_pending") await finalizing.promise;
+        },
+        finalize: async () => ({ proxyUrl: "/api/storage-media?path=owner%2F0.mp4", requestId: "req-finalize" }),
+        createDraft: async () => { drafts++; return { persisted: true, draftId: "draft-finalized" }; },
+        onState: state => onState(state.items[0]),
+      }).then(state => state.items[0]),
+    });
+    const settled = queue.append([item("finalizing")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(queue.cancel("finalizing"), false, "finalize-pending work must be allowed to settle");
+    finalizing.resolve();
+    await settled;
+    assert.equal(queue.getState().items[0].state, "succeeded");
+    assert.equal(prepares, 1);
+    assert.equal(uploads, 1);
+    assert.equal(drafts, 1);
+  });
 
   await test("flag-off selection keeps video out of the image-only input contract", () => {
     const result = validateVideoBatchSelection([image("still.png") as File, video("clip.mp4") as File], false);
@@ -93,7 +243,7 @@ async function main() {
     assert.doesNotMatch(JSON.stringify(final), /signed-token|storage\.test/);
   });
 
-  await test("work is capped at two concurrent video transfers", async () => {
+  await test("work is capped at three concurrent video transfers", async () => {
     const state = createVideoBatchState("batch-c", [item("0"), item("1"), item("2"), item("3"), item("4")]);
     let active = 0; let peak = 0;
     const final = await runVideoBatch(state, {
@@ -179,6 +329,14 @@ async function main() {
     assert.equal(resolved.items[2].state, "cancelled");
     assert.equal(resolved.items[3].state, "cancelled", "queued work must not start after cancellation");
     assert.equal(summarizeVideoBatch(resolved), "cancelled");
+  });
+
+  await test("preflight decode and checksum fail fast when their item is cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const cancelled = (error: unknown) => (error as { code?: string }).code === "video_upload_aborted";
+    await assert.rejects(() => probeVideoFile(new File(["video"], "cancel.mp4", { type: "video/mp4" }), controller.signal), cancelled);
+    await assert.rejects(() => sha256(new Blob(["video"]), controller.signal), cancelled);
   });
 
   await test("metadata alone is insufficient when the required first video frame cannot decode", async () => {
