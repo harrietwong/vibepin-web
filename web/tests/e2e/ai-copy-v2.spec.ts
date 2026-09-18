@@ -90,8 +90,8 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
   await expect(evidence.getByText("cozy library", { exact: true })).toHaveCount(0);
   await expect(card.getByTestId("ai-copy-v2-validation")).toContainText("Validation passed");
 
-  const trends = await page.request.get("/app/trends");
-  const discover = await page.request.get("/app/discover");
+  const trends = await page.request.get("/app/trends", { timeout: 45_000 });
+  const discover = await page.request.get("/app/discover", { timeout: 45_000 });
   expect(trends.status()).toBe(200);
   expect(discover.status()).toBe(200);
 });

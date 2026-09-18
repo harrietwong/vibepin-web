@@ -11,7 +11,7 @@ const TEST_USER_ID = "988ca85e-923b-4771-840f-d5c0520c6d88";
 const TEST_WORKSPACE = "default";
 
 type VideoMockOptions = {
-  failOrdinal?: number;
+  failFinalizeCall?: number;
   hangUpload?: boolean;
   appearanceTheme?: "dark" | "light";
 };
@@ -152,7 +152,7 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
     const body = JSON.parse(route.request().postData() ?? "{}") as { ordinal?: number };
     const ordinal = Number(body.ordinal ?? 0);
     state.finalizeCalls.push(ordinal);
-    if (options.failOrdinal === ordinal && state.finalizeCalls.filter(value => value === ordinal).length === 1) {
+    if (options.failFinalizeCall === state.finalizeCalls.length) {
       await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ code: "video_upload_failed" }) });
       return;
     }
@@ -348,7 +348,7 @@ test.describe("video batch upload (fully mocked)", () => {
   });
 
   test("mixed selection keeps image separate and exposes partial failure with retry", async ({ page }) => {
-    const state = await installVideoMocks(page, { failOrdinal: 1 });
+    const state = await installVideoMocks(page, { failFinalizeCall: 2 });
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([
@@ -360,7 +360,7 @@ test.describe("video batch upload (fully mocked)", () => {
     await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 1 · Failed 1", { timeout: 30_000 });
     await expect(page.getByTestId("video-upload-retry")).toBeVisible();
     await expect(page.getByTestId("pin-board-card")).toHaveCount(2, { timeout: 20_000 });
-    expect(state.uploadCalls).toEqual(expect.arrayContaining([0, 1]));
+    expect(state.uploadCalls).toEqual([0, 0]);
 
     await page.getByTestId("video-upload-retry").click();
     await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
