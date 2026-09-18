@@ -18,28 +18,31 @@ export function VideoCoverFrameDialog({ draftId, media, onClose }: {
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const lifetimeRef = useRef<AbortController | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const lifetime = new AbortController();
+    lifetimeRef.current = lifetime;
     const previous = document.activeElement as HTMLElement | null;
     const dialog = dialogRef.current;
     dialog?.showModal();
-    return () => { dialog?.close(); previous?.focus(); };
+    return () => { lifetime.abort(); dialog?.close(); if (previous?.isConnected) previous.focus(); };
   }, []);
 
   const confirm = async () => {
-    if (!videoRef.current || savingRef.current || !ready) return;
+    const signal = lifetimeRef.current?.signal;
+    if (!videoRef.current || savingRef.current || !ready || !signal || signal.aborted) return;
     savingRef.current = true;
     setSaving(true);
     setError("");
     try {
-      await confirmVideoCoverFrame(draftId, media, videoRef.current, timeMs);
-      onClose();
+      await confirmVideoCoverFrame(draftId, media, videoRef.current, timeMs, undefined, signal);
+      if (!signal.aborted) onClose();
     } catch {
-      setError("Could not save this cover. Your previous cover is unchanged. Please retry.");
+      if (!signal.aborted) setError("Could not save this cover. Your previous cover is unchanged. Please retry.");
     } finally {
-      savingRef.current = false;
-      setSaving(false);
+      if (!signal.aborted) { savingRef.current = false; setSaving(false); }
     }
   };
 
@@ -48,7 +51,7 @@ export function VideoCoverFrameDialog({ draftId, media, onClose }: {
     onCancel={event => { event.preventDefault(); if (!savingRef.current) onClose(); }}
     style={{ width: "min(560px, calc(100vw - 32px))", maxHeight: "90vh", overflowY: "auto", padding: 20, borderRadius: 16, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, boxShadow: "0 20px 80px #0006" }}>
     <h2 id={titleId} style={{ fontSize: 18, fontWeight: 750, margin: "0 0 14px" }}>Choose cover frame</h2>
-    <video ref={videoRef} src={media.url} poster={media.posterUrl} controls={!saving} muted playsInline preload="auto"
+    <video ref={videoRef} src={media.url} poster={media.posterUrl} muted playsInline preload="auto" tabIndex={-1}
       aria-label="Video cover preview" style={{ width: "100%", maxHeight: "48vh", background: "#111", borderRadius: 8 }}
       onLoadedData={() => {
         setReady(durationMs > 0);

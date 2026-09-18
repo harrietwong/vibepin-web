@@ -12,7 +12,7 @@ Object.assign(globalThis, {
 });
 const media = { id: "clip", kind: "video" as const, url: "/api/storage-media?path=owner/video.mp4", posterUrl: "/api/storage-image?path=studio/uploads/owner/old.jpg", durationMs: 4000, width: 720, height: 1280, source: "upload" as const };
 const draft = { id: "cover", media: [media], imageUrl: media.posterUrl, coverMediaId: media.id, createdAt: "2026-09-17T00:00:00Z", updatedAt: "2026-09-17T00:00:00Z" };
-function reset() { mem.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { cover: draft } })); store.__resetMemoryCacheForTests(); }
+function reset() { mem.clear(); mem.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { cover: draft } })); store.__resetMemoryCacheForTests(); }
 async function main() {
   const html = renderToStaticMarkup(createElement(ContentMediaStrip, { draft: draft as never }));
   assert.match(html, /aria-label="Choose cover frame"/, "single-video cover must expose a meaningful frame selection action");
@@ -51,6 +51,28 @@ async function main() {
     },
   }), /changed/);
   assert.equal(store.getDraft("cover")?.imageUrl, "/api/storage-image?path=studio/uploads/owner/other.jpg");
+  for (const change of ["unmount", "owner"] as const) {
+    for (const stage of ["capture", "upload"] as const) {
+      reset();
+      if (change === "owner") store.setPinDraftOwnerScope("owner-a");
+      const lifetime = new AbortController();
+      let uploads = 0;
+      const invalidate = () => change === "unmount" ? lifetime.abort() : store.setPinDraftOwnerScope("owner-b");
+      await assert.rejects(browserMedia.confirmVideoCoverFrame("cover", media, {} as HTMLVideoElement, 1250, {
+        capture: async () => { if (stage === "capture") invalidate(); return new File(["poster"], "cover.jpg", { type: "image/jpeg" }); },
+        upload: async () => { uploads++; if (stage === "upload") invalidate(); return { proxyUrl: "/api/storage-image?path=studio/uploads/owner/new.jpg" }; },
+      }, lifetime.signal), /changed|cancelled/, `${change} during ${stage} must not commit`);
+      if (change === "owner") {
+        assert.equal(store.getDraft("cover"), null, "replacement must not appear in the new owner's store");
+        store.setPinDraftOwnerScope("owner-a");
+      }
+      assert.deepEqual(store.getDraft("cover")?.media, [media]);
+      assert.equal(store.getDraft("cover")?.imageUrl, media.posterUrl);
+      assert.equal(uploads, stage === "capture" ? 0 : 1);
+    }
+  }
+  reset();
+  store.replaceVideoPoster("cover", "clip", { posterUrl: media.posterUrl, coverFrameTimeMs: 1250 });
   const events = new EventTarget();
   let position = 0;
   let capturedAt = -1;

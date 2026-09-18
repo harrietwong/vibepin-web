@@ -81,3 +81,24 @@ The selector requires the video's known persisted duration and browser decode su
 ## Self-review
 
 Checked optional timestamp compatibility (no added null field in old fingerprints), exact zero handling, subsecond units, inclusive duration, invalid-value rejection, server validation, image receipt compatibility, identity preservation, no upload on scrub/cancel, no finalized association reuse, no replacement cleanup, no private capability in user errors, durable AI evidence, owner/concurrent-edit checks, and test registration. Existing upload/auth/queue code was not refactored. No known blocker remains in the implemented scope.
+
+## Fix round 1 — authoritative slider and component lifetime
+
+Reviewer found that native play/seek controls could display a different frame while the saved selection still came from the range value. Removed native controls from the real preview video and excluded it from keyboard focus; the labelled, keyboard-operable range is now the sole frame-selection control. Preview and capture both seek from that same range value.
+
+The dialog now owns an AbortController for its mount lifetime. Unmount aborts pending capture waits and revokes the transaction's right to upload/commit. A generic upload already in flight may finish, but its result cannot mutate the draft after unmount; error/loading state and the close callback are not updated after cancellation. The established P0 retention policy applies to any already-uploaded abandoned image. No new upload/delete capability was added.
+
+RED evidence:
+
+- The real Chromium test expected preview `controls === false` and received `true`.
+- The focused transaction test aborted its component-lifetime signal during capture and reported `Missing expected rejection: unmount during capture must not commit`.
+
+Expanded coverage:
+
+- The real browser test checks absence of native controls, verifies clicking the video does not play it, uses ArrowRight/ArrowLeft on the slider, asserts the actual video `currentTime` follows 1.251 then 1.250 seconds, and observes the real canvas `drawImage` capture times (1.25 seconds for both the failed-upload attempt and successful retry). Scrub/cancel, failure preservation, generic multipart replacement, and updated rendered poster remain covered.
+- Four focused transaction races cover cancellation during capture, cancellation during upload, owner switch during capture, and owner switch during upload. Every case preserves the original media/poster; capture-side cancellation prevents an upload; owner switching cannot create a replacement draft in the other owner's store.
+- A second real browser test holds the replacement upload in flight, navigates through the app's own link so React unmounts the dialog while keeping the JS runtime/request alive, releases the response, and verifies unchanged persisted draft and no late cover error.
+
+The stronger preview assertion exposed a fixture problem: the older E2E video route returned HTTP 200 for Range requests, causing the browser's remote preview seek to remain at zero. The mock now mirrors the production byte-range contract with 206/Content-Range/Accept-Ranges. The real preview and captured timestamps then agree. The navigation test's generic `role=alert` assertion was narrowed to cover errors because Next's normal route announcer also uses that role.
+
+Round verification passed: `npx tsx scripts/test-video-cover-selection.ts`, the two Chromium tests selected by `--grep 'cover frame dialog'` (2 passed in 1.1 minutes), and `npm run typecheck`. The earlier broad Task 3 tests remain documented above; this round changes only preview controls, cancellation lifetime, and focused tests.

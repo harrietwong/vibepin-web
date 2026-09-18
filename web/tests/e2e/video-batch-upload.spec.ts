@@ -175,7 +175,11 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/storage-media**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "video/mp4", body: VIDEO });
+    const range = route.request().headers().range?.match(/^bytes=(\d+)-(\d*)$/);
+    const start = range ? Number(range[1]) : 0;
+    const end = range?.[2] ? Math.min(Number(range[2]), VIDEO.length - 1) : VIDEO.length - 1;
+    await route.fulfill({ status: range ? 206 : 200, contentType: "video/mp4", body: VIDEO.subarray(start, end + 1),
+      headers: { "accept-ranges": "bytes", "content-length": String(end - start + 1), ...(range ? { "content-range": `bytes ${start}-${end}/${VIDEO.length}` } : {}) } });
   });
   await page.route("**/api/storage-image**", async (route) => {
     await route.fulfill({ status: 200, contentType: "image/png", body: IMAGE });
@@ -238,9 +242,30 @@ test.describe("video batch upload (fully mocked)", () => {
     await choose.click();
     const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator("video")).toBeVisible();
+    const preview = dialog.locator("video");
+    await expect(preview).toBeVisible();
+    await expect(preview).toHaveJSProperty("controls", false);
+    await expect(preview).toHaveJSProperty("paused", true);
+    await page.evaluate(() => {
+      const captured: number[] = [];
+      (window as unknown as { coverCaptureTimes: number[] }).coverCaptureTimes = captured;
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      CanvasRenderingContext2D.prototype.drawImage = function (...args: unknown[]) {
+        if (args[0] instanceof HTMLVideoElement) captured.push(args[0].currentTime);
+        return Reflect.apply(drawImage, this, args);
+      };
+    });
     const slider = dialog.getByRole("slider", { name: "Cover frame time" });
     await slider.fill("1250");
+    await slider.focus();
+    await slider.press("ArrowRight");
+    await expect(slider).toHaveValue("1251");
+    await expect.poll(() => preview.evaluate(video => (video as HTMLVideoElement).currentTime)).toBe(1.251);
+    await slider.press("ArrowLeft");
+    await expect(slider).toHaveValue("1250");
+    await expect.poll(() => preview.evaluate(video => (video as HTMLVideoElement).currentTime)).toBe(1.25);
+    await preview.click();
+    await expect(preview).toHaveJSProperty("paused", true);
     expect(await readCover()).toEqual(before);
     expect(replacements).toBe(0);
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -260,6 +285,45 @@ test.describe("video batch upload (fully mocked)", () => {
     await expect(card.getByTestId("content-media-video").first()).toHaveAttribute("poster", /selected\.jpg/);
     expect(replacements).toBe(2);
     expect(cleanupCalls).toBe(0);
+    expect(await page.evaluate(() => (window as unknown as { coverCaptureTimes: number[] }).coverCaptureTimes)).toEqual([1.25, 1.25]);
+  });
+
+  test("cover frame dialog unmount during upload preserves the previous cover", async ({ page }) => {
+    await installVideoMocks(page);
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    await page.getByTestId("board-upload-input").setInputFiles([video("unmount-cover.mp4")]);
+    const card = page.getByTestId("pin-board-card");
+    await expect(card).toHaveCount(1, { timeout: 30000 });
+    const readCover = () => page.evaluate(() => {
+      const entry = Object.entries(localStorage).find(([key]) => key.startsWith("vp:pin_drafts:v2:") && !key.includes("migrated"));
+      return entry ? Object.values(JSON.parse(entry[1]).drafts)[0] : null;
+    });
+    const before = await readCover();
+    let releaseUpload = () => {};
+    let uploadStarted = false;
+    const gate = new Promise<void>(resolve => { releaseUpload = resolve; });
+    await page.route("**/api/studio/upload", async route => {
+      uploadStarted = true;
+      await gate;
+      const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fabandoned.jpg`;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/abandoned.jpg` }) });
+    });
+    await card.getByRole("button", { name: "Choose cover frame", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    await dialog.getByRole("slider", { name: "Cover frame time" }).fill("1250");
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect.poll(() => uploadStarted).toBe(true);
+    // Programmatic navigation simulates a parent route unmount while the modal
+    // blocks ordinary outside clicks. Keep the same JS runtime and pending request.
+    await page.getByRole("link", { name: "My Pins", exact: true }).evaluate(link => (link as HTMLElement).click());
+    await expect(dialog).not.toBeVisible({ timeout: 45000 });
+    const response = page.waitForResponse(r => r.url().endsWith("/api/studio/upload"));
+    releaseUpload();
+    await (await response).finished();
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
+    expect(await readCover()).toEqual(before);
+    await expect(page.getByRole("alert").filter({ hasText: "Could not save this cover" })).toHaveCount(0);
   });
 
   test("selecting multiple videos creates independent video drafts", async ({ page }) => {

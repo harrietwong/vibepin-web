@@ -105,16 +105,18 @@ export async function probeVideoFile(file: File, signal?: AbortSignal): Promise<
 }
 
 /** Unlike the optional initial poster, an explicit cover selection must fail visibly. */
-export async function captureVideoCoverFrame(video: HTMLVideoElement, timeMs: number, durationMs: number): Promise<File> {
+export async function captureVideoCoverFrame(video: HTMLVideoElement, timeMs: number, durationMs: number, signal?: AbortSignal): Promise<File> {
+  if (signal?.aborted) throw new VideoBrowserMediaError("video_cover_cancelled");
   if (!isValidCoverFrameTime(timeMs, durationMs) || !Number.isFinite(video.duration)
       || timeMs > video.duration * 1000 + 1) throw new VideoBrowserMediaError("invalid_cover_frame_time");
   video.pause();
   if (video.seeking || Math.abs(video.currentTime - timeMs / 1000) > 0.000001) {
-    const sought = waitFor(video, "seeked");
+    const sought = waitFor(video, "seeked", signal);
     video.currentTime = Math.min(timeMs / 1000, video.duration);
     await sought;
   }
-  if (video.readyState < 2) await waitFor(video, "loadeddata");
+  if (video.readyState < 2) await waitFor(video, "loadeddata", signal);
+  if (signal?.aborted) throw new VideoBrowserMediaError("video_cover_cancelled");
   const canvas = document.createElement("canvas");
   const scale = Math.min(1, 2048 / Math.max(video.videoWidth, video.videoHeight));
   canvas.width = Math.round(video.videoWidth * scale);
@@ -123,6 +125,7 @@ export async function captureVideoCoverFrame(video: HTMLVideoElement, timeMs: nu
   if (!context || !canvas.width || !canvas.height) throw new VideoBrowserMediaError("video_cover_capture_failed");
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.88));
+  if (signal?.aborted) throw new VideoBrowserMediaError("video_cover_cancelled");
   if (!blob?.size || blob.type !== "image/jpeg") throw new VideoBrowserMediaError("video_cover_capture_failed");
   return new File([blob], "video-cover.jpg", { type: "image/jpeg" });
 }
@@ -135,17 +138,18 @@ type CoverSelectionDependencies = {
 export async function confirmVideoCoverFrame(
   draftId: string, media: ContentVideoMedia, video: HTMLVideoElement, timeMs: number,
   deps: CoverSelectionDependencies = { capture: captureVideoCoverFrame, upload: uploadPinImage },
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!isValidCoverFrameTime(timeMs, media.durationMs)) throw new Error("invalid_cover_frame_time");
   const owner = JSON.stringify(getPinDraftOwnerScope());
   const unchanged = () => {
     const current = getDraft(draftId)?.media?.find(item => item.id === media.id);
-    return owner === JSON.stringify(getPinDraftOwnerScope()) && current?.kind === "video"
+    return !signal?.aborted && owner === JSON.stringify(getPinDraftOwnerScope()) && current?.kind === "video"
       && current.url === media.url && current.posterUrl === media.posterUrl
       && current.coverFrameTimeMs === media.coverFrameTimeMs && current.durationMs === media.durationMs;
   };
   if (!unchanged()) throw new Error("The video cover changed. Reopen the selector and retry.");
-  const file = await deps.capture(video, timeMs, media.durationMs!);
+  const file = await deps.capture(video, timeMs, media.durationMs!, signal);
   if (!unchanged()) throw new Error("The video cover changed. Reopen the selector and retry.");
   // Generic owner-bound upload: v80 association is finalized and must never be reused.
   const poster = await deps.upload(file);
