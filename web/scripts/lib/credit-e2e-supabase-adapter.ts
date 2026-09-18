@@ -48,7 +48,9 @@ function exactHttpsOrigin(value: string, label: string): URL {
   return parsed;
 }
 
-type PreviewProcessEnv = Pick<NodeJS.ProcessEnv, "VERCEL_AUTOMATION_BYPASS_SECRET">;
+type PreviewProcessEnv = {
+  readonly VERCEL_AUTOMATION_BYPASS_SECRET?: string;
+};
 
 function isVercelPreviewOrigin(value: URL): boolean {
   return value.hostname === "vercel.app" || value.hostname.endsWith(".vercel.app");
