@@ -58,7 +58,7 @@ export type Match = {
 export type ReviewPatch = {
   operation: "update_existing_pin_draft";
   draftId: string;
-  expected: { status: string; scheduled_at: string | null; mediaId: string };
+  expected: { userId: string; status: string; scheduled_at: string | null; mediaId: string; mediaUrl: string };
   media: NonNullable<DraftPayload["media"]>[number];
   set: {
     status: "ready";
@@ -128,7 +128,7 @@ export function buildReviewPatch(match: Match, connectionId = CONNECTION_ID, acc
   return {
     operation: "update_existing_pin_draft",
     draftId: match.draftId,
-    expected: { status: match.current.status, scheduled_at: match.current.scheduledAt, mediaId: match.mediaId },
+    expected: { userId: match.current.userId, status: match.current.status, scheduled_at: match.current.scheduledAt, mediaId: match.mediaId, mediaUrl: String(match.media.url) },
     media: match.media,
     set: {
       status: "ready",
@@ -146,10 +146,34 @@ export function buildReviewPatch(match: Match, connectionId = CONNECTION_ID, acc
         targetConnectionId: connectionId,
         targetAccountLabel: accountLabel,
         scheduledDestinations: [{ provider: "pinterest", socialConnectionId: connectionId, accountLabel, boardId: match.boardId, boardName: match.row.boardName, capturedAt }],
-        sourceMappingId: match.row.mappingId,
-        sourceVideoSha256: match.row.sha256,
-        sourceLocalFileName: match.row.sourceLocalFileName ?? match.row.localFilePath.split(/[\\/]/).pop(),
       },
     },
   };
+}
+
+export function assertApplyInvocation(argv: readonly string[]): void {
+  if (argv[2] !== "apply" || argv[3] !== "--confirm-preview-write" || argv[4] !== "snulmwprsahzqvdbyenc" || argv.length > 5) {
+    throw new Error("apply_requires_exact_confirmation: apply --confirm-preview-write snulmwprsahzqvdbyenc");
+  }
+}
+
+export function mergeApplyPayload(current: DraftPayload, patch: ReviewPatch["set"]["payload"]): DraftPayload {
+  const forbidden = new Set(["sourceVideoSha256", "sourceMappingId", "sourceLocalFileName"]);
+  const next = { ...current };
+  for (const [key, value] of Object.entries(patch)) if (!forbidden.has(key)) next[key] = value;
+  return next;
+}
+
+export function validateApplyPreflight(patch: ReviewPatch, current: ExistingDraft): string | null {
+  if (current.userId !== patch.expected.userId) return `${patch.draftId}: user_id_mismatch`;
+  if (current.status !== patch.expected.status) return `${patch.draftId}: status_mismatch`;
+  if (current.scheduledAt !== patch.expected.scheduled_at) return `${patch.draftId}: scheduled_at_mismatch`;
+  if (classifyExistingDraft(current) !== "draft") return `${patch.draftId}: posted_or_failed`;
+  const media = current.payload.media?.find((item) => item.id === patch.expected.mediaId);
+  if (!media || media.id !== patch.expected.mediaId || media.url !== patch.expected.mediaUrl) return `${patch.draftId}: media_cas_mismatch`;
+  return null;
+}
+
+export function validateApplyResultCount(count: number, draftId: string): void {
+  if (count !== 1) throw new Error(`${draftId}: update_returned_${count}_rows`);
 }

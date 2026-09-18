@@ -6,8 +6,12 @@ import {
   BOARD_IDS,
   CONNECTION_ID,
   buildReviewPatch,
+  assertApplyInvocation,
   classifyExistingDraft,
   reconcileDrafts,
+  mergeApplyPayload,
+  validateApplyPreflight,
+  validateApplyResultCount,
   type ExistingDraft,
   type ManifestRow,
 } from "./lib/reconcile-cheerish-drafts";
@@ -16,6 +20,8 @@ const DEFAULT_MANIFEST = "D:/vp-tmp/publish-prep/cheerish-schedule-manifest-draf
 const DEFAULT_ENV = "D:/代码/Pinterest flow/web/.env.test.local";
 const DEFAULT_REPORT = "D:/vp-tmp/coordination/reconcile-62-dryrun-report.md";
 const DEFAULT_PATCH = "D:/vp-tmp/coordination/reconcile-62-dryrun-patch.json";
+const DEFAULT_BEFORE = "D:/vp-tmp/coordination/reconcile-62-apply-before.json";
+const DEFAULT_EXECUTION = "D:/vp-tmp/coordination/reconcile-62-apply-execution-report.md";
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(name);
@@ -66,11 +72,15 @@ function markdownReport(args: {
 }
 
 async function main() {
-  if ((process.argv[2] ?? "dry-run") !== "dry-run") throw new Error("only_dry_run_is_supported");
+  const command = process.argv[2] ?? "dry-run";
+  if (command === "apply") assertApplyInvocation(process.argv);
+  else if (command !== "dry-run") throw new Error("only_dry_run_or_exact_apply_is_supported");
   const manifestPath = resolve(flag("--manifest", DEFAULT_MANIFEST));
   const env = loadEnv(resolve(flag("--env-file", DEFAULT_ENV)));
   const reportPath = resolve(flag("--report", DEFAULT_REPORT));
   const patchPath = resolve(flag("--patch", DEFAULT_PATCH));
+  const beforePath = resolve(flag("--before", DEFAULT_BEFORE));
+  const executionPath = resolve(flag("--execution-report", DEFAULT_EXECUTION));
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("missing_supabase_env");
   const manifest = readManifest(manifestPath);
   const db = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -80,6 +90,45 @@ async function main() {
   const result = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,payload").eq("vibepin_user_id", connection.data.user_id).is("deleted_at", null).limit(500);
   if (result.error) throw result.error;
   const existing = (result.data ?? []).map((item) => ({ userId: String(item.vibepin_user_id), draftId: String(item.draft_id), status: String(item.status ?? ""), scheduledAt: item.scheduled_at ? String(item.scheduled_at) : null, payload: (item.payload ?? {}) as ExistingDraft["payload"] }));
+  if (command === "apply") {
+    const document = JSON.parse(readFileSync(patchPath, "utf8")) as { mode?: string; writesPerformed?: boolean; patches?: ReturnType<typeof buildReviewPatch>[] };
+    if (document.mode !== "dry-run" || document.writesPerformed !== false || !Array.isArray(document.patches) || document.patches.length !== 62) throw new Error("invalid_dry_run_patch");
+    const byId = new Map(existing.map((item) => [item.draftId, item]));
+    const preflightRows: ExistingDraft[] = [];
+    const failures: string[] = [];
+    for (const patch of document.patches) {
+      const current = byId.get(patch.draftId);
+      if (!current) { failures.push(`${patch.draftId}: missing_on_preflight`); continue; }
+      const failure = validateApplyPreflight(patch, current);
+      if (failure) failures.push(failure);
+      preflightRows.push(current);
+    }
+    if (new Set(document.patches.map((patch) => patch.draftId)).size !== document.patches.length) failures.push("duplicate_patch_draft_id");
+    if (failures.length) throw new Error(`preflight_failed:\n${failures.join("\n")}`);
+    writeFileSync(beforePath, `${JSON.stringify({ mode: "apply-preflight", writesPerformed: false, connectionId: CONNECTION_ID, drafts: preflightRows }, null, 2)}\n`, "utf8");
+    const updateResults: Array<{ draftId: string; updatedAt: string }> = [];
+    for (const patch of document.patches) {
+      const current = byId.get(patch.draftId)!;
+      const updatedAt = new Date().toISOString();
+      const mergedPayload = mergeApplyPayload(current.payload, patch.set.payload);
+      const updated = await db.from("pin_drafts").update({ payload: mergedPayload, status: "ready", updated_at: updatedAt, scheduled_at: patch.set.scheduled_at, publish_claimed_at: null }).eq("vibepin_user_id", current.userId).eq("draft_id", patch.draftId).is("scheduled_at", null).select("draft_id");
+      if (updated.error) throw updated.error;
+      validateApplyResultCount(updated.data?.length ?? 0, patch.draftId);
+      updateResults.push({ draftId: patch.draftId, updatedAt });
+    }
+    const after = await db.from("pin_drafts").select("vibepin_user_id,draft_id,status,scheduled_at,payload").eq("vibepin_user_id", connection.data.user_id).in("draft_id", document.patches.map((patch) => patch.draftId));
+    if (after.error) throw after.error;
+    const afterById = new Map((after.data ?? []).map((item) => [String(item.draft_id), item]));
+    const verifyFailures: string[] = [];
+    for (const patch of document.patches) {
+      const item = afterById.get(patch.draftId); const payload = item?.payload as ExistingDraft["payload"] | undefined;
+      if (!item || String(item.status) !== "ready" || String(item.scheduled_at ?? "") !== patch.set.scheduled_at || payload?.targetConnectionId !== CONNECTION_ID || payload?.targetAccountLabel !== ACCOUNT_LABEL || payload?.boardId !== patch.set.payload.boardId || payload?.boardName !== patch.set.payload.boardName || payload?.title !== patch.set.payload.title || payload?.description !== patch.set.payload.description || payload?.destinationUrl !== patch.set.payload.destinationUrl) verifyFailures.push(`${patch.draftId}: post_apply_mismatch`);
+    }
+    writeFileSync(executionPath, `# Cheerish Preview apply execution\n\n- Confirmation: exact\n- Writes performed: ${updateResults.length}\n- Post-apply failures: ${verifyFailures.length}\n- Before snapshot: ${beforePath}\n\n${verifyFailures.length ? verifyFailures.map((failure) => `- ${failure}`).join("\n") : "All 62 rows re-read and verified."}\n`, "utf8");
+    console.log(JSON.stringify({ ok: verifyFailures.length === 0, mode: "apply", writesPerformed: updateResults.length, verifyFailures, beforePath, executionPath }, null, 2));
+    if (verifyFailures.length) process.exitCode = 2;
+    return;
+  }
   if (existing.length !== manifest.length) throw new Error(`scope_count_mismatch:manifest=${manifest.length}:existing=${existing.length}`);
   const handled = new Set<string>(); const excluded: ExistingDraft[] = []; const candidateRows: ManifestRow[] = [];
   for (const row of manifest) {
