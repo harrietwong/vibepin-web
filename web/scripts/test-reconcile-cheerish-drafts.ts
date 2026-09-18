@@ -5,10 +5,12 @@ import {
   buildReviewPatch,
   assertApplyInvocation,
   classifyExistingDraft,
+  hasExpectedPinterestDestination,
   mergeApplyPayload,
   reconcileDrafts,
   validateApplyPreflight,
   validateApplyResultCount,
+  sameInstant,
   type ExistingDraft,
   type ManifestRow,
 } from "./lib/reconcile-cheerish-drafts";
@@ -90,6 +92,11 @@ assert.throws(() => validateApplyResultCount(0, "draft-1"), /update_returned_0_r
 assert.doesNotThrow(() => validateApplyResultCount(1, "draft-1"));
 const alreadyApplied = { ...matched.items[0].current, status: "ready", scheduledAt: patch.set.scheduled_at, payload: { ...matched.items[0].current.payload, ...patch.set.payload }, publishClaimedAt: null };
 assert.equal(validateApplyPreflight(patch, alreadyApplied), "already_applied");
+assert.equal(hasExpectedPinterestDestination(alreadyApplied.payload, BOARD_IDS["Home & Kitchen Finds"]), true);
+assert.equal(hasExpectedPinterestDestination({ ...alreadyApplied.payload, scheduledDestinations: [...(alreadyApplied.payload.scheduledDestinations ?? []), { provider: "pinterest", socialConnectionId: "vibepin", boardId: BOARD_IDS["Home & Kitchen Finds"] }] }, BOARD_IDS["Home & Kitchen Finds"]), false);
+assert.equal(validateApplyPreflight(patch, { ...matched.items[0].current, payload: { ...matched.items[0].current.payload, media: [] } }), `${patch.draftId}: media_cas_mismatch`);
+assert.equal(sameInstant("2026-09-20T14:03:00Z", "2026-09-20T10:03:00-04:00"), true);
+assert.equal(sameInstant("2026-09-20T10:03:00-04:00", "2026-09-20T10:04:00-04:00"), false);
 assert.match(validateApplyPreflight(patch, { ...matched.items[0].current, publishClaimedAt: "2026-09-18T21:00:00.000Z" })!, /publish_claimed/);
 assert.equal((mergeApplyPayload(matched.items[0].current.payload, patch.set.payload)).updatedAt, undefined);
 const appliedPayload = mergeApplyPayload(matched.items[0].current.payload, patch.set.payload, "2026-09-18T21:00:00.000Z");
@@ -98,6 +105,7 @@ const applySource = readFileSync("scripts/reconcile-cheerish-drafts.ts", "utf8")
 assert.doesNotMatch(applySource, /\.insert\(|\.upsert\(/, "apply must never create drafts");
 assert.match(applySource, /\.eq\("updated_at",\s*patch\.expected\.updatedAt\)/);
 assert.match(applySource, /publish_claimed_at/);
+assert.match(applySource, /\.is\("publish_claimed_at",\s*null\)/);
 
 const ambiguous = reconcileDrafts([row(1)], [existing(1), existing(1, { draftId: "draft-duplicate" })]);
 assert.equal(ambiguous.ok, false);

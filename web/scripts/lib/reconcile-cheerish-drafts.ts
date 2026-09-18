@@ -35,6 +35,7 @@ export type DraftPayload = {
   publishError?: string;
   failureType?: string;
   destinationResults?: Array<{ status?: string; [key: string]: unknown }>;
+  scheduledDestinations?: Array<{ provider?: string; socialConnectionId?: string; boardId?: string; [key: string]: unknown }>;
   [key: string]: unknown;
 };
 
@@ -181,11 +182,26 @@ export function validateApplyPreflight(patch: ReviewPatch, current: ExistingDraf
 
 export function isAlreadyApplied(patch: ReviewPatch, current: ExistingDraft): boolean {
   const target = patch.set.payload;
-  return current.status === "ready" && current.scheduledAt === patch.set.scheduled_at && current.publishClaimedAt === null
+  return current.status === "ready" && sameInstant(current.scheduledAt, patch.set.scheduled_at) && current.publishClaimedAt === null
     && current.payload.targetConnectionId === target.targetConnectionId && current.payload.targetAccountLabel === target.targetAccountLabel
     && current.payload.boardId === target.boardId && current.payload.boardName === target.boardName
     && current.payload.title === target.title && current.payload.description === target.description
-    && current.payload.destinationUrl === target.destinationUrl;
+    && current.payload.destinationUrl === target.destinationUrl
+    && hasExpectedPinterestDestination(current.payload, String(target.boardId))
+    && current.payload.media?.some((media) => media.id === patch.expected.mediaId && media.url === patch.expected.mediaUrl) === true;
+}
+
+export function sameInstant(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false;
+  const leftMs = Date.parse(left); const rightMs = Date.parse(right);
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs === rightMs;
+}
+
+export function hasExpectedPinterestDestination(payload: DraftPayload, boardId: string): boolean {
+  const destinations = payload.scheduledDestinations?.filter((destination) => destination.provider === "pinterest") ?? [];
+  return destinations.length === 1
+    && destinations[0].socialConnectionId === CONNECTION_ID
+    && destinations[0].boardId === boardId;
 }
 
 export function validateApplyResultCount(count: number, draftId: string): void {

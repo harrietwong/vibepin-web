@@ -10,6 +10,8 @@ import {
   classifyExistingDraft,
   reconcileDrafts,
   mergeApplyPayload,
+  hasExpectedPinterestDestination,
+  sameInstant,
   validateApplyPreflight,
   validateApplyResultCount,
   type ExistingDraft,
@@ -113,7 +115,7 @@ async function main() {
       if (alreadyApplied) continue;
       const updatedAt = new Date().toISOString();
       const mergedPayload = mergeApplyPayload(current.payload, patch.set.payload, updatedAt);
-      const updated = await db.from("pin_drafts").update({ payload: mergedPayload, status: "ready", updated_at: updatedAt, scheduled_at: patch.set.scheduled_at, publish_claimed_at: null }).eq("vibepin_user_id", current.userId).eq("draft_id", patch.draftId).eq("updated_at", patch.expected.updatedAt).eq("status", patch.expected.status).is("scheduled_at", null).select("draft_id");
+      const updated = await db.from("pin_drafts").update({ payload: mergedPayload, status: "ready", updated_at: updatedAt, scheduled_at: patch.set.scheduled_at, publish_claimed_at: null }).eq("vibepin_user_id", current.userId).eq("draft_id", patch.draftId).eq("updated_at", patch.expected.updatedAt).eq("status", patch.expected.status).is("scheduled_at", null).is("publish_claimed_at", null).select("draft_id");
       if (updated.error) throw updated.error;
       validateApplyResultCount(updated.data?.length ?? 0, patch.draftId);
       updateResults.push({ draftId: patch.draftId, updatedAt });
@@ -124,7 +126,7 @@ async function main() {
     const verifyFailures: string[] = [];
     for (const patch of document.patches) {
       const item = afterById.get(patch.draftId); const payload = item?.payload as ExistingDraft["payload"] | undefined;
-      if (!item || String(item.status) !== "ready" || item.publish_claimed_at !== null || String(item.scheduled_at ?? "") !== patch.set.scheduled_at || payload?.updatedAt !== item.updated_at || payload?.targetConnectionId !== CONNECTION_ID || payload?.targetAccountLabel !== ACCOUNT_LABEL || payload?.boardId !== patch.set.payload.boardId || payload?.boardName !== patch.set.payload.boardName || payload?.title !== patch.set.payload.title || payload?.description !== patch.set.payload.description || payload?.destinationUrl !== patch.set.payload.destinationUrl) verifyFailures.push(`${patch.draftId}: post_apply_mismatch`);
+      if (!item || String(item.status) !== "ready" || item.publish_claimed_at !== null || !sameInstant(String(item.scheduled_at ?? ""), patch.set.scheduled_at) || !sameInstant(String(payload?.updatedAt ?? ""), String(item.updated_at ?? "")) || payload?.targetConnectionId !== CONNECTION_ID || payload?.targetAccountLabel !== ACCOUNT_LABEL || payload?.boardId !== patch.set.payload.boardId || payload?.boardName !== patch.set.payload.boardName || payload?.title !== patch.set.payload.title || payload?.description !== patch.set.payload.description || payload?.destinationUrl !== patch.set.payload.destinationUrl || !hasExpectedPinterestDestination(payload ?? {}, String(patch.set.payload.boardId)) || payload?.media?.some((media) => media.id === patch.expected.mediaId && media.url === patch.expected.mediaUrl) !== true) verifyFailures.push(`${patch.draftId}: post_apply_mismatch`);
     }
     writeFileSync(executionPath, `# Cheerish Preview apply execution\n\n- Confirmation: exact\n- Writes performed: ${updateResults.length}\n- Post-apply failures: ${verifyFailures.length}\n- Before snapshot: ${beforePath}\n\n${verifyFailures.length ? verifyFailures.map((failure) => `- ${failure}`).join("\n") : "All 62 rows re-read and verified."}\n`, "utf8");
     console.log(JSON.stringify({ ok: verifyFailures.length === 0, mode: "apply", writesPerformed: updateResults.length, verifyFailures, beforePath, executionPath }, null, 2));
