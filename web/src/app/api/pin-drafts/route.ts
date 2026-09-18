@@ -31,6 +31,7 @@ import {
   buildScheduleColumns,
   buildScheduledAt,
   blockedScheduleDestinations,
+  classifyMissingColumnError,
   requiredScheduleDestinations,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
@@ -44,6 +45,7 @@ const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 100;
 const MAX_PAYLOAD_BYTES = 200 * 1024; // 200KB per draft payload
 const MAX_DRAFTS_PER_USER = 500;      // mirror of pinDraftStore MAX_DRAFTS
+const MAX_MISSING_COLUMN_RETRIES = 2;
 
 type IncomingDraft = { draftId: string; updatedAt: string; payload: Record<string, unknown> };
 type DraftSyncOutcome = {
@@ -484,20 +486,38 @@ export async function PUT(req: Request) {
 
     let { error: writeError, matched } = await attempt();
 
-    // v41/v42 not applied yet: strip the promoted columns and retry once so the base
-    // draft sync keeps working unchanged until the migration lands. A single missing
-    // column raises PGRST204 for whichever column PostgREST checks first, so latch BOTH
-    // uncertain sets on any missing-column error and strip both before the retry — the
-    // one that actually exists is simply re-derived and re-added on the next request
-    // after a restart (the latches self-heal on redeploy). Unchanged by the CAS: the
-    // retry re-runs the SAME predicate, so it cannot smuggle a blind write back in.
-    if (writeError && (!_promotedColumnsMissing || !_scheduleColumnsMissing) && isMissingColumnError(writeError)) {
-      _promotedColumnsMissing = true;
-      _scheduleColumnsMissing = true;
-      for (const r of rows) {
-        for (const key of PROMOTED_COLUMN_KEYS) delete r.row[key];
-        for (const key of SCHEDULE_COLUMN_KEYS) delete r.row[key];
+    // v41/v42 may be deployed independently. Identify the missing group when
+    // PostgREST names the column, and keep the other promoted group on the retry.
+    // A bare PGRST204 is ambiguous, so fall back in a bounded order: creative
+    // first, then schedule only if the second write still reports a missing
+    // column. Each retry re-runs the SAME CAS predicate.
+    let missingColumnRetries = 0;
+    while (
+      writeError
+      && isMissingColumnError(writeError)
+      && missingColumnRetries < MAX_MISSING_COLUMN_RETRIES
+    ) {
+      const classified = classifyMissingColumnError(writeError);
+      const group = classified === "unknown"
+        ? (!_promotedColumnsMissing ? "promoted" : !_scheduleColumnsMissing ? "schedule" : null)
+        : classified;
+
+      if (!group) break;
+      if (group === "promoted") {
+        if (_promotedColumnsMissing) break;
+        _promotedColumnsMissing = true;
+        for (const r of rows) {
+          for (const key of PROMOTED_COLUMN_KEYS) delete r.row[key];
+        }
+      } else {
+        if (_scheduleColumnsMissing) break;
+        _scheduleColumnsMissing = true;
+        for (const r of rows) {
+          for (const key of SCHEDULE_COLUMN_KEYS) delete r.row[key];
+        }
       }
+
+      missingColumnRetries++;
       ({ error: writeError, matched } = await attempt());
     }
 

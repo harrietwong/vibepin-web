@@ -32,6 +32,7 @@ import assert from "node:assert/strict";
 import Module from "node:module";
 import fs from "node:fs";
 import path from "node:path";
+import { buildScheduledAt } from "../src/app/api/pin-drafts/promote";
 
 let passed = 0;
 async function test(name: string, fn: () => Promise<void> | void) {
@@ -60,6 +61,7 @@ type Row = {
 
 let table: Row[] = [];
 let log: string[] = [];
+let writePayloads: Array<Record<string, unknown>> = [];
 let meterCalls: string[] = [];
 let allowanceAllowed = true;
 const unavailableDraftIds = new Set<string>();
@@ -67,15 +69,19 @@ const unavailableDraftIds = new Set<string>();
 let beforeWrite: (() => void) | null = null;
 /** 下一次 insert 强制返回 23505(有人抢先建了这一行)。 */
 let forceUniqueViolation = false;
+/** 模拟 PostgREST 在写入时发现某个 promoted column 不存在。 */
+let missingWriteErrors: Array<{ code: string; message: string }> = [];
 
 function resetDb() {
   table = [];
   log = [];
+  writePayloads = [];
   meterCalls = [];
   allowanceAllowed = true;
   unavailableDraftIds.clear();
   beforeWrite = null;
   forceUniqueViolation = false;
+  missingWriteErrors = [];
 }
 
 type Filter = { op: "eq" | "is" | "in"; col: string; value: unknown };
@@ -111,6 +117,9 @@ function makeBuilder(tableName: string) {
   const runWrite = () => {
     beforeWrite?.();
     beforeWrite = null;
+    writePayloads.push(...payloadRows.map(row => ({ ...row })));
+    const missingWriteError = missingWriteErrors.shift();
+    if (missingWriteError) return { data: null, error: missingWriteError };
     if (mode === "insert" || mode === "upsert") {
       for (const r of payloadRows) {
         const clash = table.find(t => t.vibepin_user_id === r.vibepin_user_id && t.draft_id === r.draft_id);
@@ -557,6 +566,53 @@ async function main() {
       ["scheduled-good", "applied", ""],
       ["scheduled-bad", "rejected", "destination_not_schedulable"],
     ]);
+  });
+
+  // ── 5) Missing-column fallback keeps the two promoted groups independent ──
+  console.log("\n=== 5) PGRST204: v41 creative 缺列不得吞掉 scheduled_at ===");
+
+  await test("v41 creative missing: retry still carries scheduled_at", async () => {
+    resetDb();
+    missingWriteErrors = [{
+      code: "PGRST204",
+      message: "Could not find the 'image_analysis' column of 'pin_drafts' in the schema cache",
+    }];
+
+    const res = await route.PUT(putRequest([{
+      draftId: "v41-missing",
+      updatedAt: "2026-09-01T12:00:00.000Z",
+      payload: scheduled("v41-missing", "pinterest", "pin-v41"),
+    }]));
+
+    assert.equal(res.status, 200, "v41 fallback should still persist the base draft");
+    assert.equal(writePayloads.length, 2, "one failed write plus one creative-only retry");
+    assert.ok("scheduled_at" in writePayloads[0], "the first write attempts the schedule column");
+    assert.ok("scheduled_at" in writePayloads[1],
+      "a v41 missing-column retry must keep scheduled_at so cron can see the planned pin");
+    for (const key of ["image_analysis", "recommended_keywords", "creative_selections"]) {
+      assert.ok(!(key in writePayloads[1]), `creative retry must strip ${key}`);
+    }
+    assert.equal(table[0].scheduled_at, buildScheduledAt(scheduled("v41-missing", "pinterest", "pin-v41")),
+      "the scheduled_at column must be persisted when only v41 is missing");
+  });
+
+  await test("ambiguous missing-column errors stop after the bounded fallback attempts", async () => {
+    resetDb();
+    missingWriteErrors = [
+      { code: "PGRST204", message: "schema cache mismatch" },
+      { code: "PGRST204", message: "schema cache mismatch" },
+      { code: "PGRST204", message: "schema cache mismatch" },
+    ];
+
+    const res = await route.PUT(putRequest([{
+      draftId: "ambiguous-missing",
+      updatedAt: "2026-09-01T12:00:00.000Z",
+      payload: draftPayload("ambiguous-missing", "2026-09-01T12:00:00.000Z"),
+    }]));
+
+    assert.equal(res.status, 503, "an unresolved schema error should surface instead of looping");
+    assert.equal(writePayloads.length, 2, "creative then schedule fallback is bounded to two retries");
+    assert.equal(table.length, 0, "failed missing-column writes must not partially persist");
   });
 
   console.log(`\n${passed} passed`);

@@ -8,11 +8,14 @@
  */
 
 import assert from "node:assert";
+import fs from "node:fs";
+import path from "node:path";
 import {
   buildImageAnalysis,
   buildRecommendedKeywords,
   buildCreativeSelections,
   buildPromotedColumns,
+  classifyMissingColumnError,
   PROMOTED_COLUMN_KEYS,
 } from "../src/app/api/pin-drafts/promote";
 
@@ -85,6 +88,25 @@ test("buildPromotedColumns: always returns the three keys", () => {
 
 test("PROMOTED_COLUMN_KEYS matches the column set (used by the missing-column fallback)", () => {
   assert.deepEqual([...PROMOTED_COLUMN_KEYS].sort(), ["creative_selections", "image_analysis", "recommended_keywords"]);
+});
+
+test("missing-column fallback classifies creative, schedule, and ambiguous errors separately", () => {
+  const src = fs.readFileSync(path.join(__dirname, "../src/app/api/pin-drafts/promote.ts"), "utf8");
+  assert.match(src, /export function classifyMissingColumnError/,
+    "the fallback needs a shared classifier instead of latching both column groups");
+  assert.match(src, /image_analysis[\s\S]*recommended_keywords[\s\S]*creative_selections/,
+    "creative column names must be recognized as one group");
+  assert.match(src, /scheduled_at/,
+    "scheduled_at must have its own missing-column group");
+  assert.equal(classifyMissingColumnError({
+    code: "PGRST204",
+    message: "Could not find the 'image_analysis' column of 'pin_drafts' in the schema cache",
+  }), "promoted");
+  assert.equal(classifyMissingColumnError({
+    code: "PGRST204",
+    message: "Could not find the 'scheduled_at' column of 'pin_drafts' in the schema cache",
+  }), "schedule");
+  assert.equal(classifyMissingColumnError({ code: "PGRST204", message: "schema cache mismatch" }), "unknown");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

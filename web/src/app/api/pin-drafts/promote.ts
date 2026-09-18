@@ -273,6 +273,22 @@ export function buildScheduleColumns(payload: Record<string, unknown>): Promoted
 /** Keys added by buildScheduleColumns — stripped on the v42 missing-column fallback. */
 export const SCHEDULE_COLUMN_KEYS: Array<keyof PromotedScheduleColumns> = ["scheduled_at"];
 
+export type MissingColumnGroup = "promoted" | "schedule" | "unknown";
+
+/**
+ * Identify which optional pin_drafts column group a PostgREST missing-column
+ * error belongs to. A bare PGRST204 has no column name, so callers must use the
+ * safe, bounded creative-then-schedule fallback for `unknown`.
+ */
+export function classifyMissingColumnError(
+  err: { code?: string; message?: string } | null,
+): MissingColumnGroup {
+  const message = (err?.message ?? "").toLowerCase();
+  if (PROMOTED_COLUMN_KEYS.some(key => message.includes(key))) return "promoted";
+  if (SCHEDULE_COLUMN_KEYS.some(key => message.includes(key))) return "schedule";
+  return "unknown";
+}
+
 // ── Schedulable-destination rule ─────────────────────────────────────────────
 /**
  * The destinations a payload asks to publish to, restricted to real providers.
