@@ -11,7 +11,7 @@ const TEST_USER_ID = "988ca85e-923b-4771-840f-d5c0520c6d88";
 const TEST_WORKSPACE = "default";
 
 type VideoMockOptions = {
-  failOrdinal?: number;
+  failFinalizeCall?: number;
   hangUpload?: boolean;
   appearanceTheme?: "dark" | "light";
 };
@@ -152,7 +152,7 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
     const body = JSON.parse(route.request().postData() ?? "{}") as { ordinal?: number };
     const ordinal = Number(body.ordinal ?? 0);
     state.finalizeCalls.push(ordinal);
-    if (options.failOrdinal === ordinal && state.finalizeCalls.filter(value => value === ordinal).length === 1) {
+    if (options.failFinalizeCall === state.finalizeCalls.length) {
       await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ code: "video_upload_failed" }) });
       return;
     }
@@ -175,7 +175,11 @@ async function installVideoMocks(page: Page, options: VideoMockOptions = {}): Pr
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/storage-media**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "video/mp4", body: VIDEO });
+    const range = route.request().headers().range?.match(/^bytes=(\d+)-(\d*)$/);
+    const start = range ? Number(range[1]) : 0;
+    const end = range?.[2] ? Math.min(Number(range[2]), VIDEO.length - 1) : VIDEO.length - 1;
+    await route.fulfill({ status: range ? 206 : 200, contentType: "video/mp4", body: VIDEO.subarray(start, end + 1),
+      headers: { "accept-ranges": "bytes", "content-length": String(end - start + 1), ...(range ? { "content-range": `bytes ${start}-${end}/${VIDEO.length}` } : {}) } });
   });
   await page.route("**/api/storage-image**", async (route) => {
     await route.fulfill({ status: 200, contentType: "image/png", body: IMAGE });
@@ -209,13 +213,126 @@ function video(name: string) {
 test.describe("video batch upload (fully mocked)", () => {
   test.describe.configure({ timeout: 90_000 });
 
+  test("cover frame dialog cancels without mutation and confirms a captured replacement", async ({ page }) => {
+    await installVideoMocks(page);
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    await page.getByTestId("board-upload-input").setInputFiles([video("cover.mp4")]);
+    const card = page.getByTestId("pin-board-card");
+    await expect(card).toHaveCount(1, { timeout: 30000 });
+    const readCover = () => page.evaluate(() => {
+      const entry = Object.entries(localStorage).find(([key]) => key.startsWith("vp:pin_drafts:v2:") && !key.includes("migrated"));
+      return entry ? Object.values(JSON.parse(entry[1]).drafts)[0] as { imageUrl: string; media: Array<{ posterUrl?: string; coverFrameTimeMs?: number }> } : null;
+    });
+    const before = await readCover();
+    let replacements = 0;
+    let cleanupCalls = 0;
+    let failUpload = true;
+    await page.route("**/api/studio/upload/cleanup", async route => { cleanupCalls++; await route.fulfill({ status: 200, body: "{}" }); });
+    await page.route("**/api/studio/upload", async route => {
+      replacements++;
+      const body = route.request().postDataBuffer()!.toString("latin1");
+      expect(body).not.toContain('name="videoBatchId"');
+      expect(body).not.toContain('name="videoOrdinal"');
+      if (failUpload) { await route.fulfill({ status: 500, body: '{"code":"upload_failed"}' }); return; }
+      const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fselected.jpg`;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/selected.jpg` }) });
+    });
+    const choose = card.getByRole("button", { name: "Choose cover frame", exact: true });
+    await choose.click();
+    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    await expect(dialog).toBeVisible();
+    const preview = dialog.locator("video");
+    await expect(preview).toBeVisible();
+    await expect(preview).toHaveJSProperty("controls", false);
+    await expect(preview).toHaveJSProperty("paused", true);
+    await page.evaluate(() => {
+      const captured: number[] = [];
+      (window as unknown as { coverCaptureTimes: number[] }).coverCaptureTimes = captured;
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      CanvasRenderingContext2D.prototype.drawImage = function (...args: unknown[]) {
+        if (args[0] instanceof HTMLVideoElement) captured.push(args[0].currentTime);
+        return Reflect.apply(drawImage, this, args);
+      };
+    });
+    const slider = dialog.getByRole("slider", { name: "Cover frame time" });
+    await slider.fill("1250");
+    await slider.focus();
+    await slider.press("ArrowRight");
+    await expect(slider).toHaveValue("1251");
+    await expect.poll(() => preview.evaluate(video => (video as HTMLVideoElement).currentTime)).toBe(1.251);
+    await slider.press("ArrowLeft");
+    await expect(slider).toHaveValue("1250");
+    await expect.poll(() => preview.evaluate(video => (video as HTMLVideoElement).currentTime)).toBe(1.25);
+    await preview.click();
+    await expect(preview).toHaveJSProperty("paused", true);
+    expect(await readCover()).toEqual(before);
+    expect(replacements).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(choose).toBeFocused();
+    expect(await readCover()).toEqual(before);
+    await choose.click();
+    await slider.fill("1250");
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText("retry");
+    expect(await readCover()).toEqual(before);
+    failUpload = false;
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    expect((await readCover())!.media[0].coverFrameTimeMs).toBe(1250);
+    expect((await readCover())!.imageUrl).toContain("selected.jpg");
+    await expect(card.getByTestId("content-media-video").first()).toHaveAttribute("poster", /selected\.jpg/);
+    expect(replacements).toBe(2);
+    expect(cleanupCalls).toBe(0);
+    expect(await page.evaluate(() => (window as unknown as { coverCaptureTimes: number[] }).coverCaptureTimes)).toEqual([1.25, 1.25]);
+  });
+
+  test("cover frame dialog unmount during upload preserves the previous cover", async ({ page }) => {
+    await installVideoMocks(page);
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    await page.getByTestId("board-upload-input").setInputFiles([video("unmount-cover.mp4")]);
+    const card = page.getByTestId("pin-board-card");
+    await expect(card).toHaveCount(1, { timeout: 30000 });
+    const readCover = () => page.evaluate(() => {
+      const entry = Object.entries(localStorage).find(([key]) => key.startsWith("vp:pin_drafts:v2:") && !key.includes("migrated"));
+      return entry ? Object.values(JSON.parse(entry[1]).drafts)[0] : null;
+    });
+    const before = await readCover();
+    let releaseUpload = () => {};
+    let uploadStarted = false;
+    const gate = new Promise<void>(resolve => { releaseUpload = resolve; });
+    await page.route("**/api/studio/upload", async route => {
+      uploadStarted = true;
+      await gate;
+      const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fabandoned.jpg`;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/abandoned.jpg` }) });
+    });
+    await card.getByRole("button", { name: "Choose cover frame", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    await dialog.getByRole("slider", { name: "Cover frame time" }).fill("1250");
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect.poll(() => uploadStarted).toBe(true);
+    // Programmatic navigation simulates a parent route unmount while the modal
+    // blocks ordinary outside clicks. Keep the same JS runtime and pending request.
+    await page.getByRole("link", { name: "My Pins", exact: true }).evaluate(link => (link as HTMLElement).click());
+    await expect(dialog).not.toBeVisible({ timeout: 45000 });
+    const response = page.waitForResponse(r => r.url().endsWith("/api/studio/upload"));
+    releaseUpload();
+    await (await response).finished();
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
+    expect(await readCover()).toEqual(before);
+    await expect(page.getByRole("alert").filter({ hasText: "Could not save this cover" })).toHaveCount(0);
+  });
+
   test("selecting multiple videos creates independent video drafts", async ({ page }) => {
     await installVideoMocks(page);
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([video("alpha.mp4"), video("beta.mp4")]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("completed", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
     const cards = page.getByTestId("pin-board-card");
     await expect(cards).toHaveCount(2, { timeout: 20_000 });
     await expect(cards.nth(0).getByTestId("content-media-video").first()).toBeVisible();
@@ -231,7 +348,7 @@ test.describe("video batch upload (fully mocked)", () => {
   });
 
   test("mixed selection keeps image separate and exposes partial failure with retry", async ({ page }) => {
-    const state = await installVideoMocks(page, { failOrdinal: 1 });
+    const state = await installVideoMocks(page, { failFinalizeCall: 2 });
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([
@@ -240,13 +357,13 @@ test.describe("video batch upload (fully mocked)", () => {
       video("needs-retry.mp4"),
     ]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("partial", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 1 · Failed 1", { timeout: 30_000 });
     await expect(page.getByTestId("video-upload-retry")).toBeVisible();
     await expect(page.getByTestId("pin-board-card")).toHaveCount(2, { timeout: 20_000 });
-    expect(state.uploadCalls).toEqual(expect.arrayContaining([0, 1]));
+    expect(state.uploadCalls).toEqual([0, 0]);
 
     await page.getByTestId("video-upload-retry").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("completed", { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(3, { timeout: 20_000 });
   });
 
@@ -257,9 +374,23 @@ test.describe("video batch upload (fully mocked)", () => {
     await page.getByTestId("board-upload-input").setInputFiles([video("cancel-me.mp4")]);
     await expect(page.getByTestId("video-upload-cancel")).toBeVisible({ timeout: 30_000 });
     await page.getByTestId("video-upload-cancel").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("cancelled", { timeout: 15_000 });
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 1", { timeout: 15_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
     expect(state.finalizeCalls).toEqual([]);
+  });
+
+  test("keeps the picker enabled and appends a later selection while uploads are active", async ({ page }) => {
+    await installVideoMocks(page, { hangUpload: true });
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    const input = page.getByTestId("board-upload-input");
+    await input.setInputFiles([video("first.mp4")]);
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 1", { timeout: 30_000 });
+    await expect(input).toBeEnabled();
+    await input.setInputFiles([video("second.mp4")]);
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 2", { timeout: 30_000 });
+    await page.getByTestId("video-upload-cancel-all").click();
+    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 2", { timeout: 15_000 });
   });
 
   test("reload recovers a finalized receipt into its original owner draft", async ({ page }) => {

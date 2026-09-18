@@ -157,6 +157,7 @@ export type PublishConfirmationFingerprintInput = {
     height?: number | null;
     durationMs?: number | null;
     posterUrl?: string | null;
+    coverFrameTimeMs?: number;
     altText?: string | null;
   }>;
   mode: PublishConfirmationMode;
@@ -198,6 +199,7 @@ export function publishConfirmationFingerprint(input: PublishConfirmationFingerp
           height: item.height ?? null,
           durationMs: item.durationMs ?? null,
           posterUrl: item.posterUrl?.trim() || null,
+          ...(item.coverFrameTimeMs !== undefined ? { coverFrameTimeMs: item.coverFrameTimeMs } : {}),
           altText: item.altText?.trim() || null,
         }
       // Byte-for-byte compatibility with the pre-video identity is deliberate:
@@ -317,6 +319,7 @@ export function buildPublishConfirmation(
       ...(item.kind === "video" ? {
         durationMs: item.durationMs ?? null,
         posterUrl: item.posterUrl?.trim() || null,
+        ...(item.coverFrameTimeMs !== undefined ? { coverFrameTimeMs: item.coverFrameTimeMs } : {}),
         altText: item.altText?.trim() || null,
       } : {}),
     })),
@@ -373,6 +376,7 @@ export function receiptMatchesDispatch(receipt: ConfirmedPublishReceipt, draft: 
   const sameRevision = receipt.sourceUpdatedAt === draft.updatedAt
     || draft.publishIntentFingerprint === receipt.fingerprint;
   if (receipt.draftId !== draft.id || !sameRevision || !receipt.publishableDestinations.length) return false;
+  if (publishConfirmationFingerprint({ ...receipt, media: contentMedia(draft) }) !== receipt.fingerprint) return false;
   const confirmedAt = Date.parse(receipt.confirmedAt);
   if (!Number.isFinite(confirmedAt)) return false;
   const ids = new Set(receipt.publishableDestinations.map(destination => destination.id));

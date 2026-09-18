@@ -14,10 +14,11 @@
  * so chips are labeled "Recommended Pinterest keywords" — NEVER "Trending".
  */
 
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { isBusyKey, runWithBusyGuard, subscribeBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
@@ -89,6 +90,8 @@ export type PinAICopyPanelProps = {
   compact?: boolean;
   /** Called just before a generate run — e.g. to flush pending manual edits. */
   onBeforeGenerate?: () => void;
+  /** Reports the request lifetime to a host that must prevent remounting this panel. */
+  onBusyChange?: (busy: boolean) => void;
   onApplyCopy: (result: PinAICopyResult) => void;
   /**
    * Sibling action rendered in the SAME row as Generate copy (e.g. Create Pins'
@@ -99,7 +102,7 @@ export type PinAICopyPanelProps = {
 };
 
 /** Imperative handle so a host (e.g. per-field regen buttons) can trigger a run. */
-export type PinAICopyPanelHandle = { generate: () => void };
+export type PinAICopyPanelHandle = { generate: () => void; isBusy: () => boolean };
 
 type Stage = "idle" | "analyzing" | "generating" | "checking" | "done" | "error";
 
@@ -123,8 +126,15 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [generatedThisSession, setGeneratedThisSession] = useState(false);
+  const busyRef = useRef(false);
+  const subscribeToDraftBusy = useCallback(
+    (listener: () => void) => subscribeBusyKey(props.draftId, listener),
+    [props.draftId],
+  );
+  const readDraftBusy = useCallback(() => isBusyKey(props.draftId), [props.draftId]);
+  const sharedDraftBusy = useSyncExternalStore(subscribeToDraftBusy, readDraftBusy, () => false);
 
-  const busy = stage === "analyzing" || stage === "generating" || stage === "checking";
+  const busy = sharedDraftBusy || stage === "analyzing" || stage === "generating" || stage === "checking";
   const isRegen = props.hasGeneratedBefore || generatedThisSession || stage === "done";
   const analysisReady = props.analysisStatus === "ready";
 
@@ -141,6 +151,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
     if (stage === "done") return tr("pinForm.copyGenerated");
     return "";
   }, [stage, analysisReady, tr]);
+  const visibleProgressLabel = progressLabel || (sharedDraftBusy ? tr("pinForm.writingCopy") : "");
 
   // PRD 7.3 fill-in-the-blank: both fields already have text → this run, once it
   // completes, will overwrite user-written copy. Computed from current props so the
@@ -148,85 +159,87 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const willReplaceExisting = !!props.title?.trim() && !!props.description?.trim();
 
   const runGenerate = useCallback(async (confirmedReplace: boolean) => {
-    setErrorMsg("");
-    props.onBeforeGenerate?.();
-    try {
-      const language = props.language ?? readResolvedContentLanguage();
-      const res = await generatePinterestPinCopy({
-        draftId: props.draftId,
-        imageUrl: props.imageUrl,
-        title: props.title,
-        description: props.description,
-        boardId: props.boardId,
-        boardName: props.boardName,
-        category: props.category,
-        keyword: props.keyword,
-        destinationUrl: props.destinationUrl,
-        setupSnapshot: props.setupSnapshot,
-        promptSnapshot: props.promptSnapshot,
-        opportunity: props.opportunity,
-        recommendedKeywords: props.recommendedKeywords,
-        boards: props.boards,
-        language,
-        length: FIXED_LENGTH,
-        mode: isRegen ? "regenerate" : "initial",
-        onStage: setStage,
-      });
-      props.onApplyCopy({
-        title: res.fields.title,
-        description: res.fields.description,
-        altText: res.fields.altText,
-        tags: res.tags,
-        destinationUrl: res.fields.destinationUrl,
-        metadataDraft: res.metadataDraft,
-        context: res.context,
-        confirmedReplace,
-      });
-      setResult({
-        summary: res.context.contextSummary,
-        imageSummary: res.context.imageSummary,
-        recommendedKeywords: res.context.recommendedKeywords ?? [],
-        boardName: res.context.boardName ?? undefined,
-        aiCopyV2: res.context.aiCopyV2,
-      });
-      setStage("done");
-      setGeneratedThisSession(true);
-      toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
-    } catch (err) {
-      const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
-      setErrorMsg(msg);
-      setStage("error");
-      // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user
-      // did anything wrong to cause. Softened to the NEUTRAL toast severity, matching
-      // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
-      // Reuses the existing rate-limit strings (translated in all 20 locales) rather
-      // than the raw server message.
-      if (isTextLimitReachedError(err)) {
-        // The plan's AI text allowance is spent (PRD v3.2 §6.4). Waiting does not fix
-        // it, so this gets the PRD's upgrade sentence and a Billing link rather than
-        // the "service busy" wording used for the 429 below. Neutral severity: the
-        // user did nothing wrong. Shown ONCE per attempt, like every other branch here.
-        const limitMsg = tr("studioBoard.limit.text.allUsed");
-        setErrorMsg(limitMsg);
-        toast.message(limitMsg, {
-          action: {
-            label: tr("studioBoard.limit.upgradeCta"),
-            onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
-          },
+    if (props.disabled) return;
+    await runWithBusyGuard(busyRef, props.onBusyChange, props.onBeforeGenerate, async () => {
+      setErrorMsg("");
+      try {
+        const language = props.language ?? readResolvedContentLanguage();
+        const res = await generatePinterestPinCopy({
+          draftId: props.draftId,
+          imageUrl: props.imageUrl,
+          title: props.title,
+          description: props.description,
+          boardId: props.boardId,
+          boardName: props.boardName,
+          category: props.category,
+          keyword: props.keyword,
+          destinationUrl: props.destinationUrl,
+          setupSnapshot: props.setupSnapshot,
+          promptSnapshot: props.promptSnapshot,
+          opportunity: props.opportunity,
+          recommendedKeywords: props.recommendedKeywords,
+          boards: props.boards,
+          language,
+          length: FIXED_LENGTH,
+          mode: isRegen ? "regenerate" : "initial",
+          onStage: setStage,
         });
-      } else if (isRateLimitError(err)) {
-        toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
-      } else {
-        toast.error(msg);
+        props.onApplyCopy({
+          title: res.fields.title,
+          description: res.fields.description,
+          altText: res.fields.altText,
+          tags: res.tags,
+          destinationUrl: res.fields.destinationUrl,
+          metadataDraft: res.metadataDraft,
+          context: res.context,
+          confirmedReplace,
+        });
+        setResult({
+          summary: res.context.contextSummary,
+          imageSummary: res.context.imageSummary,
+          recommendedKeywords: res.context.recommendedKeywords ?? [],
+          boardName: res.context.boardName ?? undefined,
+          aiCopyV2: res.context.aiCopyV2,
+        });
+        setStage("done");
+        setGeneratedThisSession(true);
+        toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
+      } catch (err) {
+        const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
+        setErrorMsg(msg);
+        setStage("error");
+        // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user
+        // did anything wrong to cause. Softened to the NEUTRAL toast severity, matching
+        // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
+        // Reuses the existing rate-limit strings (translated in all 20 locales) rather
+        // than the raw server message.
+        if (isTextLimitReachedError(err)) {
+          // The plan's AI text allowance is spent (PRD v3.2 §6.4). Waiting does not fix
+          // it, so this gets the PRD's upgrade sentence and a Billing link rather than
+          // the "service busy" wording used for the 429 below. Neutral severity: the
+          // user did nothing wrong. Shown ONCE per attempt, like every other branch here.
+          const limitMsg = tr("studioBoard.limit.text.allUsed");
+          setErrorMsg(limitMsg);
+          toast.message(limitMsg, {
+            action: {
+              label: tr("studioBoard.limit.upgradeCta"),
+              onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
+            },
+          });
+        } else if (isRateLimitError(err)) {
+          toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
+        } else {
+          toast.error(msg);
+        }
       }
-    }
+    }, props.draftId);
   }, [isRegen, props, tr]);
 
   // Entry point used by the button + the imperative handle. Gates on the fill-in-
   // the-blank rule: if both title and description already have text, ask first
   // instead of silently overwriting what the user wrote.
   const generate = useCallback(() => {
-    if (busy || props.disabled) return;
+    if (busyRef.current || busy || props.disabled) return;
     if (willReplaceExisting) { setConfirmOpen(true); return; }
     void runGenerate(false);
   }, [busy, props.disabled, willReplaceExisting, runGenerate]);
@@ -236,7 +249,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
     void runGenerate(true);
   }, [runGenerate]);
 
-  useImperativeHandle(ref, () => ({ generate }), [generate]);
+  useImperativeHandle(ref, () => ({ generate, isBusy: () => busyRef.current || busy }), [generate, busy]);
 
   const showPreStrip = (stage === "idle") && (props.analysisStatus === "pending" || props.analysisStatus === "ready");
 
@@ -255,7 +268,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
             ? { flex: "0 0 auto", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: "#7C3AED", fontSize: 10.5, fontWeight: 700, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }
             : { flex: props.actionsSlot ? "0 1 auto" : "1 1 160px", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }}>
           {busy ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Sparkles style={{ width: 13, height: 13 }} />}
-          {busy ? progressLabel : tr("pinForm.generateCopy")}
+          {busy ? visibleProgressLabel : tr("pinForm.generateCopy")}
         </button>
         {props.actionsSlot}
       </div>
@@ -309,7 +322,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
             {busy && <Loader2 style={{ width: 12, height: 12, color: "#7C3AED" }} className="animate-spin" />}
             {stage === "done" && <Check style={{ width: 12, height: 12, color: P.success }} />}
             <span style={{ flex: 1, fontSize: 11.5, fontWeight: 750, color: stage === "error" ? P.error : P.text }}>
-              {stage === "error" ? (errorMsg || tr("pinForm.copyGenerationFailed")) : progressLabel}
+              {stage === "error" ? (errorMsg || tr("pinForm.copyGenerationFailed")) : visibleProgressLabel}
             </span>
           </div>
           {stage === "done" && result?.summary && (

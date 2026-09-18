@@ -3,7 +3,51 @@ import {
   MAX_VIDEO_UPLOAD_ITEMS,
 } from "@/lib/videoUploadLimits";
 
-export const VIDEO_BATCH_UPLOAD_CONCURRENCY = 2;
+export const VIDEO_BATCH_UPLOAD_CONCURRENCY = 3;
+type GlobalVideoUploadSlotWaiter = {
+  signal: AbortSignal;
+  resolve: (release: (() => void) | undefined) => void;
+  onAbort: () => void;
+};
+let globalVideoUploadSlots = 0;
+const globalVideoUploadSlotWaiters: GlobalVideoUploadSlotWaiter[] = [];
+
+function drainGlobalVideoUploadSlots(): void {
+  while (globalVideoUploadSlots < VIDEO_BATCH_UPLOAD_CONCURRENCY && globalVideoUploadSlotWaiters.length) {
+    const waiter = globalVideoUploadSlotWaiters.shift()!;
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    if (waiter.signal.aborted) {
+      waiter.resolve(undefined);
+      continue;
+    }
+    globalVideoUploadSlots++;
+    let released = false;
+    waiter.resolve(() => {
+      if (released) return;
+      released = true;
+      globalVideoUploadSlots--;
+      drainGlobalVideoUploadSlots();
+    });
+  }
+}
+
+function acquireGlobalVideoUploadSlot(signal: AbortSignal): Promise<(() => void) | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise(resolve => {
+    const waiter: GlobalVideoUploadSlotWaiter = {
+      signal,
+      resolve,
+      onAbort: () => {
+        const index = globalVideoUploadSlotWaiters.indexOf(waiter);
+        if (index >= 0) globalVideoUploadSlotWaiters.splice(index, 1);
+        resolve(undefined);
+      },
+    };
+    signal.addEventListener("abort", waiter.onAbort, { once: true });
+    globalVideoUploadSlotWaiters.push(waiter);
+    drainGlobalVideoUploadSlots();
+  });
+}
 const VIDEO_TYPES = new Set(["video/mp4", "video/x-m4v", "video/quicktime"]);
 const EXTENSION_TYPE: Record<string, "video/mp4" | "video/x-m4v" | "video/quicktime"> = {
   mp4: "video/mp4",
@@ -48,6 +92,36 @@ export type VideoBatchState = {
   ownerScope?: { ownerUserId: string; workspaceId: string };
   items: VideoBatchItem[];
   status: VideoBatchStatus;
+};
+
+export type VideoUploadQueueSummary = {
+  active: number;
+  queued: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  total: number;
+};
+
+export type AppendableVideoUploadQueue = {
+  append(items: VideoBatchItem[]): Promise<VideoBatchState>;
+  retry(id: string): Promise<VideoBatchState> | undefined;
+  cancel(id: string): boolean;
+  cancelAll(): void;
+  dispose(): void;
+  getState(): VideoBatchState;
+  getSummary(): VideoUploadQueueSummary;
+};
+
+export type AppendableVideoUploadQueueDependencies = {
+  concurrency?: number;
+  ownerScope?: VideoBatchState["ownerScope"];
+  runItem(
+    item: VideoBatchItem,
+    signal: AbortSignal,
+    onState: (item: VideoBatchItem) => void,
+  ): Promise<VideoBatchItem>;
+  onState?(state: VideoBatchState): void;
 };
 
 export type VideoUploadDescriptor = {
@@ -133,6 +207,187 @@ export function createVideoBatchState(clientBatchId: string, items: VideoBatchIt
     status: "running",
   };
   return { ...state, status: summarizeVideoBatch(state) };
+}
+
+export function summarizeVideoUploadQueue(state: Pick<VideoBatchState, "items">): VideoUploadQueueSummary {
+  let active = 0;
+  let queued = 0;
+  let completed = 0;
+  let failed = 0;
+  let cancelled = 0;
+  for (const item of state.items) {
+    if (item.state === "uploading") active++;
+    else if (item.state === "queued") queued++;
+    else if (item.state === "succeeded") completed++;
+    else if (item.state === "failed") failed++;
+    else cancelled++;
+  }
+  return { active, queued, completed, failed, cancelled, total: state.items.length };
+}
+
+/** Terminal/action rows are bounded by their scroll container, never by truncating data. */
+export function selectVisibleVideoQueueItems(state: Pick<VideoBatchState, "items">): VideoBatchItem[] {
+  return state.items.filter(item => item.state !== "succeeded");
+}
+
+/**
+ * A single page-lifetime FIFO shared by every picker selection. Each scheduler
+ * slot owns one complete per-file operation; runItem normally delegates to
+ * runVideoBatch so its write-ahead recovery and idempotency rules stay intact.
+ */
+export function createAppendableVideoUploadQueue(
+  clientBatchId: string,
+  deps: AppendableVideoUploadQueueDependencies,
+): AppendableVideoUploadQueue {
+  const concurrency = Math.max(1, Math.floor(deps.concurrency ?? VIDEO_BATCH_UPLOAD_CONCURRENCY));
+  let state: VideoBatchState = {
+    clientBatchId,
+    ...(deps.ownerScope ? { ownerScope: deps.ownerScope } : {}),
+    items: [],
+    status: "cancelled",
+  };
+  const pendingIds: string[] = [];
+  const active = new Map<string, AbortController>();
+  const waiters: Array<{ ids: Set<string>; resolve: (state: VideoBatchState) => void }> = [];
+  let disposed = false;
+
+  const itemById = (id: string) => state.items.find(item => item.id === id);
+  const publish = () => {
+    state = { ...state, status: summarizeVideoBatch(state) };
+    deps.onState?.(state);
+    for (let index = waiters.length - 1; index >= 0; index--) {
+      const waiter = waiters[index];
+      const settled = [...waiter.ids].every(id => {
+        const item = itemById(id);
+        return Boolean(item && item.state !== "queued" && item.state !== "uploading" && !active.has(id));
+      });
+      if (!settled) continue;
+      waiters.splice(index, 1);
+      waiter.resolve(state);
+    }
+  };
+  const replaceItem = (next: VideoBatchItem) => {
+    state = {
+      ...state,
+      items: state.items.map(current => {
+        if (current.id !== next.id) return current;
+        if (current.state === "cancelled" || current.state === "succeeded") return current;
+        return {
+          ...next,
+          state: active.has(next.id) && next.state === "queued" ? "uploading" : next.state,
+          draftIdempotencyKey: current.draftIdempotencyKey ?? next.draftIdempotencyKey,
+        };
+      }),
+    };
+    publish();
+  };
+  const waitFor = (ids: string[]) => new Promise<VideoBatchState>(resolve => {
+    waiters.push({ ids: new Set(ids), resolve });
+    publish();
+  });
+
+  const pump = () => {
+    if (disposed) return;
+    while (!disposed && active.size < concurrency && pendingIds.length) {
+      const id = pendingIds.shift()!;
+      const pending = itemById(id);
+      if (!pending || pending.state !== "queued") continue;
+      const controller = new AbortController();
+      active.set(id, controller);
+      state = reduceVideoBatch(state, { type: "uploading", id });
+      publish();
+      const input = { ...itemById(id)!, state: "queued" as const };
+      void (async () => {
+        const releaseSlot = await acquireGlobalVideoUploadSlot(controller.signal);
+        if (!releaseSlot) return { ...input, state: "cancelled" as const };
+        try {
+          return await deps.runItem(input, controller.signal, replaceItem);
+        } finally {
+          releaseSlot();
+        }
+      })()
+        .then(replaceItem)
+        .catch(error => {
+          const current = itemById(id);
+          if (!current || current.state === "cancelled" || current.state === "succeeded") return;
+          state = reduceVideoBatch(state, { type: "failed", id, error: safeVideoBatchError(error) });
+          publish();
+        })
+        .finally(() => {
+          active.delete(id);
+          publish();
+          pump();
+        });
+    }
+  };
+
+  return {
+    append(items) {
+      if (disposed) throw new Error("video_upload_queue_disposed");
+      if (!items.length) return Promise.resolve(state);
+      const existing = new Set(state.items.map(item => item.id));
+      const normalized = createVideoBatchState(clientBatchId, items).items;
+      for (const item of normalized) {
+        if (existing.has(item.id)) throw new Error(`duplicate_video_queue_item:${item.id}`);
+        existing.add(item.id);
+      }
+      state = { ...state, items: [...state.items, ...normalized] };
+      pendingIds.push(...normalized.filter(item => item.state === "queued").map(item => item.id));
+      const settled = waitFor(normalized.map(item => item.id));
+      pump();
+      return settled;
+    },
+    retry(id) {
+      if (disposed) return undefined;
+      const failed = itemById(id);
+      if (!failed || failed.state !== "failed") return undefined;
+      const retry = queueFailedVideoItems(createVideoBatchState(clientBatchId, [failed])).items[0];
+      if (retry.state !== "queued") return undefined;
+      state = { ...state, items: state.items.map(item => item.id === id ? retry : item) };
+      pendingIds.push(id);
+      const settled = waitFor([id]);
+      pump();
+      return settled;
+    },
+    cancel(id) {
+      const current = itemById(id);
+      if (!current || (current.state !== "queued" && current.state !== "uploading")) return false;
+      if (current.finalized || current.attempt?.phase === "finalize_pending") return false;
+      active.get(id)?.abort();
+      state = reduceVideoBatch(state, { type: "cancelled", id });
+      publish();
+      pump();
+      return true;
+    },
+    cancelAll() {
+      for (const item of [...state.items]) {
+        if (item.state !== "queued" && item.state !== "uploading") continue;
+        if (item.finalized || item.attempt?.phase === "finalize_pending") continue;
+        active.get(item.id)?.abort();
+        state = reduceVideoBatch(state, { type: "cancelled", id: item.id });
+      }
+      publish();
+      pump();
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      pendingIds.length = 0;
+      for (const item of [...state.items]) {
+        if (item.state !== "queued" && item.state !== "uploading") continue;
+        const controller = active.get(item.id);
+        // A dispatched finalize/finalized receipt is irreversible and must settle.
+        // A queued retry carrying such a receipt has not started and stays durable
+        // in recovery instead of being pumped by an inaccessible queue.
+        if (controller && (item.finalized || item.attempt?.phase === "finalize_pending")) continue;
+        controller?.abort();
+        state = reduceVideoBatch(state, { type: "cancelled", id: item.id });
+      }
+      publish();
+    },
+    getState: () => state,
+    getSummary: () => summarizeVideoUploadQueue(state),
+  };
 }
 
 export type VideoBatchEvent =

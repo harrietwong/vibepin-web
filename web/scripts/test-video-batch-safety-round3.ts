@@ -39,15 +39,14 @@ async function main() {
     await ui.recover();
     assert.equal(store.getAllDrafts().length, 0, "B must receive no A recovery draft during the await window");
   });
-  await check("mixed-image cancellation releases lock and settles queued videos", async () => {
+  await check("mixed-image cancellation settles its video without blocking a later selection", async () => {
     h.reset(); const images = h.deferred(); let transferred = 0;
     const ui = h.callbacks({ processFiles: async () => images.promise, uploadVideoToSignedStorage: async () => { transferred++; } });
     const first = ui.processMixedVideoSelection([h.photo(), h.file()]);
     ui.cancelVideoBatch(); images.resolve(); await first;
-    const locked = Boolean(ui.operationRef.current);
     await ui.startVideoBatch([h.file("next.mp4")]);
-    assert.equal(locked, false, "cancel must release the mixed-operation lock");
     assert.equal(transferred, 1, "the next user selection must work after cancellation");
+    assert.equal(ui.state()?.items.length, 2, "the aggregate queue retains the cancelled item and the later success");
   });
   await check("cleanup refuses an already referenced uploaded image, even while provenance remains draft", async () => {
     h.reset(); let rows = 0;

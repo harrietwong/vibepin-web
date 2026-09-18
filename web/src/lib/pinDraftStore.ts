@@ -10,6 +10,7 @@
  */
 
 import { writePinProducts, type LinkedProduct, type MetadataTouchedFlags, type PinMetadataDraft } from "./pinMetadata";
+import { isValidCoverFrameTime } from "./videoCoverFrame";
 import * as pinMetadataStore from "./pinMetadataStore";
 import type { SetupSnapshot } from "./studioPersistence";
 import {
@@ -947,7 +948,7 @@ export function completeGeneratedDraft(
  * can never be forgotten by one call site: coverMediaId and the legacy imageUrl
  * are OUTPUTS of the list order, never independent inputs.
  */
-function writeMedia(id: string, draft: PinDraft, media: ContentMedia[]): PinDraft | null {
+function writeMedia(id: string, draft: PinDraft, media: ContentMedia[], updatedAt = new Date().toISOString()): PinDraft | null {
   const cover = media[0];
   if (!cover) return draft; // a Content cannot be left without media
   const data = load();
@@ -956,7 +957,7 @@ function writeMedia(id: string, draft: PinDraft, media: ContentMedia[]): PinDraf
     media,
     coverMediaId: cover.id,
     imageUrl: legacyImageAlias(cover, draft.imageUrl),
-    updatedAt: new Date().toISOString(),
+    updatedAt,
   };
   data.drafts[id] = updated;
   persist(data); emit(); syncPinMetadataStore(updated);
@@ -1037,6 +1038,50 @@ export function removeMedia(id: string, mediaItemId: string): PinDraft | null {
   const next = contentMedia(draft).filter(item => item.id !== mediaItemId);
   if (!next.length) return draft; // a Content cannot be left without media
   return writeMedia(id, draft, next);
+}
+
+/** Atomically replace only a video's poster and chosen frame, retaining all video facts. */
+export function replaceVideoPoster(
+  id: string,
+  mediaItemId: string,
+  patch: { posterUrl: string; coverFrameTimeMs: number },
+): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const media = contentMedia(draft);
+  const selected = media.find(item => item.id === mediaItemId);
+  if (!selected || selected.kind !== "video") return null;
+  if (!patch.posterUrl.trim() || !isValidCoverFrameTime(patch.coverFrameTimeMs, selected.durationMs)) {
+    throw new Error("invalid_cover_frame_time");
+  }
+  // Visual analysis and keyword recommendations describe the old poster identity.
+  // Clear only those derived caches so the next legacy copy request analyzes the
+  // replacement poster; merchant copy and product/Board context stay untouched.
+  const invalidatedDraft: PinDraft = {
+    ...draft,
+    imageAnalysisStatus: undefined,
+    imageAnalysisError: undefined,
+    imageAnalysisErrorCode: undefined,
+    imageAnalysisRetryAfter: undefined,
+    imageAnalysisHttpStatus: undefined,
+    imageAnalysisRequestId: undefined,
+    imageSummary: undefined,
+    visibleObjects: undefined,
+    colors: undefined,
+    style: undefined,
+    ocrText: undefined,
+    imageCategory: undefined,
+    imageAnalysisModel: undefined,
+    imageAnalysisUpdatedAt: undefined,
+    keywordStatus: undefined,
+    recommendedKeywords: undefined,
+    keywordSource: undefined,
+    keywordUpdatedAt: undefined,
+  };
+  // Keep the video and its metadata intact. P0 retains old private poster objects.
+  return writeMedia(id, invalidatedDraft, media.map(item => item.id === mediaItemId
+    ? { ...selected, posterUrl: patch.posterUrl, coverFrameTimeMs: patch.coverFrameTimeMs }
+    : item), new Date(Math.max(Date.now(), (Date.parse(draft.updatedAt) || 0) + 1)).toISOString());
 }
 
 /**

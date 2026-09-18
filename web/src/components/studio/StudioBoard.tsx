@@ -33,13 +33,21 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { requestPinImageCleanup, uploadPinImage, UploadPinImageError } from "@/lib/studio/uploadPinImage";
 import {
+  beginImageUploadBatch,
+  completeImageUploadBatch,
+  createImageUploadBatchState,
+} from "@/lib/studio/imageUploadBatchState";
+import {
+  createAppendableVideoUploadQueue,
   createVideoBatchState,
   isVideoCandidate,
-  queueFailedVideoItems,
   runVideoBatch,
   safeVideoBatchError,
+  selectVisibleVideoQueueItems,
   summarizeVideoBatch,
+  summarizeVideoUploadQueue,
   validateVideoBatchSelection,
+  type AppendableVideoUploadQueue,
   type VideoBatchItem,
   type VideoBatchState,
 } from "@/lib/studio/videoBatchUpload";
@@ -349,16 +357,32 @@ export function StudioBoard() {
     try { window.localStorage.setItem(PLAN_PINNED_STORAGE_KEY, String(next)); } catch { /* in-memory preference still works */ }
   }, []);
 
-  const [uploading, setUploading] = useState(false);
+  const [standaloneVideoUploading, setUploading] = useState(false);
+  const [imageUploadState, setImageUploadState] = useState(createImageUploadBatchState);
+  const uploading = standaloneVideoUploading || imageUploadState.activeBatchIds.length > 0;
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
-  const [uploadFailures, setUploadFailures] = useState<Array<{ fileName: string; detail: CreativeRequestError }>>([]);
-  const [uploadRetry, setUploadRetry] = useState<{ files: File[]; mode: MultiUploadMode } | null>(null);
+  const uploadFailures = imageUploadState.failures;
+  const uploadRetries = imageUploadState.retries;
   const [videoBatch, setVideoBatch] = useState<VideoBatchState | null>(null);
-  const videoBatchAbortRef = useRef<AbortController | null>(null);
+  const videoQueueRef = useRef<{ scope: VideoRecoveryScope; queue: AppendableVideoUploadQueue } | null>(null);
+  const videoQueueItemSequenceRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveIdState] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const aiCopyBusyDraftIdsRef = useRef(new Set<string>());
+  const setActiveId = useCallback((nextId: string | null) => {
+    const currentId = activeIdRef.current;
+    if (currentId && currentId !== nextId && aiCopyBusyDraftIdsRef.current.has(currentId)) return;
+    if (nextId && nextId !== currentId && aiCopyBusyDraftIdsRef.current.has(nextId)) return;
+    activeIdRef.current = nextId;
+    setActiveIdState(nextId);
+  }, []);
+  const handleAiCopyBusyChange = useCallback((draftId: string, busy: boolean) => {
+    if (busy) aiCopyBusyDraftIdsRef.current.add(draftId);
+    else aiCopyBusyDraftIdsRef.current.delete(draftId);
+  }, []);
   const [publishConfirmation, setPublishConfirmation] = useState<PublishConfirmationSnapshot | null>(null);
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   // Drawer state is ephemeral and must never cross a verified owner/workspace
@@ -366,7 +390,6 @@ export function StudioBoard() {
   // scope; this ref only records which scope owns the currently open drawer.
   const ownerScope = pinDraftStore.getPinDraftOwnerScope();
   const ownerScopeKey = generationOwnerScopeKey(ownerScope);
-  const videoOperationRef = useRef<{ controller: AbortController; scope: VideoRecoveryScope; id: string } | null>(null);
   const aiDrawerOwnerScopeRef = useRef<string | null>(ownerScopeKey);
   const [aiDrawerScopeKey, setAiDrawerScopeKey] = useState<string | null>(ownerScopeKey);
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -425,6 +448,21 @@ export function StudioBoard() {
       aiGenerationLockRef.current = null;
     }
   }, [aiDrawer, aiGenerating, limitPrompt, ownerScopeKey]);
+
+  useEffect(() => {
+    const holder = videoQueueRef.current;
+    const currentScope = pinDraftStore.getPinDraftOwnerScope();
+    if (!holder || videoRecoveryScopeEquals(holder.scope, currentScope)) return;
+    videoQueueRef.current = null;
+    holder.queue.dispose();
+    setVideoBatch(null);
+  }, [ownerScopeKey]);
+
+  useEffect(() => () => {
+    const holder = videoQueueRef.current;
+    videoQueueRef.current = null;
+    holder?.queue.dispose();
+  }, []);
 
   const presentGenerationAttempt = useCallback((summary: GenerationAttemptSummary) => {
     const command = generationToastCommand(summary);
@@ -587,100 +625,106 @@ export function StudioBoard() {
   }, [flashSaved]);
 
   // ── Upload → one Content with N media, or N separate Contents ──────────────
-  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode) => {
+  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode, retryBatchId?: string) => {
     if (!arr.length) return;
     const seedDestinations = defaultDestinationsForNewContent();
-    setUploading(true);
-    setUploadFailures([]);
-    setUploadRetry(null);
-    setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setImageUploadState(current => beginImageUploadBatch(current, { batchId, retryBatchId }));
+    setUploadProgress({ done: 0, total: arr.length });
     let ok = 0;
     const failedNames: string[] = [];
     const failedFiles: File[] = [];
     const failedDetails: Array<{ fileName: string; detail: CreativeRequestError }> = [];
     const uploaded: Array<{ publicUrl: string; file: File; index: number; width?: number; height?: number }> = [];
-    for (let i = 0; i < arr.length; i++) {
-      try {
-        const { publicUrl, requestId } = await uploadPinImage(arr[i]);
-        track("creative_upload_succeeded", { requestId, stage: "upload", bytes: arr[i].size, mediaType: arr[i].type });
-        // Measured from the File while we still hold the bytes — the hosted URL
-        // cannot be measured without a second network round trip, and without
-        // dimensions the carousel ratio rules can only say "unverified".
-        const { width, height } = await measureImageFile(arr[i]);
-        uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
-        ok++;
-      } catch (error) {
-        // A failed file never blocks or rolls back the successful ones.
-        failedNames.push(arr[i].name);
-        failedFiles.push(arr[i]);
-        const detail = error instanceof UploadPinImageError
-          ? error.detail
-          : { stage: "upload" as const, code: "other", requestId: `upload-${batchId}-${i}` };
-        failedDetails.push({ fileName: arr[i].name, detail });
-        track("creative_upload_failed", {
-          requestId: detail.requestId,
-          stage: detail.stage,
-          code: detail.code,
-          httpStatus: detail.httpStatus ?? null,
-          retryAfterSeconds: detail.retryAfter ?? null,
-        });
+    try {
+      for (let i = 0; i < arr.length; i++) {
+        try {
+          const { publicUrl, requestId } = await uploadPinImage(arr[i]);
+          track("creative_upload_succeeded", { requestId, stage: "upload", bytes: arr[i].size, mediaType: arr[i].type });
+          // Measured from the File while we still hold the bytes — the hosted URL
+          // cannot be measured without a second network round trip, and without
+          // dimensions the carousel ratio rules can only say "unverified".
+          const { width, height } = await measureImageFile(arr[i]);
+          uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
+          ok++;
+        } catch (error) {
+          // A failed file never blocks or rolls back the successful ones.
+          failedNames.push(arr[i].name);
+          failedFiles.push(arr[i]);
+          const detail = error instanceof UploadPinImageError
+            ? error.detail
+            : { stage: "upload" as const, code: "other", requestId: `upload-${batchId}-${i}` };
+          failedDetails.push({ fileName: arr[i].name, detail });
+          track("creative_upload_failed", {
+            requestId: detail.requestId,
+            stage: detail.stage,
+            code: detail.code,
+            httpStatus: detail.httpStatus ?? null,
+            retryAfterSeconds: detail.retryAfter ?? null,
+          });
+        }
+        setUploadProgress({ done: i + 1, total: arr.length });
       }
-      setUploadProgress({ done: i + 1, total: arr.length });
-    }
-    if (mode === "together" && uploaded.length) {
-      const first = uploaded[0];
-      const created = pinDraftStore.createBoardDraft({
-        imageUrl: first.publicUrl,
-        media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
-          id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
-          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
-        })),
-        source: "uploaded_image", idempotencyKey: `${batchId}:content`,
-        title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
-        defaultDestinations: seedDestinations,
-      });
-      void startImageAnalysis(created.id);
-    } else {
-      uploaded.forEach(({ publicUrl, file, index, width, height }) => {
+      if (mode === "together" && uploaded.length) {
+        const first = uploaded[0];
         const created = pinDraftStore.createBoardDraft({
-          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
-          // Explicit single-item media: the imageUrl-only path lets the store
-          // synthesize a media item, and that synthetic item has nowhere to carry
-          // the dimensions we just measured.
-          media: [{
+          imageUrl: first.publicUrl,
+          media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
             id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
             altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
-          }],
-          title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+          })),
+          source: "uploaded_image", idempotencyKey: `${batchId}:content`,
+          title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
           defaultDestinations: seedDestinations,
         });
         void startImageAnalysis(created.id);
-      });
-    }
-    setUploading(false);
-    setUploadProgress(null);
-    setUploadFailures(failedDetails);
-    if (failedFiles.length) setUploadRetry({ files: failedFiles, mode });
-    if (ok) { toast.success(ok === 1 ? tr("studioBoard.toast.uploadedOne") : tr("studioBoard.toast.uploadedMany").replace("{n}", String(ok))); flashSaved(); }
-    if (failedNames.length) {
-      const shown = failedNames.slice(0, 3).join(", ");
-      const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
-      toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
+      } else {
+        uploaded.forEach(({ publicUrl, file, index, width, height }) => {
+          const created = pinDraftStore.createBoardDraft({
+            imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
+            // Explicit single-item media: the imageUrl-only path lets the store
+            // synthesize a media item, and that synthetic item has nowhere to carry
+            // the dimensions we just measured.
+            media: [{
+              id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+              altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
+            }],
+            title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+            defaultDestinations: seedDestinations,
+          });
+          void startImageAnalysis(created.id);
+        });
+      }
+      if (ok) { toast.success(ok === 1 ? tr("studioBoard.toast.uploadedOne") : tr("studioBoard.toast.uploadedMany").replace("{n}", String(ok))); flashSaved(); }
+      if (failedNames.length) {
+        const shown = failedNames.slice(0, 3).join(", ");
+        const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
+        toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
+      }
+    } finally {
+      setUploadProgress(null);
+      setImageUploadState(current => completeImageUploadBatch(current, {
+        batchId,
+        failures: failedDetails,
+        ...(failedFiles.length ? { retry: { files: failedFiles, mode } } : {}),
+      }));
     }
   }, [defaultDestinationsForNewContent, flashSaved, tr]);
 
-  const executeVideoBatch = useCallback(async (initial: VideoBatchState, existingOperation?: { controller: AbortController; scope: VideoRecoveryScope; id: string }) => {
+  const executeVideoBatch = useCallback(async (
+    initial: VideoBatchState,
+    existingOperation?: { signal: AbortSignal; scope: VideoRecoveryScope; id: string },
+    stateSink?: (state: VideoBatchState) => void,
+  ): Promise<VideoBatchState> => {
     const currentScope = pinDraftStore.getPinDraftOwnerScope();
     const boundScope = initial.ownerScope ?? currentScope;
     const operation = existingOperation ?? (() => {
       if (!boundScope || !videoRecoveryScopeEquals(boundScope, currentScope)) return null;
-      return { controller: new AbortController(), scope: boundScope, id: initial.clientBatchId };
+      return { signal: new AbortController().signal, scope: boundScope, id: initial.clientBatchId };
     })();
-    if (!operation || videoOperationRef.current && videoOperationRef.current !== existingOperation) return;
-    videoOperationRef.current = operation;
-    const controller = operation.controller;
-    videoBatchAbortRef.current = controller;
+    if (!operation) return initial;
+    const standalone = !stateSink;
+    const publishState = stateSink ?? setVideoBatch;
     const ownerIsCurrent = () => videoRecoveryScopeEquals(operation.scope, pinDraftStore.getPinDraftOwnerScope());
     const recoveryRecord = (item: VideoBatchItem, patch: Partial<VideoRecoveryRecord> = {}): VideoRecoveryRecord | null => {
       const inspection = item.inspection;
@@ -694,11 +738,10 @@ export function StudioBoard() {
       };
     };
     const ownedInitial = initial.ownerScope ? initial : { ...initial, ownerScope: operation.scope };
-    setUploading(true);
-    setVideoBatch(ownedInitial);
-    setUploadProgress({ done: ownedInitial.items.filter(item => item.state === "succeeded").length, total: ownedInitial.items.length });
+    if (standalone) setUploading(true);
+    publishState(ownedInitial);
     const result = await runVideoBatch(ownedInitial, {
-      signal: controller.signal,
+      signal: operation.signal,
       // One descriptor per fresh transfer attempt avoids the v77 batch-level
       // finalizing state coupling unrelated siblings. The logical draft key stays stable.
       prepare: descriptors => prepareVideoDirectUpload(`video_attempt_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`, descriptors),
@@ -759,22 +802,20 @@ export function StudioBoard() {
         return { persisted: true, draftId: created.id };
       },
       onState: next => {
-        setVideoBatch(next);
-        setUploadProgress({ done: next.items.filter(item => item.state !== "queued" && item.state !== "uploading").length, total: next.items.length });
+        publishState(next);
       },
     });
-    if (videoOperationRef.current === operation) {
-      videoOperationRef.current = null;
-      if (videoBatchAbortRef.current === controller) videoBatchAbortRef.current = null;
-      setVideoBatch(result);
+    publishState(result);
+    if (standalone) {
       setUploading(false);
       setUploadProgress(null);
     }
     const status = summarizeVideoBatch(result);
-    if (status === "completed") toast.success(`${result.items.length} video Pins uploaded`);
-    else if (status === "partial") toast.error("Some video Pins need attention");
-    else if (status === "failed") toast.error("Video uploads could not be completed");
+    if (standalone && status === "completed") toast.success(`${result.items.length} video Pins uploaded`);
+    else if (standalone && status === "partial") toast.error("Some video Pins need attention");
+    else if (standalone && status === "failed") toast.error("Video uploads could not be completed");
     if (result.items.some(item => item.state === "succeeded")) flashSaved();
+    return result;
   }, [defaultDestinationsForNewContent, flashSaved]);
 
   // Reload recovery intentionally handles only server-finalized records. Browser
@@ -842,93 +883,105 @@ export function StudioBoard() {
     return () => { disposed = true; };
   }, [defaultDestinationsForNewContent, ownerScopeKey]);
 
-  const startVideoBatch = useCallback(async (files: File[], existingOperation?: { controller: AbortController; scope: VideoRecoveryScope; id: string }) => {
-    if (!existingOperation && videoOperationRef.current) { toast.error("A video upload is already running"); return; }
-    const scope = existingOperation?.scope ?? pinDraftStore.getPinDraftOwnerScope();
-    if (!scope) { toast.error("Sign in before uploading video"); return; }
-    const operation = existingOperation ?? { controller: new AbortController(), scope, id: `video_${Date.now()}` };
-    if (videoOperationRef.current && videoOperationRef.current !== operation) return;
-    videoOperationRef.current = operation;
-    videoBatchAbortRef.current = operation.controller;
-    const clientBatchId = `video_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`;
-    const items: VideoBatchItem[] = [];
-    setUploading(true);
-    setVideoBatch({ ...createVideoBatchState(clientBatchId, files.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "queued" }))), ownerScope: scope });
-    setUploadProgress({ done: 0, total: files.length });
-    for (const [ordinal, file] of files.entries()) {
-      if (operation.controller.signal.aborted || !videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) {
-        items.push({ id: `${ordinal}`, ordinal, file, state: "cancelled" });
-        continue;
-      }
-      const singleSelection = validateVideoBatchSelection([file], true);
-      if (singleSelection.kind === "rejected") {
-        items.push({ id: `${ordinal}`, ordinal, file, state: "failed", error: singleSelection.error ?? { code: "invalid_video_upload" } });
-        continue;
-      }
-      try {
-        const probe = await probeVideoFile(file);
-        const { posterFile, ...observed } = probe;
-        items.push({
-          id: `${ordinal}`, ordinal, file, state: "queued",
-          inspection: { ...observed, checksumSha256: await sha256(file) },
-          ...(posterFile ? { posterFile } : {}),
-        });
-      } catch (error) {
-        items.push({ id: `${ordinal}`, ordinal, file, state: "failed", error: safeVideoBatchError(error, "video_decode_failed") });
-      }
-      setUploadProgress({ done: ordinal + 1, total: files.length });
-    }
-    const initial = { ...createVideoBatchState(clientBatchId, items), ownerScope: scope };
-    setVideoBatch(initial);
-    if (!initial.items.some(item => item.state === "queued")) {
-      setUploading(false);
-      setUploadProgress(null);
-      if (videoOperationRef.current === operation) { videoOperationRef.current = null; videoBatchAbortRef.current = null; }
-      toast.error("Video files need attention before upload");
-      return;
-    }
-    await executeVideoBatch(initial, operation);
+  const getVideoQueue = useCallback((scope: VideoRecoveryScope) => {
+    const existing = videoQueueRef.current;
+    if (existing && videoRecoveryScopeEquals(existing.scope, scope)) return existing.queue;
+    videoQueueRef.current = null;
+    existing?.queue.dispose();
+    const clientBatchId = `video_queue_${globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? Date.now()}`;
+    let queue: AppendableVideoUploadQueue;
+    queue = createAppendableVideoUploadQueue(clientBatchId, {
+      ownerScope: scope,
+      onState: next => {
+        if (videoQueueRef.current?.queue !== queue) return;
+        if (!videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) return;
+        setVideoBatch(next);
+      },
+      runItem: async (queued, signal, onItemState) => {
+        if (signal.aborted) return { ...queued, state: "cancelled" };
+        try {
+          const hasReplayableReceipt = Boolean(queued.finalized || queued.attempt?.phase === "finalize_pending");
+          let inspected = queued;
+          if (hasReplayableReceipt) {
+            if (!queued.inspection) return { ...queued, state: "failed", error: { code: "video_decode_failed" } };
+          } else {
+            const selection = validateVideoBatchSelection([queued.file], true);
+            if (selection.kind === "rejected") return {
+              ...queued,
+              state: "failed",
+              error: selection.error ?? { code: "invalid_video_upload" },
+            };
+            const [probe, checksumSha256] = await Promise.all([probeVideoFile(queued.file, signal), sha256(queued.file, signal)]);
+            if (signal.aborted) return { ...queued, state: "cancelled" };
+            if (!videoRecoveryScopeEquals(scope, pinDraftStore.getPinDraftOwnerScope())) {
+              return { ...queued, state: "failed", error: { code: "video_owner_changed" } };
+            }
+            const { posterFile, ...observed } = probe;
+            inspected = {
+              ...queued,
+              state: "queued",
+              inspection: { ...observed, checksumSha256 },
+              ...(posterFile ? { posterFile } : {}),
+            };
+          }
+          onItemState({ ...inspected, state: "uploading" });
+          const result = await executeVideoBatch(
+            { ...createVideoBatchState(clientBatchId, [inspected]), ownerScope: scope },
+            { signal, scope, id: queued.id },
+            next => onItemState(next.items[0]),
+          );
+          return result.items[0];
+        } catch (error) {
+          return signal.aborted
+            ? { ...queued, state: "cancelled" }
+            : { ...queued, state: "failed", error: safeVideoBatchError(error, "video_decode_failed") };
+        }
+      },
+    });
+    videoQueueRef.current = { scope, queue };
+    return queue;
   }, [executeVideoBatch]);
+
+  const startVideoBatch = useCallback(async (files: File[], rejectedError?: VideoBatchItem["error"]) => {
+    const scope = pinDraftStore.getPinDraftOwnerScope();
+    if (!scope) { toast.error("Sign in before uploading video"); return; }
+    const queue = getVideoQueue(scope);
+    const items = files.map(file => {
+      const sequence = videoQueueItemSequenceRef.current++;
+      const nonce = globalThis.crypto?.randomUUID?.().replace(/-/g, "") ?? `${Date.now()}_${sequence}`;
+      return {
+        id: `video_item_${nonce}`,
+        // Every Studio task creates an isolated one-item server batch. FIFO order
+        // lives in the appendable scheduler; transport ordinal is therefore 0.
+        ordinal: 0,
+        file,
+        state: rejectedError ? "failed" as const : "queued" as const,
+        ...(rejectedError ? { error: rejectedError } : {}),
+      };
+    });
+    await queue.append(items);
+  }, [getVideoQueue]);
 
   const processMixedVideoSelection = useCallback(async (arr: File[]) => {
     const videoFiles = arr.filter(isVideoCandidate);
     const imageFiles = arr.filter(file => !isVideoCandidate(file));
-    if (videoOperationRef.current) { toast.error("A video upload is already running"); return; }
-    const scope = pinDraftStore.getPinDraftOwnerScope();
-    if (!scope) { toast.error("Sign in before uploading video"); return; }
-    const operation = { controller: new AbortController(), scope, id: `mixed_${Date.now()}` };
-    videoOperationRef.current = operation;
-    videoBatchAbortRef.current = operation.controller;
-    setVideoBatch(createVideoBatchState(operation.id, videoFiles.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "queued" as const }))));
     // Mixed content is always separate: images never join a video in a carousel.
-    try {
-      if (imageFiles.length) await processFiles(imageFiles, "separate");
-      if (videoFiles.length && !operation.controller.signal.aborted) await startVideoBatch(videoFiles, operation);
-    } finally {
-      // startVideoBatch normally owns completion. If image work throws/cancels
-      // before it enters, this is the one unconditional lock-release boundary.
-      if (videoOperationRef.current === operation) {
-        if (operation.controller.signal.aborted) {
-          setVideoBatch(createVideoBatchState(operation.id, videoFiles.map((file, ordinal) => ({ id: `${ordinal}`, ordinal, file, state: "cancelled" as const }))));
-          setUploading(false);
-          setUploadProgress(null);
-        }
-        videoOperationRef.current = null;
-        videoBatchAbortRef.current = null;
-      }
-    }
+    const pending: Promise<unknown>[] = [];
+    if (imageFiles.length) pending.push(processFiles(imageFiles, "separate"));
+    if (videoFiles.length) pending.push(startVideoBatch(videoFiles));
+    await Promise.allSettled(pending);
   }, [processFiles, startVideoBatch]);
 
-  const retryVideoBatch = useCallback(() => {
-    if (!videoBatch || uploading) return;
-    const next = queueFailedVideoItems(videoBatch);
-    if (next.items.every(item => item.state !== "queued")) return;
-    void executeVideoBatch(next);
-  }, [executeVideoBatch, uploading, videoBatch]);
+  const retryVideoItem = useCallback((id: string) => {
+    void videoQueueRef.current?.queue.retry(id);
+  }, []);
+
+  const cancelVideoItem = useCallback((id: string) => {
+    videoQueueRef.current?.queue.cancel(id);
+  }, []);
 
   const cancelVideoBatch = useCallback(() => {
-    videoOperationRef.current?.controller.abort();
-    videoBatchAbortRef.current?.abort();
+    videoQueueRef.current?.queue.cancelAll();
   }, []);
 
   const handleFiles = useCallback((files: FileList | File[]) => {
@@ -937,8 +990,7 @@ export function StudioBoard() {
     if (videoBatchUploadEnabled) {
       const selection = validateVideoBatchSelection(arr, true);
       if (selection.kind === "rejected") {
-        const rejected = createVideoBatchState(`video_${Date.now()}`, [{ id: "selection", ordinal: 0, file: arr[0], state: "failed", error: selection.error ?? { code: "invalid_video_upload" } }]);
-        setVideoBatch(rejected);
+        void startVideoBatch([arr[0]], selection.error ?? { code: "invalid_video_upload" });
         toast.error("Video selection needs attention");
         return;
       }
@@ -952,7 +1004,7 @@ export function StudioBoard() {
     setUploadChoice("together");
     setRememberUploadChoice(false);
     setPendingUploadFiles(arr);
-  }, [processFiles, processMixedVideoSelection, videoBatchUploadEnabled]);
+  }, [processFiles, processMixedVideoSelection, startVideoBatch, videoBatchUploadEnabled]);
 
   const continueMultiUpload = useCallback(() => {
     const files = pendingUploadFiles;
@@ -1073,7 +1125,7 @@ export function StudioBoard() {
     } else {
       toast.error(result.toast);
     }
-  }, [announceScheduled, noBoardAccess, tr]);
+  }, [announceScheduled, noBoardAccess, setActiveId, tr]);
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
   // Gating and toasts live here (they are card UI); the publish ITSELF is
@@ -1104,7 +1156,7 @@ export function StudioBoard() {
     // Opening the dialog is read-only. It exposes missing/invalid destinations in the
     // disabled-reason area instead of silently repairing them with a default account.
     setPublishConfirmation(buildPublishConfirmation(draft, { onlyPending: options?.onlyPending ?? true }));
-  }, [tr]);
+  }, [setActiveId, tr]);
 
   const handlePublish = useCallback(async (receipt: ConfirmedPublishReceipt) => {
     setPublishConfirmation(null);
@@ -1177,7 +1229,7 @@ export function StudioBoard() {
         action: { label: tr("studioBoard.toast.openInPlan"), onClick: () => { window.location.href = planDeepLink(id); } },
       });
     }
-  }, [announceScheduled, flashSaved, noBoardAccess, tr]);
+  }, [announceScheduled, flashSaved, noBoardAccess, setActiveId, tr]);
 
   // ── Product → Pin / attach product ─────────────────────────────────────────
   // A product selected from My Products, Product Opportunities, Shopify, Etsy or a
@@ -1758,6 +1810,13 @@ export function StudioBoard() {
       {saving ? <><Loader2 style={{ width: 12, height: 12 }} className="animate-spin" /> {tr("studioBoard.saving")}</> : <><Check style={{ width: 12, height: 12, color: BUI.success }} /> {tr("studioBoard.savedOnDevice")}</>}
     </span>
   );
+  const videoQueueSummary = videoBatch ? summarizeVideoUploadQueue(videoBatch) : null;
+  const visibleVideoQueueItems = videoBatch ? selectVisibleVideoQueueItems(videoBatch) : [];
+  const cancellableVideoItems = videoBatch?.items.filter(item =>
+    (item.state === "queued" || item.state === "uploading")
+      && !item.finalized
+      && item.attempt?.phase !== "finalize_pending",
+  ) ?? [];
 
   // Draft store still hydrating on the client (or SSR) → V2 loading state, never a
   // premature empty state. Matches the SSR output so hydration stays consistent.
@@ -1774,26 +1833,44 @@ export function StudioBoard() {
       {videoBatch && (
         <section data-testid="video-upload-batch" role="status" aria-live="polite"
           style={{ margin: "10px 22px 0", padding: "10px 12px", borderRadius: 10, border: `1px solid ${BUI.border}`, background: "#20242B", color: BUI.text, display: "flex", flexDirection: "column", gap: 5 }}>
-          <strong style={{ fontSize: 12 }}>Video upload: {videoBatch.status}</strong>
-          {videoBatch.items.filter(item => item.state === "failed").slice(0, 3).map(item => (
-            <span key={item.id} style={{ fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
-              {item.file.name} · Code: {item.error?.code ?? "video_upload_failed"}{item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}
-            </span>
-          ))}
-          <div style={{ display: "flex", gap: 8, marginTop: 3 }}>
-            {videoBatch.items.some(item => item.state === "failed") && (
-              <button type="button" data-testid="video-upload-retry" disabled={uploading} onClick={retryVideoBatch}
-                style={{ minHeight: 40, padding: "8px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 12, fontWeight: 800, cursor: uploading ? "default" : "pointer" }}>
-                Retry failed videos
-              </button>
-            )}
-            {videoBatch.status === "running" && (
-              <button type="button" data-testid="video-upload-cancel" onClick={cancelVideoBatch}
-                style={{ minHeight: 40, padding: "8px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
-                Cancel video upload
-              </button>
-            )}
+          <strong style={{ fontSize: 12 }}>
+            Video uploads · Active {videoQueueSummary?.active ?? 0} · Queued {videoQueueSummary?.queued ?? 0} · Completed {videoQueueSummary?.completed ?? 0} · Failed {videoQueueSummary?.failed ?? 0}
+            {videoQueueSummary?.cancelled ? ` · Cancelled ${videoQueueSummary.cancelled}` : ""}
+          </strong>
+          <div role="list" aria-label="Video uploads needing attention"
+            style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 240, overflowY: "auto" }}>
+          {visibleVideoQueueItems.map((item, index) => {
+            const retryable = item.state === "failed" && Boolean(item.inspection || item.finalized);
+            const cancellable = (item.state === "queued" || item.state === "uploading")
+              && !item.finalized
+              && item.attempt?.phase !== "finalize_pending";
+            return (
+              <div role="listitem" key={item.id} data-testid={`video-upload-item-${item.id}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
+                  {item.file.name} · {item.state}{item.state === "failed" ? ` · Code: ${item.error?.code ?? "video_upload_failed"}${item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}` : ""}
+                </span>
+                {retryable ? (
+                  <button type="button" data-testid={index === 0 ? "video-upload-retry" : `video-upload-retry-${item.id}`} onClick={() => retryVideoItem(item.id)}
+                    style={{ padding: "5px 9px", borderRadius: 7, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
+                    Retry
+                  </button>
+                ) : null}
+                {cancellable ? (
+                  <button type="button" data-testid={index === 0 ? "video-upload-cancel" : `video-upload-cancel-${item.id}`} onClick={() => cancelVideoItem(item.id)}
+                    style={{ padding: "5px 9px", borderRadius: 7, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
           </div>
+          {cancellableVideoItems.length > 1 ? (
+            <button type="button" data-testid="video-upload-cancel-all" onClick={cancelVideoBatch}
+              style={{ alignSelf: "flex-start", marginTop: 3, padding: "6px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
+              Cancel all active uploads
+            </button>
+          ) : null}
         </section>
       )}
 
@@ -1806,13 +1883,13 @@ export function StudioBoard() {
               {fileName} · Stage: upload · Code: {detail.code}{detail.httpStatus != null ? ` · HTTP ${detail.httpStatus}` : ""} · Request {detail.requestId}
             </span>
           ))}
-          {uploadRetry && (
-            <button type="button" data-testid="upload-retry" disabled={uploading}
-              onClick={() => { const retry = uploadRetry; setUploadRetry(null); void processFiles(retry.files, retry.mode); }}
+          {uploadRetries.map((retry, index) => (
+            <button key={retry.batchId} type="button" data-testid={index === 0 ? "upload-retry" : `upload-retry-${retry.batchId}`} disabled={uploading}
+              onClick={() => { void processFiles(retry.files, retry.mode, retry.batchId); }}
               style={{ alignSelf: "flex-start", marginTop: 3, padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: uploading ? "default" : "pointer" }}>
               Retry failed uploads
             </button>
-          )}
+          ))}
         </section>
       )}
 
@@ -1841,7 +1918,7 @@ export function StudioBoard() {
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
               <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.aiDrawer.createWithAi")}
             </button>
-            <button type="button" data-testid="board-upload-more" onClick={openFilePicker} disabled={uploading}
+            <button type="button" data-testid="board-upload-more" onClick={openFilePicker}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.textSec, fontSize: 12, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
               {uploading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Upload style={{ width: 13, height: 13 }} />}
               {uploading && uploadProgress ? ` ${tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total))}` : ` ${tr("studioBoard.uploadMore")}`}
@@ -1940,7 +2017,7 @@ export function StudioBoard() {
             </div>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.empty.dragDropTitle")}</h2>
             <p style={{ margin: 0, fontSize: 13, color: BUI.textSec }}>{tr("studioBoard.empty.dragDropSub")}</p>
-            <button type="button" data-testid="board-upload-primary" onClick={openFilePicker} disabled={uploading}
+            <button type="button" data-testid="board-upload-primary" onClick={openFilePicker}
               style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 11, border: "none", background: BUI.gradient, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", marginTop: 4, fontFamily: "inherit" }}>
               {uploading ? <><Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> {uploadProgress ? tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total)) : tr("studioBoard.empty.uploading")}</> : <><Upload style={{ width: 15, height: 15 }} /> {tr("studioBoard.empty.uploadImages")}</>}
             </button>
@@ -1969,7 +2046,7 @@ export function StudioBoard() {
               <Link data-testid="board-empty-open-plan" href="/app/plan" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
                 {tr("studioBoard.empty.openPlanScheduled")}
               </Link>
-              <button type="button" onClick={openFilePicker} disabled={uploading}
+              <button type="button" onClick={openFilePicker}
                 style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
                 {tr("studioBoard.uploadMore")}
               </button>
@@ -1994,6 +2071,7 @@ export function StudioBoard() {
                   return next;
                 })}
                 active={activeId === draft.id} onSetActive={setActiveId}
+                onAiCopyBusyChange={handleAiCopyBusyChange}
                 boards={customerBoards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}

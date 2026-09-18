@@ -21,6 +21,7 @@ export async function dispatchSupabaseV76PinterestVideo(
       // Provider client construction/refresh is inside this callback, hence
       // unreachable until v76 grants a ready claim and starts a durable attempt.
       const client = await PinterestClient.forConnection(current.uid, connectionId);
+      const media = current.receipt.media.find(item => item.id === source.mediaId);
       return client.createVideoPin({
         boardId,
         title: current.receipt.title,
@@ -29,6 +30,7 @@ export async function dispatchSupabaseV76PinterestVideo(
         altText: current.receipt.altText,
         file: source.file,
         fileName: source.fileName,
+        ...(media?.kind === "video" ? { coverFrameTimeMs: media.coverFrameTimeMs, durationMs: media.durationMs } : {}),
       });
     },
   }));

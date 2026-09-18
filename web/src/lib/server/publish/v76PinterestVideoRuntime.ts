@@ -91,6 +91,7 @@ function exactMediaIdentity(media: unknown): string {
       height: typeof row.height === "number" ? row.height : null,
       source: typeof row.source === "string" ? row.source : null,
       posterUrl: typeof row.posterUrl === "string" ? row.posterUrl.trim() || null : null,
+      ...(row.coverFrameTimeMs !== undefined ? { coverFrameTimeMs: row.coverFrameTimeMs } : {}),
       altText: typeof row.altText === "string" ? row.altText.trim() || null : null,
     };
   }));

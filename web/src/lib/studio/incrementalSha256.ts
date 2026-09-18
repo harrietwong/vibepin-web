@@ -68,17 +68,29 @@ class Sha256 {
   }
 }
 
+function abortedError() {
+  return Object.assign(new Error("video_upload_aborted"), { code: "video_upload_aborted" });
+}
+
 /** Incremental browser digest; memory stays bounded to the stream chunk plus 64 bytes. */
-export async function sha256Blob(blob: Blob) {
+export async function sha256Blob(blob: Blob, signal?: AbortSignal) {
+  if (signal?.aborted) throw abortedError();
   const hash = new Sha256();
   const reader = blob.stream().getReader();
+  const abort = () => { void reader.cancel(signal?.reason).catch(() => undefined); };
+  signal?.addEventListener("abort", abort, { once: true });
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value) hash.update(value);
     }
+    if (signal?.aborted) throw abortedError();
+  } catch (error) {
+    if (signal?.aborted) throw abortedError();
+    throw error;
   } finally {
+    signal?.removeEventListener("abort", abort);
     reader.releaseLock();
   }
   return hash.digestHex();

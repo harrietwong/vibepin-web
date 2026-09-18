@@ -31,7 +31,7 @@ import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type Media
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
-import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
+import { PinFieldsForm, TitleAICopyButton, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
@@ -180,6 +180,7 @@ export type PinBoardCardProps = {
   onSelectedChange?: (id: string, selected: boolean) => void;
   active: boolean;
   onSetActive: (id: string | null) => void;
+  onAiCopyBusyChange: (id: string, busy: boolean) => void;
   boards: PinterestBoard[];
   boardsLoading?: boolean;
   disconnected?: boolean;
@@ -279,6 +280,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [hoveredKw, setHoveredKw] = useState<string | null>(null);
   const [copiedKw, setCopiedKw] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiRef = useRef<PinAICopyPanelHandle>(null);
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
@@ -505,10 +507,24 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     flush();
     props.onPublish(draft.id, options);
   }, [flush, props, draft.id, destinationError]);
-  const collapse = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
+  const collapse = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    flush();
+    setEditing(false);
+    props.onSetActive(null);
+  }, [flush, props]);
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
-  const startEditing = useCallback(() => { setEditing(true); props.onSetActive(draft.id); }, [props, draft.id]);
-  const stopEditing = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
+  const startEditing = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    setEditing(true);
+    props.onSetActive(draft.id);
+  }, [props, draft.id]);
+  const stopEditing = useCallback(() => {
+    if (aiRef.current?.isBusy()) return;
+    flush();
+    setEditing(false);
+    props.onSetActive(null);
+  }, [flush, props]);
   const publishEntryNotice = props.publishEntryIssue ? (
     <div data-testid="card-publish-entry-issue" role="alert" data-code={props.publishEntryIssue}
       style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: "#fffbeb", color: "#92400e" }}>
@@ -651,7 +667,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // the confirm copy talks about title/description only. Compares against `fields`
   // (the on-screen values the panel itself was seeded with), not the possibly-stale
   // `draft`, so this agrees with what the panel used for its own fill-state check.
-  const aiRef = useRef<PinAICopyPanelHandle>(null);
   const applyCopy = useCallback((r: PinAICopyResult) => {
     const prevTitle = fields.title;
     const prevDescription = fields.description;
@@ -668,7 +683,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       metadataDraft: r.metadataDraft,
     });
   }, [props, draft.id, draft.destinationUrl, draft.tags, fields.title, fields.description, fields.altText]);
-
   // A "failed" card is either a PUBLISH failure (had a real schedule attempt) or a
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
@@ -725,6 +739,25 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       ? tr("studioBoard.card.needsAttention")
       : status.label;
   const publishing = props.publishing;
+  const aiCopyPanel = (
+    <PinAICopyPanel
+      ref={aiRef}
+      compact
+      draftId={draft.id} imageUrl={draft.imageUrl}
+      title={fields.title} description={fields.description} altText={fields.altText}
+      boardId={draft.boardId} boardName={draft.boardName}
+      category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
+      setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
+      imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
+      boards={boards}
+      analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
+      hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
+      disabled={publishing}
+      onBeforeGenerate={flush}
+      onBusyChange={(busy) => props.onAiCopyBusyChange(draft.id, busy)}
+      onApplyCopy={applyCopy}
+    />
+  );
   const posted = lifecycle === "posted";
   const failed = lifecycle === "failed";
   const needsAttention = lifecycle === "needs_attention" || failed;
@@ -1037,7 +1070,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             thumbnail — which is the cover, since setCoverMedia moves it to media[0].
             Never regenerates the whole set. */}
         {!generating && !posted && (
-          <div style={{ padding: "6px 12px 0", display: "flex" }}>
+          <div data-testid="card-ai-tools" style={{ padding: "6px 12px 0", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            {aiCopyPanel}
             <button type="button" data-testid="card-regenerate-image" onClick={doGenerateAiImage} disabled={publishing}
               style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
@@ -1074,12 +1108,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
           <>
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
-            {tr("studioBoard.card.fields.title")}
-            <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+              <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
+              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} busyKey={draft.id} />
+            </div>
+            <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
               style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700 }} />
-          </label>
+          </div>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.description")}
             <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
@@ -1351,22 +1388,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </button>
           </div>
           <div data-testid="card-ai-tools" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            <PinAICopyPanel
-              ref={aiRef}
-              compact
-              draftId={draft.id} imageUrl={draft.imageUrl}
-              title={fields.title} description={fields.description} altText={fields.altText}
-              boardId={draft.boardId} boardName={draft.boardName}
-              category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
-              setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
-              imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
-              boards={boards}
-              analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
-              hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-              disabled={publishing}
-              onBeforeGenerate={flush}
-              onApplyCopy={applyCopy}
-            />
+            {aiCopyPanel}
             <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
@@ -1384,6 +1406,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           boardFieldError={props.boardFieldError}
           titleFieldError={props.titleFieldError} descriptionFieldError={props.descriptionFieldError}
           disabled={publishing} onChange={handleChange}
+          onGenerateCopy={() => aiRef.current?.generate()}
+          aiBusyKey={draft.id}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 
         <PublishDestinations
