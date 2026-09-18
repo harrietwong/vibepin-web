@@ -368,6 +368,7 @@ export function StudioBoard() {
   const setActiveId = useCallback((nextId: string | null) => {
     const currentId = activeIdRef.current;
     if (currentId && currentId !== nextId && aiCopyBusyDraftIdsRef.current.has(currentId)) return;
+    if (nextId && nextId !== currentId && aiCopyBusyDraftIdsRef.current.has(nextId)) return;
     activeIdRef.current = nextId;
     setActiveIdState(nextId);
   }, []);

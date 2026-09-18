@@ -75,7 +75,7 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
   await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
   // The shortcut delegates to the panel's existing busy guard. Rapid extra
   // activations while the shared request is in flight must not start new calls.
-  await shortcut.dblclick();
+  await expect(shortcut).toBeDisabled();
   await expect.poll(() => generateCount).toBe(1);
   releaseGenerate();
   await expect(card.getByTestId("board-card-title")).toHaveValue("Reading Corner Ideas");
@@ -194,7 +194,7 @@ test("in-flight AI copy blocks local, cross-card, and parent-driven card shape c
   await otherCard.getByTestId("card-edit").click();
   await expect(card).toHaveAttribute("data-active", "true");
   await expect(otherCard).toHaveAttribute("data-active", "false");
-  await card.getByTestId("title-ai-copy-generate").dblclick();
+  await expect(card.getByTestId("title-ai-copy-generate")).toBeDisabled();
   expect(analyzeCount).toBe(2);
   expect(generateCount).toBe(2);
 
@@ -213,4 +213,31 @@ test("in-flight AI copy blocks local, cross-card, and parent-driven card shape c
   await expect(card.getByTestId("ai-copy-generate")).toBeEnabled();
   await card.getByTestId("card-collapse").click();
   await expect(card).toHaveAttribute("data-active", "false");
+
+  // A compact target card can also be expanded by its own publish validation.
+  // Its per-draft lock must survive that attempted shape change and a complete
+  // filter unmount/remount, with both visible triggers reflecting the busy state.
+  generateGate = new Promise<void>(resolve => { releaseGenerate = resolve; });
+  await otherCard.getByTestId("ai-copy-generate").click();
+  await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
+  await page.getByTestId("ai-copy-replace-confirm-btn").click();
+  await expect.poll(() => generateCount).toBe(3);
+  await expect(otherCard.getByTestId("ai-copy-generate")).toBeDisabled();
+
+  await otherCard.getByTestId("card-publish").click();
+  await expect(otherCard).toHaveAttribute("data-active", "false");
+  expect(analyzeCount).toBe(3);
+  expect(generateCount).toBe(3);
+
+  await page.getByTestId("board-filter-unscheduled").click();
+  await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
+  await page.getByTestId("board-filter-scheduled").click();
+  const remountedOtherCard = page.getByTestId("pin-board-card").nth(1);
+  await expect(remountedOtherCard).toBeVisible();
+  await expect(remountedOtherCard.getByTestId("ai-copy-generate")).toBeDisabled();
+  expect(analyzeCount).toBe(3);
+  expect(generateCount).toBe(3);
+
+  releaseGenerate();
+  await expect(remountedOtherCard.getByTestId("ai-copy-generate")).toBeEnabled();
 });

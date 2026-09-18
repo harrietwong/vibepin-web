@@ -14,11 +14,11 @@
  * so chips are labeled "Recommended Pinterest keywords" — NEVER "Trending".
  */
 
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
-import { runWithBusyGuard } from "@/lib/ai-copy/runWithBusyGuard";
+import { isBusyKey, runWithBusyGuard, subscribeBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
@@ -127,8 +127,14 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [generatedThisSession, setGeneratedThisSession] = useState(false);
   const busyRef = useRef(false);
+  const subscribeToDraftBusy = useCallback(
+    (listener: () => void) => subscribeBusyKey(props.draftId, listener),
+    [props.draftId],
+  );
+  const readDraftBusy = useCallback(() => isBusyKey(props.draftId), [props.draftId]);
+  const sharedDraftBusy = useSyncExternalStore(subscribeToDraftBusy, readDraftBusy, () => false);
 
-  const busy = stage === "analyzing" || stage === "generating" || stage === "checking";
+  const busy = sharedDraftBusy || stage === "analyzing" || stage === "generating" || stage === "checking";
   const isRegen = props.hasGeneratedBefore || generatedThisSession || stage === "done";
   const analysisReady = props.analysisStatus === "ready";
 
@@ -145,6 +151,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
     if (stage === "done") return tr("pinForm.copyGenerated");
     return "";
   }, [stage, analysisReady, tr]);
+  const visibleProgressLabel = progressLabel || (sharedDraftBusy ? tr("pinForm.writingCopy") : "");
 
   // PRD 7.3 fill-in-the-blank: both fields already have text → this run, once it
   // completes, will overwrite user-written copy. Computed from current props so the
@@ -225,7 +232,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
           toast.error(msg);
         }
       }
-    });
+    }, props.draftId);
   }, [isRegen, props, tr]);
 
   // Entry point used by the button + the imperative handle. Gates on the fill-in-
@@ -261,7 +268,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
             ? { flex: "0 0 auto", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: "#7C3AED", fontSize: 10.5, fontWeight: 700, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }
             : { flex: props.actionsSlot ? "0 1 auto" : "1 1 160px", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }}>
           {busy ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Sparkles style={{ width: 13, height: 13 }} />}
-          {busy ? progressLabel : tr("pinForm.generateCopy")}
+          {busy ? visibleProgressLabel : tr("pinForm.generateCopy")}
         </button>
         {props.actionsSlot}
       </div>
@@ -315,7 +322,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
             {busy && <Loader2 style={{ width: 12, height: 12, color: "#7C3AED" }} className="animate-spin" />}
             {stage === "done" && <Check style={{ width: 12, height: 12, color: P.success }} />}
             <span style={{ flex: 1, fontSize: 11.5, fontWeight: 750, color: stage === "error" ? P.error : P.text }}>
-              {stage === "error" ? (errorMsg || tr("pinForm.copyGenerationFailed")) : progressLabel}
+              {stage === "error" ? (errorMsg || tr("pinForm.copyGenerationFailed")) : visibleProgressLabel}
             </span>
           </div>
           {stage === "done" && result?.summary && (

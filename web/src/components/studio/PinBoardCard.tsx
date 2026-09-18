@@ -1114,7 +1114,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
               <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
-              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} />
+              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} busyKey={draft.id} />
             </div>
             <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
@@ -1396,6 +1396,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           titleFieldError={props.titleFieldError} descriptionFieldError={props.descriptionFieldError}
           disabled={publishing} onChange={handleChange}
           onGenerateCopy={() => aiRef.current?.generate()}
+          aiBusyKey={draft.id}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 
         <PublishDestinations

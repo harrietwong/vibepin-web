@@ -121,3 +121,13 @@ Focused ESLint completed with zero errors and two existing hook warnings at unch
 - `.superpowers/sdd/2026-09-17-video-upload-cover-ai-p0/task-4-report.md`
 
 `web/AGENTS.md` was restored to `HEAD` and is not part of the task diff.
+
+## Controller integration fix — cross-remount draft lock
+
+Final read-only review reproduced two remaining remount paths: a compact busy card could be expanded by its own publish validation, and a filter change could unmount then recreate the same draft's panel. Both allowed a second request because the guard lived only in the old component instance.
+
+The controller replaced that boundary with one keyed in-memory lock per draft in `runWithBusyGuard`. `PinAICopyPanel` and the Title shortcut subscribe to the same lock with `useSyncExternalStore`, so a newly mounted copy of either control is immediately disabled and visibly busy until the original request settles. The Studio active-card gate now checks both the current and target draft. No request, result, or generation-stage state was added to `StudioBoard`.
+
+TDD evidence: the focused UI script first failed because `isBusyKey` did not exist, then passed after proving a second component-local ref cannot acquire the same draft key and that the key releases after settlement. The Chromium regression now covers target-card publish validation plus Drafts → Scheduled filter unmount/remount while the response is held; counts remain at one run for that phase and both remounted controls reflect the shared busy state.
+
+Fresh verification after this integration fix: focused Chromium `2 passed`, AI Copy UI/client passed, all three video-cover boundary suites passed, Studio UI `7 passed`, test registry passed, and TypeScript completed with exit 0.
