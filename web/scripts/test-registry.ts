@@ -136,6 +136,7 @@ export const CORE: string[] = [
   "test-billing-usage-api",
   "test-entitlements-security",
   "test-usage-metering",
+  "test-build-identity",
   "test-credit-e2e-harness",
   "test-credit-e2e-live-adapter",
   "test-credit-account-quota-harness",
