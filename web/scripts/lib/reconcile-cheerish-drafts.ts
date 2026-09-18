@@ -56,6 +56,7 @@ export type Match = {
   mediaId: string;
   boardId: string;
   current: ExistingDraft;
+  applyState: "pending" | "already_applied";
 };
 
 export type ReviewPatch = {
@@ -113,13 +114,16 @@ export function reconcileDrafts(rows: ManifestRow[], existing: ExistingDraft[]):
     if (used.has(draft.draftId)) { failures.push(`${row.mappingId}: ambiguous duplicate use of ${draft.draftId}`); continue; }
     used.add(draft.draftId);
     const lifecycle = classifyExistingDraft(draft);
-    if (lifecycle !== "draft") { failures.push(`${row.mappingId}: existing draft ${draft.draftId} is not_draft (${lifecycle})`); continue; }
+    if (lifecycle !== "draft" && lifecycle !== "scheduled") { failures.push(`${row.mappingId}: existing draft ${draft.draftId} is not_draft (${lifecycle})`); continue; }
     if (draft.status !== "ready" && draft.status !== "draft") { failures.push(`${row.mappingId}: existing draft ${draft.draftId} has unsupported status ${draft.status}`); continue; }
     const media = draft.payload.media?.filter((item) => item.kind === "video" && typeof item.id === "string" && typeof item.url === "string") ?? [];
     if (media.length !== 1) { failures.push(`${row.mappingId}: existing draft ${draft.draftId} must have exactly one video media item`); continue; }
     const boardId = BOARD_IDS[row.boardName];
     if (!boardId) { failures.push(`${row.mappingId}: missing board id for ${row.boardName}`); continue; }
-    items.push({ row, draftId: draft.draftId, media: media[0], mediaId: media[0].id!, boardId, current: draft });
+    const candidate: Match = { row, draftId: draft.draftId, media: media[0], mediaId: media[0].id!, boardId, current: draft, applyState: "pending" };
+    const provisional = buildReviewPatch(candidate);
+    if (lifecycle === "scheduled" && !isAlreadyApplied(provisional, draft)) { failures.push(`${row.mappingId}: scheduled draft ${draft.draftId} is not fully applied`); continue; }
+    items.push({ ...candidate, applyState: lifecycle === "scheduled" ? "already_applied" : "pending" });
   }
   return { ok: failures.length === 0, items, failures };
 }

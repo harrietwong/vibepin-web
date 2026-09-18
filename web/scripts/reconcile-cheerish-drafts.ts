@@ -62,6 +62,7 @@ function markdownReport(args: {
     `- Preview manifest: \`${args.manifest}\``, `- Review patch: \`${args.patch}\``, `- Account: @${ACCOUNT_LABEL} (${CONNECTION_ID})`, "",
     "## Scope", "", `- Manifest rows: ${args.rows.length}`, `- Existing non-draft rows excluded from mutation: ${args.excluded.length}`,
     `- Matched existing draft rows: ${args.matches.length}`, `- Failures: ${args.failures.length}`, "",
+    `- Pending updates: ${args.matches.filter((match) => match.applyState === "pending").length}`, `- Already applied (idempotent): ${args.matches.filter((match) => match.applyState === "already_applied").length}`, "",
     "## Counts", "", `- Dates: ${[...dateCounts.entries()].sort().map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`,
     `- Boards: ${[...boardCounts.entries()].sort().map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`,
     `- Account: @${ACCOUNT_LABEL}=${args.matches.length}`, `- Board IDs: ${Object.entries(BOARD_IDS).map(([key, value]) => `${key}=${value}`).join(", ")}`, "",
@@ -149,7 +150,7 @@ async function main() {
   const patches = reconciled.items.map((match) => buildReviewPatch(match));
   writeFileSync(patchPath, `${JSON.stringify({ mode: "dry-run", writesPerformed: false, connectionId: CONNECTION_ID, accountLabel: ACCOUNT_LABEL, patches }, null, 2)}\n`, "utf8");
   writeFileSync(reportPath, markdownReport({ manifest: manifestPath, patch: patchPath, rows: manifest, excluded, matches: reconciled.items, failures }), "utf8");
-  console.log(JSON.stringify({ ok: failures.length === 0, mode: "dry-run", manifestRows: manifest.length, excluded: excluded.length, matched: reconciled.items.length, failures, reportPath, patchPath }, null, 2));
+  console.log(JSON.stringify({ ok: failures.length === 0, mode: "dry-run", manifestRows: manifest.length, excluded: excluded.length, matched: reconciled.items.length, pending: reconciled.items.filter((match) => match.applyState === "pending").length, alreadyApplied: reconciled.items.filter((match) => match.applyState === "already_applied").length, failures, reportPath, patchPath }, null, 2));
   if (failures.length) process.exitCode = 2;
 }
 

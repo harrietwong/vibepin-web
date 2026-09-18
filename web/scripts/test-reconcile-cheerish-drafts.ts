@@ -60,6 +60,7 @@ assert.equal(matched.items.length, 1);
 assert.equal(matched.items[0].draftId, "draft-1");
 assert.equal(matched.items[0].mediaId, "media-1");
 assert.equal(matched.items[0].boardId, BOARD_IDS["Home & Kitchen Finds"]);
+assert.equal(matched.items[0].applyState, "pending");
 
 const patch = buildReviewPatch(matched.items[0], "a273f91c-4589-4fce-b19c-e24f2bdf6c99", "cheerishh");
 assert.equal(patch.draftId, "draft-1");
@@ -71,6 +72,11 @@ assert.equal(patch.set.scheduled_at, "2026-09-20T10:01:00-04:00");
 assert.equal(patch.set.payload.boardId, BOARD_IDS["Home & Kitchen Finds"]);
 assert.equal(patch.set.payload.targetConnectionId, "a273f91c-4589-4fce-b19c-e24f2bdf6c99");
 assert.equal("sourceVideoSha256" in patch.set.payload, false);
+const scheduled = { ...matched.items[0].current, scheduledAt: patch.set.scheduled_at, payload: mergeApplyPayload(matched.items[0].current.payload, patch.set.payload, "2026-09-18T21:00:00.000Z") };
+const resumed = reconcileDrafts([row(1)], [scheduled]);
+assert.equal(resumed.ok, true);
+assert.equal(resumed.items[0].applyState, "already_applied");
+assert.equal(reconcileDrafts([row(1)], [{ ...scheduled, payload: { ...scheduled.payload, boardId: "wrong" } }]).ok, false);
 
 assert.doesNotThrow(() => assertApplyInvocation(["node", "script", "apply", "--confirm-preview-write", "snulmwprsahzqvdbyenc"]));
 for (const argv of [
@@ -117,6 +123,6 @@ assert.match(missing.failures[0], /missing/);
 
 const blocked = reconcileDrafts([row(1)], [existing(1, { scheduledAt: "2026-09-20T10:01:00-04:00" })]);
 assert.equal(blocked.ok, false);
-assert.match(blocked.failures[0], /not_draft/);
+assert.match(blocked.failures[0], /not fully applied/);
 
 console.log("reconcile-cheerish-drafts tests passed");
