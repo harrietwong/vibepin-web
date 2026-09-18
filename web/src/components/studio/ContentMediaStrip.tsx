@@ -10,6 +10,8 @@ import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { BUI } from "@/components/studio/boardUI";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
+import { VideoCoverFrameDialog } from "./VideoCoverFrameDialog";
+import type { ContentVideoMedia } from "@/lib/contentDraftModel";
 
 export const MEDIA_DRAG_TYPE = "application/x-vibepin-content-media";
 
@@ -43,9 +45,9 @@ function VideoMediaItem({ media, index, disabled, selected, onSelect }: {
     <div style={{ position: "relative", height: 64, borderRadius: 6, overflow: "hidden", background: BUI.surface3 }}>
       <MediaThumbnail media={media} alt={media.altText || `Video ${index + 1}`} />
     </div>
-    <button type="button" aria-label={`Use video ${index + 1} as cover`} disabled={disabled} onClick={onSelect}
+    <button type="button" aria-label="Choose cover frame" disabled={disabled} onClick={event => { event.stopPropagation(); onSelect(); }}
       style={{ minHeight: 40, padding: "3px 5px", border: 0, borderRadius: 6, background: selected ? BUI.purple : BUI.surface3, color: "#fff", cursor: disabled ? "default" : "pointer", fontSize: 12, fontWeight: 700 }}>
-      {selected ? "Video cover" : "Use as cover"}
+      Choose cover frame
     </button>
   </div>;
 }
@@ -71,6 +73,7 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [editingVideo, setEditingVideo] = useState<ContentVideoMedia | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const media = contentMedia(draft);
   const cover = coverMedia(draft);
@@ -142,7 +145,7 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
                 background: BUI.surface, cursor: disabled ? "default" : "grab" }}>
               {item.kind === "video" ? (
                 <VideoMediaItem media={item} index={index} disabled={disabled} selected={selected}
-                  onSelect={() => !disabled && setCoverMedia(draft.id, item.id)} />
+                  onSelect={() => !disabled && setEditingVideo(item)} />
               ) : (
                 <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
                   onClick={() => !disabled && setCoverMedia(draft.id, item.id)}
@@ -170,6 +173,7 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
         </button>}
         {!containsVideo && <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={event => void addFiles(event.target.files)} />}
       </div>
+      {editingVideo && <VideoCoverFrameDialog draftId={draft.id} media={editingVideo} onClose={() => setEditingVideo(null)} />}
     </div>
   );
 }

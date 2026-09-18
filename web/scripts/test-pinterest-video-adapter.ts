@@ -96,6 +96,24 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  await test("cover time milliseconds become precise Pinterest seconds; invalid times never dispatch", async () => {
+    for (const [time, seconds] of [[undefined, 1], [0, 0], [1000, 1], [1250.5, 1.2505], [4000, 4]]) {
+      const { deps, calls } = dependencies([
+        response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "a" } }),
+        new Response(null, { status: 204 }), response({ status: "succeeded" }), response({ id: "pin-1" }, 201),
+      ]);
+      const result = await publishPinterestVideo(input({ coverFrameTimeMs: time, durationMs: 4000 }), deps);
+      assert.equal(result.outcome, "succeeded");
+      const payload = JSON.parse(String(calls.at(-1)!.init.body));
+      assert.equal(payload.media_source.cover_image_key_frame_time, seconds);
+    }
+    for (const time of [-1, NaN, Infinity, 4001, "1000"]) {
+      const { deps, calls } = dependencies([]);
+      const result = await publishPinterestVideo(input({ coverFrameTimeMs: time, durationMs: 4000 }), deps);
+      assert.equal(result.evidence.classification, "definite_validation");
+      assert.equal(calls.length, 0);
+    }
+  });
   await test("registers video with exact Bearer request, uploads fields then file, polls, and creates exact video Pin", async () => {
     const { deps, calls, sleeps } = dependencies([
       response({ media_id: "media-1", upload_url: "https://upload.example.test/form", upload_parameters: { key: "uploads/a", policy: "p" } }, 200, { "x-pinterest-rid": "register-rid" }),

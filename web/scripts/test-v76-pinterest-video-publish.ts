@@ -335,6 +335,14 @@ await test("private materialization freezes the owner source revision and reject
   assert.equal(copied.length, 1);
 
   copied.length = 0;
+  const loadOriginal = boundary.loadDraft;
+  boundary.loadDraft = async () => ({
+    updatedAt: receipt.sourceUpdatedAt,
+    payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: [{ ...receipt.media[0], coverFrameTimeMs: 1250 }] },
+  });
+  await assert.rejects(materializePrivateVideoSources(input(), { leaseToken: "lease-1", deliveryId: "delivery-1" }, boundary), /publish_source_media_conflict/);
+  assert.equal(copied.length, 0, "cover change invalidates old exact source before copying");
+  boundary.loadDraft = loadOriginal;
   boundary.loadDraft = async () => ({
     updatedAt: "2026-09-16T12:00:03.000Z",
     payload: { title: receipt.title, description: receipt.description, altText: receipt.altText, destinationUrl: receipt.destinationUrl, media: receipt.media },

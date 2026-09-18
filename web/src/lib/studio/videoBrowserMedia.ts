@@ -2,6 +2,10 @@
 
 import { MAX_VIDEO_DURATION_MS, MIN_VIDEO_DURATION_MS } from "@/lib/videoUploadLimits";
 import { normalizedVideoContentType, type VideoInspection } from "./videoBatchUpload";
+import type { ContentVideoMedia } from "@/lib/contentDraftModel";
+import { getDraft, getPinDraftOwnerScope, replaceVideoPoster } from "@/lib/pinDraftStore";
+import { isValidCoverFrameTime } from "@/lib/videoCoverFrame";
+import { uploadPinImage } from "./uploadPinImage";
 
 export class VideoBrowserMediaError extends Error {
   readonly code: string;
@@ -10,7 +14,7 @@ export class VideoBrowserMediaError extends Error {
 
 export type BrowserVideoProbe = Omit<VideoInspection, "checksumSha256"> & { posterFile?: File };
 
-function waitFor(video: HTMLVideoElement, event: "loadedmetadata" | "seeked", signal?: AbortSignal): Promise<void> {
+function waitFor(video: HTMLVideoElement, event: "loadedmetadata" | "loadeddata" | "seeked", signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = window.setTimeout(() => done(new VideoBrowserMediaError("video_decode_failed")), 15_000);
@@ -97,5 +101,58 @@ export async function probeVideoFile(file: File, signal?: AbortSignal): Promise<
     video.removeAttribute("src");
     video.load();
     URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/** Unlike the optional initial poster, an explicit cover selection must fail visibly. */
+export async function captureVideoCoverFrame(video: HTMLVideoElement, timeMs: number, durationMs: number): Promise<File> {
+  if (!isValidCoverFrameTime(timeMs, durationMs) || !Number.isFinite(video.duration)
+      || timeMs > video.duration * 1000 + 1) throw new VideoBrowserMediaError("invalid_cover_frame_time");
+  video.pause();
+  if (video.seeking || Math.abs(video.currentTime - timeMs / 1000) > 0.000001) {
+    const sought = waitFor(video, "seeked");
+    video.currentTime = Math.min(timeMs / 1000, video.duration);
+    await sought;
+  }
+  if (video.readyState < 2) await waitFor(video, "loadeddata");
+  const canvas = document.createElement("canvas");
+  const scale = Math.min(1, 2048 / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  const context = canvas.getContext("2d");
+  if (!context || !canvas.width || !canvas.height) throw new VideoBrowserMediaError("video_cover_capture_failed");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.88));
+  if (!blob?.size || blob.type !== "image/jpeg") throw new VideoBrowserMediaError("video_cover_capture_failed");
+  return new File([blob], "video-cover.jpg", { type: "image/jpeg" });
+}
+
+type CoverSelectionDependencies = {
+  capture: typeof captureVideoCoverFrame;
+  upload: (file: File) => Promise<{ proxyUrl: string }>;
+};
+
+export async function confirmVideoCoverFrame(
+  draftId: string, media: ContentVideoMedia, video: HTMLVideoElement, timeMs: number,
+  deps: CoverSelectionDependencies = { capture: captureVideoCoverFrame, upload: uploadPinImage },
+): Promise<void> {
+  if (!isValidCoverFrameTime(timeMs, media.durationMs)) throw new Error("invalid_cover_frame_time");
+  const owner = JSON.stringify(getPinDraftOwnerScope());
+  const unchanged = () => {
+    const current = getDraft(draftId)?.media?.find(item => item.id === media.id);
+    return owner === JSON.stringify(getPinDraftOwnerScope()) && current?.kind === "video"
+      && current.url === media.url && current.posterUrl === media.posterUrl
+      && current.coverFrameTimeMs === media.coverFrameTimeMs && current.durationMs === media.durationMs;
+  };
+  if (!unchanged()) throw new Error("The video cover changed. Reopen the selector and retry.");
+  const file = await deps.capture(video, timeMs, media.durationMs!);
+  if (!unchanged()) throw new Error("The video cover changed. Reopen the selector and retry.");
+  // Generic owner-bound upload: v80 association is finalized and must never be reused.
+  const poster = await deps.upload(file);
+  if (!unchanged()) throw new Error("The video cover changed. Reopen the selector and retry.");
+  // The old poster (and a racing unattached upload) is retained in P0: there is no
+  // replacement-delete capability on the one-time v80 operation.
+  if (!replaceVideoPoster(draftId, media.id, { posterUrl: poster.proxyUrl, coverFrameTimeMs: timeMs })) {
+    throw new Error("The video cover changed. Reopen the selector and retry.");
   }
 }

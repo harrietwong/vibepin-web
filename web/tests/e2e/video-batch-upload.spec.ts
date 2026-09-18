@@ -209,6 +209,59 @@ function video(name: string) {
 test.describe("video batch upload (fully mocked)", () => {
   test.describe.configure({ timeout: 90_000 });
 
+  test("cover frame dialog cancels without mutation and confirms a captured replacement", async ({ page }) => {
+    await installVideoMocks(page);
+    await gotoStudio(page);
+    await requireVideoFlag(page);
+    await page.getByTestId("board-upload-input").setInputFiles([video("cover.mp4")]);
+    const card = page.getByTestId("pin-board-card");
+    await expect(card).toHaveCount(1, { timeout: 30000 });
+    const readCover = () => page.evaluate(() => {
+      const entry = Object.entries(localStorage).find(([key]) => key.startsWith("vp:pin_drafts:v2:") && !key.includes("migrated"));
+      return entry ? Object.values(JSON.parse(entry[1]).drafts)[0] as { imageUrl: string; media: Array<{ posterUrl?: string; coverFrameTimeMs?: number }> } : null;
+    });
+    const before = await readCover();
+    let replacements = 0;
+    let cleanupCalls = 0;
+    let failUpload = true;
+    await page.route("**/api/studio/upload/cleanup", async route => { cleanupCalls++; await route.fulfill({ status: 200, body: "{}" }); });
+    await page.route("**/api/studio/upload", async route => {
+      replacements++;
+      const body = route.request().postDataBuffer()!.toString("latin1");
+      expect(body).not.toContain('name="videoBatchId"');
+      expect(body).not.toContain('name="videoOrdinal"');
+      if (failUpload) { await route.fulfill({ status: 500, body: '{"code":"upload_failed"}' }); return; }
+      const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fselected.jpg`;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/selected.jpg` }) });
+    });
+    const choose = card.getByRole("button", { name: "Choose cover frame", exact: true });
+    await choose.click();
+    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("video")).toBeVisible();
+    const slider = dialog.getByRole("slider", { name: "Cover frame time" });
+    await slider.fill("1250");
+    expect(await readCover()).toEqual(before);
+    expect(replacements).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(choose).toBeFocused();
+    expect(await readCover()).toEqual(before);
+    await choose.click();
+    await slider.fill("1250");
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText("retry");
+    expect(await readCover()).toEqual(before);
+    failUpload = false;
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    expect((await readCover())!.media[0].coverFrameTimeMs).toBe(1250);
+    expect((await readCover())!.imageUrl).toContain("selected.jpg");
+    await expect(card.getByTestId("content-media-video").first()).toHaveAttribute("poster", /selected\.jpg/);
+    expect(replacements).toBe(2);
+    expect(cleanupCalls).toBe(0);
+  });
+
   test("selecting multiple videos creates independent video drafts", async ({ page }) => {
     await installVideoMocks(page);
     await gotoStudio(page);

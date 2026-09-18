@@ -7,6 +7,8 @@
  * a durable orchestration layer can reconcile before it considers another dispatch.
  */
 
+import { isValidCoverFrameTime, videoCoverFrameSeconds } from "@/lib/videoCoverFrame";
+
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 export type PinterestVideoAdapterDependencies = {
@@ -31,6 +33,8 @@ export type PinterestVideoPublishInput = {
   /** Provider bytes; never returned, logged, or put in evidence. */
   file: Blob;
   fileName?: string;
+  coverFrameTimeMs?: number;
+  durationMs?: number;
 };
 
 export type PinterestVideoEvidence = {
@@ -232,6 +236,7 @@ export async function publishPinterestVideo(
   deps: PinterestVideoAdapterDependencies,
 ): Promise<PinterestVideoPublishResult> {
   if (!validInput(input, deps)) return validationResult();
+  if (input.coverFrameTimeMs !== undefined && !isValidCoverFrameTime(input.coverFrameTimeMs, input.durationMs)) return validationResult();
 
   const token = cleanText(input.accessToken);
   const tokenSensitiveValues = new Set([token]);
@@ -338,7 +343,7 @@ export async function publishPinterestVideo(
       media_source: {
         source_type: "video_id",
         media_id: registered.mediaId,
-        cover_image_key_frame_time: 1,
+        cover_image_key_frame_time: videoCoverFrameSeconds(input.coverFrameTimeMs, input.durationMs),
       },
     };
     const optional = [

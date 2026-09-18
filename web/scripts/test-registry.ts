@@ -272,6 +272,8 @@ export const STUDIO: string[] = [
   "test-generation-recovery",
   "test-generation-failure-media",
   "test-video-media-rendering",
+  "test-video-cover-frame",
+  "test-video-cover-selection",
   "test-video-batch-upload",
   "test-video-batch-safety",
   "test-video-batch-safety-round3",

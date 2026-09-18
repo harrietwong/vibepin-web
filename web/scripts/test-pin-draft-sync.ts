@@ -19,7 +19,7 @@ const __dirname_ = path.dirname(fileURLToPath(import.meta.url));
 
 // ── window + localStorage shim (same pattern as test-pin-board-store.ts) ───────
 const mem = new Map<string, string>();
-const listeners = new Set<() => void>();
+const listeners = new Map<string, Set<() => void>>();
 (globalThis as unknown as { localStorage: unknown }).localStorage = {
   getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
   setItem: (k: string, v: string) => { mem.set(k, String(v)); },
@@ -27,9 +27,9 @@ const listeners = new Set<() => void>();
   clear: () => mem.clear(),
 };
 (globalThis as unknown as { window: unknown }).window = {
-  addEventListener: (_t: string, cb: () => void) => { listeners.add(cb); },
-  removeEventListener: (_t: string, cb: () => void) => { listeners.delete(cb); },
-  dispatchEvent: () => { listeners.forEach(fn => fn()); return true; },
+  addEventListener: (type: string, cb: () => void) => { const group = listeners.get(type) ?? new Set(); group.add(cb); listeners.set(type, group); },
+  removeEventListener: (type: string, cb: () => void) => { listeners.get(type)?.delete(cb); },
+  dispatchEvent: (event: Event) => { listeners.get(event.type)?.forEach(fn => fn()); return true; },
 };
 
 // ── Tiny harness ───────────────────────────────────────────────────────────────
@@ -245,6 +245,59 @@ async function main() {
   }
 
   // ── mergeServerDrafts (LWW 三态 + tombstone) ────────────────────────────────
+
+  await test("video AI evidence waits for durable cover acknowledgement, not the local poster", async () => {
+    reset();
+    const media = { id: "clip", kind: "video", url: "/api/storage-media?path=owner/clip.mp4", posterUrl: "/api/storage-image?path=studio/uploads/owner/old.jpg", durationMs: 4000 };
+    const server = createMockServer([serverDraft("cover-sync", "2026-01-01T00:00:00.000Z", { media: [media], imageUrl: media.posterUrl })]);
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: server.fetchImpl });
+    await sync.__waitForPinDraftSyncReady();
+    assert.equal(typeof sync.isPinDraftMediaSynced, "function", "requires actual durable media acknowledgement");
+    await sync.waitForPinDraftMediaSync("cover-sync", 2000);
+    assert.equal(sync.isPinDraftMediaSynced("cover-sync"), true);
+    server.defer(true);
+    store.replaceVideoPoster("cover-sync", "clip", { posterUrl: "/api/storage-image?path=studio/uploads/owner/new.jpg", coverFrameTimeMs: 1250 });
+    assert.equal(sync.isPinDraftMediaSynced("cover-sync"), false);
+    await assert.rejects(sync.waitForPinDraftMediaSync("cover-sync", 30), /sync/i);
+    assert.equal((server.live()[0].payload.media as typeof media[])[0].posterUrl, media.posterUrl);
+    server.defer(false);
+    await sync.waitForPinDraftMediaSync("cover-sync", 2000);
+    assert.equal(sync.isPinDraftMediaSynced("cover-sync"), true);
+    assert.equal((server.live()[0].payload.media as typeof media[])[0].posterUrl, "/api/storage-image?path=studio/uploads/owner/new.jpg");
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.invalid";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service";
+    const { analyzeOwnedVideoCover } = await import("../src/lib/ai-copy/v2/videoCoverEvidence");
+    const resolvedPaths: string[] = [];
+    const evidence = await analyzeOwnedVideoCover({ userId: "owner", draftId: "cover-sync" }, {
+      loadOwnedDraft: async () => server.live()[0].payload,
+      findProvenance: async (_owner, _bucket, path) => {
+        resolvedPaths.push(path);
+        return { owner_user_id: "owner", bucket_id: "generated-private", object_path: path, source_type: "upload", intent_id: null, lifecycle_state: "ready" };
+      },
+      fetchStorageObject: async () => new Response(new Uint8Array([255, 216, 255]), { headers: { "content-type": "image/jpeg" } }),
+      analyzePoster: async ({ dataUrl }) => { assert.match(dataUrl, /^data:image\/jpeg;/); return { objects: ["mug"], colors: ["blue"] }; },
+    });
+    assert.equal(evidence.degradedMode, "none");
+    assert.ok(resolvedPaths.length > 0 && resolvedPaths.every(path => path === "studio/uploads/owner/new.jpg"), "durable AI evidence resolves only the confirmed new poster");
+    sync.stopPinDraftSync();
+    assert.equal(sync.isPinDraftMediaSynced("cover-sync"), false, "stopping/owner change revokes acknowledgement");
+  });
+
+  await test("legacy stale success cannot acknowledge an unpersisted replacement cover", async () => {
+    reset();
+    const media = { id: "clip", kind: "video", url: "/api/storage-media?path=owner/clip.mp4", posterUrl: "/api/storage-image?path=studio/uploads/owner/old.jpg", durationMs: 4000 };
+    const server = createMockServer([serverDraft("legacy-cover", "2026-01-01T00:00:00.000Z", { media: [media], imageUrl: media.posterUrl, coverMediaId: "clip" })]);
+    const fetchImpl: typeof fetch = async (url, init) => init?.method === "PUT"
+      ? new Response(JSON.stringify({ applied: 0, skippedStale: 1 }), { headers: { "content-type": "application/json" } })
+      : server.fetchImpl(url, init);
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl });
+    await sync.__waitForPinDraftSyncReady();
+    store.replaceVideoPoster("legacy-cover", "clip", { posterUrl: "/api/storage-image?path=studio/uploads/owner/new.jpg", coverFrameTimeMs: 1250 });
+    await sync.__flushPinDraftSyncForTests();
+    assert.equal(sync.isPinDraftMediaSynced("legacy-cover"), false);
+    await assert.rejects(sync.waitForPinDraftMediaSync("legacy-cover", 30), /sync/i);
+  });
 
   await test("merge LWW: server strictly newer overwrites local", () => {
     reset();

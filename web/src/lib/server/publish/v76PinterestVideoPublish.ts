@@ -121,6 +121,7 @@ export function videoPublishSourceIdentityFingerprint(receipt: ConfirmedPublishR
       height: item.height ?? null,
       durationMs: item.kind === "video" ? item.durationMs ?? null : null,
       posterUrl: item.kind === "video" ? item.posterUrl?.trim() || null : null,
+      ...(item.kind === "video" && item.coverFrameTimeMs !== undefined ? { coverFrameTimeMs: item.coverFrameTimeMs } : {}),
       altText: item.kind === "video" ? item.altText?.trim() || null : null,
     })),
     destinations: receipt.publishableDestinations.map(item => ({

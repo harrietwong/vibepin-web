@@ -43,6 +43,8 @@ export interface ContentVideoMedia extends ContentMediaBase {
   /** Private poster image used by legacy image-only consumers; never the binary URL. */
   posterUrl?: string;
   durationMs?: number;
+  /** The only authoritative cover timestamp; absent means the legacy one-second frame. */
+  coverFrameTimeMs?: number;
 }
 
 export type ContentMedia = ContentImageMedia | ContentVideoMedia;

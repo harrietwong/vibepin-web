@@ -7,6 +7,7 @@ import {
 import type { PublishDestination } from "@/lib/contentDraftModel";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isValidCoverFrameTime } from "@/lib/videoCoverFrame";
 
 const MAX_CONFIRMATION_AGE_MS = 15 * 60_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
@@ -194,6 +195,8 @@ export function validateImmediatePublishReceipt(
       ? row.durationMs
       : undefined;
     const posterUrl = text(row.posterUrl).trim();
+    if (row.coverFrameTimeMs !== undefined
+      && (kind !== "video" || !isValidCoverFrameTime(row.coverFrameTimeMs, durationMs))) return [];
     const mediaAltText = text(row.altText).trim();
     return [{
       id: text(row.id),
@@ -205,6 +208,7 @@ export function validateImmediatePublishReceipt(
       source,
       ...(kind === "video" && durationMs ? { durationMs } : {}),
       ...(kind === "video" && posterUrl ? { posterUrl } : {}),
+      ...(kind === "video" && row.coverFrameTimeMs !== undefined ? { coverFrameTimeMs: row.coverFrameTimeMs as number } : {}),
     }];
   });
   if (!normalizedMedia.length || normalizedMedia.length !== media.length) return invalid("The confirmed media is invalid.");

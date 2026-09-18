@@ -3,6 +3,7 @@ import { parseLimitReached } from "@/lib/usage/limitReached";
 import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { coverMedia } from "@/lib/contentDraftModel";
+import { waitForPinDraftMediaSync } from "@/lib/pinDraftSync";
 import { track, trackLatency } from "@/lib/analytics";
 import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 import { readPinterestRegionFromStorage } from "@/lib/i18n/config";
@@ -194,6 +195,12 @@ export function resolveDirectionContext(
 export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyInput): Promise<GeneratePinterestPinCopyResult> {
   const started = performance.now();
   const storeDraft = findStoreDraft(input.draftId, input.imageUrl);
+  const selectedCover = storeDraft ? coverMedia(storeDraft) : null;
+  if (storeDraft && selectedCover?.kind === "video" && selectedCover.coverFrameTimeMs !== undefined) {
+    input.onStage?.("analyzing");
+    await waitForPinDraftMediaSync(storeDraft.id);
+    input = { ...input, imageUrl: selectedCover.posterUrl ?? "" };
+  }
   const previousMeta = storeDraft?.metadataDraft?.copyGenerationMeta;
   // Mode: caller override wins; else derive from whether copy was generated before.
   const mode = input.mode ?? (previousMeta ? "regenerate" : "initial");

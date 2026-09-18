@@ -139,6 +139,36 @@ let _opts = { ...DEFAULTS, fetchImpl: undefined as typeof fetch | undefined };
 
 /** Last-seen local state (id → updatedAt). Seeded from the server after the pull. */
 let _lastSeen = new Map<string, string>();
+/** Only server reads and successful writes establish durable media evidence. */
+let _acknowledgedMedia = new Map<string, string>();
+
+function mediaSyncIdentity(draft: Pick<PinDraft, "media" | "imageUrl">): string {
+  return JSON.stringify({ media: draft.media, imageUrl: draft.imageUrl });
+}
+
+export function isPinDraftMediaSynced(draftId: string): boolean {
+  const draft = getDraft(draftId);
+  return !!draft && _initialized && _ready && !_outbox.has(draftId) && !_issues.has(draftId)
+    && _acknowledgedMedia.get(draftId) === mediaSyncIdentity(draft);
+}
+
+/** Wait for the existing write-through engine; rejected/deferred/local-only edits never count. */
+export async function waitForPinDraftMediaSync(draftId: string, timeoutMs = 15_000): Promise<void> {
+  const epoch = _runEpoch;
+  const draft = getDraft(draftId);
+  if (!_initialized || !draft) throw new Error("The cover is not synced yet. Please retry after syncing.");
+  const identity = mediaSyncIdentity(draft);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const current = getDraft(draftId);
+    if (epoch !== _runEpoch || !current || mediaSyncIdentity(current) !== identity) {
+      throw new Error("The cover changed while syncing. Please retry.");
+    }
+    if (isPinDraftMediaSynced(draftId)) return;
+    if (_issues.has(draftId) || Date.now() >= deadline) throw new Error("The cover is not synced yet. Please retry after syncing.");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 /** Pending changes not yet acknowledged by the server. Never dropped on failure. */
 let _outbox = new Map<string, OutboxEntry>();
 let _issues = new Map<string, PinDraftSyncIssue>();
@@ -331,6 +361,7 @@ export function stopPinDraftSync(options: { clearOwnerScope?: boolean } = {}): v
   _ready = false;
   _getToken = null;
   _lastSeen = new Map();
+  _acknowledgedMedia = new Map();
   _outbox = new Map();
   _issues = new Map();
   _debounceTimer = null;
@@ -378,6 +409,7 @@ async function startupPull(epoch = _runEpoch): Promise<void> {
     _lastSeen = new Map(
       live.map(r => [r.draftId, ((r.payload as { updatedAt?: string }).updatedAt) || r.updatedAt]),
     );
+    _acknowledgedMedia = new Map(live.map(row => [row.draftId, mediaSyncIdentity(row.payload as unknown as PinDraft)]));
     _ready = true;
     _failureCount = 0;
     maybeRecover();
@@ -727,6 +759,8 @@ async function applyPutOutcomes(
     const sent = typeof outcome.draftId === "string" ? sentById.get(outcome.draftId) : undefined;
     if (!sent) continue;
     if (outcome.status === "applied" || (outcome.status === "stale" && outcome.retryable === false)) {
+      if (outcome.status === "applied") _acknowledgedMedia.set(sent.id, mediaSyncIdentity(sent.draft));
+      else _acknowledgedMedia.delete(sent.id);
       ackEntries([sent]);
       _issues.delete(sent.id);
       terminal.add(sent.id);
@@ -949,6 +983,7 @@ function ackEntries(chunk: Array<{ id: string; entry: OutboxEntry }>): void {
 // ── Test hooks (not used by product code) ─────────────────────────────────────
 
 export function __resetPinDraftSyncForTests(): void {
+  _acknowledgedMedia = new Map();
   _runEpoch++;
   if (_debounceTimer) clearTimeout(_debounceTimer);
   if (_retryTimer) clearTimeout(_retryTimer);
