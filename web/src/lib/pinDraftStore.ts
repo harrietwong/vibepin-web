@@ -1051,8 +1051,32 @@ export function replaceVideoPoster(
   if (!patch.posterUrl.trim() || !isValidCoverFrameTime(patch.coverFrameTimeMs, selected.durationMs)) {
     throw new Error("invalid_cover_frame_time");
   }
+  // Visual analysis and keyword recommendations describe the old poster identity.
+  // Clear only those derived caches so the next legacy copy request analyzes the
+  // replacement poster; merchant copy and product/Board context stay untouched.
+  const invalidatedDraft: PinDraft = {
+    ...draft,
+    imageAnalysisStatus: undefined,
+    imageAnalysisError: undefined,
+    imageAnalysisErrorCode: undefined,
+    imageAnalysisRetryAfter: undefined,
+    imageAnalysisHttpStatus: undefined,
+    imageAnalysisRequestId: undefined,
+    imageSummary: undefined,
+    visibleObjects: undefined,
+    colors: undefined,
+    style: undefined,
+    ocrText: undefined,
+    imageCategory: undefined,
+    imageAnalysisModel: undefined,
+    imageAnalysisUpdatedAt: undefined,
+    keywordStatus: undefined,
+    recommendedKeywords: undefined,
+    keywordSource: undefined,
+    keywordUpdatedAt: undefined,
+  };
   // Keep the video and its metadata intact. P0 retains old private poster objects.
-  return writeMedia(id, draft, media.map(item => item.id === mediaItemId
+  return writeMedia(id, invalidatedDraft, media.map(item => item.id === mediaItemId
     ? { ...selected, posterUrl: patch.posterUrl, coverFrameTimeMs: patch.coverFrameTimeMs }
     : item), new Date(Math.max(Date.now(), (Date.parse(draft.updatedAt) || 0) + 1)).toISOString());
 }

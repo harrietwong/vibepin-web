@@ -284,6 +284,110 @@ async function main() {
     assert.equal(sync.isPinDraftMediaSynced("cover-sync"), false, "stopping/owner change revokes acknowledgement");
   });
 
+  await test("replacement cover invalidates legacy AI caches through reload and durable sync", async () => {
+    reset();
+    const media = { id: "clip", kind: "video", url: "/api/storage-media?path=owner/clip.mp4", posterUrl: "/api/storage-image?path=studio/uploads/owner/old.jpg", durationMs: 4000 };
+    const oldVisualFields = {
+      imageAnalysisStatus: "ready",
+      imageAnalysisError: "provider_error",
+      imageAnalysisErrorCode: "old_error",
+      imageAnalysisRetryAfter: 17,
+      imageAnalysisHttpStatus: 502,
+      imageAnalysisRequestId: "old-request",
+      imageSummary: "OLD red lamp on a desk",
+      visibleObjects: ["red lamp"],
+      colors: ["red"],
+      style: "industrial",
+      ocrText: "OLD SALE",
+      imageCategory: "old decor",
+      imageAnalysisModel: "old-vision-model",
+      imageAnalysisUpdatedAt: "2026-01-01T00:00:00.000Z",
+      keywordStatus: "ready",
+      recommendedKeywords: ["OLD red lamp ideas"],
+      keywordSource: "pinterest_high_search",
+      keywordUpdatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const durableFacts = {
+      title: "Handwritten title",
+      description: "Handwritten description",
+      keyword: "merchant keyword",
+      category: "Lighting",
+      boardId: "board-1",
+      boardName: "Desk styling",
+      productId: "product-1",
+      sourceProductImageUrl: "https://shop.test/product.jpg",
+    };
+    const server = createMockServer([serverDraft("cover-cache", "2026-01-01T00:00:00.000Z", {
+      media: [media], imageUrl: media.posterUrl, coverMediaId: "clip", ...oldVisualFields, ...durableFacts,
+    })]);
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: server.fetchImpl });
+    await sync.__waitForPinDraftSyncReady();
+    await sync.waitForPinDraftMediaSync("cover-cache", 2000);
+
+    store.replaceVideoPoster("cover-cache", "clip", {
+      posterUrl: "/api/storage-image?path=studio/uploads/owner/new.jpg",
+      coverFrameTimeMs: 1250,
+    });
+    const afterReplace = store.getDraft("cover-cache")! as unknown as Record<string, unknown>;
+    for (const field of Object.keys(oldVisualFields)) {
+      assert.equal(afterReplace[field], undefined, `${field} must not survive a poster identity change`);
+    }
+    for (const [field, value] of Object.entries(durableFacts)) {
+      assert.deepEqual(afterReplace[field], value, `${field} is durable merchant/product/Board context`);
+    }
+
+    store.__resetMemoryCacheForTests();
+    const afterReload = store.getDraft("cover-cache")! as unknown as Record<string, unknown>;
+    for (const field of Object.keys(oldVisualFields)) {
+      assert.equal(afterReload[field], undefined, `${field} must stay invalidated after local reload`);
+    }
+    for (const [field, value] of Object.entries(durableFacts)) {
+      assert.deepEqual(afterReload[field], value, `${field} must survive local reload`);
+    }
+
+    await sync.waitForPinDraftMediaSync("cover-cache", 2000);
+    const synced = server.live()[0].payload;
+    assert.equal((synced.media as typeof media[])[0].posterUrl, "/api/storage-image?path=studio/uploads/owner/new.jpg");
+    for (const field of Object.keys(oldVisualFields)) {
+      assert.equal(synced[field], undefined, `${field} must be absent from the synchronized payload`);
+    }
+
+    const previousV2Flag = process.env.NEXT_PUBLIC_AI_COPY_V2;
+    process.env.NEXT_PUBLIC_AI_COPY_V2 = "false";
+    const originalFetch = globalThis.fetch;
+    const legacyBodies: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (input, init) => {
+      assert.equal(String(input), "/api/ai-copy");
+      legacyBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        ok: true,
+        pathUsed: "vision_fallback",
+        output: { title: "New cover title", description: "New cover description", altText: "New cover alt", tags: [], keywords: [] },
+        context: { imageContext: { primarySubject: "blue mug" }, productContext: {}, pageContext: {}, boardContext: {}, keywordContext: [] },
+        contextSourcesUsed: ["image"],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const { generatePinterestPinCopy } = await import("../src/lib/ai-copy/generatePinCopy");
+      const generated = await generatePinterestPinCopy({
+        draftId: "cover-cache",
+        imageUrl: media.posterUrl,
+        language: "en",
+      });
+      assert.equal(generated.fields.title, "New cover title");
+      const legacyBody = legacyBodies[0];
+      assert.equal(legacyBody?.imageUrl, "/api/storage-image?path=studio/uploads/owner/new.jpg", "legacy analysis must receive the durable replacement poster");
+      assert.equal(legacyBody?.imageAnalysis, undefined, "legacy fast_text must not receive the old visual summary");
+      assert.equal(legacyBody?.recommendedKeywords, undefined, "legacy fast_text must not receive the old keyword cache");
+      assert.equal(JSON.stringify(legacyBody).includes("OLD red lamp"), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousV2Flag === undefined) delete process.env.NEXT_PUBLIC_AI_COPY_V2;
+      else process.env.NEXT_PUBLIC_AI_COPY_V2 = previousV2Flag;
+      sync.stopPinDraftSync();
+    }
+  });
+
   await test("legacy stale success cannot acknowledge an unpersisted replacement cover", async () => {
     reset();
     const media = { id: "clip", kind: "video", url: "/api/storage-media?path=owner/clip.mp4", posterUrl: "/api/storage-image?path=studio/uploads/owner/old.jpg", durationMs: 4000 };
