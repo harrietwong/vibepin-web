@@ -2,6 +2,7 @@ import type { MessageKey } from "./en";
 import { publicPricingZhCN } from "./publicPricing";
 
 const zhCN: Partial<Record<MessageKey, string>> = {
+  "studioBoard.actions.viewDetails": "查看详情",
   "nav.home": "首页",
   "nav.createPins": "创建 Pin",
   "nav.weeklyPlan": "每周计划",
@@ -2217,6 +2218,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.fields.description": "描述",
   "studioBoard.card.fields.descriptionPlaceholder": "介绍一下这条内容",
   "studioBoard.card.fields.websiteUrl": "网站链接",
+  "studioBoard.card.fields.board": "画板",
+  "studioBoard.card.fields.boardPlaceholder": "选择画板",
   "studioBoard.card.publishTo": "发布目标",
   "studioBoard.card.editDestinations": "修改发布目标",
   "studioBoard.card.noSavedDestination": "选择发布目标",

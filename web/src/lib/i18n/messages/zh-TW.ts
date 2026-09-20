@@ -2,6 +2,7 @@ import type { MessageKey } from "./en";
 import { publicPricingZhTW } from "./publicPricing";
 
 const zhTW: Partial<Record<MessageKey, string>> = {
+  "studioBoard.actions.viewDetails": "查看詳情",
   "nav.home": "首頁",
   "nav.createPins": "建立 Pin",
   "nav.weeklyPlan": "每週計畫",
@@ -1139,6 +1140,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.fields.description": "描述",
   "studioBoard.card.fields.descriptionPlaceholder": "介紹一下這則內容",
   "studioBoard.card.fields.websiteUrl": "網站連結",
+  "studioBoard.card.fields.board": "畫板",
+  "studioBoard.card.fields.boardPlaceholder": "選擇畫板",
   "studioBoard.card.publishTo": "發布目標",
   "studioBoard.card.editDestinations": "修改發布目標",
   "studioBoard.card.noSavedDestination": "選擇發布目標",

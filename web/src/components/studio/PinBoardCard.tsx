@@ -49,6 +49,7 @@ import { BUI, STUDIO_UI, toneColor, fieldStyle, labelStyle } from "@/components/
 import { track } from "@/lib/analytics";
 import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
 import { explicitPublishDestinations } from "@/lib/studio/publishConfirmation";
+import { canEnterCardEdit, resolveMediaAspectRatio, studioCardPresentation } from "@/lib/studio/studioCardPresentation";
 
 const PERSIST_DEBOUNCE = 400;
 
@@ -80,9 +81,7 @@ function scheduledSummary(d: PinDraft): string {
  * into the legacy Pinterest portrait frame. */
 function mediaAspectRatio(draft: PinDraft): string {
   const media = coverMedia(draft);
-  const width = Number(media?.width);
-  const height = Number(media?.height);
-  return width > 0 && height > 0 ? `${width} / ${height}` : "2 / 3";
+  return resolveMediaAspectRatio(media?.width, media?.height);
 }
 /** The scheduled day / clock time, split for the "publishes now instead of {date} {time}"
  *  confirm. Locale-formatted; empty when the Content has no slot. */
@@ -256,6 +255,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [customTimeOpen, setCustomTimeOpen] = useState(false);
   const [customDate, setCustomDate] = useState(() => draft.scheduledDate ?? "");
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
+  const initialAspectRatio = mediaAspectRatio(draft);
+  const [intrinsicAspectRatio, setIntrinsicAspectRatio] = useState(initialAspectRatio);
+  useEffect(() => { setIntrinsicAspectRatio(initialAspectRatio); }, [draft.id, draft.updatedAt, initialAspectRatio]);
+  const onIntrinsicSize = useCallback((width: number, height: number) => {
+    setIntrinsicAspectRatio(resolveMediaAspectRatio(width, height));
+  }, []);
   const [selectedProviders, setSelectedProviders] = useState<PublishProvider[]>(() => {
     const providers = explicitPublishDestinations(draft).map(item => item.provider);
     return Array.from(new Set(providers));
@@ -477,13 +482,14 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
    */
   const [dragDepth, setDragDepth] = useState(0);
   const foreignDrag = useCallback((event: React.DragEvent) => {
+    if (lifecycle === "posted") return false;
     // getData() is empty until the drop, so the source card is identified through the
     // module-level drag ref rather than the payload. Both must agree: our media type,
     // and a source that is not this card.
     if (!event.dataTransfer.types.includes(MEDIA_DRAG_TYPE)) return false;
     const source = currentDragSourceDraftId();
     return !!source && source !== draft.id;
-  }, [draft.id]);
+  }, [draft.id, lifecycle]);
   const onCardDragEnter = useCallback((event: React.DragEvent) => {
     if (!foreignDrag(event)) return;
     event.preventDefault();
@@ -496,6 +502,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, [foreignDrag]);
   const onCardDragLeave = useCallback(() => setDragDepth(depth => Math.max(0, depth - 1)), []);
   const onCardDrop = useCallback((event: React.DragEvent) => {
+    if (lifecycle === "posted") return;
     setDragDepth(0);
     let payload: { sourceDraftId?: string; mediaId?: string } | null = null;
     try { payload = JSON.parse(event.dataTransfer.getData(MEDIA_DRAG_TYPE) || "null"); } catch { payload = null; }
@@ -504,7 +511,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     // No index: appended at the end. Copy, never move — the source card keeps its item,
     // which is what makes dragging a good image onto three Contents safe.
     copyMedia(payload.sourceDraftId, payload.mediaId, draft.id);
-  }, [draft.id]);
+  }, [draft.id, lifecycle]);
   const showDropHint = dragDepth > 0;
   /**
    * Publish. `onlyPending` is the board default (Retry semantics); an explicit
@@ -524,7 +531,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, [flush, props]);
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
   const startEditing = useCallback(() => {
-    if (lifecycle === "posted") return;
+    if (!canEnterCardEdit(lifecycle)) return;
     if (aiRef.current?.isBusy()) return;
     setEditing(true);
     props.onSetActive(draft.id);
@@ -736,8 +743,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   );
 
   // Draft cards edit in place; scheduled/posted/failed stay compact until Edit.
-  const compactFields = lifecycle !== "generating";
-  const cardFieldsEditable = lifecycle !== "posted";
+  const cardPresentation = studioCardPresentation(lifecycle);
+  const compactFields = cardPresentation.fieldsVisible;
+  const cardFieldsEditable = cardPresentation.fieldsEditable;
 
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
@@ -763,7 +771,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boards={boards}
       analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
       hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-      disabled={publishing}
+      disabled={publishing || !cardFieldsEditable}
       onBeforeGenerate={flush}
       onBusyChange={(busy) => props.onAiCopyBusyChange(draft.id, busy)}
       onApplyCopy={applyCopy}
@@ -995,13 +1003,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           </div>
         )}
-        <div data-testid="card-media" style={{ position: "relative", width: "100%", aspectRatio: mediaAspectRatio(draft), background: BUI.surface3 }}>
+        <div data-testid="card-media" style={{ position: "relative", width: "100%", minHeight: 180, aspectRatio: intrinsicAspectRatio, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
             // (generated → source → parent) instead of the raw draft.imageUrl, which
             // may be empty (scratch mode) or a dead snapshot. Never blank/broken.
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
-              placeholderVariant="generationFailed" generating={generating} hiddenByQuality={hiddenByQuality} />
+              placeholderVariant="generationFailed" generating={generating} hiddenByQuality={hiddenByQuality} onIntrinsicSize={onIntrinsicSize} />
           ) : (coverMedia(draft)?.kind === "video" || resolveInitialFailureMediaUrl(draft)) ? (
             // Publish-failed / healthy cards: same chain, starting at draft.imageUrl
             // (so a genuinely valid final image is always preferred) but falling
@@ -1009,7 +1017,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             // "No image" placeholder — instead of a broken image or a solid-color
             // junk block when imageUrl is dead or degenerate.
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
-              placeholderVariant="noImage" generating={generating} hiddenByQuality={hiddenByQuality} />
+              placeholderVariant="noImage" generating={generating} hiddenByQuality={hiddenByQuality} onIntrinsicSize={onIntrinsicSize} />
           ) : (
             <div data-testid={generating ? "card-generating-placeholder" : "card-fallback-placeholder"} style={{ width: "100%", height: "100%" }}>
               <PinFallbackArtwork busy={generating} />
@@ -1057,7 +1065,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           )}
         </div>
-        {!generating && <ContentMediaStrip draft={draft} disabled={publishing} offendingMediaIds={offendingIds} />}
+        {!generating && <ContentMediaStrip draft={draft} disabled={publishing || !cardFieldsEditable} offendingMediaIds={offendingIds} />}
         {/* Media compatibility (PRD §9/§13): ONE compact amber line per platform that
             refuses this set, directly under the images it is about. It reports and
             offers a way out — it never removes an image and never unticks a platform,
@@ -1071,7 +1079,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {mediaNoticeText(tr, notice)}
               </p>
             ))}
-            <button type="button" data-testid="card-split-separate" onClick={doSplitSeparate} disabled={publishing}
+            <button type="button" data-testid="card-split-separate" onClick={doSplitSeparate} disabled={publishing || !cardFieldsEditable}
               style={{ alignSelf: "flex-start", padding: "2px 4px", border: "none", background: "transparent", color: "#b45309", fontSize: 10.5, fontWeight: 800, textDecoration: "underline", cursor: publishing ? "default" : "pointer", fontFamily: "inherit" }}>
               {tr("studioBoard.card.mediaNotice.splitSeparate")}
             </button>
@@ -1122,7 +1130,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
               <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
-              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} busyKey={draft.id} />
+              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={!cardFieldsEditable || publishing || generating} busyKey={draft.id} />
             </div>
             <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
@@ -1357,8 +1365,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 </button>
               </>
             ) : posted ? (
-              <button type="button" data-testid="card-edit" aria-label={editAriaLabel} onClick={startEditing} style={primaryBtn}>
-                {tr("studioBoard.actions.edit")}
+              <button type="button" data-testid="card-view-details" aria-label={tr("studioBoard.actions.viewDetails")} onClick={() => props.onSetActive(draft.id)} style={primaryBtn}>
+                {tr("studioBoard.actions.viewDetails")}
               </button>
             ) : (
               <>
@@ -1383,13 +1391,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     <div data-testid="pin-board-card" data-active="true" data-source={draft.source} data-lifecycle={lifecycle}
       style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: STUDIO_UI.cardRadius, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)" }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
-        <div style={{ position: "relative", width: 96, aspectRatio: mediaAspectRatio(draft), borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
+        <div style={{ position: "relative", width: 96, minHeight: 144, aspectRatio: intrinsicAspectRatio, borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
-              placeholderVariant="generationFailed" />
+              placeholderVariant="generationFailed" onIntrinsicSize={onIntrinsicSize} />
           ) : (coverMedia(draft)?.kind === "video" || resolveInitialFailureMediaUrl(draft)) ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
-              placeholderVariant="noImage" />
+              placeholderVariant="noImage" onIntrinsicSize={onIntrinsicSize} />
           ) : (
             <PinFallbackArtwork busy={generating} />
           )}
@@ -1398,7 +1406,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
             <div style={{ minWidth: 0 }}>
-              <p style={{ margin: 0, fontSize: 14, fontWeight: 850, color: BUI.text }}>{tr("pinDetails.editTitle")}</p>
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 850, color: BUI.text }}>{posted ? tr("studioBoard.actions.viewDetails") : tr("pinDetails.editTitle")}</p>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
                 <span data-testid="card-status-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: toneColor[status.tone] ?? BUI.textSec, borderRadius: 999, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
                   {publishing && <Loader2 style={{ width: 10, height: 10 }} className="animate-spin" />}{statusLabel}
@@ -1412,7 +1420,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           </div>
           <div data-testid="card-ai-tools" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
             {aiCopyPanel}
-            <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
+            <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage} disabled={!cardFieldsEditable}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
             </button>
@@ -1428,12 +1436,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={onRetryBoards}
           boardFieldError={props.boardFieldError}
           titleFieldError={props.titleFieldError} descriptionFieldError={props.descriptionFieldError}
-          disabled={publishing} onChange={handleChange}
+          disabled={publishing || !cardFieldsEditable} onChange={handleChange}
           onGenerateCopy={() => aiRef.current?.generate()}
           aiBusyKey={draft.id}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 
-        <PublishDestinations
+        {cardFieldsEditable && <PublishDestinations
           selected={selectedProviders}
           onSelectedChange={changeProviders}
           selectedAccountIds={selectedAccountIds}
@@ -1441,7 +1449,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           onSummariesChange={setConnectionSummaries}
           onConnectPinterest={props.onConnect}
           pinterestConnected={!disconnected && !needsReconnect}
-        />
+        />}
         {destinationError && (
           <p data-testid="card-destination-error" role="alert"
             style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#b45309" }}>
@@ -1459,7 +1467,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <div data-testid="card-more-details" style={{ display: "flex", flexDirection: "column", gap: 11, marginTop: 10 }}>
               <div>
                 <span style={labelStyle}>{tr("studioBoard.expanded.productOptional")}</span>
-                <button type="button" data-testid="card-select-product" disabled={publishing || !props.onSelectProduct}
+                <button type="button" data-testid="card-select-product" disabled={!cardFieldsEditable || publishing || !props.onSelectProduct}
                   onClick={() => { flush(); props.onSelectProduct?.(draft); }}
                   style={{ ...fieldStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: linkedProduct ? BUI.text : BUI.purple, cursor: publishing ? "default" : "pointer", textAlign: "left", fontFamily: "inherit" }}>
                   <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: linkedProduct ? 700 : 650 }}>
@@ -1477,13 +1485,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               </div>
               <div>
                 <span style={labelStyle}>{tr("studioBoard.expanded.altTextOptional")}</span>
-                <textarea data-testid="board-field-alt" value={fields.altText} disabled={publishing}
+                <textarea data-testid="board-field-alt" value={fields.altText} disabled={publishing || !cardFieldsEditable}
                   onChange={e => handleChange({ altText: e.target.value })} rows={2}
                   placeholder={tr("studioBoard.expanded.altTextPlaceholder")} style={{ ...fieldStyle, resize: "vertical", minHeight: 48 }} />
               </div>
               <div>
                 <span style={labelStyle}>{tr("studioBoard.expanded.tagsOptional")}</span>
-                <input data-testid="board-field-tags" value={fields.tags} disabled={publishing}
+                <input data-testid="board-field-tags" value={fields.tags} disabled={publishing || !cardFieldsEditable}
                   onChange={e => handleChange({ tags: e.target.value })} placeholder={tr("studioBoard.expanded.tagsPlaceholder")} style={fieldStyle} />
               </div>
             </div>
@@ -1520,7 +1528,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           {/* While editing a Scheduled/Posted Content the primary action is Publish —
               a fresh publish of what is on screen (onlyPending:false), so an edit that
               was made specifically to fix a live Pin actually reaches every platform. */}
-          {(scheduled || posted) ? (
+          {scheduled ? (
             <>
               <button type="button" data-testid="card-done" onClick={stopEditing} style={secondaryBtn}>
                 {tr("studioBoard.actions.done")}
@@ -1530,6 +1538,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
               </button>
             </>
+          ) : posted ? (
+            <button type="button" data-testid="card-done" onClick={stopEditing} style={secondaryBtn}>
+              {tr("studioBoard.actions.done")}
+            </button>
           ) : (failed || lifecycle === "needs_attention") ? (
             isPublishFailure ? (
               <>

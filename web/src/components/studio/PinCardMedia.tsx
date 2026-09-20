@@ -51,6 +51,8 @@ export type PinCardMediaProps = {
   /** Quality-judge "invalid" verdict not yet overridden by the user: blur + dim the
    *  image underneath the card's own overlay (matches the old inline filter/opacity). */
   hiddenByQuality?: boolean;
+  /** Reports intrinsic dimensions discovered after loading unknown legacy media. */
+  onIntrinsicSize?: (width: number, height: number) => void;
 };
 
 /** Resolve the first (best) candidate — used by callers that just need a URL/null,
@@ -59,16 +61,16 @@ export function resolveInitialFailureMediaUrl(draft: FailureMediaDraft): string 
   return resolveFailureMediaUrl(draft, lookupParent);
 }
 
-export function PinCardMedia({ draft, alt, className, style, placeholderVariant = "generationFailed", generating, hiddenByQuality }: PinCardMediaProps) {
+export function PinCardMedia({ draft, alt, className, style, placeholderVariant = "generationFailed", generating, hiddenByQuality, onIntrinsicSize }: PinCardMediaProps) {
   const { t: tr } = useLocale();
   const primaryMedia = contentMedia(draft as Parameters<typeof contentMedia>[0])[0];
   if (primaryMedia?.kind === "video") {
-    return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} style={{ objectFit: "contain", opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
+    return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} onIntrinsicSize={onIntrinsicSize} style={{ objectFit: "contain", opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
   }
-  return <ImagePinCardMedia draft={draft} alt={alt} className={className} style={style} placeholderVariant={placeholderVariant} generating={generating} hiddenByQuality={hiddenByQuality} tr={tr} />;
+  return <ImagePinCardMedia draft={draft} alt={alt} className={className} style={style} placeholderVariant={placeholderVariant} generating={generating} hiddenByQuality={hiddenByQuality} onIntrinsicSize={onIntrinsicSize} tr={tr} />;
 }
 
-function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, tr }: PinCardMediaProps & { tr: (key: MessageKey) => string }) {
+function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, generating, hiddenByQuality, onIntrinsicSize, tr }: PinCardMediaProps & { tr: (key: MessageKey) => string }) {
   const chain = useMemo(() => resolveFailureMediaCandidates(draft, lookupParent), [draft]);
   // A different draft (or an edit that changes the candidate chain) resets the walk.
   // Derived DURING RENDER instead of by setting state from an effect: the effect
@@ -117,6 +119,9 @@ function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, g
       onError={advance}
       onLoad={e => {
         const el = e.currentTarget;
+        if (el.naturalWidth > JUNK_IMAGE_MAX_DIMENSION && el.naturalHeight > JUNK_IMAGE_MAX_DIMENSION) {
+          onIntrinsicSize?.(el.naturalWidth, el.naturalHeight);
+        }
         // A "successfully loaded" 1x1/2x2 pixel is junk (e.g. a stray placeholder PNG
         // data URL) — treat it exactly like a decode error and advance the chain.
         if (el.naturalWidth <= JUNK_IMAGE_MAX_DIMENSION || el.naturalHeight <= JUNK_IMAGE_MAX_DIMENSION) {

@@ -65,6 +65,7 @@ type Props = {
   candidate?: Pick<LoadedMediaMetrics, "id" | "provenance" | "knownPlaceholder">;
   /** A stalled image must not leave a permanent blank media well. */
   timeoutMs?: number;
+  onIntrinsicSize?: (width: number, height: number) => void;
 };
 
 type NeutralMediaFallbackProps = {
@@ -88,7 +89,7 @@ function DefaultFallback({ alt }: Pick<Props, "alt">) {
   return <NeutralMediaFallback testId="resilient-media-fallback" label={alt || "Media unavailable"} />;
 }
 
-function MediaResource({ src, alt = "", className, style, loading = "lazy", imageTestId, fallback, candidate, timeoutMs = 8_000 }: Props) {
+function MediaResource({ src, alt = "", className, style, loading = "lazy", imageTestId, fallback, candidate, timeoutMs = 8_000, onIntrinsicSize }: Props) {
   const [loadState, setLoadState] = useState<MediaLoadState>("loading");
   const failed = loadState === "failed";
 
@@ -116,6 +117,7 @@ function MediaResource({ src, alt = "", className, style, loading = "lazy", imag
       onError={() => setLoadState(current => reduceMediaLoadState(current, "decode-error"))}
       onLoad={event => {
         const image = event.currentTarget;
+        if (image.naturalWidth > 2 && image.naturalHeight > 2) onIntrinsicSize?.(image.naturalWidth, image.naturalHeight);
         // A successful decode can still be a 1x1/2x2 tracking pixel. Use the
         // browser's measured naturalWidth/naturalHeight, never URL spelling or color.
         const result = image.naturalWidth <= 2 || image.naturalHeight <= 2 || inspectLoadedMedia(image, candidate ?? src) !== "valid"

@@ -1,6 +1,9 @@
 import type { MessageKey } from "./en";
 
 const ja: Partial<Record<MessageKey, string>> = {
+  "studioBoard.card.fields.board": "Board",
+  "studioBoard.card.fields.boardPlaceholder": "Choose a board",
+  "studioBoard.actions.viewDetails": "View details",
   "nav.home": "ホーム",
   "nav.createPins": "Pin を作成",
   "nav.weeklyPlan": "週間プラン",

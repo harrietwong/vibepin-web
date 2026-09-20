@@ -1,6 +1,9 @@
 import type { MessageKey } from "./en";
 
 const vi: Partial<Record<MessageKey, string>> = {
+  "studioBoard.card.fields.board": "Board",
+  "studioBoard.card.fields.boardPlaceholder": "Choose a board",
+  "studioBoard.actions.viewDetails": "View details",
   "nav.home": "Trang chủ",
   "nav.createPins": "Tạo Pin",
   "nav.weeklyPlan": "Kế hoạch tuần",

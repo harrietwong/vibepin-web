@@ -1,24 +1,24 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const card = readFileSync(join(process.cwd(), "src/components/studio/PinBoardCard.tsx"), "utf8");
-const media = readFileSync(join(process.cwd(), "src/components/studio/PinCardMedia.tsx"), "utf8");
+// @ts-expect-error Node's strip-types runner needs the explicit extension; the app
+// bundler resolves the same production module extensionlessly.
+import { canEnterCardEdit, resolveMediaAspectRatio, studioCardPresentation } from "../src/lib/studio/studioCardPresentation.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Studio UI contract failed: ${message}`);
 }
 
-assert(card.includes('const compactFields = lifecycle !== "generating";'),
-  "metadata fields should be shown for every non-generating lifecycle");
-assert(card.includes('const cardFieldsEditable = lifecycle !== "posted";'),
-  "posted metadata should be read-only");
-assert(card.includes('data-testid="board-card-board"'),
-  "board field should be present in the default card view");
-assert(card.includes('disabled={!cardFieldsEditable || publishing || generating}'),
-  "posted metadata controls should be disabled");
-assert(card.includes("mediaAspectRatio(draft)"),
-  "card media frame should use the cover media aspect ratio");
-assert(media.includes('objectFit: "contain"'),
-  "card media should preserve the source aspect ratio");
+for (const lifecycle of ["unscheduled", "scheduled", "failed", "needs_attention"] as const) {
+  const view = studioCardPresentation(lifecycle);
+  assert(view.fieldsVisible && view.fieldsEditable && !view.readOnly, `${lifecycle} is editable by default`);
+  assert(canEnterCardEdit(lifecycle), `${lifecycle} can enter edit`);
+}
+const posted = studioCardPresentation("posted");
+assert(posted.fieldsVisible && !posted.fieldsEditable && posted.readOnly, "posted is read-only");
+assert(!canEnterCardEdit("posted"), "posted cannot enter edit even when stale active");
+const generating = studioCardPresentation("generating");
+assert(generating.fieldsVisible && !generating.fieldsEditable, "generating fields remain visible but disabled");
+
+assert(resolveMediaAspectRatio(1920, 1080) === "1920 / 1080", "known media ratio is preserved");
+assert(resolveMediaAspectRatio() === "auto", "unknown media ratio is neutral");
+assert(resolveMediaAspectRatio(0, 0) === "auto", "invalid media ratio is neutral");
 
 console.log("Studio UI contract: PASS");

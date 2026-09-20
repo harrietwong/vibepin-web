@@ -237,6 +237,7 @@ export const studioBoardMessages = {
   "studioBoard.card.fields.websiteUrl": "Website URL",
   "studioBoard.card.fields.board": "Board",
   "studioBoard.card.fields.boardPlaceholder": "Choose a board",
+  "studioBoard.actions.viewDetails": "View details",
   "studioBoard.card.publishTo": "Destinations",
   "studioBoard.card.editDestinations": "Edit destinations",
   "studioBoard.card.noSavedDestination": "Choose publishing destinations",

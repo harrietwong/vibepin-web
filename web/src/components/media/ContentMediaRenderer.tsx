@@ -16,6 +16,7 @@ type Props = {
   videoControls?: boolean;
   /** Lets image-only surfaces keep their established loading/recovery behavior. */
   renderImage?: (media: ContentImageMedia) => ReactNode;
+  onIntrinsicSize?: (width: number, height: number) => void;
 };
 
 /** Stable resource identity; changing it must create a fresh load/error lifecycle. */
@@ -58,7 +59,7 @@ export function ContentMediaRenderer({ media, ...props }: Props) {
   return <MediaResource key={mediaIdentity(media)} media={media} {...props} />;
 }
 
-function MediaResource({ media, alt = "", className, style, loading = "lazy", imageTestId, fallback, videoControls = true, renderImage }: Omit<Props, "media"> & { media: ContentMedia }) {
+function MediaResource({ media, alt = "", className, style, loading = "lazy", imageTestId, fallback, videoControls = true, renderImage, onIntrinsicSize }: Omit<Props, "media"> & { media: ContentMedia }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <MediaFallback media={media} failed style={style} fallback={fallback} />;
   if (media.kind === "video") {
@@ -67,7 +68,7 @@ function MediaResource({ media, alt = "", className, style, loading = "lazy", im
         onClick={videoControls ? stopMediaActivation : undefined} onKeyDown={videoControls ? stopMediaActivation : undefined}>
         <video data-testid="content-media-video" src={media.url} controls={videoControls} muted playsInline preload="metadata"
           poster={media.posterUrl} aria-label={alt || "Video preview"} tabIndex={videoControls ? undefined : -1}
-          onError={() => setFailed(true)} className={className}
+          onError={() => setFailed(true)} onLoadedMetadata={event => onIntrinsicSize?.(event.currentTarget.videoWidth, event.currentTarget.videoHeight)} className={className}
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", ...style }} />
       </span>
     );
@@ -82,5 +83,6 @@ function MediaResource({ media, alt = "", className, style, loading = "lazy", im
     candidate={media}
     fallback={fallback ?? <MediaFallback media={media} failed style={style} />}
     style={{ width: "100%", height: "100%", objectFit: "cover", ...style }}
+    onIntrinsicSize={onIntrinsicSize}
   />;
 }
