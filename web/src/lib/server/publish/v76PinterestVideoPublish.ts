@@ -147,6 +147,17 @@ function canonicalPinterestUrl(pinId: string | undefined, pinUrl?: string): stri
     : undefined;
 }
 
+/** Durable storage is a separate trust boundary from the provider adapter. Keep
+ * only a short human diagnostic and reject URL/payload/credential-shaped text. */
+function safeSettlementProviderMessage(value: unknown): string | undefined {
+  const message = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!message || message.length > 240) return undefined;
+  if (/https?:\/\//i.test(message) || /[{}\[\]]/.test(message) || /[\u0000-\u001f]/.test(message)) return undefined;
+  if (/\b(?:authorization|bearer|access[_ -]?token|api[_ -]?key|secret|signature)\b\s*[:=]\s*\S+/i.test(message)) return undefined;
+  if (/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/.test(message)) return undefined;
+  return message;
+}
+
 function safeSettlementEvidence(providerEvidence: PinterestVideoPublishResult["evidence"] | undefined): Record<string, unknown> {
   if (!providerEvidence) return {};
   const evidence: Record<string, unknown> = {};
@@ -156,7 +167,8 @@ function safeSettlementEvidence(providerEvidence: PinterestVideoPublishResult["e
     const value = providerEvidence[key];
     if (typeof value === "string" && value.length <= 2048) evidence[key] = value;
   }
-  if (typeof providerEvidence.providerMessage === "string" && providerEvidence.providerMessage.length <= 240) evidence.providerMessage = providerEvidence.providerMessage;
+  const providerMessage = safeSettlementProviderMessage(providerEvidence.providerMessage);
+  if (providerMessage) evidence.providerMessage = providerMessage;
   if (typeof providerEvidence.providerStatus === "number" && Number.isFinite(providerEvidence.providerStatus)) evidence.providerStatus = providerEvidence.providerStatus;
   const canonicalUrl = providerEvidence.pinId ? canonicalPinterestUrl(providerEvidence.pinId) : undefined;
   if (canonicalUrl) evidence.pinUrl = canonicalUrl;

@@ -372,6 +372,44 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
   });
 });
 
+await test("provider settlement independently rejects unsafe provider messages", async () => {
+  const settlement = { args: null as Record<string, unknown> | null };
+  const deps = createV76RpcVideoPublishDependencies({
+    inspect: async () => ({ kind: "missing" }),
+    materializeSources: async () => [source],
+    loadReadySources: async () => [source],
+    publishVideo: async () => ({
+      outcome: "failed",
+      evidence: {
+        stage: "created",
+        classification: "definite_rejection",
+        providerStatus: 400,
+        providerMessage: "https://private.invalid/?token=SECRET-TOKEN",
+      },
+    }),
+    rpc: async (name, args) => {
+      if (name === "publish_provider_attempt_settle_v78") settlement.args = args;
+      const values: Record<string, unknown> = {
+        publish_intent_confirm_prepare_v78: { prepared: true },
+        publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
+        publish_asset_settle_video_item_v79: { deliveryReady: true },
+        publish_asset_claim_ready_v78: { claimToken: "claim-1" },
+        publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
+        publish_provider_attempt_settle_v78: { settled: true },
+      };
+      return values[name];
+    },
+  });
+  assert.equal((await dispatchV76PinterestVideo(input(), deps)).outcome, "failed");
+  assert.deepEqual(settlement.args?.p_evidence, {
+    provider: "pinterest",
+    reason: "provider_rejected",
+    stage: "created",
+    classification: "definite_rejection",
+    providerStatus: 400,
+  });
+});
+
 await test("private materialization freezes the owner source revision and rejects owner/path tampering before copy", async () => {
   const copied: string[] = [];
   const boundary: PrivateVideoMaterializationBoundary = {
