@@ -75,6 +75,15 @@ function scheduledSummary(d: PinDraft): string {
   const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
   return `${day} · ${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
 }
+
+/** Keep known media at its real aspect ratio instead of forcing landscape media
+ * into the legacy Pinterest portrait frame. */
+function mediaAspectRatio(draft: PinDraft): string {
+  const media = coverMedia(draft);
+  const width = Number(media?.width);
+  const height = Number(media?.height);
+  return width > 0 && height > 0 ? `${width} / ${height}` : "2 / 3";
+}
 /** The scheduled day / clock time, split for the "publishes now instead of {date} {time}"
  *  confirm. Locale-formatted; empty when the Content has no slot. */
 // "Was scheduled: <time>" — reads the ISO snapshot WP-B captures right before a
@@ -515,10 +524,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, [flush, props]);
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
   const startEditing = useCallback(() => {
+    if (lifecycle === "posted") return;
     if (aiRef.current?.isBusy()) return;
     setEditing(true);
     props.onSetActive(draft.id);
-  }, [props, draft.id]);
+  }, [props, draft.id, lifecycle]);
   const stopEditing = useCallback(() => {
     if (aiRef.current?.isBusy()) return;
     flush();
@@ -726,7 +736,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   );
 
   // Draft cards edit in place; scheduled/posted/failed stay compact until Edit.
-  const compactFields = lifecycle === "unscheduled" || lifecycle === "generating";
+  const compactFields = lifecycle !== "generating";
+  const cardFieldsEditable = lifecycle !== "posted";
 
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
@@ -984,7 +995,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           </div>
         )}
-        <div data-testid="card-media" style={{ position: "relative", width: "100%", aspectRatio: "2 / 3", background: BUI.surface3 }}>
+        <div data-testid="card-media" style={{ position: "relative", width: "100%", aspectRatio: mediaAspectRatio(draft), background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
             // (generated → source → parent) instead of the raw draft.imageUrl, which
@@ -1113,21 +1124,32 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
               <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={publishing || generating} busyKey={draft.id} />
             </div>
-            <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
+            <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
               style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700 }} />
           </div>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.description")}
-            <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
+            <textarea data-testid="board-card-description" value={fields.description} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder={tr("studioBoard.card.fields.descriptionPlaceholder")}
               style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 60 }} />
           </label>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.websiteUrl")}
-            <input data-testid="board-card-url" value={fields.websiteUrl} disabled={publishing || generating}
+            <input data-testid="board-card-url" value={fields.websiteUrl} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
               style={{ ...fieldStyle, fontSize: 11.5 }} />
+          </label>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
+            {tr("studioBoard.card.fields.board")}
+            <select data-testid="board-card-board" value={fields.boardId} disabled={!cardFieldsEditable || publishing || generating}
+              onChange={event => {
+                const board = boards.find(item => item.id === event.target.value);
+                handleChange({ boardId: board?.id ?? event.target.value });
+              }} style={{ ...fieldStyle, fontSize: 11.5 }}>
+              <option value="">{tr("studioBoard.card.fields.boardPlaceholder")}</option>
+              {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
+            </select>
           </label>
           </>
           )}
@@ -1135,6 +1157,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <span style={labelStyle}>{tr("studioBoard.card.publishTo")}</span>
               <button type="button" data-testid="card-destination-dropdown" aria-label={tr("studioBoard.card.editDestinations")}
+                disabled={!cardFieldsEditable || publishing}
                 aria-expanded={destinationsOpen} onClick={() => setDestinationsOpen(open => !open)}
                 style={{ width: 26, height: 26, display: "grid", placeItems: "center", border: `1px solid ${BUI.border}`, borderRadius: 7, background: BUI.surface2, padding: 0, color: BUI.textSec, cursor: "pointer" }}>
                 <ChevronDown style={{ width: 14, height: 14 }} />
@@ -1360,7 +1383,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     <div data-testid="pin-board-card" data-active="true" data-source={draft.source} data-lifecycle={lifecycle}
       style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: STUDIO_UI.cardRadius, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)" }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
-        <div style={{ position: "relative", width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
+        <div style={{ position: "relative", width: 96, aspectRatio: mediaAspectRatio(draft), borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="generationFailed" />

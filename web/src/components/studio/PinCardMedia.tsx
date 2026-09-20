@@ -63,7 +63,7 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
   const { t: tr } = useLocale();
   const primaryMedia = contentMedia(draft as Parameters<typeof contentMedia>[0])[0];
   if (primaryMedia?.kind === "video") {
-    return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} style={{ opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
+    return <ContentMediaRenderer media={primaryMedia} alt={alt} className={className} style={{ objectFit: "contain", opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1, filter: hiddenByQuality ? "blur(10px)" : "none", ...style }} />;
   }
   return <ImagePinCardMedia draft={draft} alt={alt} className={className} style={style} placeholderVariant={placeholderVariant} generating={generating} hiddenByQuality={hiddenByQuality} tr={tr} />;
 }
@@ -123,7 +123,7 @@ function ImagePinCardMedia({ draft, alt, className, style, placeholderVariant, g
           advance();
         }
       }}
-      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",
+      style={{ width: "100%", height: "100%", objectFit: "contain", display: "block",
         opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1,
         filter: hiddenByQuality ? "blur(10px)" : "none",
         ...style }}
