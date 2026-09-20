@@ -24,6 +24,14 @@ export function canEnterCardEdit(lifecycle: PinLifecycle): boolean {
   return lifecycle !== "posted";
 }
 
+/** Field-level visibility policy consumed directly by the card renderer. */
+export function shouldShowStudioMetadataField(
+  lifecycle: PinLifecycle,
+  field: StudioCardPresentation["metadataFields"][number],
+): boolean {
+  return studioCardPresentation(lifecycle).metadataFields.includes(field);
+}
+
 /** `auto` leaves unknown media neutral until the element reports intrinsic size. */
 export function resolveMediaAspectRatio(width?: number, height?: number): string {
   return Number.isFinite(width) && Number.isFinite(height) && (width ?? 0) > 0 && (height ?? 0) > 0
@@ -32,6 +40,6 @@ export function resolveMediaAspectRatio(width?: number, height?: number): string
 }
 
 /** Reset detected intrinsic size only when the media identity or declared size changes. */
-export function mediaAspectResetKey(mediaId?: string, width?: number, height?: number): string {
-  return `${mediaId ?? ""}|${width ?? ""}|${height ?? ""}`;
+export function mediaAspectResetKey(mediaId?: string, mediaUrl?: string, width?: number, height?: number): string {
+  return `${mediaId ?? ""}|${mediaUrl ?? ""}|${width ?? ""}|${height ?? ""}`;
 }
