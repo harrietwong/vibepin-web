@@ -49,7 +49,7 @@ import { BUI, STUDIO_UI, toneColor, fieldStyle, labelStyle } from "@/components/
 import { track } from "@/lib/analytics";
 import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
 import { explicitPublishDestinations } from "@/lib/studio/publishConfirmation";
-import { canEnterCardEdit, resolveMediaAspectRatio, studioCardPresentation } from "@/lib/studio/studioCardPresentation";
+import { canEnterCardEdit, mediaAspectResetKey, resolveMediaAspectRatio, studioCardPresentation } from "@/lib/studio/studioCardPresentation";
 
 const PERSIST_DEBOUNCE = 400;
 
@@ -257,7 +257,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
   const initialAspectRatio = mediaAspectRatio(draft);
   const [intrinsicAspectRatio, setIntrinsicAspectRatio] = useState(initialAspectRatio);
-  useEffect(() => { setIntrinsicAspectRatio(initialAspectRatio); }, [draft.id, draft.updatedAt, initialAspectRatio]);
+  const aspectResetKey = mediaAspectResetKey(coverMedia(draft)?.id, coverMedia(draft)?.width, coverMedia(draft)?.height);
+  useEffect(() => { setIntrinsicAspectRatio(initialAspectRatio); }, [aspectResetKey, initialAspectRatio]);
   const onIntrinsicSize = useCallback((width: number, height: number) => {
     setIntrinsicAspectRatio(resolveMediaAspectRatio(width, height));
   }, []);
@@ -1150,7 +1151,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           </label>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.board")}
-            <select data-testid="board-card-board" value={fields.boardId} disabled={!cardFieldsEditable || publishing || generating}
+          <select data-testid="board-card-board" value={fields.boardId} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => {
                 const board = boards.find(item => item.id === event.target.value);
                 handleChange({ boardId: board?.id ?? event.target.value });
@@ -1158,6 +1159,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               <option value="">{tr("studioBoard.card.fields.boardPlaceholder")}</option>
               {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
+          </label>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
+            {tr("studioBoard.expanded.altTextOptional")}
+            <textarea data-testid="board-card-alt" value={fields.altText} disabled={!cardFieldsEditable || publishing || generating}
+              onChange={event => handleChange({ altText: event.target.value })} rows={2}
+              placeholder={tr("studioBoard.expanded.altTextPlaceholder")} style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 48 }} />
           </label>
           </>
           )}
