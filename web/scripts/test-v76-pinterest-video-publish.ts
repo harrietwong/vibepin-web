@@ -77,6 +77,32 @@ const source: MaterializedVideoSource = {
   file: new Blob(["video-data"], { type: "video/mp4" }),
 };
 
+async function testStructuredPinterestSettlementEvidence(): Promise<void> {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const deps = createV76RpcVideoPublishDependencies({
+    rpc: async (name, args) => { calls.push({ name, args }); return {}; },
+    inspect: async () => ({ kind: "missing" }),
+    materializeSources: async () => [],
+    loadReadySources: async () => [],
+    publishVideo: async () => { throw new Error("unused"); },
+  });
+  await deps.settleAttempt({} as never, "failed", { attemptId: "attempt-1", claimToken: "claim-1" }, {
+    outcome: "failed", evidence: {
+      stage: "registered", classification: "definite_rejection", providerStatus: 400,
+      providerCode: "invalid_board", requestId: "req-123", mediaId: "media-123",
+    },
+  });
+  const evidence = calls.at(-1)?.args.p_evidence as Record<string, unknown>;
+  assert.equal(evidence.stage, "registered");
+  assert.equal(evidence.classification, "definite_rejection");
+  assert.equal(evidence.providerStatus, 400);
+  assert.equal(evidence.providerCode, "invalid_board");
+  assert.equal(evidence.requestId, "req-123");
+  assert.equal(evidence.mediaId, "media-123");
+  assert.equal(evidence.reason, "provider_rejected");
+  assert.equal(JSON.stringify(evidence).includes("claim-1"), false);
+}
+
 function input(overrides: Partial<DurableVideoPublishInput> = {}): DurableVideoPublishInput {
   return {
     uid: "owner-1",
@@ -138,6 +164,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  await testStructuredPinterestSettlementEvidence();
 await test("confirmation fingerprints freeze media kind and video identity", async () => {
   const shared = {
     priorIntentId: null,
@@ -332,7 +359,10 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
   });
   assert.equal((await dispatchV76PinterestVideo(input(), deps)).outcome, "failed");
   assert.equal(settlement.args?.p_provider_status, 400);
-  assert.deepEqual(settlement.args?.p_evidence, { provider: "pinterest", reason: "provider_rejected" });
+  assert.deepEqual(settlement.args?.p_evidence, {
+    provider: "pinterest", reason: "provider_rejected", stage: "created", classification: "definite_rejection",
+    mediaId: "media-1", requestId: "request-1", providerStatus: 400, providerCode: "board.invalid",
+  });
 });
 
 await test("private materialization freezes the owner source revision and rejects owner/path tampering before copy", async () => {

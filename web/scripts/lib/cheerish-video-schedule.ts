@@ -25,6 +25,70 @@ export type VideoNormalizationFacts = {
   audioCodec?: string; audioProfile?: string; audioSampleRate?: number; audioChannels?: number;
 };
 
+export const PORTRAIT_TRANSFORM_VERSION = "cheerish-portrait-v1";
+export const PORTRAIT_WIDTH = 1080;
+export const PORTRAIT_HEIGHT = 1920;
+
+export type CheerishManifestMedia = {
+  draftId: string;
+  schedule: string;
+  board: string;
+  destination: string;
+  connection: string;
+  title: string;
+  description: string;
+  url: string;
+  mediaUrl: string;
+  width: number;
+  height: number;
+  durationMs: number;
+  originalDigest: string;
+  status: string;
+  [key: string]: unknown;
+};
+
+export function buildPortraitTransformIdempotencyKey(originalDigest: string, version = PORTRAIT_TRANSFORM_VERSION): string {
+  return `portrait:${version}:${createHash("sha256").update(`${version}:${originalDigest.toLowerCase()}`).digest("hex")}`;
+}
+
+/**
+ * Foreground is always contained (never cropped); only the blurred background
+ * is cover-scaled and cropped to fill the portrait canvas.
+ */
+export function buildPortraitTransformFilter(): string {
+  return `[0:v]split=2[bg0][fg0];[bg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,crop=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT},boxblur=luma_radius=24:luma_power=2[bg];[fg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`;
+}
+
+export function buildPortraitTransformCommand(inputPath: string, outputPath: string): string[] {
+  return ["-y", "-i", inputPath, "-filter_complex", buildPortraitTransformFilter(), "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "128k", "-movflags", "+faststart", outputPath];
+}
+
+export function normalizeManifestMedia<T extends CheerishManifestMedia>(
+  input: T,
+  replacementMediaUrl?: string,
+): T & { provenance: Record<string, unknown> } {
+  if (input.status === "posted" || input.status === "claimed") throw new Error("portrait_transform_refused_terminal");
+  const key = buildPortraitTransformIdempotencyKey(input.originalDigest);
+  const alreadyTransformed = input.width === PORTRAIT_WIDTH && input.height === PORTRAIT_HEIGHT
+    && (input.provenance as Record<string, unknown> | undefined)?.transformIdempotencyKey === key;
+  if (input.width === PORTRAIT_WIDTH && input.height === PORTRAIT_HEIGHT) {
+    return { ...input, provenance: { ...(input.provenance as Record<string, unknown> | undefined), transformVersion: PORTRAIT_TRANSFORM_VERSION, transformIdempotencyKey: key, ...(alreadyTransformed ? {} : { source: "portrait" }) } };
+  }
+  return {
+    ...input,
+    ...(replacementMediaUrl ? { mediaUrl: replacementMediaUrl } : {}),
+    width: PORTRAIT_WIDTH,
+    height: PORTRAIT_HEIGHT,
+    provenance: {
+      ...(input.provenance as Record<string, unknown> | undefined),
+      source: "portrait-normalization",
+      transformVersion: PORTRAIT_TRANSFORM_VERSION,
+      transformIdempotencyKey: key,
+      originalDigest: input.originalDigest,
+    },
+  };
+}
+
 export const SAFE_PRIVATE_STORAGE_BYTES = 45 * 1024 * 1024;
 const AUDIO_BITRATE_KBPS = 128;
 const STORAGE_BUDGET_FRACTION = 0.95;

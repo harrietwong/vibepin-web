@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { validateManifest, validatePreviewBinding, buildDraftId, buildCanaryScheduledAt, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PREVIEW_REF, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { validateManifest, validatePreviewBinding, buildDraftId, buildCanaryScheduledAt, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PREVIEW_REF, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 import { handleVideoUploadPrepare, handleVideoUploadFinalize, VIDEO_UPLOAD_BUCKET } from "../src/lib/server/media/videoUploadHandler";
 import { createVideoUploadStore } from "../src/lib/server/media/videoUploadStore";
 import { createSupabaseVideoStorage } from "../src/lib/server/media/supabaseVideoStorage";
@@ -42,15 +42,26 @@ function probe(path: string) {
 }
 function uploadSource(row: CheerishScheduleRow): string {
   if (hashFile(row.localFilePath) !== row.sha256.toLowerCase()) throw new Error(`sha_mismatch ${row.mappingId}`);
-  const sourceFacts = probe(row.localFilePath);
-  if (!needsVideoNormalization(sourceFacts, statSync(row.localFilePath).size)) return row.localFilePath;
+  let sourcePath = row.localFilePath;
+  let sourceFacts = probe(sourcePath);
+  if (sourceFacts.width !== 1080 || sourceFacts.height !== 1920) {
+    const outDir = "D:/vp-tmp/publish-prep/normalized"; mkdirSync(outDir, { recursive: true });
+    const out = join(outDir, `${buildPortraitTransformIdempotencyKey(row.sha256)}.mp4`);
+    if (!existsSync(out) || probe(out).width !== 1080 || probe(out).height !== 1920) {
+      execFileSync("ffmpeg", buildPortraitTransformCommand(sourcePath, out), { stdio: "inherit" });
+    }
+    sourcePath = out;
+    sourceFacts = probe(sourcePath);
+    if (sourceFacts.width !== 1080 || sourceFacts.height !== 1920) throw new Error(`portrait_transform_invalid ${row.mappingId}`);
+  }
+  if (!needsVideoNormalization(sourceFacts, statSync(sourcePath).size)) return sourcePath;
   const videoBitrateKbps = targetVideoBitrateKbps(sourceFacts.durationMs);
   const videoMaxrateKbps = videoBitrateKbps;
   const videoBufsizeKbps = videoMaxrateKbps * 2;
   const outDir = "D:/vp-tmp/publish-prep/normalized"; mkdirSync(outDir, { recursive: true });
   const out = join(outDir, `${row.sha256}.mp4`);
   if (existsSync(out) && statSync(out).size <= SAFE_PRIVATE_STORAGE_BYTES && !needsVideoNormalization(probe(out), statSync(out).size)) return out;
-  execFileSync("ffmpeg", ["-y","-i",row.localFilePath,"-c:v","libx264","-profile:v","high","-pix_fmt","yuv420p","-preset","medium","-b:v",`${videoBitrateKbps}k`,"-maxrate",`${videoMaxrateKbps}k`,"-bufsize",`${videoBufsizeKbps}k`,"-c:a","aac","-profile:a","aac_low","-ar","48000","-ac","2","-b:a","128k","-movflags","+faststart",out], { stdio: "inherit" });
+  execFileSync("ffmpeg", ["-y","-i",sourcePath,"-c:v","libx264","-profile:v","high","-pix_fmt","yuv420p","-preset","medium","-b:v",`${videoBitrateKbps}k`,"-maxrate",`${videoMaxrateKbps}k`,"-bufsize",`${videoBufsizeKbps}k`,"-c:a","aac","-profile:a","aac_low","-ar","48000","-ac","2","-b:a","128k","-movflags","+faststart",out], { stdio: "inherit" });
   if (statSync(out).size > SAFE_PRIVATE_STORAGE_BYTES) throw new Error(`normalized_video_too_large ${row.mappingId}`);
   if (needsVideoNormalization(probe(out), statSync(out).size)) throw new Error(`normalized_video_invalid ${row.mappingId}`);
   return out;

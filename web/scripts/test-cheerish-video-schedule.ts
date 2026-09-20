@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { ALLOWED_BOARDS, CANARY_MAPPING_ID, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, patchSourceCsvRow, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { ALLOWED_BOARDS, CANARY_MAPPING_ID, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, patchSourceCsvRow, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
@@ -56,6 +56,30 @@ assert.match(SOCIAL_CONNECTION_PROJECTION, /(?:^|,)provider(?:,|$)/);
 const availableBoards = ALLOWED_BOARDS.map((name, index) => ({ id: `board-${index}`, name }));
 assert.deepEqual(resolveRequiredBoards(availableBoards), Object.fromEntries(ALLOWED_BOARDS.map((name, index) => [name, `board-${index}`])));
 assert.throws(() => resolveRequiredBoards(availableBoards.slice(0, -1)), /required_pinterest_board_count:0/);
+
+const mediaBase = {
+  draftId: "draft-1", schedule: "2026-09-21T12:00:00-04:00", board: "Home & Kitchen Finds",
+  destination: "pinterest:connection-1", connection: "connection-1", title: "Title", description: "Description",
+  url: "https://cheerish.co/products/item", mediaUrl: "file:///tmp/source.mp4", width: 1920, height: 1080,
+  durationMs: 8000, status: "draft" as const, originalDigest: "a".repeat(64),
+};
+assert.equal(normalizeManifestMedia({ ...mediaBase, width: 1920, height: 1080 }).width, 1080);
+assert.equal(normalizeManifestMedia({ ...mediaBase, width: 1080, height: 1080 }).height, 1920);
+assert.equal(normalizeManifestMedia({ ...mediaBase, width: 1080, height: 1920 }).width, 1080);
+const portraitCommand = buildPortraitTransformCommand("source.mp4", "portrait.mp4").join(" ");
+assert.match(portraitCommand, /scale=1080:1920:force_original_aspect_ratio=decrease/);
+assert.match(portraitCommand, /boxblur/);
+assert.match(portraitCommand, /crop=1080:1920/);
+assert.equal(portraitCommand.includes("crop=iw:ih"), false, "no-crop contract");
+const transformed = normalizeManifestMedia({ ...mediaBase, mediaUrl: "https://cdn/source.mp4", width: 1920, height: 1080, durationMs: 8_000 });
+assert.equal(transformed.mediaUrl, "https://cdn/source.mp4");
+assert.equal(transformed.width, 1080); assert.equal(transformed.height, 1920); assert.equal(transformed.durationMs, 8_000);
+assert.equal(transformed.draftId, mediaBase.draftId); assert.equal(transformed.schedule, mediaBase.schedule); assert.equal(transformed.board, mediaBase.board);
+assert.equal(transformed.title, mediaBase.title); assert.equal(transformed.description, mediaBase.description); assert.equal(transformed.url, mediaBase.url);
+assert.equal(buildPortraitTransformIdempotencyKey(mediaBase.originalDigest), buildPortraitTransformIdempotencyKey(mediaBase.originalDigest));
+assert.notEqual(buildPortraitTransformIdempotencyKey(mediaBase.originalDigest), buildPortraitTransformIdempotencyKey("b".repeat(64)));
+assert.throws(() => normalizeManifestMedia({ ...mediaBase, status: "posted" }), /portrait_transform_refused_terminal/);
+assert.throws(() => normalizeManifestMedia({ ...mediaBase, status: "claimed" }), /portrait_transform_refused_terminal/);
 assert.throws(() => resolveRequiredBoards([...availableBoards, { id: "duplicate", name: ALLOWED_BOARDS[0] }]), /required_pinterest_board_count:2/);
 const sourceCsv = [
   "pinterest_account,pinterest_board,pinterest_title,pinterest_description,pinterest_destination_url,publish_status,pinterest_scheduled_at,pinterest_pin_id,published_at,publish_error,notes,rights_status,consent_reference",

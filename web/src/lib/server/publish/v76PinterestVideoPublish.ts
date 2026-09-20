@@ -237,7 +237,11 @@ export function createV76RpcVideoPublishDependencies(
         p_provider_status: providerEvidence?.providerStatus ?? (status === "succeeded" ? 201 : null),
         p_remote_id: succeeded?.pinId ?? null,
         p_remote_url: remoteUrl ?? null,
+        // Keep the adapter's already-sanitized receipt intact. The old wrapper
+        // reduced every rejection to provider/reason, losing stage, status,
+        // provider code and request id needed for diagnosis and reconciliation.
         p_evidence: {
+          ...(providerEvidence ?? {}),
           provider: "pinterest",
           reason: status === "succeeded"
             ? "non_retryable"
