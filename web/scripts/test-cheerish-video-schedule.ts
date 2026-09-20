@@ -87,7 +87,6 @@ async function verifyAsyncSourceContracts() {
   await assert.rejects(() => readPortraitSource({ privateStorageLocator: "private://generated-private/other/video.mp4", sha256: "a".repeat(64) }, "owner-1", { readLocal: async () => new Uint8Array(), readPrivate: async () => new Uint8Array() }), /owner_invalid/);
   await assert.rejects(() => readPortraitSource({ localFilePath: "source.mp4", sha256: "" }, "owner-1", { readLocal: async () => new Uint8Array(), readPrivate: async () => new Uint8Array() }), /digest_missing/);
 }
-verifyAsyncSourceContracts().catch(error => { throw error; });
 const ffmpegDir = mkdtempSync(`${tmpdir()}/cheerish-portrait-`);
 try {
   const sourceVideo = `${ffmpegDir}/source.mp4`;
@@ -162,6 +161,7 @@ assert.ok(bitrateAt199Point6Seconds < bitrateAt160Seconds, "longer videos receiv
 assert.ok((bitrateAt199Point6Seconds + 128) * 1000 * 199.6 <= SAFE_PRIVATE_STORAGE_BYTES * 8, "199.6-second audio and video budget stays within private storage");
 
 async function testConcurrentSequentialRetry() {
+  await verifyAsyncSourceContracts();
   const retryAttempts = new Map<string, number>();
   const retryEvents: string[] = [];
   const retryRows = ["a", "b", "c", "d"];

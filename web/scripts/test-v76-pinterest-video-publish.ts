@@ -342,6 +342,7 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
         requestId: "request-1",
         providerStatus: 400,
         providerCode: "board.invalid",
+        providerMessage: "Board was rejected",
         pinId: "12345",
         pinUrl: "https://presigned.invalid/pin?token=SECRET-TOKEN",
         token: "SECRET-TOKEN",
@@ -367,7 +368,7 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
   assert.equal(settlement.args?.p_provider_status, 400);
   assert.deepEqual(settlement.args?.p_evidence, {
     provider: "pinterest", reason: "provider_rejected", stage: "created", classification: "definite_rejection",
-    mediaId: "media-1", pinId: "12345", pinUrl: "https://www.pinterest.com/pin/12345/", requestId: "request-1", providerStatus: 400, providerCode: "board.invalid",
+    mediaId: "media-1", pinId: "12345", pinUrl: "https://www.pinterest.com/pin/12345/", requestId: "request-1", providerStatus: 400, providerCode: "board.invalid", providerMessage: "Board was rejected",
   });
 });
 

@@ -156,6 +156,7 @@ function safeSettlementEvidence(providerEvidence: PinterestVideoPublishResult["e
     const value = providerEvidence[key];
     if (typeof value === "string" && value.length <= 2048) evidence[key] = value;
   }
+  if (typeof providerEvidence.providerMessage === "string" && providerEvidence.providerMessage.length <= 240) evidence.providerMessage = providerEvidence.providerMessage;
   if (typeof providerEvidence.providerStatus === "number" && Number.isFinite(providerEvidence.providerStatus)) evidence.providerStatus = providerEvidence.providerStatus;
   const canonicalUrl = providerEvidence.pinId ? canonicalPinterestUrl(providerEvidence.pinId) : undefined;
   if (canonicalUrl) evidence.pinUrl = canonicalUrl;

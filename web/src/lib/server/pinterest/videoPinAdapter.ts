@@ -46,6 +46,8 @@ export type PinterestVideoEvidence = {
   requestId?: string;
   providerStatus?: number;
   providerCode?: string;
+  /** Short, human-readable provider diagnostic; never raw payloads or URLs. */
+  providerMessage?: string;
 };
 
 export type PinterestVideoPublishResult =
@@ -96,6 +98,12 @@ function safeProviderCode(value: unknown, sensitiveValues: ReadonlySet<string>):
     && !containsSensitiveValue(code, sensitiveValues) ? code : undefined;
 }
 
+function safeProviderMessage(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+  const message = cleanText(value);
+  if (!message || message.length > 240 || /https?:\/\//i.test(message) || /[{}\[\]]/.test(message) || /[\u0000-\u001f]/.test(message) || containsSensitiveValue(message, sensitiveValues)) return undefined;
+  return message;
+}
+
 function safeRequestId(response: Response, sensitiveValues: ReadonlySet<string>): string | undefined {
   return safeEvidenceId(
     response.headers.get("x-pinterest-rid")
@@ -122,6 +130,7 @@ function evidence(
   const pinId = safeEvidenceId(values.pinId, sensitiveValues);
   const requestId = safeEvidenceId(values.requestId, sensitiveValues);
   const providerCode = safeProviderCode(values.providerCode, sensitiveValues);
+  const providerMessage = safeProviderMessage(values.providerMessage, sensitiveValues);
   const providerStatus = values.providerStatus;
   const pinUrl = safePinUrl(values.pinUrl, pinId, sensitiveValues);
   return {
@@ -134,6 +143,7 @@ function evidence(
     ...(typeof providerStatus === "number" && Number.isInteger(providerStatus) && providerStatus >= 100 && providerStatus <= 599
       ? { providerStatus } : {}),
     ...(providerCode ? { providerCode } : {}),
+    ...(providerMessage ? { providerMessage } : {}),
   };
 }
 
@@ -156,6 +166,7 @@ async function responseResult(
       ...(safeRequestId(response, sensitiveValues) ? { requestId: safeRequestId(response, sensitiveValues) } : {}),
       providerStatus: response.status,
       ...(safeProviderCode(body?.code, sensitiveValues) ? { providerCode: safeProviderCode(body?.code, sensitiveValues) } : {}),
+      ...(safeProviderMessage(body?.message, sensitiveValues) ? { providerMessage: safeProviderMessage(body?.message, sensitiveValues) } : {}),
     }, sensitiveValues),
   };
 }
@@ -340,6 +351,7 @@ export async function publishPinterestVideo(
           mediaId: registered.mediaId,
           providerStatus: pollResponse.status,
           ...(safeProviderCode(pollBody?.code, registered.sensitiveValues) ? { providerCode: safeProviderCode(pollBody?.code, registered.sensitiveValues) } : {}),
+          ...(safeProviderMessage(pollBody?.message, registered.sensitiveValues) ? { providerMessage: safeProviderMessage(pollBody?.message, registered.sensitiveValues) } : {}),
           ...(safeRequestId(pollResponse, registered.sensitiveValues) ? { requestId: safeRequestId(pollResponse, registered.sensitiveValues) } : {}),
         }, registered.sensitiveValues),
       };
@@ -386,6 +398,7 @@ export async function publishPinterestVideo(
       outcome: "unknown",
       evidence: evidence("created", "unknown", {
         mediaId: registered.mediaId,
+        ...(safeProviderMessage(body?.message, registered.sensitiveValues) ? { providerMessage: safeProviderMessage(body?.message, registered.sensitiveValues) } : {}),
         ...(safeRequestId(createResponse, registered.sensitiveValues) ? { requestId: safeRequestId(createResponse, registered.sensitiveValues) } : {}),
       }, registered.sensitiveValues),
     };
@@ -394,6 +407,7 @@ export async function publishPinterestVideo(
       evidence: evidence("created", "succeeded", {
         mediaId: registered.mediaId,
         pinId,
+        ...(safeProviderMessage(body?.message, registered.sensitiveValues) ? { providerMessage: safeProviderMessage(body?.message, registered.sensitiveValues) } : {}),
         ...(safePinUrl(body?.url, pinId, registered.sensitiveValues) ? { pinUrl: safePinUrl(body?.url, pinId, registered.sensitiveValues) } : {}),
         ...(safeRequestId(createResponse, registered.sensitiveValues) ? { requestId: safeRequestId(createResponse, registered.sensitiveValues) } : {}),
       }, registered.sensitiveValues),
