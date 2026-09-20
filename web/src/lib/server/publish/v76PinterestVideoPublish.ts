@@ -153,7 +153,8 @@ function safeSettlementProviderMessage(value: unknown): string | undefined {
   const message = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
   if (!message || message.length > 240) return undefined;
   if (/https?:\/\//i.test(message) || /[{}\[\]]/.test(message) || /[\u0000-\u001f]/.test(message)) return undefined;
-  if (/\b(?:authorization|bearer|access[_ -]?token|api[_ -]?key|secret|signature)\b\s*[:=]\s*\S+/i.test(message)) return undefined;
+  if (/\bbearer\s+\S+/i.test(message)) return undefined;
+  if (/\b(?:authorization|token|access[_ -]?token|api[_ -]?key|secret|signature)\b\s*[:=]\s*\S+/i.test(message)) return undefined;
   if (/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/.test(message)) return undefined;
   return message;
 }

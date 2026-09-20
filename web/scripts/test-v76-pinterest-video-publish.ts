@@ -384,7 +384,7 @@ await test("provider settlement independently rejects unsafe provider messages",
         stage: "created",
         classification: "definite_rejection",
         providerStatus: 400,
-        providerMessage: "https://private.invalid/?token=SECRET-TOKEN",
+        providerMessage: "token=SECRET-TOKEN",
       },
     }),
     rpc: async (name, args) => {
