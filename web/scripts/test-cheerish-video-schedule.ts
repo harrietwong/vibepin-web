@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
   rowIndex: n + 2,
+  draftId: `pd_${n}`,
   mappingId: `map-${n}`,
   localFilePath: `D:/data/videos/${n}.mp4`,
   sha256: n.toString(16).padStart(64, "0"),
@@ -27,6 +28,7 @@ assert.deepEqual(chunkRows(rows.slice(0, 1), 4).map((chunk) => chunk.length), [1
 assert.equal(validateManifest(rows).ok, true);
 assert.equal(validateManifest(rows.slice(0, 50)).ok, true, "current live manifest size is not hard-coded");
 assert.equal(validateManifest([]).ok, false, "empty manifests are rejected");
+assert.equal(validateManifest(rows.map((item, index) => index === 0 ? { ...item, draftId: "" } : item)).ok, false, "real draft id is required");
 assert.equal(validateManifest(rows.map((r, i) => i === 0 ? { ...r, destinationUrl: "https://amazon.com/dp/x" } : r)).ok, false);
 assert.equal(validateManifest(rows.map((r, i) => i === 41 ? { ...r, board: "Home & Kitchen Finds" } : r)).ok, false);
 assert.equal(authoritativeDestination("personalized-preserved-rose-box-necklace"), "https://cheerish.co/products/personalized-preserved-rose-box-necklace");
@@ -41,13 +43,18 @@ assert.equal(selectRowsForCommand(rows, "stage-all", canaryMappingId).some((item
 assert.throws(() => selectRowsForCommand(rows, "retry-canary", canaryMappingId), /unknown_command/);
 assert.equal(buildCanaryScheduledAt(new Date("2026-01-15T17:30:00.000Z")), "2026-01-16T01:29:00+08:00");
 assert.equal(buildCanaryScheduledAt(new Date("2026-07-15T16:30:00.000Z")), "2026-07-16T00:29:00+08:00");
+assert.deepEqual(scheduleFieldsInTimeZone("2026-01-15T12:00:00-05:00"), { plannedAt:"2026-01-16T01:00", scheduledDate:"2026-01-16", scheduledTime:"01:00", scheduleTimezone:"Asia/Shanghai" });
+assert.deepEqual(scheduleFieldsInTimeZone("2026-07-15T12:00:00-04:00"), { plannedAt:"2026-07-16T00:00", scheduledDate:"2026-07-16", scheduledTime:"00:00", scheduleTimezone:"Asia/Shanghai" });
 const scheduleSource = readFileSync("scripts/cheerish-video-schedule.ts", "utf8");
 assert.doesNotMatch(scheduleSource, /buildCanaryScheduledAt\(new Date\(Date\.now\(\)\s*-\s*60_000\)\)/, "canary caller must not subtract a second minute");
 assert.match(scheduleSource, /scheduleRow\(db,\s*ctx,\s*boards,\s*row,\s*upload,\s*buildCanaryScheduledAt\(new Date\(\)\)\)/, "canary scheduling passes the finalized upload before its time override");
 assert.match(scheduleSource, /--canary-mapping-id/, "canary identity is an explicit per-manifest argument");
-assert.match(scheduleSource, /scheduleTimezone:"Asia\/Shanghai"/, "scheduled rows persist Beijing timezone");
+assert.match(scheduleSource, /\.\.\.scheduleFieldsInTimeZone\(scheduledAt\)/, "scheduled rows derive Beijing wall time from the instant");
 assert.match(scheduleSource, /portrait_transform_cas_lost/, "replacement refuses concurrent state changes");
 assert.match(scheduleSource, /\.is\("deleted_at",null\)/, "replacement CAS excludes deleted rows");
+assert.match(scheduleSource, /const draftId = row\.draftId/, "replacement uses the authoritative manifest draft id");
+assert.match(scheduleSource, /portrait_transform_draft_missing/, "missing authoritative drafts fail closed");
+assert.doesNotMatch(scheduleSource, /\.insert\(\{vibepin_user_id:ctx\.uid/, "rollout never creates duplicate drafts");
 const cheerish = { provider: "pinterest", connection_status: "connected", provider_account_username: "@cheerishh", needs_reconnect: false, disconnected_at: null };
 assert.equal(selectExpectedPinterestConnection([cheerish], "cheerishh"), cheerish);
 const namedCheerish = { ...cheerish, provider_account_username: "unrelated", provider_account_name: "@cheerishh" };

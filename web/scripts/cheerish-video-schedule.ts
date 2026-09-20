@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { validateManifest, validatePreviewBinding, buildDraftId, buildCanaryScheduledAt, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PORTRAIT_TRANSFORM_VERSION, PREVIEW_REF, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { validateManifest, validatePreviewBinding, buildCanaryScheduledAt, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PORTRAIT_TRANSFORM_VERSION, PREVIEW_REF, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 import { handleVideoUploadPrepare, handleVideoUploadFinalize, VIDEO_UPLOAD_BUCKET } from "../src/lib/server/media/videoUploadHandler";
 import { createVideoUploadStore } from "../src/lib/server/media/videoUploadStore";
 import { createSupabaseVideoStorage } from "../src/lib/server/media/supabaseVideoStorage";
@@ -178,7 +178,6 @@ async function uploadVideo(uid: string, row: CheerishScheduleRow): Promise<{prox
   throw new Error(`upload_retry_exhausted:${row.mappingId}:${lastProviderCode}:${lastState.batchStatus}:${lastState.itemStatus}`);
 }
 
-function localFields(scheduledAt: string) { const local = scheduledAt.slice(0,16); return { plannedAt:local,scheduledDate:local.slice(0,10),scheduledTime:local.slice(11,16),scheduleTimezone:"Asia/Shanghai" }; }
 function patchScheduledSource(row: CheerishScheduleRow, ctx: { label: string }, scheduledAt: string): void {
   const source = readFileSync(row.sourceCsv, "utf8");
   const patched = patchSourceCsvRow(source, row.rowIndex, {
@@ -191,12 +190,13 @@ function patchScheduledSource(row: CheerishScheduleRow, ctx: { label: string }, 
   renameSync(temporary, row.sourceCsv);
 }
 async function scheduleRow(db: SupabaseClient, ctx:{uid:string;connectionId:string;label:string}, boards:Record<string,string>, row:CheerishScheduleRow, upload:{proxyUrl:string;width:number;height:number;durationMs:number}, override?:string) {
-  const now = new Date().toISOString(); const scheduledAt = override ?? row.scheduledAt; const draftId = buildDraftId(row); const mId = mediaId(row); const boardId = boards[row.board];
+  const now = new Date().toISOString(); const scheduledAt = override ?? row.scheduledAt; const draftId = row.draftId; const mId = mediaId(row); const boardId = boards[row.board];
   const sourceLocalFileName = row.localFilePath ? basename(row.localFilePath) : undefined;
-  const payload:any = { id:draftId,contentId:draftId,imageUrl:"",media:[{id:mId,kind:"video",url:upload.proxyUrl,source:"upload",width:upload.width,height:upload.height,durationMs:upload.durationMs,altText:row.title}],coverMediaId:mId,keyword:row.productHandle.replaceAll("-"," "),category:row.board,title:row.title,description:row.description,altText:row.title,destinationUrl:row.destinationUrl,boardId,boardName:row.board,weeklyPlanItemId:"",generationSessionId:"cheerish-2026-09",status:"ready",planningStatus:"ready",createdAt:now,updatedAt:now,source:"uploaded_image",idempotencyKey:row.mappingId,addedToPlanAt:now,targetConnectionId:ctx.connectionId,targetAccountLabel:ctx.label,scheduledDestinations:[{provider:"pinterest",socialConnectionId:ctx.connectionId,accountLabel:ctx.label,boardId,boardName:row.board,capturedAt:now}],sourceVideoSha256:row.sha256,sourceLocalFileName,sourcePrivateStorageLocator:row.privateStorageLocator,sourceMappingId:row.mappingId,...localFields(scheduledAt) };
+  const payload:any = { id:draftId,contentId:draftId,imageUrl:"",media:[{id:mId,kind:"video",url:upload.proxyUrl,source:"upload",width:upload.width,height:upload.height,durationMs:upload.durationMs,altText:row.title}],coverMediaId:mId,keyword:row.productHandle.replaceAll("-"," "),category:row.board,title:row.title,description:row.description,altText:row.title,destinationUrl:row.destinationUrl,boardId,boardName:row.board,weeklyPlanItemId:"",generationSessionId:"cheerish-2026-09",status:"ready",planningStatus:"ready",createdAt:now,updatedAt:now,source:"uploaded_image",idempotencyKey:row.mappingId,addedToPlanAt:now,targetConnectionId:ctx.connectionId,targetAccountLabel:ctx.label,scheduledDestinations:[{provider:"pinterest",socialConnectionId:ctx.connectionId,accountLabel:ctx.label,boardId,boardName:row.board,capturedAt:now}],sourceVideoSha256:row.sha256,sourceLocalFileName,sourcePrivateStorageLocator:row.privateStorageLocator,sourceMappingId:row.mappingId,...scheduleFieldsInTimeZone(scheduledAt) };
   const computed = buildScheduledAt(payload); if(!computed) throw new Error(`schedule_invalid ${row.mappingId}`);
   const confirmation = buildPublishConfirmation(payload,{onlyPending:false,mode:{kind:"now"},actionId:"ops-check"}); if(confirmation.blockers.length) throw new Error(`publish_blocked ${row.mappingId}: ${confirmation.blockers.map(b=>b.code).join(",")}`);
   const {data:old,error:readError}=await db.from("pin_drafts").select("payload,status,publish_claimed_at,archived_at,deleted_at,updated_at").eq("vibepin_user_id",ctx.uid).eq("draft_id",draftId).maybeSingle(); if(readError) throw readError;
+  if (!old) throw new Error(`portrait_transform_draft_missing:${row.mappingId}:${draftId}`);
   if (old && !canReplaceManifestMedia({
     status: old.status ?? old.payload?.status,
     publish_claimed_at: old.publish_claimed_at ?? old.payload?.publish_claimed_at ?? old.payload?.publishClaimedAt,
@@ -206,18 +206,13 @@ async function scheduleRow(db: SupabaseClient, ctx:{uid:string;connectionId:stri
     destinationResults: old.payload?.destinationResults,
   })) throw new Error(`portrait_transform_refused_terminal:${row.mappingId}`);
   const provenance = { source:"portrait-normalization", transformVersion:PORTRAIT_TRANSFORM_VERSION, transformIdempotencyKey:buildPortraitTransformIdempotencyKey(row.sha256), originalDigest:row.sha256.toLowerCase() };
-  const persistedPayload = replaceVideoMediaPayload(old?.payload ?? payload, { url: upload.proxyUrl, width: upload.width, height: upload.height, durationMs: upload.durationMs, provenance });
-  if (old) {
-    const update = await db.from("pin_drafts").update({payload:persistedPayload,status:"ready",updated_at:now,scheduled_at:computed})
-      .eq("vibepin_user_id",ctx.uid).eq("draft_id",draftId).eq("updated_at",old.updated_at)
-      .is("publish_claimed_at",null).is("archived_at",null).is("deleted_at",null)
-      .select("draft_id").maybeSingle();
-    if (update.error) throw update.error;
-    if (!update.data?.draft_id) throw new Error(`portrait_transform_cas_lost:${row.mappingId}`);
-  } else {
-    const inserted = await db.from("pin_drafts").insert({vibepin_user_id:ctx.uid,draft_id:draftId,payload,status:"ready",updated_at:now,created_at:now,archived_at:null,deleted_at:null,scheduled_at:computed});
-    if (inserted.error) throw inserted.error;
-  }
+  const persistedPayload = replaceVideoMediaPayload(old.payload, { url: upload.proxyUrl, width: upload.width, height: upload.height, durationMs: upload.durationMs, provenance });
+  const update = await db.from("pin_drafts").update({payload:persistedPayload,status:"ready",updated_at:now,scheduled_at:computed})
+    .eq("vibepin_user_id",ctx.uid).eq("draft_id",draftId).eq("updated_at",old.updated_at)
+    .is("publish_claimed_at",null).is("archived_at",null).is("deleted_at",null)
+    .select("draft_id").maybeSingle();
+  if (update.error) throw update.error;
+  if (!update.data?.draft_id) throw new Error(`portrait_transform_cas_lost:${row.mappingId}`);
   return {draftId,status:"scheduled",scheduledAt:computed};
 }
 

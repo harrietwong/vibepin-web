@@ -11,7 +11,7 @@ const AUTH_0918: Record<string, string> = {
 };
 
 export type CheerishScheduleRow = {
-  sourceCsv: string; rowIndex: number; mappingId: string; localFilePath?: string; privateStorageLocator?: string; sha256: string;
+  sourceCsv: string; rowIndex: number; mappingId: string; draftId: string; localFilePath?: string; privateStorageLocator?: string; sha256: string;
   productHandle: string; destinationUrl: string; board: string; title: string; description: string; scheduledAt: string;
 };
 export type PinterestConnectionCandidate = {
@@ -221,7 +221,7 @@ export function validateManifest(input: unknown): { ok: boolean; rows: CheerishS
   const titles = new Set<string>(); const descriptions = new Set<string>();
   rows.forEach((r, i) => {
     const label = `row ${i + 1}`;
-    for (const key of ["sourceCsv","mappingId","sha256","productHandle","destinationUrl","board","title","description","scheduledAt"] as const) {
+    for (const key of ["sourceCsv","mappingId","draftId","sha256","productHandle","destinationUrl","board","title","description","scheduledAt"] as const) {
       if (typeof r?.[key] !== "string" || !String(r[key]).trim()) errors.push(`${label} missing ${key}`);
     }
     if ((!r?.localFilePath || !String(r.localFilePath).trim()) && (!r?.privateStorageLocator || !String(r.privateStorageLocator).trim())) errors.push(`${label} missing source locator`);
@@ -299,6 +299,18 @@ export function buildCanaryScheduledAt(now: Date): string {
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   const local = `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}:00`;
   return `${local.slice(0, 16)}:00+08:00`;
+}
+
+export function scheduleFieldsInTimeZone(scheduledAt: string, timeZone = "Asia/Shanghai") {
+  const instant = new Date(scheduledAt);
+  if (!Number.isFinite(instant.getTime())) throw new Error("schedule_invalid");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hourCycle:"h23",
+  }).formatToParts(instant);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const scheduledDate = `${value("year")}-${value("month")}-${value("day")}`;
+  const scheduledTime = `${value("hour")}:${value("minute")}`;
+  return { plannedAt:`${scheduledDate}T${scheduledTime}`, scheduledDate, scheduledTime, scheduleTimezone:timeZone };
 }
 
 export function normalizePinterestUsername(value: string): string {
