@@ -275,7 +275,38 @@ export async function loadReadyPrivateVideoSources(
 }
 
 function dbError(error: { code?: string; message?: string } | null, fallback: string): Error {
-  return new Error(error?.message || error?.code || fallback);
+  return Object.assign(new Error(error?.message || error?.code || fallback), {
+    code: error?.code,
+  });
+}
+
+function isMissingRichEvidenceStore(error: { code?: string; message?: string } | null): boolean {
+  const code = error?.code ?? "";
+  const message = error?.message?.toLowerCase() ?? "";
+  return code === "PGRST205" || code === "42P01"
+    || message.includes("pinterest_publish_evidence") && (message.includes("does not exist") || message.includes("not found"));
+}
+
+async function loadPinterestPublishEvidence(
+  db: SupabaseClient,
+  input: DurableVideoPublishInput,
+  intentDbId: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await db
+    .from("pinterest_publish_evidence")
+    .select("evidence")
+    .eq("owner_user_id", input.uid)
+    .eq("publish_intent_id", intentDbId)
+    .eq("destination_id", input.destination.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (result.error) {
+    if (isMissingRichEvidenceStore(result.error)) return null;
+    throw dbError(result.error, "pinterest_publish_evidence_inspection_failed");
+  }
+  const evidence = (result.data as { evidence?: unknown } | null)?.evidence;
+  return evidence && typeof evidence === "object" ? evidence as Record<string, unknown> : null;
 }
 
 export async function inspectV76VideoPublishState(
@@ -300,6 +331,10 @@ export async function inspectV76VideoPublishState(
     .maybeSingle();
   if (destinationResult.error) throw dbError(destinationResult.error, "publish_destination_inspection_failed");
   const destination = destinationResult.data as Record<string, unknown> | null;
+  const richEvidence = await loadPinterestPublishEvidence(db, input, intentDbId);
+  const destinationEvidence = richEvidence ?? (destination?.evidence && typeof destination.evidence === "object"
+    ? destination.evidence as Record<string, unknown>
+    : {});
   if (destination?.status === "published") {
     const remoteId = typeof destination.remote_id === "string" ? destination.remote_id : "";
     const storedUrl = typeof destination.remote_url === "string" ? destination.remote_url : "";
@@ -309,17 +344,13 @@ export async function inspectV76VideoPublishState(
       kind: "published",
       remoteId,
       ...(remoteUrl ? { remoteUrl } : {}),
-      evidence: destination.evidence && typeof destination.evidence === "object"
-        ? destination.evidence as Record<string, unknown>
-        : {},
+      evidence: destinationEvidence,
     };
   }
   if (destination?.status === "delivery_unknown") {
     return {
       kind: "delivery_unknown",
-      evidence: destination.evidence && typeof destination.evidence === "object"
-        ? destination.evidence as Record<string, unknown>
-        : {},
+      evidence: destinationEvidence,
     };
   }
   const attemptResult = await db
@@ -367,9 +398,7 @@ export async function inspectV76VideoPublishState(
   return destination?.status === "failed"
     ? {
       kind: "failed",
-      evidence: destination.evidence && typeof destination.evidence === "object"
-        ? destination.evidence as Record<string, unknown>
-        : {},
+      evidence: destinationEvidence,
     }
     : { kind: "prepared" };
 }

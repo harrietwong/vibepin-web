@@ -55,9 +55,15 @@ test("the publish result still persists postedAt / remotePinId / remotePinUrl â€
     "no second Pinterest publish path may remain in the drawer");
 
   const publishContentSrc = readFileSync(join(root, "src/lib/studio/publishContent.ts"), "utf8");
-  const m = /pinDraftStore\.updateDraft\(draftId, \{\s*\n\s*destinationResults: results,/.exec(publishContentSrc);
-  assert(m !== null, "publishContent must write the result back to the draft");
-  const body = publishContentSrc.slice(m!.index, m!.index + 500);
+  const destinationIndex = publishContentSrc.indexOf("destinationResults: results");
+  const updateIndex = publishContentSrc.lastIndexOf(
+    "pinDraftStore.updateDraft(draftId, {",
+    destinationIndex,
+  );
+  assert(destinationIndex >= 0 && updateIndex >= 0,
+    "publishContent must write the result back to the draft");
+  const body = publishContentSrc.slice(updateIndex, updateIndex + 700);
+  assert(/destinationResults: results/.test(body), "destination results must be persisted with the publish receipt");
   assert(/postedAt: legacy\.postedAt/.test(body), "postedAt must still be set on publish");
   assert(/remotePinId: legacy\.remotePinId/.test(body), "remotePinId must be captured from the publish result");
   assert(/remotePinUrl: legacy\.remotePinUrl/.test(body), "remotePinUrl must be captured from the publish result");

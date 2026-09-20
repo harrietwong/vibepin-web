@@ -34,7 +34,8 @@ async function main() {
  'backend/db/migrate_v32_social_connections.sql','backend/db/migrate_v59_social_pinterest_unify.sql',
  'backend/db/migrate_v72_publish_intent_idempotency.sql','backend/db/migrate_v73_publish_intent_retry_lineage.sql',
  'backend/db/migrate_v75_media_provenance.sql','backend/db/migrate_v76_publish_asset_materializer.sql','backend/db/migrate_v77_video_media.sql',
- 'backend/db/migrate_v78_video_publish_recovery.sql','backend/db/migrate_v79_video_publish_provenance.sql']) {
+ 'backend/db/migrate_v78_video_publish_recovery.sql','backend/db/migrate_v79_video_publish_provenance.sql',
+ 'backend/db/migrate_v81_pinterest_publish_evidence.sql']) {
   await db.exec(load(path).replace(/create extension if not exists "uuid-ossp";?/gi,''));
  }
  await db.query(`insert into social_connections(id,user_id,provider,provider_account_id,connection_status,auth_provider) values ($1,$3,'pinterest','a1','connected','official'),($2,$3,'pinterest','a2','connected','official')`,[C1,C2,A]);
@@ -69,7 +70,21 @@ async function main() {
  });
  const check=async(name:string,fn:()=>Promise<void>)=>{await fn();console.log('REPRODUCED '+name);};
  await check('normal production wrappers and v76/v77 SQL publish and replay without duplicate',async()=>{
-  const i=makeInput(makeReceipt('normal'));assert.equal((await dispatchV76PinterestVideo(i,deps)).outcome,'published');const n=calls;assert.equal((await dispatchV76PinterestVideo(i,deps)).replayed,true);assert.equal(calls,n);
+ const i=makeInput(makeReceipt('normal'));assert.equal((await dispatchV76PinterestVideo(i,deps)).outcome,'published');const n=calls;assert.equal((await dispatchV76PinterestVideo(i,deps)).replayed,true);assert.equal(calls,n);
+  const replay=await dispatchV76PinterestVideo(i,deps);assert.equal(replay.evidence?.stage,'created');assert.equal(replay.evidence?.classification,'succeeded');
+ });
+ await check('v81 rejects unknown evidence keys and credential-shaped diagnostics before settlement',async()=>{
+  const i=makeInput(makeReceipt('v81-evidence-guard'));await deps.confirmPrepare(i);const lease=await deps.leaseMaterialization(i);
+  for(const source of await deps.materializeSources(i,lease))await deps.settleItem(i,lease,source);
+  const claim=await deps.claimReady(i,lease);const started=await deps.startAttempt(i,claim);
+  const call=(evidence:any)=>db.query(`select public.publish_provider_attempt_settle_v81($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,[
+    A,started.attemptId,claim.claimToken,'failed',400,null,null,JSON.stringify(evidence)
+  ]);
+  await assert.rejects(call({provider:'pinterest',reason:'provider_rejected',unsafeExtra:'must-drop'}),/provider_evidence_invalid/);
+  await assert.rejects(call({provider:'pinterest',reason:'provider_rejected',stage:'created',classification:'definite_rejection',providerStatus:400,providerMessage:'token=SECRET-TOKEN'}),/provider_evidence_invalid/);
+  await assert.rejects(call({provider:'pinterest',reason:'provider_rejected',stage:'created',classification:'definite_rejection',providerStatus:400,providerMessage:'Bearer: SECRET-TOKEN'}),/provider_evidence_invalid/);
+  await assert.rejects(call({provider:'pinterest',reason:'provider_rejected',stage:'created',classification:'definite_rejection',providerStatus:400,providerMessage:'Bearer=SECRET-TOKEN'}),/provider_evidence_invalid/);
+  await assert.rejects(call({provider:'pinterest',reason:'provider_rejected',stage:'created',classification:'definite_rejection',providerStatus:400,providerMessage:'eyJabcdefghijklmno.abcdefghijklmnop.signature'}),/provider_evidence_invalid/);
  });
  await check('R2/I2: operational updated_at writes do not invalidate a frozen sibling',async()=>{
   const r=makeReceipt('siblings',ds);assert.equal((await dispatchV76PinterestVideo(makeInput(r),deps)).outcome,'published');
@@ -116,7 +131,7 @@ async function main() {
  });
  await check('R1: one failed destination authorizes exactly one narrowed child retry',async()=>{
   const r=makeReceipt('failed-lineage');
-  assert.equal((await dispatchV76PinterestVideo(makeInput(r),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'failed',error:'rejected'}})})).outcome,'failed');
+  assert.equal((await dispatchV76PinterestVideo(makeInput(r),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'definite_rejection'}})})).outcome,'failed');
   const child={...r,intentId:r.intentId+'retrya',priorIntentId:r.intentId,onlyPending:true};child.fingerprint=publishConfirmationFingerprint(child as any);
   const n=calls;assert.equal((await dispatchV76PinterestVideo(makeInput(child),deps)).outcome,'published');assert.equal(calls,n+1);
   const duplicate={...r,intentId:r.intentId+'retryb',priorIntentId:r.intentId,onlyPending:true};duplicate.fingerprint=publishConfirmationFingerprint(duplicate as any);
@@ -127,7 +142,7 @@ async function main() {
   assert.equal((await dispatchV76PinterestVideo(makeInput(r,1),deps)).outcome,'published');
  });
  await check('R5: first failure does not block an untouched sibling',async()=>{
-  const r=makeReceipt('failed-siblings',ds);assert.equal((await dispatchV76PinterestVideo(makeInput(r),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'failed',error:'rejected'}})})).outcome,'failed');
+  const r=makeReceipt('failed-siblings',ds);assert.equal((await dispatchV76PinterestVideo(makeInput(r),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'definite_rejection'}})})).outcome,'failed');
   assert.equal((await dispatchV76PinterestVideo(makeInput(r,1),deps)).outcome,'published');
  });
  await check('R2: a substantive media mutation still fails closed before provider',async()=>{
@@ -152,6 +167,23 @@ async function main() {
   assert.equal(validated.ok,true);if(!validated.ok)throw new Error('unexpected validation');
   currentMedia=r.media;assert.equal((await materializePrivateVideoSources(makeInput(validated.receipt),{} as any,materializer)).length,1);currentMedia=media;
   const tampered={...r,media:r.media.map((m:any)=>({...m,altText:'changed'}))};assert.notEqual(publishConfirmationFingerprint(tampered),r.fingerprint);
+ });
+ await check('v81 is service-only, idempotent, rollback-safe, and re-applicable',async()=>{
+  const migration=load('backend/db/migrate_v81_pinterest_publish_evidence.sql');
+  await db.exec(migration);
+  const rows=await db.query(`select count(*)::int as count from pinterest_publish_evidence`);assert.ok(Number((rows.rows[0] as any).count)>0);
+  await db.exec('set role authenticated');
+  try{await assert.rejects(db.query(`select * from pinterest_publish_evidence`),/permission denied/);}finally{await db.exec('reset role');}
+  await db.exec(`comment on table public.pinterest_publish_evidence is 'collision:unrelated-table'`);
+  await assert.rejects(db.exec(load('backend/db/rollback_v81_pinterest_publish_evidence.sql')),/v81_rollback_collision/);
+  await db.exec('rollback');
+  const preserved=await db.query(`select to_regclass('public.pinterest_publish_evidence') as table_name`);
+  assert.equal((preserved.rows[0] as any).table_name,'pinterest_publish_evidence');
+  await db.exec(`comment on table public.pinterest_publish_evidence is 'vibepin:v81:pinterest-publish-evidence'`);
+  await db.exec(load('backend/db/rollback_v81_pinterest_publish_evidence.sql'));
+  const removed=await db.query(`select to_regclass('public.pinterest_publish_evidence') as table_name,to_regprocedure('public.publish_provider_attempt_settle_v81(uuid,uuid,uuid,text,integer,text,text,jsonb)') as function_name`);
+  assert.equal((removed.rows[0] as any).table_name,null);assert.equal((removed.rows[0] as any).function_name,null);
+  await db.exec(migration);
  });
  await db.close();console.log('All local review probes completed.');
 }

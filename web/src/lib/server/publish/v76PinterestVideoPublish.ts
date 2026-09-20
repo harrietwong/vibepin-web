@@ -176,6 +176,17 @@ function safeSettlementEvidence(providerEvidence: PinterestVideoPublishResult["e
   return evidence;
 }
 
+function isMissingV81SettlementRpc(error: unknown): boolean {
+  const value = error && typeof error === "object" ? error as { code?: unknown; message?: unknown } : {};
+  const code = typeof value.code === "string" ? value.code : "";
+  const message = typeof value.message === "string" ? value.message.toLowerCase() : String(error).toLowerCase();
+  if (code === "PGRST202" || code === "42883") return true;
+  return message.includes("publish_provider_attempt_settle_v81")
+    && (message.includes("does not exist")
+      || message.includes("not found")
+      || message.includes("schema cache"));
+}
+
 /** Bind the orchestrator to the existing v76 service-role RPC surface. */
 export function createV76RpcVideoPublishDependencies(
   boundary: V76RpcVideoPublishBoundary,
@@ -258,7 +269,12 @@ export function createV76RpcVideoPublishDependencies(
       const succeeded = status === "succeeded" ? provider?.evidence : undefined;
       const remoteUrl = canonicalPinterestUrl(succeeded?.pinId, succeeded?.pinUrl);
       const providerEvidence = provider?.evidence;
-      await boundary.rpc("publish_provider_attempt_settle_v78", {
+      const reason = status === "succeeded"
+        ? "non_retryable"
+        : status === "failed"
+          ? "provider_rejected"
+          : "unknown_outcome";
+      const sharedArgs = {
         p_user_id: input.uid,
         p_attempt_id: attempt.attemptId,
         p_claim_token: attempt.claimToken,
@@ -266,19 +282,29 @@ export function createV76RpcVideoPublishDependencies(
         p_provider_status: providerEvidence?.providerStatus ?? (status === "succeeded" ? 201 : null),
         p_remote_id: succeeded?.pinId ?? null,
         p_remote_url: remoteUrl ?? null,
+      };
+      try {
+        await boundary.rpc("publish_provider_attempt_settle_v81", {
+          ...sharedArgs,
         // Keep the adapter's already-sanitized receipt intact. The old wrapper
         // reduced every rejection to provider/reason, losing stage, status,
         // provider code and request id needed for diagnosis and reconciliation.
-        p_evidence: {
-          ...safeSettlementEvidence(providerEvidence),
-          provider: "pinterest",
-          reason: status === "succeeded"
-            ? "non_retryable"
-            : status === "failed"
-              ? "provider_rejected"
-              : "unknown_outcome",
-        },
-      });
+          p_evidence: {
+            ...safeSettlementEvidence(providerEvidence),
+            provider: "pinterest",
+            reason,
+          },
+        });
+      } catch (error) {
+        if (!isMissingV81SettlementRpc(error)) throw error;
+        // App-before-migration and migration rollback are safe: v78 still owns
+        // the terminal transition, remote id and replay contract. Only the
+        // additive diagnostic record is unavailable during this window.
+        await boundary.rpc("publish_provider_attempt_settle_v78", {
+          ...sharedArgs,
+          p_evidence: { provider: "pinterest", reason },
+        });
+      }
     },
   };
 }

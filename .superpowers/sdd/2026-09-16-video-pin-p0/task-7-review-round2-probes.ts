@@ -41,7 +41,7 @@ const checks = String.raw`
  await safe('real partial retry receipt dispatches only the failed sibling',async()=>{
    const r=makeReceipt('r2-narrowed',ds);
    await dispatchV76PinterestVideo(makeInput(r),deps);
-   await dispatchV76PinterestVideo(makeInput(r,1),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'failed',error:'rejected'}})});
+   await dispatchV76PinterestVideo(makeInput(r,1),{...deps,publishVideo:async()=>({outcome:'failed',evidence:{stage:'registered',classification:'definite_rejection'}})});
    const child:any={...r,intentId:r.intentId+'child',priorIntentId:r.intentId,onlyPending:true,dispatchDestinationIds:[r.destinations[1].id],confirmedAt:new Date().toISOString()};
    child.fingerprint=publishConfirmationFingerprint(child);
    const validated=validateImmediatePublishReceipt(child,{draftId:child.draftId,title:child.title,description:child.description,altText:child.altText,destinationUrl:child.destinationUrl,imageUrls:child.media.map((m:any)=>m.url)},child.dispatchDestinationIds);

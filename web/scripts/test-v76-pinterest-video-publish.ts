@@ -298,7 +298,7 @@ await test("the production RPC adapter uses additive v78 recovery and v79 proven
         publish_asset_settle_video_item_v79: { deliveryReady: true },
         publish_asset_claim_ready_v78: { claimToken: "claim-1" },
         publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
-        publish_provider_attempt_settle_v78: { settled: true },
+        publish_provider_attempt_settle_v81: { settled: true },
       };
       return values[name];
     },
@@ -310,7 +310,7 @@ await test("the production RPC adapter uses additive v78 recovery and v79 proven
     "publish_asset_settle_video_item_v79",
     "publish_asset_claim_ready_v78",
     "publish_provider_attempt_start",
-    "publish_provider_attempt_settle_v78",
+    "publish_provider_attempt_settle_v81",
   ]);
   assert.deepEqual(settlementArgs, {
     p_user_id: "owner-1",
@@ -352,14 +352,14 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
       },
     }),
     rpc: async (name, args) => {
-      if (name === "publish_provider_attempt_settle_v78") settlement.args = args;
+      if (name === "publish_provider_attempt_settle_v81") settlement.args = args;
       const values: Record<string, unknown> = {
         publish_intent_confirm_prepare_v78: { prepared: true },
         publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
         publish_asset_settle_video_item_v79: { deliveryReady: true },
         publish_asset_claim_ready_v78: { claimToken: "claim-1" },
         publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
-        publish_provider_attempt_settle_v78: { settled: true },
+        publish_provider_attempt_settle_v81: { settled: true },
       };
       return values[name];
     },
@@ -388,14 +388,14 @@ await test("provider settlement independently rejects unsafe provider messages",
       },
     }),
     rpc: async (name, args) => {
-      if (name === "publish_provider_attempt_settle_v78") settlement.args = args;
+      if (name === "publish_provider_attempt_settle_v81") settlement.args = args;
       const values: Record<string, unknown> = {
         publish_intent_confirm_prepare_v78: { prepared: true },
         publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
         publish_asset_settle_video_item_v79: { deliveryReady: true },
         publish_asset_claim_ready_v78: { claimToken: "claim-1" },
         publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
-        publish_provider_attempt_settle_v78: { settled: true },
+        publish_provider_attempt_settle_v81: { settled: true },
       };
       return values[name];
     },
@@ -408,6 +408,75 @@ await test("provider settlement independently rejects unsafe provider messages",
     classification: "definite_rejection",
     providerStatus: 400,
   });
+});
+
+await test("a missing v81 RPC falls back exactly once to the v78 settlement contract", async () => {
+  const rpcNames: string[] = [];
+  const fallbackEvidence: Array<Record<string, unknown>> = [];
+  const deps = createV76RpcVideoPublishDependencies({
+    inspect: async () => ({ kind: "missing" }),
+    materializeSources: async () => [source],
+    loadReadySources: async () => [source],
+    publishVideo: async () => ({
+      outcome: "succeeded",
+      evidence: { stage: "created", classification: "succeeded", pinId: "12345" },
+    }),
+    rpc: async (name, args) => {
+      rpcNames.push(name);
+      if (name === "publish_provider_attempt_settle_v81") {
+        throw Object.assign(new Error("Could not find the function public.publish_provider_attempt_settle_v81 in the schema cache"), { code: "PGRST202" });
+      }
+      if (name === "publish_provider_attempt_settle_v78") fallbackEvidence.push(args.p_evidence as Record<string, unknown>);
+      const values: Record<string, unknown> = {
+        publish_intent_confirm_prepare_v78: { prepared: true },
+        publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
+        publish_asset_settle_video_item_v79: { deliveryReady: true },
+        publish_asset_claim_ready_v78: { claimToken: "claim-1" },
+        publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
+        publish_provider_attempt_settle_v78: { settled: true },
+      };
+      return values[name];
+    },
+  });
+  const result = await dispatchV76PinterestVideo(input(), deps);
+  assert.equal(result.outcome, "published");
+  assert.equal(rpcNames.filter(name => name === "publish_provider_attempt_settle_v81").length, 1);
+  assert.equal(rpcNames.filter(name => name === "publish_provider_attempt_settle_v78").length, 1);
+  assert.deepEqual(fallbackEvidence, [{ provider: "pinterest", reason: "non_retryable" }]);
+});
+
+await test("v81 validation or arbitrary settlement failures never downgrade to v78", async () => {
+  for (const error of [
+    Object.assign(new Error("provider_evidence_invalid"), { code: "22023" }),
+    Object.assign(new Error("database unavailable"), { code: "08006" }),
+  ]) {
+    const rpcNames: string[] = [];
+    const deps = createV76RpcVideoPublishDependencies({
+      inspect: async () => ({ kind: "missing" }),
+      materializeSources: async () => [source],
+      loadReadySources: async () => [source],
+      publishVideo: async () => ({
+        outcome: "succeeded",
+        evidence: { stage: "created", classification: "succeeded", pinId: "12345" },
+      }),
+      rpc: async (name) => {
+        rpcNames.push(name);
+        if (name === "publish_provider_attempt_settle_v81") throw error;
+        const values: Record<string, unknown> = {
+          publish_intent_confirm_prepare_v78: { prepared: true },
+          publish_asset_lease_materialization: { leaseToken: "lease-1", deliveryId: "delivery-1" },
+          publish_asset_settle_video_item_v79: { deliveryReady: true },
+          publish_asset_claim_ready_v78: { claimToken: "claim-1" },
+          publish_provider_attempt_start: { attemptId: "attempt-1", status: "started", replayed: false },
+        };
+        return values[name];
+      },
+    });
+    const result = await dispatchV76PinterestVideo(input(), deps);
+    assert.equal(result.outcome, "delivery_unknown");
+    assert.equal(result.reconcileRequired, true);
+    assert.equal(rpcNames.includes("publish_provider_attempt_settle_v78"), false);
+  }
 });
 
 await test("private materialization freezes the owner source revision and rejects owner/path tampering before copy", async () => {
