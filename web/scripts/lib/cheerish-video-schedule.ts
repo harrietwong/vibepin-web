@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 
 export const PREVIEW_REF = "snulmwprsahzqvdbyenc";
 export const ALLOWED_BOARDS = ["Gift Ideas for Her & Personalized Jewelry", "Home & Kitchen Finds", "Cleaning & Self-Care Finds", "Smart Gadgets & Everyday Essentials"] as const;
@@ -12,7 +13,7 @@ const AUTH_0918: Record<string, string> = {
 };
 
 export type CheerishScheduleRow = {
-  sourceCsv: string; rowIndex: number; mappingId: string; localFilePath: string; sha256: string;
+  sourceCsv: string; rowIndex: number; mappingId: string; localFilePath?: string; privateStorageLocator?: string; sha256: string;
   productHandle: string; destinationUrl: string; board: string; title: string; description: string; scheduledAt: string;
 };
 export type PinterestConnectionCandidate = {
@@ -51,6 +52,45 @@ export function buildPortraitTransformIdempotencyKey(originalDigest: string, ver
   return `portrait:${version}:${createHash("sha256").update(`${version}:${originalDigest.toLowerCase()}`).digest("hex")}`;
 }
 
+export function buildPortraitTransformOutputPath(root: string, originalDigest: string, version = PORTRAIT_TRANSFORM_VERSION): string {
+  const digest = createHash("sha256").update(`${version}:${originalDigest.toLowerCase()}`).digest("hex");
+  return join(root, `portrait-${digest}.mp4`);
+}
+
+export function parsePrivateStorageLocator(locator: string, expectedOwner: string): { bucketId: "generated-private"; objectPath: string } {
+  const value = locator.trim();
+  if (!value || /^https?:\/\//i.test(value)) throw new Error("private_locator_invalid");
+  const match = value.match(/^private:\/\/([^/]+)\/(.+)$/i);
+  if (!match || match[1] !== "generated-private") throw new Error("private_locator_bucket_invalid");
+  const objectPath = decodeURIComponent(match[2]);
+  if (!expectedOwner || !objectPath.startsWith(`${expectedOwner}/`) || objectPath.includes("..") || objectPath.includes("\\")) throw new Error("private_locator_owner_invalid");
+  return { bucketId: "generated-private", objectPath };
+}
+
+export async function readPortraitSource(
+  source: { localFilePath?: string; privateStorageLocator?: string; sha256: string },
+  ownerId: string,
+  readers: { readLocal(path: string): Promise<Uint8Array>; readPrivate(locator: { bucketId: "generated-private"; objectPath: string }): Promise<Uint8Array> },
+): Promise<Uint8Array> {
+  if (!/^[0-9a-f]{64}$/i.test(source.sha256)) throw new Error("portrait_source_digest_missing");
+  if (source.localFilePath) return readers.readLocal(source.localFilePath);
+  if (source.privateStorageLocator) return readers.readPrivate(parsePrivateStorageLocator(source.privateStorageLocator, ownerId));
+  throw new Error("portrait_source_locator_missing");
+}
+
+export function canReplaceManifestMedia(input: { status?: string | null; publish_claimed_at?: string | null; publishClaimedAt?: string | null }): boolean {
+  return input.status !== "posted" && input.status !== "claimed" && !input.publish_claimed_at && !input.publishClaimedAt;
+}
+
+export function replaceVideoMediaPayload<T extends Record<string, unknown>>(current: T, replacement: { url: string; width: number; height: number; durationMs: number; provenance?: Record<string, unknown> }): T {
+  const media = Array.isArray(current.media) ? current.media as Array<Record<string, unknown>> : [];
+  if (!media.length) throw new Error("portrait_media_missing");
+  return {
+    ...current,
+    media: media.map((item, index) => index === 0 ? { ...item, url: replacement.url, width: replacement.width, height: replacement.height, durationMs: replacement.durationMs, ...(replacement.provenance ? { provenance: replacement.provenance } : {}) } : item),
+  } as T;
+}
+
 /**
  * Foreground is always contained (never cropped); only the blurred background
  * is cover-scaled and cropped to fill the portrait canvas.
@@ -67,7 +107,7 @@ export function normalizeManifestMedia<T extends CheerishManifestMedia>(
   input: T,
   replacementMediaUrl?: string,
 ): T & { provenance: Record<string, unknown> } {
-  if (input.status === "posted" || input.status === "claimed") throw new Error("portrait_transform_refused_terminal");
+  if (!canReplaceManifestMedia(input)) throw new Error("portrait_transform_refused_terminal");
   const key = buildPortraitTransformIdempotencyKey(input.originalDigest);
   const alreadyTransformed = input.width === PORTRAIT_WIDTH && input.height === PORTRAIT_HEIGHT
     && (input.provenance as Record<string, unknown> | undefined)?.transformIdempotencyKey === key;
@@ -166,9 +206,10 @@ export function validateManifest(input: unknown): { ok: boolean; rows: CheerishS
   const titles = new Set<string>(); const descriptions = new Set<string>();
   rows.forEach((r, i) => {
     const label = `row ${i + 1}`;
-    for (const key of ["sourceCsv","mappingId","localFilePath","sha256","productHandle","destinationUrl","board","title","description","scheduledAt"] as const) {
+    for (const key of ["sourceCsv","mappingId","sha256","productHandle","destinationUrl","board","title","description","scheduledAt"] as const) {
       if (typeof r?.[key] !== "string" || !String(r[key]).trim()) errors.push(`${label} missing ${key}`);
     }
+    if ((!r?.localFilePath || !String(r.localFilePath).trim()) && (!r?.privateStorageLocator || !String(r.privateStorageLocator).trim())) errors.push(`${label} missing source locator`);
     if (!Number.isInteger(r?.rowIndex) || r.rowIndex < 2) errors.push(`${label} invalid rowIndex`);
     if (!/^[0-9a-f]{64}$/i.test(r?.sha256 ?? "")) errors.push(`${label} invalid sha256`);
     if (!/^https:\/\/cheerish\.co\/products\/[a-z0-9-]+$/.test(r?.destinationUrl ?? "")) errors.push(`${label} invalid destinationUrl`);
@@ -192,7 +233,7 @@ export function dedupeManifest(rows: CheerishScheduleRow[]) {
   const sha = new Set<string>(); const file = new Set<string>(); const id = new Set<string>();
   const accepted: CheerishScheduleRow[] = []; const duplicates: CheerishScheduleRow[] = [];
   for (const row of rows) {
-    const keys = [row.sha256.toLowerCase(), row.localFilePath.toLowerCase(), row.mappingId];
+    const keys = [row.sha256.toLowerCase(), (row.localFilePath ?? row.privateStorageLocator ?? "").toLowerCase(), row.mappingId];
     if (sha.has(keys[0]) || file.has(keys[1]) || id.has(keys[2])) duplicates.push(row);
     else { sha.add(keys[0]); file.add(keys[1]); id.add(keys[2]); accepted.push(row); }
   }

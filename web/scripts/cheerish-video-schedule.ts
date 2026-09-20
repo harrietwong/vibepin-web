@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { validateManifest, validatePreviewBinding, buildDraftId, buildCanaryScheduledAt, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PREVIEW_REF, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { validateManifest, validatePreviewBinding, buildDraftId, buildCanaryScheduledAt, buildPortraitTransformCommand, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PREVIEW_REF, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, targetVideoBitrateKbps, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 import { handleVideoUploadPrepare, handleVideoUploadFinalize, VIDEO_UPLOAD_BUCKET } from "../src/lib/server/media/videoUploadHandler";
 import { createVideoUploadStore } from "../src/lib/server/media/videoUploadStore";
 import { createSupabaseVideoStorage } from "../src/lib/server/media/supabaseVideoStorage";
@@ -29,7 +29,7 @@ process.env.CRON_SECRET ||= randomUUID();
 const parsed = JSON.parse(readFileSync(manifestArg, "utf8"));
 const checked = validateManifest(parsed);
 if (!checked.ok) throw new Error(`manifest_invalid:\n${checked.errors.slice(0, 20).join("\n")}`);
-for (const row of checked.rows) if (!existsSync(row.localFilePath)) throw new Error(`missing file ${row.localFilePath}`);
+for (const row of checked.rows) if (row.localFilePath && !existsSync(row.localFilePath)) throw new Error(`missing file ${row.localFilePath}`);
 const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
 function hashFile(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
@@ -41,12 +41,13 @@ function probe(path: string) {
   return { width: video.width, height: video.height, durationMs, videoCodec: video.codec_name, videoProfile: video.profile, pixelFormat: video.pix_fmt, audioCodec: audio?.codec_name, audioProfile: audio?.profile, audioSampleRate: Number(audio?.sample_rate), audioChannels: audio?.channels };
 }
 function uploadSource(row: CheerishScheduleRow): string {
+  if (!row.localFilePath) throw new Error(`private_source_requires_injected_reader:${row.mappingId}`);
   if (hashFile(row.localFilePath) !== row.sha256.toLowerCase()) throw new Error(`sha_mismatch ${row.mappingId}`);
   let sourcePath = row.localFilePath;
   let sourceFacts = probe(sourcePath);
   if (sourceFacts.width !== 1080 || sourceFacts.height !== 1920) {
     const outDir = "D:/vp-tmp/publish-prep/normalized"; mkdirSync(outDir, { recursive: true });
-    const out = join(outDir, `${buildPortraitTransformIdempotencyKey(row.sha256)}.mp4`);
+    const out = buildPortraitTransformOutputPath(outDir, row.sha256);
     if (!existsSync(out) || probe(out).width !== 1080 || probe(out).height !== 1920) {
       execFileSync("ffmpeg", buildPortraitTransformCommand(sourcePath, out), { stdio: "inherit" });
     }
@@ -191,9 +192,10 @@ async function scheduleRow(db: SupabaseClient, ctx:{uid:string;connectionId:stri
   const payload:any = { id:draftId,contentId:draftId,imageUrl:"",media:[{id:mId,kind:"video",url:upload.proxyUrl,source:"upload",width:upload.width,height:upload.height,durationMs:upload.durationMs,altText:row.title}],coverMediaId:mId,keyword:row.productHandle.replaceAll("-"," "),category:row.board,title:row.title,description:row.description,altText:row.title,destinationUrl:row.destinationUrl,boardId,boardName:row.board,weeklyPlanItemId:"",generationSessionId:"cheerish-2026-09",status:"ready",planningStatus:"ready",createdAt:now,updatedAt:now,source:"uploaded_image",idempotencyKey:row.mappingId,addedToPlanAt:now,targetConnectionId:ctx.connectionId,targetAccountLabel:ctx.label,scheduledDestinations:[{provider:"pinterest",socialConnectionId:ctx.connectionId,accountLabel:ctx.label,boardId,boardName:row.board,capturedAt:now}],sourceVideoSha256:row.sha256,sourceLocalFileName:basename(row.localFilePath),sourceMappingId:row.mappingId,...localFields(scheduledAt) };
   const computed = buildScheduledAt(payload); if(!computed) throw new Error(`schedule_invalid ${row.mappingId}`);
   const confirmation = buildPublishConfirmation(payload,{onlyPending:false,mode:{kind:"now"},actionId:"ops-check"}); if(confirmation.blockers.length) throw new Error(`publish_blocked ${row.mappingId}: ${confirmation.blockers.map(b=>b.code).join(",")}`);
-  const {data:old,error:readError}=await db.from("pin_drafts").select("payload").eq("vibepin_user_id",ctx.uid).eq("draft_id",draftId).maybeSingle(); if(readError) throw readError;
-  if (old?.payload?.remotePinId || old?.payload?.postedAt) return {draftId,status:"already_published"};
-  const {error}=await db.from("pin_drafts").upsert({vibepin_user_id:ctx.uid,draft_id:draftId,payload,status:"ready",updated_at:now,created_at:old?undefined:now,archived_at:null,deleted_at:null,scheduled_at:computed,publish_claimed_at:null},{onConflict:"vibepin_user_id,draft_id"}); if(error) throw error;
+  const {data:old,error:readError}=await db.from("pin_drafts").select("payload,status,publish_claimed_at,archived_at,deleted_at").eq("vibepin_user_id",ctx.uid).eq("draft_id",draftId).maybeSingle(); if(readError) throw readError;
+  if (old && !canReplaceManifestMedia({ status: old.status ?? old.payload?.status, publish_claimed_at: old.publish_claimed_at ?? old.payload?.publish_claimed_at ?? old.payload?.publishClaimedAt })) throw new Error(`portrait_transform_refused_terminal:${row.mappingId}`);
+  const persistedPayload = old?.payload ? replaceVideoMediaPayload(old.payload, { url: upload.proxyUrl, width: upload.width, height: upload.height, durationMs: upload.durationMs }) : payload;
+  const {error}=await db.from("pin_drafts").upsert({vibepin_user_id:ctx.uid,draft_id:draftId,payload:persistedPayload,status:"ready",updated_at:now,created_at:old?undefined:now,archived_at:old?.archived_at ?? null,deleted_at:old?.deleted_at ?? null,scheduled_at:computed},{onConflict:"vibepin_user_id,draft_id"}); if(error) throw error;
   return {draftId,status:"scheduled",scheduledAt:computed};
 }
 

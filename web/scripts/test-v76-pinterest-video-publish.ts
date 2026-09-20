@@ -164,7 +164,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await testStructuredPinterestSettlementEvidence();
+  await test("settlement evidence allowlist drops secrets and preserves safe fields", testStructuredPinterestSettlementEvidence);
 await test("confirmation fingerprints freeze media kind and video identity", async () => {
   const shared = {
     priorIntentId: null,
@@ -342,6 +342,12 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
         requestId: "request-1",
         providerStatus: 400,
         providerCode: "board.invalid",
+        pinId: "12345",
+        pinUrl: "https://presigned.invalid/pin?token=SECRET-TOKEN",
+        token: "SECRET-TOKEN",
+        uploadUrl: "https://presigned.invalid/upload?sig=secret",
+        rawBody: { token: "SECRET-TOKEN" },
+        unsafeExtra: "must-drop",
       },
     }),
     rpc: async (name, args) => {
@@ -361,7 +367,7 @@ await test("provider settlement preserves adapter evidence and provider HTTP sta
   assert.equal(settlement.args?.p_provider_status, 400);
   assert.deepEqual(settlement.args?.p_evidence, {
     provider: "pinterest", reason: "provider_rejected", stage: "created", classification: "definite_rejection",
-    mediaId: "media-1", requestId: "request-1", providerStatus: 400, providerCode: "board.invalid",
+    mediaId: "media-1", pinId: "12345", pinUrl: "https://www.pinterest.com/pin/12345/", requestId: "request-1", providerStatus: 400, providerCode: "board.invalid",
   });
 });
 

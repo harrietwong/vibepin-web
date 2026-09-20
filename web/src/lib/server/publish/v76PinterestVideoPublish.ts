@@ -147,6 +147,21 @@ function canonicalPinterestUrl(pinId: string | undefined, pinUrl?: string): stri
     : undefined;
 }
 
+function safeSettlementEvidence(providerEvidence: PinterestVideoPublishResult["evidence"] | undefined): Record<string, unknown> {
+  if (!providerEvidence) return {};
+  const evidence: Record<string, unknown> = {};
+  if (providerEvidence.stage) evidence.stage = providerEvidence.stage;
+  if (providerEvidence.classification) evidence.classification = providerEvidence.classification;
+  for (const key of ["mediaId", "pinId", "requestId", "providerCode"] as const) {
+    const value = providerEvidence[key];
+    if (typeof value === "string" && value.length <= 2048) evidence[key] = value;
+  }
+  if (typeof providerEvidence.providerStatus === "number" && Number.isFinite(providerEvidence.providerStatus)) evidence.providerStatus = providerEvidence.providerStatus;
+  const canonicalUrl = providerEvidence.pinId ? canonicalPinterestUrl(providerEvidence.pinId) : undefined;
+  if (canonicalUrl) evidence.pinUrl = canonicalUrl;
+  return evidence;
+}
+
 /** Bind the orchestrator to the existing v76 service-role RPC surface. */
 export function createV76RpcVideoPublishDependencies(
   boundary: V76RpcVideoPublishBoundary,
@@ -241,7 +256,7 @@ export function createV76RpcVideoPublishDependencies(
         // reduced every rejection to provider/reason, losing stage, status,
         // provider code and request id needed for diagnosis and reconciliation.
         p_evidence: {
-          ...(providerEvidence ?? {}),
+          ...safeSettlementEvidence(providerEvidence),
           provider: "pinterest",
           reason: status === "succeeded"
             ? "non_retryable"

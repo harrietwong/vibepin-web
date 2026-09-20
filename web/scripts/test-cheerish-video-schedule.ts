@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { ALLOWED_BOARDS, CANARY_MAPPING_ID, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, patchSourceCsvRow, readRequiredFlag, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { ALLOWED_BOARDS, CANARY_MAPPING_ID, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
@@ -71,6 +73,37 @@ assert.match(portraitCommand, /scale=1080:1920:force_original_aspect_ratio=decre
 assert.match(portraitCommand, /boxblur/);
 assert.match(portraitCommand, /crop=1080:1920/);
 assert.equal(portraitCommand.includes("crop=iw:ih"), false, "no-crop contract");
+const safeOutput = buildPortraitTransformOutputPath("C:/temp", mediaBase.originalDigest);
+assert.equal(/[<>:"/\\|?*]/.test(safeOutput.split(/[\\/]/).at(-1) ?? ""), false, "Windows-safe output filename");
+assert.deepEqual(parsePrivateStorageLocator("private://generated-private/owner-1/uploads/video.mp4", "owner-1"), { bucketId: "generated-private", objectPath: "owner-1/uploads/video.mp4" });
+assert.throws(() => parsePrivateStorageLocator("private://generated-private/other/video.mp4", "owner-1"), /owner_invalid/);
+assert.throws(() => parsePrivateStorageLocator("https://cdn.example/video.mp4", "owner-1"), /private_locator_invalid/);
+let privateReads = 0;
+async function verifyAsyncSourceContracts() {
+  await readPortraitSource({ privateStorageLocator: "private://generated-private/owner-1/uploads/video.mp4", sha256: "a".repeat(64) }, "owner-1", {
+    readLocal: async () => new Uint8Array(), readPrivate: async () => { privateReads += 1; return new Uint8Array([1]); },
+  });
+  assert.equal(privateReads, 1);
+  await assert.rejects(() => readPortraitSource({ privateStorageLocator: "private://generated-private/other/video.mp4", sha256: "a".repeat(64) }, "owner-1", { readLocal: async () => new Uint8Array(), readPrivate: async () => new Uint8Array() }), /owner_invalid/);
+  await assert.rejects(() => readPortraitSource({ localFilePath: "source.mp4", sha256: "" }, "owner-1", { readLocal: async () => new Uint8Array(), readPrivate: async () => new Uint8Array() }), /digest_missing/);
+}
+verifyAsyncSourceContracts().catch(error => { throw error; });
+const ffmpegDir = mkdtempSync(`${tmpdir()}/cheerish-portrait-`);
+try {
+  const sourceVideo = `${ffmpegDir}/source.mp4`;
+  const outputVideo = buildPortraitTransformOutputPath(ffmpegDir, "b".repeat(64));
+  execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", sourceVideo], { stdio: "ignore" });
+  execFileSync("ffmpeg", buildPortraitTransformCommand(sourceVideo, outputVideo), { stdio: "ignore" });
+  const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height", "-of", "json", outputVideo], { encoding: "utf8" })) as { streams: Array<{ codec_type: string; codec_name: string; width?: number; height?: number }> };
+  const video = probe.streams.find(stream => stream.codec_type === "video");
+  const audio = probe.streams.find(stream => stream.codec_type === "audio");
+  assert.deepEqual({ width: video?.width, height: video?.height, videoCodec: video?.codec_name, audioCodec: audio?.codec_name }, { width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac" });
+} finally {
+  rmSync(ffmpegDir, { recursive: true, force: true });
+}
+assert.equal(canReplaceManifestMedia({ status: "draft" }), true);
+assert.equal(canReplaceManifestMedia({ status: "posted" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", publish_claimed_at: "2026-09-20T00:00:00Z" }), false);
 const transformed = normalizeManifestMedia({ ...mediaBase, mediaUrl: "https://cdn/source.mp4", width: 1920, height: 1080, durationMs: 8_000 });
 assert.equal(transformed.mediaUrl, "https://cdn/source.mp4");
 assert.equal(transformed.width, 1080); assert.equal(transformed.height, 1920); assert.equal(transformed.durationMs, 8_000);
@@ -80,6 +113,9 @@ assert.equal(buildPortraitTransformIdempotencyKey(mediaBase.originalDigest), bui
 assert.notEqual(buildPortraitTransformIdempotencyKey(mediaBase.originalDigest), buildPortraitTransformIdempotencyKey("b".repeat(64)));
 assert.throws(() => normalizeManifestMedia({ ...mediaBase, status: "posted" }), /portrait_transform_refused_terminal/);
 assert.throws(() => normalizeManifestMedia({ ...mediaBase, status: "claimed" }), /portrait_transform_refused_terminal/);
+assert.throws(() => normalizeManifestMedia({ ...mediaBase, publish_claimed_at: "2026-09-20T00:00:00Z" } as typeof mediaBase), /portrait_transform_refused_terminal/);
+const preservedPayload = replaceVideoMediaPayload({ title: "keep", destinationUrl: "https://keep", media: [{ url: "old", width: 100, height: 100, durationMs: 1 }] }, { url: "new", width: 1080, height: 1920, durationMs: 8_000 });
+assert.equal(preservedPayload.title, "keep"); assert.equal(preservedPayload.destinationUrl, "https://keep"); assert.deepEqual(preservedPayload.media?.[0], { url: "new", width: 1080, height: 1920, durationMs: 8_000 });
 assert.throws(() => resolveRequiredBoards([...availableBoards, { id: "duplicate", name: ALLOWED_BOARDS[0] }]), /required_pinterest_board_count:2/);
 const sourceCsv = [
   "pinterest_account,pinterest_board,pinterest_title,pinterest_description,pinterest_destination_url,publish_status,pinterest_scheduled_at,pinterest_pin_id,published_at,publish_error,notes,rights_status,consent_reference",
