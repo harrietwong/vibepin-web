@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { ALLOWED_BOARDS, CANARY_MAPPING_ID, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
   rowIndex: n + 2,
-  mappingId: n === 41 ? CANARY_MAPPING_ID : `map-${n}`,
+  mappingId: `map-${n}`,
   localFilePath: `D:/data/videos/${n}.mp4`,
   sha256: n.toString(16).padStart(64, "0"),
   productHandle: n < 41 ? "coffee-pod-maker-b0gjf188h7" : n === 41 ? "enchanted-led-rose-glass-dome" : "personalized-preserved-rose-box-necklace",
@@ -19,31 +19,35 @@ const row = (n: number): CheerishScheduleRow => ({
 });
 
 assert.deepEqual(ALLOWED_BOARDS, ["Gift Ideas for Her & Personalized Jewelry", "Home & Kitchen Finds", "Cleaning & Self-Care Finds", "Smart Gadgets & Everyday Essentials"]);
-const rows = Array.from({ length: 87 }, (_, i) => row(i));
+const rows = Array.from({ length: 51 }, (_, i) => row(i));
 assert.deepEqual(chunkRows(rows.slice(0, 10), 4).map((chunk) => chunk.map((item) => item.mappingId)), [
   ["map-0", "map-1", "map-2", "map-3"], ["map-4", "map-5", "map-6", "map-7"], ["map-8", "map-9"],
 ]);
 assert.deepEqual(chunkRows(rows.slice(0, 1), 4).map((chunk) => chunk.length), [1], "canary remains a single-row batch");
 assert.equal(validateManifest(rows).ok, true);
-assert.equal(validateManifest(rows.slice(0, 86)).ok, false);
-assert.equal(validateManifest(rows.map((item, index) => index === 41 ? { ...item, mappingId: "not-the-canary" } : item)).ok, false, "manifest requires exactly one canary mapping");
+assert.equal(validateManifest(rows.slice(0, 50)).ok, true, "current live manifest size is not hard-coded");
+assert.equal(validateManifest([]).ok, false, "empty manifests are rejected");
 assert.equal(validateManifest(rows.map((r, i) => i === 0 ? { ...r, destinationUrl: "https://amazon.com/dp/x" } : r)).ok, false);
 assert.equal(validateManifest(rows.map((r, i) => i === 41 ? { ...r, board: "Home & Kitchen Finds" } : r)).ok, false);
 assert.equal(authoritativeDestination("personalized-preserved-rose-box-necklace"), "https://cheerish.co/products/personalized-preserved-rose-box-necklace");
 assert.equal(authoritativeDestination("unknown"), null);
 const duplicate = { ...rows[1], mappingId: "duplicate", sha256: rows[0].sha256 };
-assert.equal(dedupeManifest([...rows, duplicate]).accepted.length, 87);
+assert.equal(dedupeManifest([...rows, duplicate]).accepted.length, 51);
 assert.equal(dedupeManifest([...rows, duplicate]).duplicates.length, 1);
-assert.deepEqual(selectRowsForCommand(rows, "canary").map((item) => item.mappingId), [CANARY_MAPPING_ID]);
-assert.equal(validateManifest(rows).rows.filter((item) => item.mappingId === CANARY_MAPPING_ID).length, 1);
-assert.equal(selectRowsForCommand(rows, "stage-all").length, 86);
-assert.equal(selectRowsForCommand(rows, "stage-all").some((item) => item.mappingId === CANARY_MAPPING_ID), false);
-assert.throws(() => selectRowsForCommand(rows, "retry-canary"), /unknown_command/);
-assert.equal(buildCanaryScheduledAt(new Date("2026-01-15T17:30:00.000Z")), "2026-01-15T12:29:00-05:00");
-assert.equal(buildCanaryScheduledAt(new Date("2026-07-15T16:30:00.000Z")), "2026-07-15T12:29:00-04:00");
+const canaryMappingId = "map-3";
+assert.deepEqual(selectRowsForCommand(rows, "canary", canaryMappingId).map((item) => item.mappingId), [canaryMappingId]);
+assert.equal(selectRowsForCommand(rows, "stage-all", canaryMappingId).length, 50);
+assert.equal(selectRowsForCommand(rows, "stage-all", canaryMappingId).some((item) => item.mappingId === canaryMappingId), false);
+assert.throws(() => selectRowsForCommand(rows, "retry-canary", canaryMappingId), /unknown_command/);
+assert.equal(buildCanaryScheduledAt(new Date("2026-01-15T17:30:00.000Z")), "2026-01-16T01:29:00+08:00");
+assert.equal(buildCanaryScheduledAt(new Date("2026-07-15T16:30:00.000Z")), "2026-07-16T00:29:00+08:00");
 const scheduleSource = readFileSync("scripts/cheerish-video-schedule.ts", "utf8");
 assert.doesNotMatch(scheduleSource, /buildCanaryScheduledAt\(new Date\(Date\.now\(\)\s*-\s*60_000\)\)/, "canary caller must not subtract a second minute");
 assert.match(scheduleSource, /scheduleRow\(db,\s*ctx,\s*boards,\s*row,\s*upload,\s*buildCanaryScheduledAt\(new Date\(\)\)\)/, "canary scheduling passes the finalized upload before its time override");
+assert.match(scheduleSource, /--canary-mapping-id/, "canary identity is an explicit per-manifest argument");
+assert.match(scheduleSource, /scheduleTimezone:"Asia\/Shanghai"/, "scheduled rows persist Beijing timezone");
+assert.match(scheduleSource, /portrait_transform_cas_lost/, "replacement refuses concurrent state changes");
+assert.match(scheduleSource, /\.is\("deleted_at",null\)/, "replacement CAS excludes deleted rows");
 const cheerish = { provider: "pinterest", connection_status: "connected", provider_account_username: "@cheerishh", needs_reconnect: false, disconnected_at: null };
 assert.equal(selectExpectedPinterestConnection([cheerish], "cheerishh"), cheerish);
 const namedCheerish = { ...cheerish, provider_account_username: "unrelated", provider_account_name: "@cheerishh" };
@@ -103,6 +107,11 @@ try {
 assert.equal(canReplaceManifestMedia({ status: "draft" }), true);
 assert.equal(canReplaceManifestMedia({ status: "posted" }), false);
 assert.equal(canReplaceManifestMedia({ status: "draft", publish_claimed_at: "2026-09-20T00:00:00Z" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", deleted_at: "2026-09-20T00:00:00Z" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", archived_at: "2026-09-20T00:00:00Z" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", remotePinId: "123" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", postedAt: "2026-09-20T00:00:00Z" }), false);
+assert.equal(canReplaceManifestMedia({ status: "draft", destinationResults: [{ status: "published" }] }), false);
 const transformed = normalizeManifestMedia({ ...mediaBase, mediaUrl: "https://cdn/source.mp4", width: 1920, height: 1080, durationMs: 8_000 });
 assert.equal(transformed.mediaUrl, "https://cdn/source.mp4");
 assert.equal(transformed.width, 1080); assert.equal(transformed.height, 1920); assert.equal(transformed.durationMs, 8_000);

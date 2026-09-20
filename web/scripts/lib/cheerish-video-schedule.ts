@@ -3,8 +3,6 @@ import { join } from "node:path";
 
 export const PREVIEW_REF = "snulmwprsahzqvdbyenc";
 export const ALLOWED_BOARDS = ["Gift Ideas for Her & Personalized Jewelry", "Home & Kitchen Finds", "Cleaning & Self-Care Finds", "Smart Gadgets & Everyday Essentials"] as const;
-// This is the one 2026-09-18 mapping allowed to cross the canary boundary.
-export const CANARY_MAPPING_ID = "2026-09-18_sparkly-roses_1755683171706442_enchanted-led-rose-glass-dome";
 export const SOCIAL_CONNECTION_PROJECTION = "id,user_id,provider,provider_account_username,provider_account_name,connection_status,needs_reconnect,disconnected_at,access_token_encrypted";
 const AUTH_0918: Record<string, string> = {
   "enchanted-led-rose-glass-dome": "https://cheerish.co/products/enchanted-led-rose-glass-dome",
@@ -78,8 +76,25 @@ export async function readPortraitSource(
   throw new Error("portrait_source_locator_missing");
 }
 
-export function canReplaceManifestMedia(input: { status?: string | null; publish_claimed_at?: string | null; publishClaimedAt?: string | null }): boolean {
-  return input.status !== "posted" && input.status !== "claimed" && !input.publish_claimed_at && !input.publishClaimedAt;
+export function canReplaceManifestMedia(input: {
+  status?: string | null;
+  publish_claimed_at?: string | null;
+  publishClaimedAt?: string | null;
+  archived_at?: string | null;
+  deleted_at?: string | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  remotePinId?: string | null;
+  postedAt?: string | null;
+  destinationResults?: Array<{ status?: string | null }>;
+}): boolean {
+  const status = String(input.status ?? "").toLowerCase();
+  const alreadyPublished = !!input.remotePinId || !!input.postedAt
+    || input.destinationResults?.some((result) => result.status === "published") === true;
+  return !["posted", "published", "claimed", "publishing", "deleted", "archived"].includes(status)
+    && !input.publish_claimed_at && !input.publishClaimedAt
+    && !input.archived_at && !input.deleted_at && !input.archivedAt && !input.deletedAt
+    && !alreadyPublished;
 }
 
 export function replaceVideoMediaPayload<T extends Record<string, unknown>>(current: T, replacement: { url: string; width: number; height: number; durationMs: number; provenance?: Record<string, unknown> }): T {
@@ -202,7 +217,7 @@ export function readRequiredFlag(args: string[], flag: string): string {
 export function validateManifest(input: unknown): { ok: boolean; rows: CheerishScheduleRow[]; errors: string[] } {
   const rows = Array.isArray(input) ? input as CheerishScheduleRow[] : [];
   const errors: string[] = [];
-  if (rows.length !== 87) errors.push(`expected 87 rows, got ${rows.length}`);
+  if (rows.length === 0) errors.push("manifest must contain at least one row");
   const titles = new Set<string>(); const descriptions = new Set<string>();
   rows.forEach((r, i) => {
     const label = `row ${i + 1}`;
@@ -224,8 +239,6 @@ export function validateManifest(input: unknown): { ok: boolean; rows: CheerishS
       if (r.board !== "Gift Ideas for Her & Personalized Jewelry") errors.push(`${label} 0918 board mismatch`);
     }
   });
-  const canaryCount = rows.filter((row) => row.mappingId === CANARY_MAPPING_ID).length;
-  if (canaryCount !== 1) errors.push(`canary_mapping_count:${canaryCount}`);
   return { ok: errors.length === 0, rows, errors };
 }
 
@@ -270,26 +283,22 @@ export async function runConcurrentWithSequentialRetry<T, R>(
   return results;
 }
 
-export function selectRowsForCommand(rows: CheerishScheduleRow[], command: string): CheerishScheduleRow[] {
-  if (command === "canary") return rows.filter((row) => row.mappingId === CANARY_MAPPING_ID);
-  if (command === "stage-all") return rows.filter((row) => row.mappingId !== CANARY_MAPPING_ID);
+export function selectRowsForCommand(rows: CheerishScheduleRow[], command: string, canaryMappingId: string): CheerishScheduleRow[] {
+  if (!canaryMappingId.trim()) throw new Error("canary_mapping_id_required");
+  if (command === "canary") return rows.filter((row) => row.mappingId === canaryMappingId);
+  if (command === "stage-all") return rows.filter((row) => row.mappingId !== canaryMappingId);
   throw new Error(`unknown_command:${command}`);
 }
 
 export function buildCanaryScheduledAt(now: Date): string {
+  const target = new Date(now.getTime() - 60_000);
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(new Date(now.getTime() - 60_000));
+  }).formatToParts(target);
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   const local = `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}:00`;
-  const utcLike = Date.parse(`${local}Z`);
-  // The formatter supplies the correct civil time; comparing it with that time
-  // interpreted as UTC yields New York's offset on this particular date (DST-safe).
-  const offsetMinutes = Math.round((utcLike - (now.getTime() - 60_000)) / 60_000);
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absolute = Math.abs(offsetMinutes);
-  return `${local.slice(0, 16)}:00${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+  return `${local.slice(0, 16)}:00+08:00`;
 }
 
 export function normalizePinterestUsername(value: string): string {
