@@ -21,6 +21,7 @@ import { ContentMediaRenderer } from "@/components/media/ContentMediaRenderer";
 import { toast } from "sonner";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
+import { planPublishingChannels, planPublishingProviderLabel } from "@/lib/planPublishingChannels";
 
 export type ListStatus = "Scheduled" | "Unscheduled" | "Published" | "Failed";
 
@@ -155,7 +156,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
   }
 
   const gridCols = [
-    "32px", "minmax(0,2.4fr)", "1.1fr", "1fr",
+    "32px", "minmax(0,2.4fr)", "1.1fr", "1fr", "1.4fr",
     cols.board ? "1.2fr" : "", cols.url ? "1.4fr" : "", cols.product ? "0.9fr" : "", "1.5fr",
   ].filter(Boolean).join(" ");
 
@@ -236,6 +237,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
         <HeaderCell>{tr("planViews.list.headerPin")}</HeaderCell>
         <HeaderCell>{tr("planViews.list.headerPublishTime")}</HeaderCell>
         <HeaderCell>{tr("planViews.list.headerStatus")}</HeaderCell>
+        <HeaderCell>{tr("planViews.list.headerChannels")}</HeaderCell>
         {cols.board && <HeaderCell>{tr("planViews.list.headerBoard")}</HeaderCell>}
         {cols.url && <HeaderCell>{tr("planViews.list.headerDestinationUrl")}</HeaderCell>}
         {cols.product && <HeaderCell>{tr("planViews.list.headerProduct")}</HeaderCell>}
@@ -254,6 +256,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
         const url = sanitizeHandoffField(d.destinationUrl);
         const scheduled = !!ev.plannedDate && !!ev.plannedTime;
         const posted = status === "Published";
+        const channels = planPublishingChannels(d);
         return (
           <div key={d.id} data-testid="plan-list-row"
             style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "10px 12px", minHeight: 84, alignItems: "center",
@@ -292,7 +295,18 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
             </div>
             {/* 4. Status (plain text) */}
             <div data-testid="plan-list-status" style={{ ...cellBase, color: status === "Published" ? C.muted : C.sec }}>{tr(STATUS_KEY[status])}</div>
-            {/* 5. Board */}
+            {/* 5. Native destinations + plan-only external channels. */}
+            <div data-testid="plan-list-channels" style={{ ...cellBase, gap: 6, flexWrap: "wrap" }}>
+              {channels.length === 0 ? (
+                <span style={{ color: C.muted }}>—</span>
+              ) : channels.map(channel => (
+                <span key={channel.id} title={`${planPublishingProviderLabel(channel.provider)} · ${channel.status}`}
+                  style={{ minHeight: 24, display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: "var(--vp-radius-pill, 999px)", border: `1px solid ${C.border}`, color: C.sec, background: C.surface2, fontSize: 12, whiteSpace: "nowrap" }}>
+                  {planPublishingProviderLabel(channel.provider)}
+                </span>
+              ))}
+            </div>
+            {/* 6. Board */}
             {cols.board && (
               <div data-testid="plan-list-board" style={{ ...cellBase, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: board ? C.sec : C.muted }}>
@@ -300,7 +314,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
                 </span>
               </div>
             )}
-            {/* 6. Destination URL */}
+            {/* 7. Destination URL */}
             {cols.url && (
               <div data-testid="plan-list-url" style={{ ...cellBase, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: url ? "#60A5FA" : C.muted }}>
@@ -308,11 +322,11 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
                 </span>
               </div>
             )}
-            {/* 7. Product (neutral) */}
+            {/* 8. Product (neutral) */}
             {cols.product && (
               <div data-testid="plan-list-product" style={{ ...cellBase, color: C.muted }}>{productLabel(d, tr)}</div>
             )}
-            {/* 8. Actions */}
+            {/* 9. Actions */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button type="button" data-testid="plan-list-edit" onClick={() => handlers.onOpenDetails(d)}
                 style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>

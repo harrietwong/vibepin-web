@@ -30,6 +30,7 @@ import type { PinDraft } from "../src/lib/pinDraftStore";
 import { ensureScheduledPlanTime } from "../src/lib/smartSchedule";
 import { saveSmartScheduleConfig } from "../src/lib/smartScheduleStore";
 import { mapPlanDraftToCalendarEvent } from "../src/lib/planCalendar";
+import { planPublishingChannels } from "../src/lib/planPublishingChannels";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -41,6 +42,8 @@ function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 const planSrc = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const listSrc = readFileSync(join(process.cwd(), "src/components/plan/PlanListView.tsx"), "utf8");
 const queueSrc = readFileSync(join(process.cwd(), "src/app/app/queue/page.tsx"), "utf8");
+const draftStoreSrc = readFileSync(join(process.cwd(), "src/lib/pinDraftStore.ts"), "utf8");
+const promoteSrc = readFileSync(join(process.cwd(), "src/app/api/pin-drafts/promote.ts"), "utf8");
 
 console.log("Weekly Plan List view + IA");
 
@@ -155,6 +158,35 @@ test("Queue load failures render one explicit retryable alert", () => {
   assert(queueSrc.includes('data-testid="queue-load-error"'), "queue load alert missing");
   assert(queueSrc.includes("!!error || !!apiError"), "transport and API failures must share the alert");
   assert(queueSrc.includes("onClick={() => mutate()}"), "queue load alert must offer retry");
+});
+
+test("Plan projects native destinations and plan-only YouTube without dispatching YouTube", () => {
+  const now = new Date().toISOString();
+  const draft = {
+    id: "channels-1", imageUrl: "https://x/video.mp4", keyword: "k", category: "home-decor",
+    title: "Three-platform plan", description: "d", altText: "", destinationUrl: "https://example.com",
+    boardId: "b1", boardName: "Board 1", weeklyPlanItemId: "", generationSessionId: "",
+    scheduledDate: "2026-09-23", scheduledTime: "06:00", plannedAt: "2026-09-23T06:00",
+    status: "ready", createdAt: now, updatedAt: now,
+    scheduledDestinations: [{
+      provider: "pinterest", socialConnectionId: "pin-1", accountLabel: "@cheerishh",
+      boardId: "b1", boardName: "Board 1", capturedAt: now,
+    }],
+    externalPublishingPlans: [{
+      id: "youtube:video-1", provider: "youtube", status: "scheduled",
+      scheduledAt: "2026-09-23T10:00:00Z", accountLabel: "@cheerishhome",
+      remoteId: "video-1", postUrl: "https://youtu.be/video-1",
+    }],
+  } as PinDraft;
+
+  const channels = planPublishingChannels(draft);
+  assert(channels.map(channel => channel.provider).join(",") === "pinterest,youtube",
+    `unexpected channels: ${channels.map(channel => channel.provider).join(",")}`);
+  assert(draft.scheduledDestinations?.length === 1 && draft.scheduledDestinations[0]?.provider === "pinterest",
+    "plan-only YouTube must not enter native scheduledDestinations");
+  assert(draftStoreSrc.includes("externalPublishingPlans?:"), "PinDraft external publishing plan contract missing");
+  assert(listSrc.includes('data-testid="plan-list-channels"'), "Plan List channel summary missing");
+  assert(!promoteSrc.includes("externalPublishingPlans"), "server promotion must never dispatch plan-only channels");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

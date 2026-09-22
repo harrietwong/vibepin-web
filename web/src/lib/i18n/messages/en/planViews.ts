@@ -26,6 +26,7 @@ export const planViewsMessages = {
   "planViews.list.headerPin": "Pin",
   "planViews.list.headerPublishTime": "Publish time",
   "planViews.list.headerStatus": "Status",
+  "planViews.list.headerChannels": "Channels",
   "planViews.list.headerBoard": "Board",
   "planViews.list.headerDestinationUrl": "Destination URL",
   "planViews.list.headerProduct": "Product",

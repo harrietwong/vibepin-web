@@ -217,6 +217,15 @@ export interface PinDraft {
    * derives the equivalent Pinterest-only intent for those rather than backfilling.
    */
   scheduledDestinations?: ScheduledDestination[];
+  /**
+   * Read-only plan entries for channels that VibePin does not dispatch itself.
+   *
+   * These records are intentionally separate from `scheduledDestinations`: the
+   * due-time worker reads only the latter, so an externally scheduled YouTube
+   * Short can be visible in Weekly Plan without being mistaken for a native
+   * VibePin publish destination.
+   */
+  externalPublishingPlans?: ExternalPublishingPlan[];
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
@@ -361,6 +370,20 @@ export type ScheduledDestination = {
   boardName?: string;
   /** When this intent was captured — lets us tell a fresh choice from a stale one. */
   capturedAt: string;
+};
+
+export type ExternalPublishingPlan = {
+  /** Stable provider/resource identity, for example `youtube:dQw4w9WgXcQ`. */
+  id: string;
+  /** P0 deliberately supports only the existing external YouTube scheduler. */
+  provider: "youtube";
+  status: "scheduled" | "publishing" | "published" | "failed" | "delivery_unknown" | "cancelled";
+  /** UTC instant used by the external provider. */
+  scheduledAt: string;
+  accountLabel?: string;
+  remoteId?: string;
+  postUrl?: string;
+  errorCode?: string;
 };
 
 /**
