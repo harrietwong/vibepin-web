@@ -14,13 +14,19 @@ import {
   type InstagramReelPublishResult,
 } from "./v76InstagramReelsPublish";
 
-function safeEvidence(result: InstagramReelPublishResult | undefined): Record<string, unknown> {
-  const evidence = result?.evidence;
-  if (!evidence) return {};
+/** v78 delegates to v76, whose JSONB evidence contract permits only these two
+ * string fields. Transport/result facts are carried by the typed RPC args. */
+export function instagramReelV78SettlementEvidence(status: DurableAttemptSettlement): {
+  provider: "instagram";
+  reason: "non_retryable" | "provider_rejected" | "unknown_outcome";
+} {
   return {
-    stage: evidence.stage,
-    classification: evidence.classification,
-    ...(typeof evidence.providerStatus === "number" ? { providerStatus: evidence.providerStatus } : {}),
+    provider: "instagram",
+    reason: status === "succeeded"
+      ? "non_retryable"
+      : status === "failed"
+        ? "provider_rejected"
+        : "unknown_outcome",
   };
 }
 
@@ -103,7 +109,7 @@ export async function dispatchSupabaseV76InstagramReel(input: {
         p_provider_status: evidence?.providerStatus ?? null,
         p_remote_id: status === "succeeded" ? evidence?.remoteId ?? null : null,
         p_remote_url: status === "succeeded" ? evidence?.remoteUrl ?? null : null,
-        p_evidence: { provider: "instagram", ...safeEvidence(provider) },
+        p_evidence: instagramReelV78SettlementEvidence(status),
       });
       if (error) throw dbError(error, "publish_provider_attempt_settle_v78_failed");
     },

@@ -7,7 +7,7 @@ import {
   dispatchV76InstagramReel,
   type InstagramReelPublishDependencies,
 } from "../src/lib/server/publish/v76InstagramReelsPublish";
-import { instagramReelProviderResult, publishFrozenInstagramReel } from "../src/lib/server/publish/v76InstagramReelsServer";
+import { instagramReelProviderResult, instagramReelV78SettlementEvidence, publishFrozenInstagramReel } from "../src/lib/server/publish/v76InstagramReelsServer";
 import type { DurableVideoPublishInput, DurableVideoPublishState, MaterializedVideoSource } from "../src/lib/server/publish/v76PinterestVideoPublish";
 
 const signedUrl = "https://storage.example.test/object/sign/frozen.mp4?token=private-token";
@@ -183,6 +183,19 @@ async function main(): Promise<void> {
     });
     assert.equal(result.evidence.remoteUrl, undefined);
     assert.equal(JSON.stringify(result.evidence).includes("private-token"), false);
+  });
+
+  await test("v78 settlement evidence uses only the permitted string provider and reason keys", async () => {
+    for (const [status, reason] of [
+      ["succeeded", "non_retryable"],
+      ["failed", "provider_rejected"],
+      ["unknown", "unknown_outcome"],
+    ] as const) {
+      const evidence = instagramReelV78SettlementEvidence(status);
+      assert.deepEqual(evidence, { provider: "instagram", reason });
+      assert.equal(Object.values(evidence).every(value => typeof value === "string"), true);
+      assert.equal(JSON.stringify(evidence).includes(signedUrl), false);
+    }
   });
 
   await test("a numeric Instagram media id without a permalink never becomes a Pinterest URL", async () => {
