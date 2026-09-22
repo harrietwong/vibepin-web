@@ -53,8 +53,20 @@ export async function dispatchV76InstagramReel(
   deps: InstagramReelPublishDependencies,
 ): Promise<DurableVideoPublishResult> {
   const published = new WeakMap<object, InstagramReelPublishResult>();
+  let materializationFailed = false;
   const result = await dispatchV76PinterestVideo(input, {
     ...deps,
+    async materializeSources(current, lease) {
+      try {
+        return await deps.materializeSources(current, lease);
+      } catch {
+        // Pinterest recovery consumers rely on provenance conflicts escaping the
+        // shared state machine. A Reel route instead owns this pre-provider
+        // boundary and may safely return a retryable failure/refund it upstream.
+        materializationFailed = true;
+        return [];
+      }
+    },
     async publishVideo(current, source) {
       const provider = await deps.publishReel(current, source);
       const evidence = provider.evidence;
@@ -84,6 +96,9 @@ export async function dispatchV76InstagramReel(
       await deps.settleAttempt(current, status, attempt, original);
     },
   });
+  if (materializationFailed && result.outcome === "failed") {
+    return { ...result, evidence: { reason: "materialization_failed" } };
+  }
   // A fresh call still passes through the shared state machine, which can synthesize
   // this exact Pinterest URL for a numeric id. Strip only that synthetic fallback:
   // v78 replay evidence deliberately omits `pinUrl`, while `remote_url` stores a
