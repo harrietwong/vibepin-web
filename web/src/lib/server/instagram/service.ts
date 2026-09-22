@@ -350,12 +350,22 @@ async function awaitContainersReady(
 ): Promise<void> {
   const pending = new Set(containerIds);
   for (;;) {
+    if (Date.now() > deadlineAt) {
+      throw new InstagramApiError(
+        "Instagram is still processing the media — please try again",
+        504,
+        "container_timeout",
+      );
+    }
     for (const containerId of [...pending]) {
       const statusRes = await fetch(
         `${INSTAGRAM_GRAPH_URL}/${containerId}?fields=status_code&access_token=${encodeURIComponent(accessToken)}`,
       );
       const status = (await statusRes.json().catch(() => ({}))) as { status_code?: string };
-      if (status.status_code === "FINISHED") {
+      // A response that arrived after the shared deadline is not safe to publish:
+      // the route budget has already expired and a late success must not turn into
+      // an untracked provider delivery.
+      if (status.status_code === "FINISHED" && Date.now() <= deadlineAt) {
         igPublishDebug({ traceId, containerId, finalContainerStatus: "FINISHED" });
         pending.delete(containerId);
         continue;
@@ -480,7 +490,8 @@ async function createCarouselContainer(
 export async function publishToInstagram(input: InstagramPublishInput): Promise<InstagramPublishResult> {
   const videoUrl = input.videoUrl?.trim() || "";
   const imageUrls = input.imageUrls?.filter(url => typeof url === "string" && url.trim()) ?? [];
-  if (videoUrl && imageUrls.length) {
+  const legacyImageUrl = input.imageUrl?.trim() || "";
+  if (videoUrl && (imageUrls.length || legacyImageUrl)) {
     throw new InstagramApiError("Instagram Reels cannot mix video and images", 400, "mixed_media");
   }
   if (videoUrl && !isPubliclyFetchableImage(videoUrl)) {
@@ -489,15 +500,28 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
   if (videoUrl) {
     const traceId = (globalThis.crypto?.randomUUID?.() ?? String(Date.now())).slice(0, 8);
     const caption = buildInstagramCaption(input.caption, input.destinationUrl);
-    const containerId = await createReelContainer(input.accessToken, input.igUserId, videoUrl, caption, traceId);
-    const publishRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media_publish`, {
+    let containerId: string;
+    try {
+      containerId = await createReelContainer(input.accessToken, input.igUserId, videoUrl, caption, traceId);
+    } catch (error) {
+      // Never expose Meta's message: it may echo the provider URL, including a
+      // signed token. Persist only this stable, token-free outcome.
+      if (error instanceof InstagramApiError && error.code === "container_timeout") throw error;
+      throw new InstagramApiError("Instagram could not prepare this Reel", 502, "container_failed");
+    }
+    let publishRes: Response;
+    try {
+      publishRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media_publish`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ creation_id: containerId, access_token: input.accessToken }).toString(),
-    });
+      });
+    } catch {
+      throw new InstagramApiError("Could not publish this Reel to Instagram", 502, "publish_failed");
+    }
     const publishedJson = (await publishRes.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
     if (!publishRes.ok || !publishedJson.id) {
-      throw new InstagramApiError(publishedJson.error?.message ?? "Instagram rejected the publish", publishRes.status, "publish_failed");
+      throw new InstagramApiError("Instagram rejected this Reel", publishRes.status, "publish_failed");
     }
     let permalink: string | null = null;
     try {

@@ -81,6 +81,21 @@ test("Instagram accepts up to 10 and rejects 11", () => {
   assert.match(r.ok === false ? r.message : "", /Remove 1\b/);
 });
 
+test("Instagram rejects mixed media and multiple videos before confirmation", () => {
+  const mixed = checkInstagramMedia([
+    { url: "https://cdn.test/a.jpg", kind: "image" },
+    { url: "https://cdn.test/a.mp4", kind: "video" },
+  ]);
+  assert.equal(mixed.ok, false);
+  assert.equal(mixed.ok === false && mixed.code, "mixed_media");
+  const multiVideo = checkInstagramMedia([
+    { url: "https://cdn.test/a.mp4", kind: "video" },
+    { url: "https://cdn.test/b.mp4", kind: "video" },
+  ]);
+  assert.equal(multiVideo.ok, false);
+  assert.equal(multiVideo.ok === false && multiVideo.code, "mixed_media");
+});
+
 test("Facebook accepts up to 10 and rejects 12 (Remove 2)", () => {
   assert.equal(checkFacebookMedia(square(10)).ok, true);
   const r = checkFacebookMedia(square(12));

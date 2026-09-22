@@ -58,6 +58,7 @@ const BLOCKER_KEYS: Record<PublishBlocker["code"], MessageKey> = {
   too_few: "studioBoard.blocker.too_few",
   too_many: "studioBoard.blocker.too_many",
   aspect_mismatch: "studioBoard.blocker.aspect_mismatch",
+  mixed_media: "studioBoard.blocker.aspect_mismatch",
 };
 
 export function blockerText(tr: Translate, blocker: PublishBlocker): string {

@@ -271,7 +271,7 @@ export function buildPublishConfirmation(
       blockers.push(blocker("missing_board", "Choose a Pinterest board before publishing.", destination));
       continue;
     }
-    const publishMedia = media.map(item => ({ url: item.url, width: item.width, height: item.height }));
+    const publishMedia = media.map(item => ({ url: item.url, kind: item.kind, width: item.width, height: item.height }));
     const check = destination.provider === "pinterest"
       ? checkPinterestMedia(publishMedia)
       : destination.provider === "instagram"

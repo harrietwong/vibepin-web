@@ -22,6 +22,7 @@
 /** One image in a publish, in the Content's display order. Dimensions optional. */
 export type PublishMediaItem = {
   url: string;
+  kind?: "image" | "video";
   width?: number;
   height?: number;
 };
@@ -37,6 +38,7 @@ export type MediaCheckFailureCode =
   | "no_media"
   | "too_few"
   | "too_many"
+  | "mixed_media"
   | "aspect_mismatch";
 
 export type MediaCheckResult =
@@ -144,6 +146,13 @@ export function checkPinterestMedia(items: readonly PublishMediaItem[] | null | 
 export function checkInstagramMedia(items: readonly PublishMediaItem[] | null | undefined): MediaCheckResult {
   const media = usableItems(items);
   if (media.length === 0) return noMedia("Instagram");
+  const videos = media.filter(item => item.kind === "video");
+  if (videos.length > 0) {
+    if (videos.length !== 1 || media.some(item => item.kind !== "video")) {
+      return { ok: false, code: "mixed_media", message: "Instagram Reels accepts exactly one video and cannot mix images." };
+    }
+    return { ok: true };
+  }
   if (media.length === 1) return { ok: true };
   if (media.length > INSTAGRAM_CAROUSEL_MAX) {
     return {
