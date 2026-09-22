@@ -28,6 +28,10 @@ let claimCalls = 0;
 let providerCalls = 0;
 let meterCalls = 0;
 let durableReelCalls = 0;
+let releaseCalls = 0;
+let meterResult: { kind: string; fresh?: boolean } = { kind: "insufficient" };
+const events: string[] = [];
+let durableOutcome: Record<string, unknown> = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
 
 class FakePublishIntentLedgerError extends Error {
   constructor(public readonly code: "unavailable" | "conflict" | "claim_lost" | "retry_not_allowed", message: string) {
@@ -58,7 +62,8 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
   if (request === "@/lib/server/publish/v76InstagramReelsServer" || request.endsWith("/server/publish/v76InstagramReelsServer")) {
     return { dispatchSupabaseV76InstagramReel: async () => {
       durableReelCalls++;
-      return { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
+      events.push("durable");
+      return durableOutcome;
     } };
   }
   if (request === "@/lib/server/publish/confirmationReceipt" || request.endsWith("/server/publish/confirmationReceipt")) {
@@ -171,9 +176,9 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
   }
   if (request === "@/lib/server/usage/meterScheduledPost" || request.endsWith("/usage/meterScheduledPost")) {
     return {
-      consumeScheduledPost: async () => { meterCalls++; return { kind: "insufficient" }; },
+      consumeScheduledPost: async () => { meterCalls++; events.push("meter"); return meterResult; },
       deriveScheduledPostKey: () => "scheduled-post-route-test",
-      releaseScheduledPost: async () => undefined,
+      releaseScheduledPost: async () => { releaseCalls++; return undefined; },
       scheduledPostLimitResponseBody: () => ({ error: "limit", code: "scheduled_post_limit_reached" }),
       usageEnforceFor: () => true,
       classifyImmediateBucket: () => "ok",
@@ -234,6 +239,10 @@ async function test(name: string, fn: () => Promise<void>) {
   providerCalls = 0;
   meterCalls = 0;
   durableReelCalls = 0;
+  releaseCalls = 0;
+  meterResult = { kind: "insufficient" };
+  events.length = 0;
+  durableOutcome = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
   try {
     await fn();
     passed++;
@@ -293,6 +302,7 @@ await test("onlyPending=true accepts only an authoritative failed+retryAllowed s
 
 await test("a private Instagram Reel uses the durable v76/v79 branch and never claims the legacy generic ledger", async () => {
   priorIntentId = null;
+  meterResult = { kind: "consumed", fresh: true };
   const reel = request(false, [INSTAGRAM_ID]);
   reel.json = async () => ({
     postId: DRAFT_ID,
@@ -309,10 +319,27 @@ await test("a private Instagram Reel uses the durable v76/v79 branch and never c
   const response = await POST(reel);
   assert.equal(response.status, 201);
   assert.equal(durableReelCalls, 1);
+  assert.deepEqual(events, ["meter", "durable"], "quota consumption must happen before the durable path can reach a provider");
   assert.equal(claimCalls, 0, "private Reel must not call publish_intent_claim_destinations");
   assert.equal(providerCalls, 0);
   const body = await response.json() as Record<string, unknown>;
   assert.equal(JSON.stringify(body).includes("private"), false, "signed URL fragments must not enter the response");
+});
+
+await test("a pre-network private Reel failure releases a fresh consume without reaching the generic claim", async () => {
+  priorIntentId = null;
+  meterResult = { kind: "consumed", fresh: true };
+  durableOutcome = { outcome: "failed", retryAllowed: true, evidence: { stage: "pre_network" } };
+  const reel = request(false, [INSTAGRAM_ID]);
+  reel.json = async () => ({
+    postId: DRAFT_ID, post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Reel", caption: "Caption" },
+    destinations: [{ provider: "instagram", socialConnectionId: "ig-connection" }],
+    confirmation: { intentId: `publish:${CONTENT_ID}:reel-not-sent`, fingerprint: "f".repeat(64), draftId: DRAFT_ID, contentId: CONTENT_ID, confirmedAt: "2026-09-01T12:00:02.000Z", onlyPending: false, mode: { kind: "now" }, media: [{ id: "reel-1", kind: "video", url: `/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`, source: "upload", width: 1080, height: 1920, durationMs: 8_000 }], blockers: [], priorIntentId: null, dispatchDestinationIds: [INSTAGRAM_ID], publishableDestinations: [destinations[1]], destinations: [destinations[1]] },
+  });
+  const response = await POST(reel);
+  assert.equal(response.status, 422);
+  assert.equal(releaseCalls, 1);
+  assert.equal(claimCalls, 0);
 });
 
 await test("a private Reel fan-out fails closed instead of sending its Instagram leg to the legacy generic claim", async () => {
