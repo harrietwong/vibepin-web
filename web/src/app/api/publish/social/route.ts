@@ -230,12 +230,23 @@ export async function POST(req: Request) {
       status: stored.code === "invalid_confirmation" ? 409 : 503,
     });
   }
-  const privateReel = requested.length === 1
-    && requestedProviders.length === 1
-    && requestedProviders[0] === "instagram"
+  const privateReelCandidate = requestedProviders.includes("instagram")
     && post.imageUrls.length === 0
     && videoUrls.length === 1
     && requiresPublishAsset(videoUrls[0], new URL(req.url).origin);
+  const privateReel = privateReelCandidate
+    && requested.length === 1
+    && requestedProviders.length === 1
+    && requestedProviders[0] === "instagram";
+  if (privateReelCandidate && !privateReel) {
+    // A single private Reel has one materialized provider copy per durable
+    // destination. Do not let a mixed fan-out fall through to the pre-v76
+    // generic claim path while that multi-destination graph is unsupported.
+    return Response.json({
+      error: "A private Instagram Reel must be published to its Instagram destination separately.",
+      code: "instagram_reels_private_fanout_unsupported",
+    }, { status: 422 });
+  }
   if (privateReel) {
     const destination = confirmation.destinations.find(item => item.id === requestedDestinationIds[0]);
     if (!destination || destination.provider !== "instagram") {

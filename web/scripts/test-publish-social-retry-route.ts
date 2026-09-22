@@ -315,6 +315,27 @@ await test("a private Instagram Reel uses the durable v76/v79 branch and never c
   assert.equal(JSON.stringify(body).includes("private"), false, "signed URL fragments must not enter the response");
 });
 
+await test("a private Reel fan-out fails closed instead of sending its Instagram leg to the legacy generic claim", async () => {
+  priorIntentId = null;
+  const raw = request(false, [FACEBOOK_ID, INSTAGRAM_ID]);
+  raw.json = async () => ({
+    postId: DRAFT_ID,
+    post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Reel", caption: "Caption" },
+    destinations: destinations.map(destination => ({ provider: destination.provider, socialConnectionId: destination.socialConnectionId })),
+    confirmation: {
+      intentId: `publish:${CONTENT_ID}:reel-fanout-test`, fingerprint: "f".repeat(64), draftId: DRAFT_ID, contentId: CONTENT_ID,
+      confirmedAt: "2026-09-01T12:00:02.000Z", onlyPending: false, mode: { kind: "now" },
+      media: [{ id: "reel-1", kind: "video", url: `/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`, source: "upload", width: 1080, height: 1920, durationMs: 8_000 }],
+      blockers: [], priorIntentId: null, dispatchDestinationIds: [FACEBOOK_ID, INSTAGRAM_ID], publishableDestinations: destinations, destinations,
+    },
+  });
+  const response = await POST(raw);
+  assert.equal(response.status, 422);
+  assert.equal((await response.json() as { code: string }).code, "instagram_reels_private_fanout_unsupported");
+  assert.equal(claimCalls, 0);
+  assert.equal(providerCalls, 0);
+});
+
 for (const [label, status, retryAllowed] of [
   ["an in-flight claim", "claimed", false],
   ["published", "published", false],
