@@ -26,6 +26,7 @@ async function run() {
     accessToken: "token", igUserId: "ig-1", videoUrl: "https://cdn.invalid/video.mp4", caption: "hello",
   });
   assert.equal(result.mediaId, "published-reel");
+  assert.equal(result.providerStatus, 200, "durable delivery requires the observed successful provider status");
   assert.ok(calls.some(call => call.body.includes("media_type=REELS") && call.body.includes("video_url=https%3A%2F%2Fcdn.invalid%2Fvideo.mp4")));
   assert.equal(calls.filter(call => call.url.endsWith("/media_publish")).length, 1);
   await assert.rejects(

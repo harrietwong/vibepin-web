@@ -267,7 +267,7 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
         videoUrl: videoUrls[0],
         caption: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
       });
-      return { ok: true, status: "published", externalPostId: result.mediaId, externalPostUrl: result.permalink, accountName: connection.username ?? null };
+      return { ok: true, status: "published", externalPostId: result.mediaId, externalPostUrl: result.permalink, providerStatus: result.providerStatus, accountName: connection.username ?? null };
     } catch (err) {
       const message = err instanceof InstagramApiError ? err.message : "Could not publish to Instagram.";
       return { ok: false, status: "failed", error: message, providerStatus: err instanceof InstagramApiError ? err.status : null, providerResourceId: null };
@@ -311,6 +311,7 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
       status: "published",
       externalPostId: result.mediaId,
       externalPostUrl: result.permalink,
+      providerStatus: result.providerStatus,
       accountName: connection.username ?? null,
     };
   } catch (err) {

@@ -264,6 +264,8 @@ export type InstagramPublishInput = {
 export type InstagramPublishResult = {
   mediaId: string;
   permalink: string | null;
+  /** Observed successful Graph API status; durable callers require a 2xx receipt. */
+  providerStatus: number;
   /** Correlates the UI, the logs, and this publish. Safe to display. */
   traceId: string;
 };
@@ -530,7 +532,7 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
       if (typeof perma.permalink === "string" && perma.permalink) permalink = perma.permalink;
     } catch { /* permalink is best effort */ }
     igPublishDebug({ traceId, igUserId: input.igUserId, mediaId: publishedJson.id, permalinkResolved: permalink !== null });
-    return { mediaId: publishedJson.id, permalink, traceId };
+    return { mediaId: publishedJson.id, permalink, providerStatus: publishRes.status, traceId };
   }
   // The media set in display order; `imageUrl` remains the single-image contract.
   const urls = input.imageUrls?.length ? input.imageUrls : input.imageUrl ? [input.imageUrl] : [];
@@ -591,5 +593,5 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
     permalinkResolved: permalink !== null,
   });
 
-  return { mediaId: publishedJson.id, permalink, traceId };
+  return { mediaId: publishedJson.id, permalink, providerStatus: publishRes.status, traceId };
 }

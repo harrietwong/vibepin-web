@@ -206,7 +206,8 @@ await test("server confirmation preserves an exact video media snapshot instead 
     description: receipt.description,
     destinationUrl: receipt.destinationUrl,
     altText: receipt.altText,
-    imageUrls: [receipt.media[0].url],
+    imageUrls: [],
+    videoUrls: [receipt.media[0].url],
   }, receipt.dispatchDestinationIds, Date.parse("2026-09-16T12:00:02.000Z"));
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.receipt.media[0].kind, "video");

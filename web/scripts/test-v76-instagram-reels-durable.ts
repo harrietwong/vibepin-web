@@ -7,6 +7,7 @@ import {
   dispatchV76InstagramReel,
   type InstagramReelPublishDependencies,
 } from "../src/lib/server/publish/v76InstagramReelsPublish";
+import { instagramReelProviderResult, publishFrozenInstagramReel } from "../src/lib/server/publish/v76InstagramReelsServer";
 import type { DurableVideoPublishInput, DurableVideoPublishState, MaterializedVideoSource } from "../src/lib/server/publish/v76PinterestVideoPublish";
 
 const signedUrl = "https://storage.example.test/object/sign/frozen.mp4?token=private-token";
@@ -87,7 +88,9 @@ async function main(): Promise<void> {
   await test("materialization failure makes zero provider calls", async () => {
     const { calls, deps } = harness();
     deps.materializeSources = async () => { calls.push("materialize"); throw new Error("private_copy_failed"); };
-    await assert.rejects(() => dispatchV76InstagramReel(input(), deps), /private_copy_failed/);
+    const result = await dispatchV76InstagramReel(input(), deps);
+    assert.equal(result.outcome, "failed");
+    assert.equal(result.retryAllowed, true);
     assert.equal(calls.some(call => call.startsWith("provider:")), false);
   });
 
@@ -101,6 +104,38 @@ async function main(): Promise<void> {
     const result = await dispatchV76InstagramReel(input(), deps);
     assert.equal(result.outcome, "failed");
     assert.equal(result.retryAllowed, true);
+  });
+
+  await test("only the intent-bound frozen copy receives a 300-second signed URL, and signing failure reaches no provider", async () => {
+    const signCalls: Array<{ path: string; seconds: number }> = [];
+    const received: string[] = [];
+    const db = {
+      storage: { from: () => ({ createSignedUrl: async (path: string, seconds: number) => {
+        signCalls.push({ path, seconds });
+        return { data: { signedUrl }, error: null };
+      } }) },
+    };
+    const result = await publishFrozenInstagramReel({
+      db: db as never,
+      input: input(),
+      source,
+      publishReel: async (_input, url) => {
+        received.push(url);
+        return { ok: true, status: "published", providerStatus: 200, externalPostId: "ig-media-1", externalPostUrl: "https://instagram.example.test/reel/1" };
+      },
+    });
+    assert.equal(result.outcome, "succeeded");
+    assert.deepEqual(signCalls, [{ path: frozenPath, seconds: 300 }]);
+    assert.deepEqual(received, [signedUrl]);
+    assert.equal(JSON.stringify(result.evidence).includes(signedUrl), false);
+    let providerCalls = 0;
+    const failed = await publishFrozenInstagramReel({
+      db: { storage: { from: () => ({ createSignedUrl: async () => ({ data: null, error: { message: "no" } }) }) } } as never,
+      input: input(), source,
+      publishReel: async () => { providerCalls++; throw new Error("must not run"); },
+    });
+    assert.equal(failed.outcome, "failed");
+    assert.equal(providerCalls, 0);
   });
 
   await test("active and unknown attempts replay without a provider call", async () => {
@@ -139,6 +174,15 @@ async function main(): Promise<void> {
       assert.equal(result.outcome, "delivery_unknown");
       assert.equal(result.retryAllowed, false);
     }
+  });
+
+  await test("provider receipts discard a token-shaped remote URL before v78 settlement", async () => {
+    const result = instagramReelProviderResult({
+      ok: true, status: "published", providerStatus: 200, externalPostId: "ig-media-1",
+      externalPostUrl: signedUrl,
+    });
+    assert.equal(result.evidence.remoteUrl, undefined);
+    assert.equal(JSON.stringify(result.evidence).includes("private-token"), false);
   });
 
   console.log(`\nInstagram durable Reels: ${passed} passed, ${failed} failed\n`);

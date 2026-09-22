@@ -393,9 +393,16 @@ export async function dispatchV76PinterestVideo(
     }
   }
 
-  const sources = prior.kind === "ready" || prior.kind === "claimed"
-    ? await deps.loadReadySources(input)
-    : await deps.materializeSources(input, lease);
+  let sources: MaterializedVideoSource[];
+  try {
+    sources = prior.kind === "ready" || prior.kind === "claimed"
+      ? await deps.loadReadySources(input)
+      : await deps.materializeSources(input, lease);
+  } catch {
+    // No provider boundary has been entered. This remains a typed retryable
+    // pre-network failure instead of escaping as an ambiguous delivery.
+    return { outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_failed" } };
+  }
   if (!sources.length || sources.length !== input.receipt.media.length) {
     return { outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" } };
   }

@@ -46,7 +46,6 @@ import { isSocialProvider, platformName, PLATFORMS } from "@/lib/social/platform
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
-import { createMediaProvenanceStore } from "@/lib/server/mediaProvenance";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
@@ -79,6 +78,7 @@ import {
   settlePublishIntentDestination,
   type PublishIntentClaim,
 } from "@/lib/server/publish/publishIntentLedger";
+import { dispatchSupabaseV76InstagramReel } from "@/lib/server/publish/v76InstagramReelsServer";
 import type { PublishDestination } from "@/lib/contentDraftModel";
 
 export const dynamic = "force-dynamic";
@@ -230,30 +230,58 @@ export async function POST(req: Request) {
       status: stored.code === "invalid_confirmation" ? 409 : 503,
     });
   }
-  // Private video locators are owner-protected app routes and cannot be fetched by
-  // Meta. Resolve them only after the frozen receipt and current draft have passed
-  // validation, then keep the short-lived provider URL strictly server-side.
-  let dispatchPost = post;
-  if (videoUrls.some(url => typeof url === "string" && requiresPublishAsset(url, new URL(req.url).origin))) {
-    const bucket = process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private";
-    const provenance = createMediaProvenanceStore(db);
-    const resolved: string[] = [];
-    try {
-      for (const rawUrl of videoUrls) {
-        const parsed = new URL(rawUrl, new URL(req.url).origin);
-        const path = parsed.searchParams.get("path")?.trim() ?? "";
-        if (parsed.pathname !== "/api/storage-media" || !path || path.split("/", 1)[0] !== uid) throw new Error("video_source_owner_mismatch");
-        const row = await provenance.findExact(uid, bucket, path);
-        if (!row || row.owner_user_id !== uid || row.bucket_id !== bucket || row.object_path !== path || row.media_kind !== "video" || !["draft", "publish_pending", "published", "retained"].includes(row.lifecycle_state)) throw new Error("video_source_provenance_invalid");
-        const signed = await db.storage.from(bucket).createSignedUrl(path, 300);
-        if (signed.error || !signed.data?.signedUrl) throw new Error("video_source_signing_failed");
-        resolved.push(signed.data.signedUrl);
-      }
-      dispatchPost = { ...post, videoUrls: resolved };
-    } catch {
-      return Response.json({ error: "The frozen private video could not be materialized for provider delivery.", code: "materialization_required" }, { status: 409 });
+  const privateReel = requested.length === 1
+    && requestedProviders.length === 1
+    && requestedProviders[0] === "instagram"
+    && post.imageUrls.length === 0
+    && videoUrls.length === 1
+    && requiresPublishAsset(videoUrls[0], new URL(req.url).origin);
+  if (privateReel) {
+    const destination = confirmation.destinations.find(item => item.id === requestedDestinationIds[0]);
+    if (!destination || destination.provider !== "instagram") {
+      return Response.json({ error: "The confirmed destination set is invalid.", code: "invalid_confirmation" }, { status: 409 });
     }
+    const result = await dispatchSupabaseV76InstagramReel({
+      db,
+      publishInput: { uid, receipt: confirmation.receipt, destination },
+      publishReel: async (_current, signedFrozenCopyUrl) => {
+        try {
+          const connection = await findConnection(uid, destination.socialConnectionId ?? "");
+          if (!connection || connection.connectionStatus !== "connected") {
+            return { ok: false, status: "failed", error: "Connect your Instagram account in Settings to publish here.", preNetwork: true };
+          }
+          return await getSocialProviderById(connection.authProvider).publishPost({
+            provider: "instagram",
+            connection,
+            post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
+            userId: uid,
+          });
+        } catch {
+          // This is before the external provider boundary: the durable worker can
+          // safely record a retryable pre-network failure without exposing a URL.
+          return { ok: false, status: "failed", error: "Could not prepare the Instagram connection.", preNetwork: true };
+        }
+      },
+    });
+    const status = result.outcome === "published" ? 201 : result.outcome === "failed" ? 422 : 409;
+    return Response.json({
+      ok: result.outcome === "published",
+      replayed: result.replayed === true,
+      status: result.outcome,
+      intentId: confirmation.receipt.intentId,
+      jobId: null,
+      destinations: [{
+        provider: "instagram",
+        socialConnectionId: destination.socialConnectionId ?? null,
+        status: result.outcome === "published" ? "published" : result.outcome,
+        externalPostId: result.remoteId ?? null,
+        externalPostUrl: result.remoteUrl ?? null,
+        retryAllowed: result.retryAllowed,
+        remoteEvidence: result.evidence ?? {},
+      }],
+    }, { status });
   }
+  const dispatchPost = post;
   const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
   const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
   try {

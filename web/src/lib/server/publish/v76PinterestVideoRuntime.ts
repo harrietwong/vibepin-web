@@ -312,6 +312,7 @@ async function loadPinterestPublishEvidence(
 export async function inspectV76VideoPublishState(
   db: SupabaseClient,
   input: DurableVideoPublishInput,
+  options: { loadPinterestEvidence?: boolean } = {},
 ): Promise<DurableVideoPublishState> {
   const intentResult = await db
     .from("publish_intents")
@@ -331,7 +332,11 @@ export async function inspectV76VideoPublishState(
     .maybeSingle();
   if (destinationResult.error) throw dbError(destinationResult.error, "publish_destination_inspection_failed");
   const destination = destinationResult.data as Record<string, unknown> | null;
-  const richEvidence = await loadPinterestPublishEvidence(db, input, intentDbId);
+  // Instagram uses the v78 settlement record directly. It must not read or
+  // depend on Pinterest's additive v81 evidence table.
+  const richEvidence = options.loadPinterestEvidence === false
+    ? null
+    : await loadPinterestPublishEvidence(db, input, intentDbId);
   const destinationEvidence = richEvidence ?? (destination?.evidence && typeof destination.evidence === "object"
     ? destination.evidence as Record<string, unknown>
     : {});
@@ -480,10 +485,13 @@ export function createSupabasePrivateVideoMaterializationBoundary(
 export function createSupabaseV76VideoPublishDependencies(input: {
   db: SupabaseClient;
   publishVideo: DurableVideoPublishDependencies["publishVideo"];
+  loadPinterestEvidence?: boolean;
 }): DurableVideoPublishDependencies {
   const materialization = createSupabasePrivateVideoMaterializationBoundary(input.db);
   return createV76RpcVideoPublishDependencies({
-    inspect: current => inspectV76VideoPublishState(input.db, current),
+    inspect: current => inspectV76VideoPublishState(input.db, current, {
+      loadPinterestEvidence: input.loadPinterestEvidence,
+    }),
     materializeSources: (current, lease) => materializePrivateVideoSources(current, lease, materialization),
     loadReadySources: current => loadReadyPrivateVideoSources(input.db, current, materialization),
     publishVideo: input.publishVideo,

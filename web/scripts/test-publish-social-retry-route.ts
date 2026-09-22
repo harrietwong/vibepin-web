@@ -27,6 +27,7 @@ let priorIntentId: string | null = "publish:prior:route";
 let claimCalls = 0;
 let providerCalls = 0;
 let meterCalls = 0;
+let durableReelCalls = 0;
 
 class FakePublishIntentLedgerError extends Error {
   constructor(public readonly code: "unavailable" | "conflict" | "claim_lost" | "retry_not_allowed", message: string) {
@@ -45,7 +46,20 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
     return { getUserIdFromBearer: async () => OWNER };
   }
   if (request.endsWith("/lib/supabase") || request.endsWith("@/lib/supabase")) {
-    return { createServerClient: () => ({}) };
+    return { createServerClient: () => ({
+      storage: { from: () => ({ createSignedUrl: async () => ({ data: { signedUrl: "https://storage.example.test/frozen.mp4?token=private" }, error: null }) }) },
+    }) };
+  }
+  if (request === "@/lib/server/mediaProvenance" || request.endsWith("/server/mediaProvenance")) {
+    return { createMediaProvenanceStore: () => ({ findExact: async () => ({
+      owner_user_id: OWNER, bucket_id: "generated-private", object_path: `${OWNER}/uploads/reel.mp4`, media_kind: "video", lifecycle_state: "draft",
+    }) }) };
+  }
+  if (request === "@/lib/server/publish/v76InstagramReelsServer" || request.endsWith("/server/publish/v76InstagramReelsServer")) {
+    return { dispatchSupabaseV76InstagramReel: async () => {
+      durableReelCalls++;
+      return { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
+    } };
   }
   if (request === "@/lib/server/publish/confirmationReceipt" || request.endsWith("/server/publish/confirmationReceipt")) {
     const real = originalLoad.call(this, request, parent, isMain) as Record<string, unknown>;
@@ -219,6 +233,7 @@ async function test(name: string, fn: () => Promise<void>) {
   claimCalls = 0;
   providerCalls = 0;
   meterCalls = 0;
+  durableReelCalls = 0;
   try {
     await fn();
     passed++;
@@ -274,6 +289,30 @@ await test("onlyPending=true accepts only an authoritative failed+retryAllowed s
   assert.equal(claimCalls, 1);
   assert.equal(meterCalls, 1);
   assert.equal(providerCalls, 0);
+});
+
+await test("a private Instagram Reel uses the durable v76/v79 branch and never claims the legacy generic ledger", async () => {
+  priorIntentId = null;
+  const reel = request(false, [INSTAGRAM_ID]);
+  reel.json = async () => ({
+    postId: DRAFT_ID,
+    post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Reel", caption: "Caption" },
+    destinations: [{ provider: "instagram", socialConnectionId: "ig-connection" }],
+    confirmation: {
+      intentId: `publish:${CONTENT_ID}:reel-route-test`, fingerprint: "f".repeat(64), draftId: DRAFT_ID, contentId: CONTENT_ID,
+      confirmedAt: "2026-09-01T12:00:02.000Z", onlyPending: false, mode: { kind: "now" },
+      media: [{ id: "reel-1", kind: "video", url: `/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`, source: "upload", width: 1080, height: 1920, durationMs: 8_000 }],
+      blockers: [], priorIntentId: null, dispatchDestinationIds: [INSTAGRAM_ID],
+      publishableDestinations: [destinations[1]], destinations: [destinations[1]],
+    },
+  });
+  const response = await POST(reel);
+  assert.equal(response.status, 201);
+  assert.equal(durableReelCalls, 1);
+  assert.equal(claimCalls, 0, "private Reel must not call publish_intent_claim_destinations");
+  assert.equal(providerCalls, 0);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(JSON.stringify(body).includes("private"), false, "signed URL fragments must not enter the response");
 });
 
 for (const [label, status, retryAllowed] of [
