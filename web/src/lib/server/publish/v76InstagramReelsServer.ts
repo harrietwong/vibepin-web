@@ -4,6 +4,7 @@ import {
   createSupabaseV76VideoPublishDependencies,
 } from "./v76PinterestVideoRuntime";
 import type {
+  DurableAttemptSettlement,
   DurableVideoPublishInput,
   DurableVideoPublishResult,
   MaterializedVideoSource,
