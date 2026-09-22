@@ -245,22 +245,24 @@ export async function POST(req: Request) {
       db,
       publishInput: { uid, receipt: confirmation.receipt, destination },
       publishReel: async (_current, signedFrozenCopyUrl) => {
+        let connection: SocialConnection | null;
         try {
-          const connection = await findConnection(uid, destination.socialConnectionId ?? "");
-          if (!connection || connection.connectionStatus !== "connected") {
-            return { ok: false, status: "failed", error: "Connect your Instagram account in Settings to publish here.", preNetwork: true };
-          }
-          return await getSocialProviderById(connection.authProvider).publishPost({
-            provider: "instagram",
-            connection,
-            post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
-            userId: uid,
-          });
+          connection = await findConnection(uid, destination.socialConnectionId ?? "");
         } catch {
-          // This is before the external provider boundary: the durable worker can
-          // safely record a retryable pre-network failure without exposing a URL.
           return { ok: false, status: "failed", error: "Could not prepare the Instagram connection.", preNetwork: true };
         }
+        if (!connection || connection.connectionStatus !== "connected") {
+          return { ok: false, status: "failed", error: "Connect your Instagram account in Settings to publish here.", preNetwork: true };
+        }
+        // Do not catch this provider-boundary call: it may have reached Meta.
+        // The durable dispatcher will settle a thrown/ambiguous delivery as
+        // delivery_unknown and forbid a blind retry.
+        return getSocialProviderById(connection.authProvider).publishPost({
+          provider: "instagram",
+          connection,
+          post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
+          userId: uid,
+        });
       },
     });
     const status = result.outcome === "published" ? 201 : result.outcome === "failed" ? 422 : 409;

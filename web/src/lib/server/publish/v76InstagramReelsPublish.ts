@@ -79,5 +79,12 @@ export async function dispatchV76InstagramReel(
       await deps.settleAttempt(current, status, attempt, original);
     },
   });
+  // The shared Pinterest state machine synthesizes a Pinterest URL for a numeric
+  // id when its adapter did not return a URL. Instagram media ids may be numeric
+  // too, so preserve a missing Reel permalink as missing.
+  if (result.outcome === "published" && !(result.evidence?.pinUrl)) {
+    const { remoteUrl: _pinterestFallback, ...withoutPinterestFallback } = result;
+    return withoutPinterestFallback;
+  }
   return result;
 }

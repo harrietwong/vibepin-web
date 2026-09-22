@@ -185,6 +185,18 @@ async function main(): Promise<void> {
     assert.equal(JSON.stringify(result.evidence).includes("private-token"), false);
   });
 
+  await test("a numeric Instagram media id without a permalink never becomes a Pinterest URL", async () => {
+    const { deps } = harness();
+    deps.publishReel = async () => ({
+      outcome: "succeeded",
+      evidence: { stage: "provider", classification: "succeeded", providerStatus: 200, remoteId: "12345" },
+    });
+    const result = await dispatchV76InstagramReel(input(), deps);
+    assert.equal(result.outcome, "published");
+    assert.equal(result.remoteId, "12345");
+    assert.equal(result.remoteUrl, undefined);
+  });
+
   console.log(`\nInstagram durable Reels: ${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }
