@@ -29,6 +29,10 @@ let providerCalls = 0;
 let meterCalls = 0;
 let durableReelCalls = 0;
 let releaseCalls = 0;
+let jobCalls = 0;
+let outcomeCalls = 0;
+let invokeDurableProvider = false;
+let privateConnectionAvailable = false;
 let meterResult: { kind: string; fresh?: boolean } = { kind: "insufficient" };
 const events: string[] = [];
 let durableOutcome: Record<string, unknown> = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
@@ -60,11 +64,25 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
     }) }) };
   }
   if (request === "@/lib/server/publish/v76InstagramReelsServer" || request.endsWith("/server/publish/v76InstagramReelsServer")) {
-    return { dispatchSupabaseV76InstagramReel: async () => {
+    return { dispatchSupabaseV76InstagramReel: async (input: {
+      publishInput: unknown;
+      publishReel: (current: unknown, signedFrozenCopyUrl: string) => Promise<unknown>;
+    }) => {
       durableReelCalls++;
       events.push("durable");
+      if (invokeDurableProvider) {
+        await input.publishReel(input.publishInput, "https://storage.example.test/user/publish/frozen.mp4?token=private");
+      }
       return durableOutcome;
     } };
+  }
+  if (request === "@/lib/social/publishFanout" || request.endsWith("/social/publishFanout")) {
+    const real = originalLoad.call(this, request, parent, isMain) as Record<string, unknown>;
+    return {
+      ...real,
+      createPublishJob: async () => { jobCalls++; return "job-durable-reel"; },
+      recordOutcomes: async () => { outcomeCalls++; return true; },
+    };
   }
   if (request === "@/lib/server/publish/confirmationReceipt" || request.endsWith("/server/publish/confirmationReceipt")) {
     const real = originalLoad.call(this, request, parent, isMain) as Record<string, unknown>;
@@ -161,7 +179,9 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
         { provider: "facebook", accounts: [{ id: "fb-connection" }] },
         { provider: "instagram", accounts: [{ id: "ig-connection" }] },
       ],
-      findConnection: async () => null,
+      findConnection: async () => privateConnectionAvailable
+        ? { id: "ig-connection", connectionStatus: "connected", authProvider: "official" }
+        : null,
     };
   }
   if (request === "@/lib/social/destinationCapability" || request.endsWith("/social/destinationCapability")) {
@@ -190,7 +210,7 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
   if (request === "@/lib/social/providers" || request.endsWith("/social/providers")) {
     return {
       getSocialProviderById: () => ({
-        publishPost: async () => { providerCalls++; return { ok: true, status: "published" }; },
+        publishPost: async () => { providerCalls++; events.push("provider"); return { ok: true, status: "published" }; },
       }),
     };
   }
@@ -240,6 +260,10 @@ async function test(name: string, fn: () => Promise<void>) {
   meterCalls = 0;
   durableReelCalls = 0;
   releaseCalls = 0;
+  jobCalls = 0;
+  outcomeCalls = 0;
+  invokeDurableProvider = false;
+  privateConnectionAvailable = false;
   meterResult = { kind: "insufficient" };
   events.length = 0;
   durableOutcome = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
@@ -303,6 +327,8 @@ await test("onlyPending=true accepts only an authoritative failed+retryAllowed s
 await test("a private Instagram Reel uses the durable v76/v79 branch and never claims the legacy generic ledger", async () => {
   priorIntentId = null;
   meterResult = { kind: "consumed", fresh: true };
+  invokeDurableProvider = true;
+  privateConnectionAvailable = true;
   const reel = request(false, [INSTAGRAM_ID]);
   reel.json = async () => ({
     postId: DRAFT_ID,
@@ -319,17 +345,19 @@ await test("a private Instagram Reel uses the durable v76/v79 branch and never c
   const response = await POST(reel);
   assert.equal(response.status, 201);
   assert.equal(durableReelCalls, 1);
-  assert.deepEqual(events, ["meter", "durable"], "quota consumption must happen before the durable path can reach a provider");
+  assert.deepEqual(events, ["meter", "durable", "provider"], "quota consumption must happen before the durable path can reach the provider");
+  assert.equal(jobCalls, 1, "the social job projection must start after metering and before the durable provider path");
+  assert.equal(outcomeCalls, 1, "the durable result must be projected into the social job outcome");
   assert.equal(claimCalls, 0, "private Reel must not call publish_intent_claim_destinations");
-  assert.equal(providerCalls, 0);
+  assert.equal(providerCalls, 1);
   const body = await response.json() as Record<string, unknown>;
   assert.equal(JSON.stringify(body).includes("private"), false, "signed URL fragments must not enter the response");
 });
 
-await test("a pre-network private Reel failure releases a fresh consume without reaching the generic claim", async () => {
+await test("a materialization failure releases a fresh consume without reaching the generic claim", async () => {
   priorIntentId = null;
   meterResult = { kind: "consumed", fresh: true };
-  durableOutcome = { outcome: "failed", retryAllowed: true, evidence: { stage: "pre_network" } };
+  durableOutcome = { outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_failed" } };
   const reel = request(false, [INSTAGRAM_ID]);
   reel.json = async () => ({
     postId: DRAFT_ID, post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Reel", caption: "Caption" },
@@ -339,6 +367,8 @@ await test("a pre-network private Reel failure releases a fresh consume without 
   const response = await POST(reel);
   assert.equal(response.status, 422);
   assert.equal(releaseCalls, 1);
+  assert.equal(jobCalls, 1, "a pre-network failure is still represented by a social job");
+  assert.equal(outcomeCalls, 1, "a pre-network failure is recorded before its charge is released");
   assert.equal(claimCalls, 0);
 });
 

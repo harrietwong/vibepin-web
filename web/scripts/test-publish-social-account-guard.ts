@@ -170,8 +170,9 @@ test("an explicit id that is no longer connected fails — it never falls back t
   // The resolver hands the id back and the route resolves it; when that account cannot
   // publish, the destination FAILS. Quietly publishing to a different connected account
   // instead would be the same wrong-account defect by another route.
-  const guard = route.indexOf('if (!connection || connection.connectionStatus !== "connected")');
-  const call = route.indexOf("publishPost({");
+  const genericDispatchLoop = route.indexOf("for (const raw of requested)");
+  const guard = route.indexOf('if (!connection || connection.connectionStatus !== "connected")', genericDispatchLoop);
+  const call = route.indexOf("publishPost({", genericDispatchLoop);
   assert.ok(guard > 0 && guard < call, "a disconnected account must be refused before the provider call");
   const block = route.slice(guard, call);
   assert.match(block, /status: "failed"/);
@@ -180,6 +181,16 @@ test("an explicit id that is no longer connected fails — it never falls back t
   // The resolver itself never substitutes a different account for a named one.
   const choice = resolveDestinationConnection(summaryOf(account("ig-1")), { socialConnectionId: "ig-gone" });
   assert.deepEqual(choice, { kind: "explicit", connectionId: "ig-gone" });
+});
+
+test("the private Reel branch also refuses a disconnected exact account before its provider call", () => {
+  const privateReel = route.indexOf("if (privateReelDestination)");
+  const guard = route.indexOf('if (!connection || connection.connectionStatus !== "connected")', privateReel);
+  const call = route.indexOf("publishPost({", privateReel);
+  assert.ok(privateReel > 0 && guard > privateReel && guard < call,
+    "a private Reel must not bypass the exact-account connection guard");
+  const block = route.slice(guard, call);
+  assert.match(block, /preNetwork: true/);
 });
 
 // ── the publish is metered exactly once, like every other publish ────────────

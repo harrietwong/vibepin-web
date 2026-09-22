@@ -247,57 +247,21 @@ export async function POST(req: Request) {
       code: "instagram_reels_private_fanout_unsupported",
     }, { status: 422 });
   }
+  let privateReelDestination: PublishDestination | null = null;
   if (privateReel) {
     const destination = confirmation.destinations.find(item => item.id === requestedDestinationIds[0]);
     if (!destination || destination.provider !== "instagram") {
       return Response.json({ error: "The confirmed destination set is invalid.", code: "invalid_confirmation" }, { status: 409 });
     }
-    const result = await dispatchSupabaseV76InstagramReel({
-      db,
-      publishInput: { uid, receipt: confirmation.receipt, destination },
-      publishReel: async (_current, signedFrozenCopyUrl) => {
-        let connection: SocialConnection | null;
-        try {
-          connection = await findConnection(uid, destination.socialConnectionId ?? "");
-        } catch {
-          return { ok: false, status: "failed", error: "Could not prepare the Instagram connection.", preNetwork: true };
-        }
-        if (!connection || connection.connectionStatus !== "connected") {
-          return { ok: false, status: "failed", error: "Connect your Instagram account in Settings to publish here.", preNetwork: true };
-        }
-        // Do not catch this provider-boundary call: it may have reached Meta.
-        // The durable dispatcher will settle a thrown/ambiguous delivery as
-        // delivery_unknown and forbid a blind retry.
-        return getSocialProviderById(connection.authProvider).publishPost({
-          provider: "instagram",
-          connection,
-          post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
-          userId: uid,
-        });
-      },
-    });
-    const status = result.outcome === "published" ? 201 : result.outcome === "failed" ? 422 : 409;
-    return Response.json({
-      ok: result.outcome === "published",
-      replayed: result.replayed === true,
-      status: result.outcome,
-      intentId: confirmation.receipt.intentId,
-      jobId: null,
-      destinations: [{
-        provider: "instagram",
-        socialConnectionId: destination.socialConnectionId ?? null,
-        status: result.outcome === "published" ? "published" : result.outcome,
-        externalPostId: result.remoteId ?? null,
-        externalPostUrl: result.remoteUrl ?? null,
-        retryAllowed: result.retryAllowed,
-        remoteEvidence: result.evidence ?? {},
-      }],
-    }, { status });
+    // Keep the v76/v79 dispatcher out of the generic claim path, but do not
+    // dispatch it yet: this route must consume quota and create its UI attempt
+    // projection before any provider-facing work begins.
+    privateReelDestination = destination;
   }
   const dispatchPost = post;
   const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
   const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
-  try {
+  if (!privateReelDestination) try {
     const destinations: PublishDestination[] = [];
     for (const destinationId of [...requestedDestinationIds].sort()) {
       const destination = destinationById.get(destinationId);
@@ -363,7 +327,9 @@ export async function POST(req: Request) {
     }, { status: 409 });
   }
 
-  const dispatchDestinationIds = new Set([...claims.entries()].filter(([, value]) => value.claim.claimed).map(([id]) => id));
+  const dispatchDestinationIds = privateReelDestination
+    ? new Set([privateReelDestination.id])
+    : new Set([...claims.entries()].filter(([, value]) => value.claim.claimed).map(([id]) => id));
   const replayedOutcomes: DestOutcome[] = [...claims.values()].flatMap(({ destination, claim }) => {
     if (claim.claimed) return [];
     return [{
@@ -489,6 +455,151 @@ export async function POST(req: Request) {
     // No draft identity on the request — never charge a key that could collide
     // across drafts. Direct API callers that omit postId are simply unmetered.
     logEvent("usage_meter_skipped", { reason: "no_draft_identity", route: "publish_social" });
+  }
+
+  if (privateReelDestination) {
+    // The durable publish tables remain the authority for Reels. The social job is
+    // only the existing UI projection, but it still begins after quota consumption
+    // and before the provider-facing durable dispatcher, like every other social
+    // publish attempt.
+    let jobId: Awaited<ReturnType<typeof createPublishJob>> = null;
+    try {
+      jobId = await createPublishJob(db, uid, postId, productId, {
+        intentId: confirmation.receipt.intentId,
+        fingerprint: confirmation.receipt.fingerprint,
+      });
+    } catch {
+      if (meterKey && postId && meterFresh) {
+        await releaseScheduledPost({
+          userId: uid,
+          key: meterKey,
+          reason: "not_sent",
+          referenceId: postId,
+          metadata: { source: "social_immediate", route: "publish_social", stage: "private_reel_job" },
+        });
+      }
+      return Response.json({
+        error: "Publishing could not start.",
+        code: "publish_not_started",
+        intentId: confirmation.receipt.intentId,
+        jobId: null,
+      }, { status: 503 });
+    }
+
+    let result: Awaited<ReturnType<typeof dispatchSupabaseV76InstagramReel>>;
+    try {
+      result = await dispatchSupabaseV76InstagramReel({
+        db,
+        publishInput: { uid, receipt: confirmation.receipt, destination: privateReelDestination },
+        publishReel: async (_current, signedFrozenCopyUrl) => {
+          let connection: SocialConnection | null;
+          try {
+            connection = await findConnection(uid, privateReelDestination.socialConnectionId ?? "");
+          } catch {
+            return { ok: false, status: "failed", error: "Could not prepare the Instagram connection.", preNetwork: true };
+          }
+          if (!connection || connection.connectionStatus !== "connected") {
+            return { ok: false, status: "failed", error: "Connect your Instagram account in Settings to publish here.", preNetwork: true };
+          }
+          // Do not catch this provider-boundary call: it may have reached Meta.
+          // The durable dispatcher records a thrown/ambiguous delivery as unknown
+          // and forbids a blind retry.
+          return getSocialProviderById(connection.authProvider).publishPost({
+            provider: "instagram",
+            connection,
+            post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
+            userId: uid,
+          });
+        },
+      });
+    } catch {
+      // This catch is before a durable provider-attempt result exists. The durable
+      // dispatcher itself converts post-attempt throws and settlement outages to
+      // delivery_unknown, so those cases never reach this refundable branch.
+      if (meterKey && postId && meterFresh) {
+        await releaseScheduledPost({
+          userId: uid,
+          key: meterKey,
+          reason: "not_sent",
+          referenceId: postId,
+          metadata: { source: "social_immediate", route: "publish_social", stage: "private_reel_pre_dispatch" },
+        });
+      }
+      return Response.json({
+        error: "Publishing could not start.",
+        code: "publish_not_started",
+        intentId: confirmation.receipt.intentId,
+        jobId,
+      }, { status: 503 });
+    }
+
+    const evidence = result.evidence ?? {};
+    const providerStatus = typeof evidence.providerStatus === "number" ? evidence.providerStatus : null;
+    const preNetwork = evidence.stage === "pre_network"
+      || evidence.reason === "materialization_failed"
+      || evidence.reason === "materialization_incomplete";
+    const projectedStatus: DestOutcome["status"] = result.outcome === "published"
+      ? "published"
+      : result.outcome === "failed"
+        ? "failed"
+        : result.outcome === "in_progress" || result.outcome === "not_due"
+          ? "publishing"
+          : "delivery_unknown";
+    const privateOutcome: DestOutcome = {
+      provider: "instagram",
+      socialConnectionId: privateReelDestination.socialConnectionId ?? null,
+      status: projectedStatus,
+      externalPostId: result.remoteId ?? null,
+      externalPostUrl: result.remoteUrl ?? null,
+      providerStatus,
+      providerResourceId: result.remoteId ?? null,
+      preNetwork,
+      error: result.outcome === "failed" ? "Instagram Reel could not be published." : null,
+    };
+    const outcomePersistenceFailed = jobId
+      ? !(await recordOutcomes(db, jobId, [privateOutcome]))
+      : false;
+
+    const providerRejectedWithoutObject = providerStatus !== null
+      && providerStatus >= 400
+      && providerStatus < 500
+      && !result.remoteId;
+    if (meterKey && postId && meterFresh && result.outcome === "failed" && (preNetwork || providerRejectedWithoutObject)) {
+      await releaseScheduledPost({
+        userId: uid,
+        key: meterKey,
+        reason: preNetwork ? "not_sent" : "rejected",
+        referenceId: postId,
+        metadata: { source: "social_immediate", route: "publish_social", stage: "private_reel" },
+      });
+    }
+
+    if (outcomePersistenceFailed) {
+      return Response.json({
+        error: "The publish result could not be recorded. Reconcile the original publish intent before retrying.",
+        code: "publish_intent_settlement_unavailable",
+        intentId: confirmation.receipt.intentId,
+        jobId,
+      }, { status: 503 });
+    }
+
+    const status = result.outcome === "published" ? 201 : result.outcome === "failed" ? 422 : 409;
+    return Response.json({
+      ok: result.outcome === "published",
+      replayed: result.replayed === true,
+      status: result.outcome,
+      intentId: confirmation.receipt.intentId,
+      jobId,
+      destinations: [{
+        provider: "instagram",
+        socialConnectionId: privateReelDestination.socialConnectionId ?? null,
+        status: result.outcome === "published" ? "published" : result.outcome,
+        externalPostId: result.remoteId ?? null,
+        externalPostUrl: result.remoteUrl ?? null,
+        retryAllowed: result.retryAllowed,
+        remoteEvidence: evidence,
+      }],
+    }, { status });
   }
 
   const outcomes: DestOutcome[] = [...replayedOutcomes];
