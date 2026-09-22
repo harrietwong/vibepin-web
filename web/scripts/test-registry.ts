@@ -56,6 +56,7 @@ export const CORE: string[] = [
   "test-v78-pinterest-video-upgrade",
   "test-v78-pinterest-video-manifest",
   "test-v79-video-provenance-materialization",
+  "test-v76-instagram-reels-durable",
   "test-publish-due-video-races",
   "test-pinterest-video-legacy-route",
   "test-published-pin-summary",
