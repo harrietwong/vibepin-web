@@ -5,7 +5,7 @@ export function requiresPublishAsset(mediaUrl: string, requestOrigin: string): b
   if (!value) return false;
   try {
     const parsed = new URL(value, requestOrigin);
-    if (parsed.origin === requestOrigin && parsed.pathname === "/api/storage-image") return true;
+    if (parsed.origin === requestOrigin && (parsed.pathname === "/api/storage-image" || parsed.pathname === "/api/storage-media")) return true;
     const ref = canonicalStorageReference(value);
     return Boolean(ref && ref.bucket === (process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private"));
   } catch {

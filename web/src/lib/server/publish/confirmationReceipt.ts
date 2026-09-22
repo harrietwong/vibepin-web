@@ -19,6 +19,7 @@ export type ImmediateDispatchContent = {
   destinationUrl?: string;
   altText?: string;
   imageUrls: string[];
+  videoUrls?: string[];
 };
 
 export type ConfirmationValidation =
@@ -240,7 +241,10 @@ export function validateImmediatePublishReceipt(
     description: normalized.description,
     destinationUrl: normalized.destinationUrl,
     altText: normalized.altText,
-    imageUrls: normalized.media.map(item => item.url),
+    imageUrls: normalized.media.filter(item => item.kind === "image").map(item => item.url),
+    ...(normalized.media.some(item => item.kind === "video")
+      ? { videoUrls: normalized.media.filter(item => item.kind === "video").map(item => item.url) }
+      : {}),
   };
   const submittedContent = {
     title: content.title ?? "",
@@ -248,6 +252,7 @@ export function validateImmediatePublishReceipt(
     destinationUrl: content.destinationUrl ?? "",
     altText: content.altText ?? "",
     imageUrls: content.imageUrls,
+    ...(content.videoUrls?.length ? { videoUrls: content.videoUrls } : {}),
   };
   if (stablePublishString(exactContent) !== stablePublishString(submittedContent)) {
     return invalid("The submitted content no longer matches the confirmation.");

@@ -87,6 +87,8 @@ export interface GetConnectionsInput {
 /** Media + copy for a single approved post. Kept generic across platforms. */
 export interface SocialPostPayload {
   imageUrls: string[];
+  /** Video media for platforms that support it (Instagram Reels currently accepts one). */
+  videoUrls?: string[];
   title?: string;
   caption?: string;
   destinationUrl?: string;

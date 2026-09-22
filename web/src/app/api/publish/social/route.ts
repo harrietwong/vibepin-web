@@ -11,7 +11,7 @@
  *   {
  *     postId?: string,
  *     productId?: string,
- *     post: { imageUrls: string[], title?, caption?, destinationUrl?, altText? },
+ *     post: { imageUrls: string[], videoUrls?: string[], title?, caption?, destinationUrl?, altText? },
  *     destinations: Array<{ provider, socialConnectionId? }>,
  *     meteringBucket?: string,           // relayed from /api/pinterest/pins for this
  *                                         // same Content; validated (never trusted
@@ -46,6 +46,7 @@ import { isSocialProvider, platformName, PLATFORMS } from "@/lib/social/platform
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { resolveDestinationCapability } from "@/lib/social/destinationCapability";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
+import { createMediaProvenanceStore } from "@/lib/server/mediaProvenance";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
@@ -107,6 +108,7 @@ export async function POST(req: Request) {
   const rawPost = (body.post ?? {}) as Record<string, unknown>;
   const post: SocialPostPayload = {
     imageUrls: Array.isArray(rawPost.imageUrls) ? (rawPost.imageUrls as string[]) : [],
+    videoUrls: Array.isArray(rawPost.videoUrls) ? (rawPost.videoUrls as string[]) : [],
     title: typeof rawPost.title === "string" ? rawPost.title : undefined,
     caption: typeof rawPost.caption === "string" ? rawPost.caption : undefined,
     destinationUrl: typeof rawPost.destinationUrl === "string" ? rawPost.destinationUrl : undefined,
@@ -116,6 +118,11 @@ export async function POST(req: Request) {
   const requested = Array.isArray(body.destinations) ? body.destinations : [];
   if (!requested.length) {
     return Response.json({ error: "Select at least one destination to publish." }, { status: 400 });
+  }
+  const requestedProviders = requested.map(raw => String((raw as { provider?: unknown }).provider ?? "").toLowerCase());
+  const videoUrls = post.videoUrls ?? [];
+  if (requestedProviders.includes("instagram") && (videoUrls.length > 1 || (videoUrls.length > 0 && post.imageUrls.length > 0))) {
+    return Response.json({ error: "Instagram Reels accepts exactly one video and cannot mix images.", code: "instagram_reels_media_invalid" }, { status: 422 });
   }
 
   const requestedDestinationIds = requested.map(raw => {
@@ -131,6 +138,7 @@ export async function POST(req: Request) {
     destinationUrl: post.destinationUrl,
     altText: post.altText,
     imageUrls: post.imageUrls,
+    videoUrls: post.videoUrls,
   }, requestedDestinationIds);
   if (!confirmation.ok) {
     return Response.json({ error: confirmation.error, code: confirmation.code }, { status: confirmation.code === "confirmation_required" ? 400 : 409 });
@@ -186,7 +194,7 @@ export async function POST(req: Request) {
       provider,
       connection,
       connectionId,
-      mediaCount: post.imageUrls.length,
+      mediaCount: post.imageUrls.length + (post.videoUrls?.length ?? 0),
       mode: "now",
     });
     return {
@@ -221,6 +229,30 @@ export async function POST(req: Request) {
     return Response.json({ error: stored.error, code: stored.code }, {
       status: stored.code === "invalid_confirmation" ? 409 : 503,
     });
+  }
+  // Private video locators are owner-protected app routes and cannot be fetched by
+  // Meta. Resolve them only after the frozen receipt and current draft have passed
+  // validation, then keep the short-lived provider URL strictly server-side.
+  let dispatchPost = post;
+  if (videoUrls.some(url => typeof url === "string" && requiresPublishAsset(url, new URL(req.url).origin))) {
+    const bucket = process.env.VIBEPIN_DRAFT_BUCKET ?? "generated-private";
+    const provenance = createMediaProvenanceStore(db);
+    const resolved: string[] = [];
+    try {
+      for (const rawUrl of videoUrls) {
+        const parsed = new URL(rawUrl, new URL(req.url).origin);
+        const path = parsed.searchParams.get("path")?.trim() ?? "";
+        if (parsed.pathname !== "/api/storage-media" || !path || path.split("/", 1)[0] !== uid) throw new Error("video_source_owner_mismatch");
+        const row = await provenance.findExact(uid, bucket, path);
+        if (!row || row.owner_user_id !== uid || row.bucket_id !== bucket || row.object_path !== path || row.media_kind !== "video" || !["draft", "publish_pending", "published", "retained"].includes(row.lifecycle_state)) throw new Error("video_source_provenance_invalid");
+        const signed = await db.storage.from(bucket).createSignedUrl(path, 300);
+        if (signed.error || !signed.data?.signedUrl) throw new Error("video_source_signing_failed");
+        resolved.push(signed.data.signedUrl);
+      }
+      dispatchPost = { ...post, videoUrls: resolved };
+    } catch {
+      return Response.json({ error: "The frozen private video could not be materialized for provider delivery.", code: "materialization_required" }, { status: 409 });
+    }
   }
   const destinationById = new Map(confirmation.destinations.map(destination => [destination.id, destination]));
   const claims = new Map<string, { destination: PublishDestination; claim: PublishIntentClaim }>();
@@ -506,7 +538,7 @@ export async function POST(req: Request) {
       const result = await getSocialProviderById(connection.authProvider).publishPost({
         provider,
         connection,
-        post,
+        post: dispatchPost,
         // Providers backed by our OWN OAuth (Facebook) read server-only,
         // per-user credentials (the encrypted PAGE token) that are deliberately
         // absent from the client-safe SocialConnection projection. `uid` is the

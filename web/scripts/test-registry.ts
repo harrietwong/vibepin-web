@@ -73,6 +73,7 @@ export const CORE: string[] = [
   "test-publish-capability",
   "test-multichannel-prd-remaining",
   "test-publish-social-account-guard",
+  "test-instagram-reels",
   "test-publish-social-retry-route",
   "test-publish-results",
   "test-per-account-disconnect",

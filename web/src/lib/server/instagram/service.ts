@@ -242,13 +242,15 @@ export type InstagramPublishInput = {
   /** IG user id (the professional account's own id, from the profile call). */
   igUserId: string;
   /** The cover image. Also the whole post when `imageUrls` is absent or has one entry. */
-  imageUrl: string;
+  imageUrl?: string;
   /**
    * The full media set in display order (cover first). ≥2 entries publish a real
    * Instagram CAROUSEL; 1 or absent keeps the single-image request byte-for-byte as
    * before. Count limits are the caller's (checkInstagramMedia) — nothing is dropped here.
    */
   imageUrls?: string[];
+  /** A single Instagram Reel video. Video and image inputs are mutually exclusive. */
+  videoUrl?: string;
   caption?: string;
   /**
    * Destination URL. Instagram captions render links as plain text — they are
@@ -285,12 +287,14 @@ function hostOf(url: string): string {
   }
 }
 
-/** Compose the caption Instagram will show, with the destination URL appended. */
+/** Compose the caption Instagram will show; destination URLs are intentionally omitted. */
 export function buildInstagramCaption(caption?: string, destinationUrl?: string): string {
   const body = (caption ?? "").trim();
-  const link = (destinationUrl ?? "").trim();
-  if (!link) return body;
-  return body ? `${body}\n\n${link}` : link;
+  // Instagram captions do not make destination URLs clickable. More importantly,
+  // this provider contract deliberately never copies a destination URL into a
+  // social caption: the destination remains available to Pinterest only.
+  void destinationUrl;
+  return body;
 }
 
 /**
@@ -301,6 +305,7 @@ export function buildInstagramCaption(caption?: string, destinationUrl?: string)
  * maxDuration (300s) and would kill the whole due-publish batch mid-run.
  */
 const CONTAINER_DEADLINE_MS = 45_000;
+const REEL_CONTAINER_DEADLINE_MS = 120_000;
 const CONTAINER_POLL_MS = 2_000;
 
 /** POST /{ig-user-id}/media with the given fields. Returns the container id. */
@@ -393,6 +398,23 @@ async function createSingleImageContainer(
   return containerId;
 }
 
+async function createReelContainer(
+  accessToken: string,
+  igUserId: string,
+  videoUrl: string,
+  caption: string,
+  traceId: string,
+): Promise<string> {
+  const containerId = await createContainer(accessToken, igUserId, {
+    media_type: "REELS",
+    video_url: videoUrl,
+    ...(caption ? { caption } : {}),
+  });
+  igPublishDebug({ traceId, igUserId, videoHost: hostOf(videoUrl), containerId });
+  await awaitContainersReady(accessToken, [containerId], Date.now() + REEL_CONTAINER_DEADLINE_MS, traceId);
+  return containerId;
+}
+
 /**
  * Build the CAROUSEL container for a 2–10 image post.
  *
@@ -456,8 +478,41 @@ async function createCarouselContainer(
  * fails. ERROR and EXPIRED are terminal and reported as such rather than retried.
  */
 export async function publishToInstagram(input: InstagramPublishInput): Promise<InstagramPublishResult> {
+  const videoUrl = input.videoUrl?.trim() || "";
+  const imageUrls = input.imageUrls?.filter(url => typeof url === "string" && url.trim()) ?? [];
+  if (videoUrl && imageUrls.length) {
+    throw new InstagramApiError("Instagram Reels cannot mix video and images", 400, "mixed_media");
+  }
+  if (videoUrl && !isPubliclyFetchableImage(videoUrl)) {
+    throw new InstagramApiError("Video URL must be publicly reachable for Instagram to fetch it", 400, "invalid_video_url");
+  }
+  if (videoUrl) {
+    const traceId = (globalThis.crypto?.randomUUID?.() ?? String(Date.now())).slice(0, 8);
+    const caption = buildInstagramCaption(input.caption, input.destinationUrl);
+    const containerId = await createReelContainer(input.accessToken, input.igUserId, videoUrl, caption, traceId);
+    const publishRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media_publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ creation_id: containerId, access_token: input.accessToken }).toString(),
+    });
+    const publishedJson = (await publishRes.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+    if (!publishRes.ok || !publishedJson.id) {
+      throw new InstagramApiError(publishedJson.error?.message ?? "Instagram rejected the publish", publishRes.status, "publish_failed");
+    }
+    let permalink: string | null = null;
+    try {
+      const permaRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${publishedJson.id}?fields=permalink&access_token=${encodeURIComponent(input.accessToken)}`);
+      const perma = (await permaRes.json().catch(() => ({}))) as { permalink?: string };
+      if (typeof perma.permalink === "string" && perma.permalink) permalink = perma.permalink;
+    } catch { /* permalink is best effort */ }
+    igPublishDebug({ traceId, igUserId: input.igUserId, mediaId: publishedJson.id, permalinkResolved: permalink !== null });
+    return { mediaId: publishedJson.id, permalink, traceId };
+  }
   // The media set in display order; `imageUrl` remains the single-image contract.
-  const urls = input.imageUrls?.length ? input.imageUrls : [input.imageUrl];
+  const urls = input.imageUrls?.length ? input.imageUrls : input.imageUrl ? [input.imageUrl] : [];
+  if (!urls.length) {
+    throw new InstagramApiError("Instagram posts need an image", 400, "missing_image");
+  }
   for (const url of urls) {
     if (!isPubliclyFetchableImage(url)) {
       throw new InstagramApiError(

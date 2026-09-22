@@ -436,7 +436,7 @@ export async function publishContent(
 
   try {
     const submittedAt = deps.now();
-    const media = confirmation.media.map(item => ({ url: item.url, width: item.width, height: item.height }));
+    const media = confirmation.media.map(item => ({ url: item.url, kind: item.kind, width: item.width, height: item.height }));
 
     // Per-destination pre-check. A destination refused by its platform's rule is
     // recorded failed and dropped from the dispatch; the others proceed.
@@ -601,7 +601,8 @@ export async function publishContent(
         const social = await deps.publishToSocial({
           postId: draftId,
           post: {
-            imageUrls: media.map(m => m.url),
+            imageUrls: media.filter(m => m.kind !== "video").map(m => m.url),
+            videoUrls: media.filter(m => m.kind === "video").map(m => m.url),
             title: confirmation.title || undefined,
             caption: confirmation.description || undefined,
             destinationUrl: confirmation.destinationUrl || undefined,

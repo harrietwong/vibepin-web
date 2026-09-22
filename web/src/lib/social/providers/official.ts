@@ -250,6 +250,29 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
 
   // Every image the Content carries, in display order — never just the cover.
   const imageUrls = (input.post.imageUrls ?? []).filter(u => typeof u === "string" && u.trim());
+  const videoUrls = (input.post.videoUrls ?? []).filter(u => typeof u === "string" && u.trim());
+  if (videoUrls.length > 1 || (videoUrls.length > 0 && imageUrls.length > 0)) {
+    return { ok: false, status: "failed", error: "Instagram Reels accepts exactly one video and cannot mix images.", preNetwork: true };
+  }
+  if (videoUrls.length === 1) {
+    let igService: typeof import("@/lib/server/instagram/service");
+    try { igService = await import("@/lib/server/instagram/service"); } catch {
+      return { ok: false, status: "failed", error: "Could not publish to Instagram.", preNetwork: true };
+    }
+    const { publishToInstagram, InstagramApiError } = igService;
+    try {
+      const result = await publishToInstagram({
+        accessToken: connection.accessToken,
+        igUserId: connection.userId,
+        videoUrl: videoUrls[0],
+        caption: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
+      });
+      return { ok: true, status: "published", externalPostId: result.mediaId, externalPostUrl: result.permalink, accountName: connection.username ?? null };
+    } catch (err) {
+      const message = err instanceof InstagramApiError ? err.message : "Could not publish to Instagram.";
+      return { ok: false, status: "failed", error: message, providerStatus: err instanceof InstagramApiError ? err.status : null, providerResourceId: null };
+    }
+  }
   if (!imageUrls.length) {
     return { ok: false, status: "failed", error: "Instagram posts need an image.", preNetwork: true };
   }
