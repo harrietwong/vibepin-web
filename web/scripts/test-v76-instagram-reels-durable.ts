@@ -197,6 +197,23 @@ async function main(): Promise<void> {
     assert.equal(result.remoteUrl, undefined);
   });
 
+  await test("a published replay preserves its stored safe Instagram permalink", async () => {
+    const permalink = "https://www.instagram.com/reel/C9-safe-replay/";
+    const replay = harness({
+      kind: "published",
+      remoteId: "12345",
+      remoteUrl: permalink,
+      // v78 stores only sanitized settlement evidence, not the provider's
+      // Pinterest-shaped adapter field used by the shared video state machine.
+      evidence: { provider: "instagram", stage: "provider", classification: "succeeded", providerStatus: 200 },
+    });
+    const result = await dispatchV76InstagramReel(input(), replay.deps);
+    assert.equal(result.outcome, "published");
+    assert.equal(result.remoteId, "12345");
+    assert.equal(result.remoteUrl, permalink);
+    assert.equal(replay.calls.some(call => call.startsWith("provider:")), false);
+  });
+
   console.log(`\nInstagram durable Reels: ${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

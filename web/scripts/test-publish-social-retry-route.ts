@@ -372,6 +372,24 @@ await test("a materialization failure releases a fresh consume without reaching 
   assert.equal(claimCalls, 0);
 });
 
+await test("an active private Reel replay does not overwrite an existing terminal social job projection", async () => {
+  priorIntentId = null;
+  meterResult = { kind: "consumed", fresh: true };
+  durableOutcome = { outcome: "in_progress", retryAllowed: false, evidence: { provider: "instagram" } };
+  const reel = request(false, [INSTAGRAM_ID]);
+  reel.json = async () => ({
+    postId: DRAFT_ID, post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Reel", caption: "Caption" },
+    destinations: [{ provider: "instagram", socialConnectionId: "ig-connection" }],
+    confirmation: { intentId: `publish:${CONTENT_ID}:reel-in-progress`, fingerprint: "f".repeat(64), draftId: DRAFT_ID, contentId: CONTENT_ID, confirmedAt: "2026-09-01T12:00:02.000Z", onlyPending: false, mode: { kind: "now" }, media: [{ id: "reel-1", kind: "video", url: `/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`, source: "upload", width: 1080, height: 1920, durationMs: 8_000 }], blockers: [], priorIntentId: null, dispatchDestinationIds: [INSTAGRAM_ID], publishableDestinations: [destinations[1]], destinations: [destinations[1]] },
+  });
+  const response = await POST(reel);
+  assert.equal(response.status, 409);
+  assert.equal(durableReelCalls, 1);
+  assert.equal(jobCalls, 1, "the existing intent job may be looked up/reused");
+  assert.equal(outcomeCalls, 0, "a non-terminal replay must not overwrite a previously published projection");
+  assert.equal(claimCalls, 0);
+});
+
 await test("a private Reel fan-out fails closed instead of sending its Instagram leg to the legacy generic claim", async () => {
   priorIntentId = null;
   const raw = request(false, [FACEBOOK_ID, INSTAGRAM_ID]);
