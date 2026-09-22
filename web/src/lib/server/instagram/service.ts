@@ -223,6 +223,66 @@ export function isProfessionalAccount(accountType: InstagramAccountType | null |
   return accountType === "BUSINESS" || accountType === "MEDIA_CREATOR";
 }
 
+export type InstagramRecentMedia = {
+  id: string;
+  permalink: string | null;
+  caption: string | null;
+  timestamp: string | null;
+  mediaType: string | null;
+};
+
+/**
+ * Read recent media for delivery reconciliation. Credentials are used only for
+ * the upstream request and are never included in the returned evidence.
+ */
+export async function fetchRecentInstagramMedia(input: {
+  accessToken: string;
+  igUserId: string;
+  since: string;
+  limit?: number;
+}): Promise<InstagramRecentMedia[]> {
+  const sinceMs = Date.parse(input.since);
+  if (!Number.isFinite(sinceMs)) {
+    throw new InstagramApiError("Invalid reconciliation timestamp", 400, "invalid_since");
+  }
+  const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 25)));
+  const params = new URLSearchParams({
+    fields: "id,permalink,caption,timestamp,media_type",
+    limit: String(limit),
+    access_token: input.accessToken,
+  });
+  const res = await fetch(`${INSTAGRAM_GRAPH_URL}/${encodeURIComponent(input.igUserId)}/media?${params.toString()}`, {
+    method: "GET",
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: Array<{
+      id?: unknown;
+      permalink?: unknown;
+      caption?: unknown;
+      timestamp?: unknown;
+      media_type?: unknown;
+    }>;
+  } & Record<string, unknown>;
+  if (!res.ok) {
+    throw new InstagramApiError(
+      extractError(json) || `Instagram media request failed (${res.status})`,
+      res.status,
+      "media_fetch_failed",
+    );
+  }
+
+  return (Array.isArray(json.data) ? json.data : [])
+    .filter(item => typeof item.id === "string" && item.id.length > 0)
+    .filter(item => typeof item.timestamp === "string" && Date.parse(item.timestamp) >= sinceMs)
+    .map(item => ({
+      id: item.id as string,
+      permalink: typeof item.permalink === "string" ? item.permalink : null,
+      caption: typeof item.caption === "string" ? item.caption : null,
+      timestamp: typeof item.timestamp === "string" ? item.timestamp : null,
+      mediaType: typeof item.media_type === "string" ? item.media_type : null,
+    }));
+}
+
 // ── Publishing ──────────────────────────────────────────────────────────────
 
 /** Only a public http(s) image can be fetched by Instagram's servers. */
