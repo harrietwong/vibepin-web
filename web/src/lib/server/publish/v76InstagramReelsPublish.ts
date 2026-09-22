@@ -38,6 +38,11 @@ function is4xx(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 400 && value < 500;
 }
 
+function isSynthesizedPinterestFallback(remoteId: string | undefined, remoteUrl: string | undefined): boolean {
+  return !!remoteId
+    && remoteUrl === `https://www.pinterest.com/pin/${remoteId}/`;
+}
+
 /**
  * Converts the existing durable video state machine into an Instagram Reel
  * boundary. The Instagram provider is called only after the intent-bound copy
@@ -79,10 +84,11 @@ export async function dispatchV76InstagramReel(
       await deps.settleAttempt(current, status, attempt, original);
     },
   });
-  // The shared Pinterest state machine synthesizes a Pinterest URL for a numeric
-  // id when its adapter did not return a URL. Instagram media ids may be numeric
-  // too, so preserve a missing Reel permalink as missing.
-  if (result.outcome === "published" && !(result.evidence?.pinUrl)) {
+  // A fresh call still passes through the shared state machine, which can synthesize
+  // this exact Pinterest URL for a numeric id. Strip only that synthetic fallback:
+  // v78 replay evidence deliberately omits `pinUrl`, while `remote_url` stores a
+  // safe Instagram permalink and must remain available to the social UI projection.
+  if (result.outcome === "published" && isSynthesizedPinterestFallback(result.remoteId, result.remoteUrl)) {
     const { remoteUrl: _pinterestFallback, ...withoutPinterestFallback } = result;
     return withoutPinterestFallback;
   }

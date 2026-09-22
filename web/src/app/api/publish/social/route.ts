@@ -556,7 +556,11 @@ export async function POST(req: Request) {
       preNetwork,
       error: result.outcome === "failed" ? "Instagram Reel could not be published." : null,
     };
-    const outcomePersistenceFailed = jobId
+    // An active/not-due durable replay has no new terminal result. Its job id is
+    // intentionally reused, but recording `publishing` here could overwrite a
+    // concurrent worker's published id/permalink. Unknown remains terminal and is
+    // persisted so it continues to block blind resend.
+    const outcomePersistenceFailed = jobId && projectedStatus !== "publishing"
       ? !(await recordOutcomes(db, jobId, [privateOutcome]))
       : false;
 

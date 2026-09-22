@@ -85,6 +85,7 @@ export async function dispatchSupabaseV76InstagramReel(input: {
   const base = createSupabaseV76VideoPublishDependencies({
     db: input.db,
     loadPinterestEvidence: false,
+    synthesizePinterestUrl: false,
     publishVideo: async () => ({ outcome: "unknown", evidence: { stage: "validated", classification: "unknown" } }),
   });
   const deps: InstagramReelPublishDependencies = {

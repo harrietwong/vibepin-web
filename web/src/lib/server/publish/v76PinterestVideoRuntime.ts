@@ -312,7 +312,7 @@ async function loadPinterestPublishEvidence(
 export async function inspectV76VideoPublishState(
   db: SupabaseClient,
   input: DurableVideoPublishInput,
-  options: { loadPinterestEvidence?: boolean } = {},
+  options: { loadPinterestEvidence?: boolean; synthesizePinterestUrl?: boolean } = {},
 ): Promise<DurableVideoPublishState> {
   const intentResult = await db
     .from("publish_intents")
@@ -343,7 +343,9 @@ export async function inspectV76VideoPublishState(
   if (destination?.status === "published") {
     const remoteId = typeof destination.remote_id === "string" ? destination.remote_id : "";
     const storedUrl = typeof destination.remote_url === "string" ? destination.remote_url : "";
-    const remoteUrl = storedUrl || (/^[0-9]+$/.test(remoteId) ? `https://www.pinterest.com/pin/${remoteId}/` : "");
+    const remoteUrl = storedUrl || (options.synthesizePinterestUrl !== false && /^[0-9]+$/.test(remoteId)
+      ? `https://www.pinterest.com/pin/${remoteId}/`
+      : "");
     if (!remoteId) throw new Error("provider_success_evidence_missing");
     return {
       kind: "published",
@@ -486,11 +488,13 @@ export function createSupabaseV76VideoPublishDependencies(input: {
   db: SupabaseClient;
   publishVideo: DurableVideoPublishDependencies["publishVideo"];
   loadPinterestEvidence?: boolean;
+  synthesizePinterestUrl?: boolean;
 }): DurableVideoPublishDependencies {
   const materialization = createSupabasePrivateVideoMaterializationBoundary(input.db);
   return createV76RpcVideoPublishDependencies({
     inspect: current => inspectV76VideoPublishState(input.db, current, {
       loadPinterestEvidence: input.loadPinterestEvidence,
+      synthesizePinterestUrl: input.synthesizePinterestUrl,
     }),
     materializeSources: (current, lease) => materializePrivateVideoSources(current, lease, materialization),
     loadReadySources: current => loadReadyPrivateVideoSources(input.db, current, materialization),
