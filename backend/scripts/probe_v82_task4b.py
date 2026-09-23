@@ -16,27 +16,37 @@ reimplementation would be a second copy to keep in sync.
 TEST DATABASE ONLY. The target ref is asserted against production before any
 statement is sent; a mismatch aborts before the first network call.
 
-★ STATUS: INCOMPLETE — BLOCKED ON FIXTURE CONSTRUCTION, NOT ON THE FEATURE.
-   E5/E6/E7 pass (the refusal paths, which need no parent fixture). E1-E4 are
-   unverified because this probe cannot build the PARENT fixture: parking a
-   destination at `delivery_unknown` requires walking
-   prepared -> materialized -> claimed -> attempt(unknown), and
-   `v76_legacy_transition_guard` refuses the `claimed` step with
-   `materialization_required` (migrate_v76:634-670) until a full
-   publish_assets / publish_asset_deliveries / publish_asset_delivery_items
-   graph exists for the intent.
+★ STATUS: SUPERSEDED for E1-E4 by web/scripts/probe-v82-child-redemption.ts.
+   This file still documents the REFUSAL paths it verified (E5/E6/E7) and is
+   kept for that record, but it is no longer the probe to run.
 
-   The guard is CORRECT and must not be worked around. In particular the
-   `v76_frozen_legacy` escape hatch (migrate_v76:629) is NOT available: its
-   meaning is "pre-v76 historical row, exempt from the transition guard", and
-   setting it on a row we just created would be falsifying lineage to dodge the
-   very protection under test.
+   WHAT IT WAS BLOCKED ON, AND WHAT THE BLOCK ACTUALLY WAS. This probe could not
+   build the PARENT fixture: parking a destination at `delivery_unknown` means
+   walking prepared -> materialized -> claimed -> attempt(unknown), and
+   `v76_legacy_transition_guard` refused the `claimed` step with
+   `materialization_required` (migrate_v76:634-670).
 
-   What is still needed: build the materialization graph the way production
-   does — `publish_asset_lease_materialization` +
-   `publish_asset_settle_video_item_v79` + `publish_asset_claim_ready_v78` —
-   which also needs storage objects for the video. That is a larger fixture
-   than this probe currently carries.
+   The diagnosis was right; the remedy was smaller than this header guessed. It
+   is NOT necessary to drive `publish_asset_lease_materialization` +
+   `publish_asset_settle_video_item_v79` + `publish_asset_claim_ready_v78` with
+   real storage objects. `publish_intent_confirm_prepare` already CREATES the
+   whole graph in `prepared`; what was missing was advancing it to `ready` —
+   assets, delivery items, the delivery, and the destinations'
+   `materialization_status` — which is precisely what the real materializer does
+   and what M6 (probe-m6-v78-child-intent.ts) had already demonstrated. Adding
+   that one block is the entire difference between blocked and 18/18.
+
+   The guard was never worked around. In particular the `v76_frozen_legacy`
+   escape hatch (migrate_v76:629) is NOT used anywhere: its meaning is "pre-v76
+   historical row, exempt from the transition guard", and setting it on a row
+   created seconds earlier would falsify lineage to dodge the very protection
+   under test.
+
+   The successor also runs entirely in TypeScript, which removes this file's
+   `npx tsx` shell-out for receipt generation, and records the confirmed_absent
+   proof through `publish_reconcile_record_v82` rather than a direct INSERT —
+   the RPC mints the check id the child receipt is derived from, so the
+   hardcoded CHECK_ID flow below could not have worked either.
 """
 import json
 import os
