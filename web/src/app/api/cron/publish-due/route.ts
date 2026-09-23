@@ -96,6 +96,7 @@ import {
   mergeNextAttemptAt,
   nextAttemptNumber,
   publishRetryWorkerEnabled,
+  RECONCILING_MESSAGE,
   retryPendingOutcome,
   shouldSkipSettlement,
   stripRetryMarkers,
@@ -686,12 +687,19 @@ export async function GET(req: Request): Promise<Response> {
        * terminal fifth attempt, and `blocked_user` (a real failure the merchant has to
        * act on, which P0 deliberately still reports immediately — design §9 decision 3).
        */
+      // Set by `retryFork` when it actually WROTE a `reconcile_required_at` ledger
+      // entry. Distinct from "the classifier said reconciliation_required": the fork
+      // also returns null when the destination has already reached a final failure, and
+      // holding the schedule for a reconciliation that was never recorded would pin the
+      // row open forever with nothing able to close it.
+      let reconcileFlagged = false;
       const retryFork = async (
         destination: { provider: string; socialConnectionId?: string | null },
         retryClass: RetryClass,
         retryAfterSeconds: number | undefined,
         evidence: AttemptEvidence | undefined,
       ): Promise<DestinationOutcome | null> => {
+        reconcileFlagged = false;
         if (!retryEnabled || !row.scheduled_at) return null;
         const key = attemptKey(destination.provider, destination.socialConnectionId);
         const prior = attempts.get(key);
@@ -731,6 +739,7 @@ export async function GET(req: Request): Promise<Response> {
             attempt, retryClass, nextAttemptAt: null,
             reconcileRequiredAt: new Date().toISOString(), evidence,
           });
+          reconcileFlagged = true;
           return null; // the caller still writes its `delivery_unknown` row
         }
 
@@ -942,6 +951,12 @@ export async function GET(req: Request): Promise<Response> {
           // A video row is excluded: its errors are dispatch-layer results handled in
           // the branch above, and running an image classifier over one would read an
           // HTTP status that no Pinterest image call ever made.
+          // Set by the fork below when the classifier said `reconciliation_required`,
+          // so the branch after it can write the matching `delivery_unknown` row. The
+          // fork returns null for that class (there is no retry to schedule — the
+          // question is "did it already happen", not "when do we try again"), and that
+          // null must not be mistaken for "nothing special happened".
+          let imageNeedsReconcile = false;
           const retryHold = retryEnabled && !videoReceipt
             ? await (async () => {
               const classified = classifyPinterestApiError(err);
@@ -962,11 +977,14 @@ export async function GET(req: Request): Promise<Response> {
                   rateLimitRetryAfter.set(connKey, retryAfterSeconds);
                 }
               }
-              return retryFork(destination, retryClass, retryAfterSeconds, {
+              const held = await retryFork(destination, retryClass, retryAfterSeconds, {
                 providerStatus: typeof status === "number" ? status : undefined,
                 providerCode: typeof (err as { code?: unknown })?.code === "string"
                   ? (err as { code: string }).code : undefined,
               });
+              // Only when a ledger entry was really written — see `reconcileFlagged`.
+              imageNeedsReconcile = reconcileFlagged;
+              return held;
             })()
             : null;
           if (retryHold) {
@@ -975,6 +993,34 @@ export async function GET(req: Request): Promise<Response> {
             // visible "your publish failed", and firing it on round 1 of 5 is exactly
             // the false alarm this feature exists to remove (design §4.4 step 3).
             await record(retryHold);
+            continue;
+          }
+          if (retryEnabled && !videoReceipt && imageNeedsReconcile) {
+            // ── The image twin of the video `delivery_unknown` branch ──────────
+            //
+            // A fetch throw on `POST /pins` cannot be proven un-sent (design §4.2:
+            // "图片创建是单次 POST /pins，无法证明未送达"), so `retryFork` has just
+            // flagged reconciliation on the ledger. Falling through to the ordinary
+            // failure row from here would contradict that in the worst possible way:
+            // the ledger would say "reconciliation open" while the payload said
+            // "failed", and `clearSchedule` would null `scheduled_at` — after which
+            // the due scan can never see the row again and the reconcile worker's
+            // eventual verdict has nothing to act on. That is precisely the §3.4
+            // dead-chain defect, reintroduced for images.
+            //
+            // So the image path records `delivery_unknown` exactly as the video path
+            // does. `holdsReconcile` at the final persist then keeps the schedule, and
+            // `pendingDestinations` counts the row as closed so nothing re-sends it
+            // before reconciliation concludes — the "never blindly retry" guarantee.
+            deliveries.push(classifyDelivery({}));
+            await record({
+              provider: "pinterest", status: "delivery_unknown",
+              socialConnectionId: destination.socialConnectionId ?? null,
+              error: RECONCILING_MESSAGE,
+            });
+            if (!firstFailure) {
+              firstFailure = { code: "delivery_unknown", message: RECONCILING_MESSAGE };
+            }
             continue;
           }
           const described = describeThrown(err);

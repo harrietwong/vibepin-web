@@ -697,7 +697,7 @@ test("each destination's outcome is stored the moment it is known", () => {
   // outcome can be collected without also being stored. The count moves whenever a
   // branch is added; the `outcomes.push` assertion above is the one that must never
   // move.
-  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 15,
+  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 16,
     "every image and video branch of the Pinterest loop must go through the recorder — unknown, trial-access and retry-hold included");
   const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
   const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
