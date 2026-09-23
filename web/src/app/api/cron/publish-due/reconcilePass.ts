@@ -55,14 +55,16 @@
  *     retry by hand through the existing v78 path.
  *
  * Fixing it needs a CHILD intent via `publish_intent_confirm_prepare_v82`,
- * which is built and verified (probe_v82_task4.py) but not wired. Two things
- * must happen first, and the second is a real defect in this file:
- *   1. a child receipt with its own deterministic actionId, and
- *   2. ★ `recordVerdict` currently passes `p_intent_row_id: null`, so every
- *      video check row written today is UNREDEEMABLE — the RPC requires
- *      `v_parent.id = v_check.publish_intent_id` and refuses otherwise.
- *      Whoever wires the child path must resolve the parent intent's database
- *      id and record it here, or nothing downstream can consume the proof.
+ * which is built and verified (probe_v82_task4.py) but not wired. One thing
+ * still must happen: a child receipt with its own deterministic actionId,
+ * `onlyPending: true` and a single-element dispatch set (migrate_v82:440-454).
+ *
+ * The OTHER half is now done. `recordVerdict` used to pass
+ * `p_intent_row_id: null`, which made every video check row UNREDEEMABLE — the
+ * RPC requires `v_parent.id = v_check.publish_intent_id` (migrate_v82:458) and
+ * refuses otherwise. `resolveParentIntentRowId` below now records the parent
+ * intent's database id on the check row, so the proof this pass writes can
+ * actually be consumed once the child path is wired.
  */
 
 import type { createServerClient } from "@/lib/supabase";
@@ -333,6 +335,62 @@ async function runProbes(
   return probes;
 }
 
+/**
+ * The v76 intent row this destination's unknown delivery belongs to — the
+ * DATABASE id (`publish_intents.id`), not the text `intent_id`.
+ *
+ * ── WHY THIS LOOKUP EXISTS AT ALL ───────────────────────────────────────────
+ * `publish_intent_confirm_prepare_v82` refuses unless
+ * `v_parent.id = v_check.publish_intent_id` (migrate_v82:458). A check row
+ * written without it is UNREDEEMABLE: the proof is recorded, and nothing can
+ * ever consume it. So the id has to be resolved here, at write time, while the
+ * destination is still identifiable — there is no second chance later, because
+ * the RPC compares against the stored column, not against anything the caller
+ * passes at redemption.
+ *
+ * ── WHY IT IS SCOPED BY THE DESTINATION, NOT JUST THE DRAFT ─────────────────
+ * One draft can carry several intents (an immediate publish, then a scheduled
+ * one, then a v78 retry child). "Latest intent for this draft" would pick
+ * whichever ran last, which is not necessarily the one holding THIS
+ * destination's unknown delivery. The join narrows it to the intent that owns a
+ * destination row sitting at `delivery_unknown` for this exact destination key,
+ * which is precisely the row the RPC will later demand (migrate_v82:467-473).
+ *
+ * ── IMAGES ARE UNAFFECTED ───────────────────────────────────────────────────
+ * The image path has no intent ledger row, so this finds nothing and returns
+ * null — the same value that was passed unconditionally before. Any error is
+ * also null: a bookkeeping lookup must never be the reason stage 0 stops, and
+ * failing to null degrades to exactly today's behaviour (proof recorded,
+ * unredeemable) rather than to a lost verdict.
+ */
+async function resolveParentIntentRowId(
+  db: Db,
+  item: OpenReconciliation,
+  destinationKey: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await db
+      .from("publish_intent_destinations")
+      .select("publish_intent_id, publish_intents!inner(id, user_id, draft_id)")
+      .eq("destination_id", destinationKey)
+      .eq("status", "delivery_unknown")
+      .eq("publish_intents.user_id", item.ownerUserId)
+      .eq("publish_intents.draft_id", item.draftId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) {
+      if (error) console.error("[cron/publish-due] reconcile intent lookup:", error.message);
+      return null;
+    }
+    const id = (data as { publish_intent_id?: unknown }).publish_intent_id;
+    return typeof id === "string" && id ? id : null;
+  } catch (err) {
+    console.error("[cron/publish-due] reconcile intent lookup threw:", (err as Error).message);
+    return null;
+  }
+}
+
 /** Write the verdict to `publish_reconcile_checks`. Returns the check row id. */
 async function recordVerdict(
   db: Db,
@@ -341,6 +399,8 @@ async function recordVerdict(
   anchors: ReconcileAnchors,
 ): Promise<string | null> {
   try {
+    const destinationKey = destinationResultKey(item.provider, item.socialConnectionId);
+    const intentRowId = await resolveParentIntentRowId(db, item, destinationKey);
     const { data, error } = await db.rpc(RECONCILE_RPC, {
       p_user_id: item.ownerUserId,
       p_draft_id: item.draftId,
@@ -351,8 +411,8 @@ async function recordVerdict(
       p_outcome: verdict.outcome,
       p_remote_id: verdict.remoteId ?? null,
       p_remote_url: verdict.remoteUrl ?? null,
-      p_intent_row_id: null,
-      p_destination_id: destinationResultKey(item.provider, item.socialConnectionId),
+      p_intent_row_id: intentRowId,
+      p_destination_id: destinationKey,
       p_provider_attempt_id: null,
       p_evidence: {
         reason: verdict.reason,

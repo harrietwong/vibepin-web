@@ -82,6 +82,8 @@ type CheckRecord = {
   outcome: string;
   remote_id: string | null;
   checked_at: string;
+  /** The parent intent's DB id — null for images, required for a redeemable video proof. */
+  publish_intent_id: string | null;
 };
 
 type DraftRow = {
@@ -114,6 +116,21 @@ let probeCalls: string[] = [];
  * `confirmed_absent` verdict, i.e. a self-service duplicate-Pin button.
  */
 let evidencePinId: string | null = null;
+/**
+ * The v76 intent ledger rows for this draft, as the video lineage writes them.
+ *
+ * Empty by default: an IMAGE destination has no intent ledger row at all, which
+ * is the state every pre-existing case in this file runs in. Only the video
+ * cases populate it, so "images keep passing null" is tested by every other
+ * case here rather than asserted once.
+ */
+let intentDestinations: Array<{
+  publish_intent_id: string;
+  destination_id: string;
+  status: string;
+  updated_at: string;
+  publish_intents: { id: string; user_id: string; draft_id: string };
+}> = [];
 /** What the fake Pinterest client answers. Set per case. */
 let getPinBehaviour: (id: string) => Promise<unknown> = async () => null;
 let listBoardPinsBehaviour: (id: string) => Promise<unknown> = async () => ({ items: [], bookmark: null });
@@ -216,6 +233,45 @@ function fakeSupabaseClient() {
     return b;
   }
 
+  /**
+   * A row builder that honours `.eq()` and `.order()`, including the embedded
+   * `publish_intents.<col>` form PostgREST uses for a filtered inner join.
+   */
+  function filteringRowsBuilder(rows: () => Array<Record<string, unknown>>) {
+    const eqs: Array<[string, unknown]> = [];
+    let orderKey: string | null = null;
+    let ascending = true;
+    const apply = () => {
+      let out = rows().filter(row => eqs.every(([key, value]) => {
+        const [head, tail] = key.includes(".") ? key.split(".") : [key, null];
+        const target = tail
+          ? (row[head] as Record<string, unknown> | undefined)?.[tail]
+          : row[head];
+        return target === value;
+      }));
+      if (orderKey) {
+        const k = orderKey;
+        out = [...out].sort((a, b2) => {
+          const x = String(a[k] ?? ""); const y = String(b2[k] ?? "");
+          return (x < y ? -1 : x > y ? 1 : 0) * (ascending ? 1 : -1);
+        });
+      }
+      return out;
+    };
+    const b: Record<string, unknown> = {
+      select: () => b,
+      eq: (k: string, v: unknown) => { eqs.push([k, v]); return b; },
+      is: () => b, lte: () => b, not: () => b, or: () => b, limit: () => b,
+      order: (k: string, opts?: { ascending?: boolean }) => {
+        orderKey = k; ascending = opts?.ascending !== false; return b;
+      },
+      maybeSingle: () => Promise.resolve({ data: apply()[0] ?? null, error: null }),
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve({ data: apply(), error: null }).then(resolve, reject),
+    };
+    return b;
+  }
+
   function rowsBuilder(rows: () => unknown[]) {
     const b: Record<string, unknown> = {
       select: () => b, eq: () => b, is: () => b, lte: () => b, not: () => b,
@@ -242,6 +298,14 @@ function fakeSupabaseClient() {
         return rowsBuilder(() => (evidencePinId
           ? [{ evidence: { pinId: evidencePinId } }]
           : []));
+      }
+      if (table === "publish_intent_destinations") {
+        // ★ Filters are APPLIED here, unlike the other row builders. The whole
+        // point of the lookup under test is that it narrows to the intent
+        // holding THIS destination at delivery_unknown — a builder that ignored
+        // `.eq()` would return the first row whatever was asked for, and the
+        // scoping (one draft, several intents) would go untested.
+        return filteringRowsBuilder(() => intentDestinations.map(r => ({ ...r })));
       }
       return draftBuilder();
     },
@@ -284,6 +348,9 @@ function fakeSupabaseClient() {
           attempt: Number(args.p_attempt), outcome,
           remote_id: args.p_remote_id === null ? null : String(args.p_remote_id),
           checked_at: new Date().toISOString(),
+          publish_intent_id: typeof args.p_intent_row_id === "string" && args.p_intent_row_id
+            ? args.p_intent_row_id
+            : null,
         });
         // ★ The migration's own semantics (§2.2 E): the attempt row's
         // reconciliation is closed for every outcome EXCEPT still_unknown, which
@@ -384,6 +451,7 @@ async function test(name: string, fn: () => Promise<void>) {
   probeCalls = [];
   errorLogs = [];
   evidencePinId = null;
+  intentDestinations = [];
   getPinBehaviour = async () => null;
   listBoardPinsBehaviour = async () => ({ items: [], bookmark: null });
   getMediaStatusBehaviour = async () => null;
@@ -725,6 +793,90 @@ function resultRows(): Array<Record<string, unknown>> {
     advancePastBackoff();
     await run();
     assert.equal(publishPinCalls, 0, `and there is no sixth send, saw ${publishPinCalls}`);
+  });
+
+  // ── P29: the video proof must be REDEEMABLE, not merely recorded ───────────
+  //
+  // `publish_intent_confirm_prepare_v82` refuses unless
+  // `v_parent.id = v_check.publish_intent_id` (migrate_v82:458). A check row
+  // written with a null intent id is therefore proof nobody can ever spend: the
+  // verdict is correct, the bookkeeping is correct, and the retry it authorizes
+  // is unreachable forever. This asserts the id is on the row — the one thing
+  // that distinguishes a usable proof from a decorative one.
+  await test("P29: a video confirmed_absent check carries the parent intent's DB id", async () => {
+    intentDestinations = [{
+      publish_intent_id: "intent-row-video-1",
+      destination_id: DEST_KEY,
+      status: "delivery_unknown",
+      updated_at: "2026-09-01T09:05:00.000Z",
+      publish_intents: { id: "intent-row-video-1", user_id: OWNER, draft_id: DRAFT },
+    }];
+    evidencePinId = "pin-404";
+    getPinBehaviour = async () => null;
+
+    const body = await run();
+    assert.equal(body.reconciled?.confirmedAbsent, 1, "the verdict is confirmed_absent");
+    assert.equal(checks.length, 1, "exactly one check row");
+    assert.equal(
+      checks[0].publish_intent_id, "intent-row-video-1",
+      `the check must carry the parent intent row id, saw ${String(checks[0].publish_intent_id)}`,
+    );
+    console.log(`        P29 evidence: publish_intent_id=${String(checks[0].publish_intent_id)} (was null before this fix → RPC would refuse with retry_not_allowed)`);
+  });
+
+  // ── P29b: the lookup is scoped, not "latest intent for this draft" ─────────
+  //
+  // One draft can carry several intents. Picking the most recent one would bind
+  // the proof to an intent that never held this destination's unknown delivery,
+  // and the RPC would then refuse at redemption — the same dead end as null,
+  // but harder to see. The row that must win is the one holding THIS
+  // destination at delivery_unknown, whatever its recency.
+  await test("P29b: the intent lookup picks the destination's own unknown row, not the newest", async () => {
+    intentDestinations = [
+      {
+        // Newer, but a different destination and already published — a
+        // draft-only lookup would pick exactly this one and be wrong.
+        publish_intent_id: "intent-row-other",
+        destination_id: "pinterest:conn-pin-2",
+        status: "published",
+        updated_at: "2026-09-01T11:00:00.000Z",
+        publish_intents: { id: "intent-row-other", user_id: OWNER, draft_id: DRAFT },
+      },
+      {
+        publish_intent_id: "intent-row-correct",
+        destination_id: DEST_KEY,
+        status: "delivery_unknown",
+        updated_at: "2026-09-01T09:05:00.000Z",
+        publish_intents: { id: "intent-row-correct", user_id: OWNER, draft_id: DRAFT },
+      },
+    ];
+    evidencePinId = "pin-404";
+    getPinBehaviour = async () => null;
+
+    await run();
+    assert.equal(
+      checks[0].publish_intent_id, "intent-row-correct",
+      `scoped to the delivery_unknown destination, saw ${String(checks[0].publish_intent_id)}`,
+    );
+  });
+
+  // ── P29c: images are unchanged ─────────────────────────────────────────────
+  //
+  // The image path has no intent ledger row. The lookup must find nothing and
+  // pass null — exactly what was passed unconditionally before this fix — so
+  // this change is provably inert for every image destination.
+  await test("P29c: an image destination still records a null intent id", async () => {
+    intentDestinations = [];
+    evidencePinId = "pin-404";
+    getPinBehaviour = async () => null;
+
+    await run();
+    assert.equal(checks.length, 1, "the verdict is still recorded");
+    assert.equal(
+      checks[0].publish_intent_id, null,
+      `images have no intent row, so null is correct, saw ${String(checks[0].publish_intent_id)}`,
+    );
+    assert.equal(publishPinCalls, 0, "and no provider create happened during the verdict tick");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
