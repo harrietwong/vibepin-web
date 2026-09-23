@@ -72,6 +72,7 @@ import {
   type PublishEventBase,
 } from "@/lib/server/publishEvents";
 import {
+  destinationResultKey,
   mergeOutcomesIntoRow,
   writeFailure,
   writeOutcomes,
@@ -912,7 +913,15 @@ export async function GET(req: Request): Promise<Response> {
                 provider: "pinterest",
                 socialConnectionId: destination.socialConnectionId ?? null,
               });
-              if (proof?.publishIntentId && proof.destinationId) {
+              // The proof must name THIS destination. `latestConfirmedAbsentCheck`
+              // already filters on it; this is the second lock, because the
+              // consequence of a mismatch is not a refused retry but a
+              // DIFFERENT destination's ordinary send being dispatched under
+              // someone else's child intent.
+              const expectedKey = destinationResultKey(
+                "pinterest", destination.socialConnectionId ?? null,
+              );
+              if (proof?.publishIntentId && proof.destinationId === expectedKey) {
                 const parentIntentId = await parentIntentTextId(
                   db, row.vibepin_user_id, proof.publishIntentId,
                 );

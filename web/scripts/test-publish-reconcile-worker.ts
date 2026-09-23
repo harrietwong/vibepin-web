@@ -289,10 +289,13 @@ function fakeSupabaseClient() {
         return rowsBuilder(() => ledger.map(r => ({ ...r })));
       }
       if (table === "publish_reconcile_checks") {
-        // Newest first, as the route's `.order(checked_at desc)` asks.
-        return rowsBuilder(() => [...checks]
+        // Filters APPLIED, and `.order(checked_at desc)` honoured. The reader
+        // under test narrows by destination_id; a builder that ignored `.eq()`
+        // would hand back the first row whatever was asked for, and P30 — the
+        // sibling-hijack case — would pass vacuously.
+        return filteringRowsBuilder(() => [...checks]
           .sort((a, b2) => (a.checked_at < b2.checked_at ? 1 : -1))
-          .map(r => ({ ...r })));
+          .map(r => ({ ...r })) as unknown as Array<Record<string, unknown>>);
       }
       if (table === "pinterest_publish_evidence") {
         return rowsBuilder(() => (evidencePinId
@@ -877,6 +880,51 @@ function resultRows(): Array<Record<string, unknown>> {
       `images have no intent row, so null is correct, saw ${String(checks[0].publish_intent_id)}`,
     );
     assert.equal(publishPinCalls, 0, "and no provider create happened during the verdict tick");
+  });
+
+  // ── P30: a proof vouches for ONE destination, never for a sibling ──────────
+  //
+  // The multi-account case, and the reason it is dangerous is not the one you
+  // would guess. If `latestConfirmedAbsentCheck` ignores the connection, a
+  // draft with Pinterest accounts A and B — A holding a `confirmed_absent`
+  // proof, B merely pending — returns A's proof while the fan-out loop is
+  // evaluating B. Every gate condition then passes, a child intent is built for
+  // A, and B's ORDINARY FIRST SEND is dispatched under it. B fails on a child
+  // intent that does not contain it: a send lost and a failure row invented,
+  // for a destination no reconciliation ever looked at.
+  //
+  // Driven against the exported reader directly, because this is a property of
+  // the query and the route gate consumes whatever it returns.
+  await test("P30: a confirmed_absent proof is not served to a SIBLING destination", async () => {
+    const { latestConfirmedAbsentCheck } = await import(
+      "../src/app/api/cron/publish-due/reconcilePass");
+    // Only account A has a proof.
+    checks = [{
+      id: "chk-A", owner_user_id: OWNER, draft_id: DRAFT, scheduled_at: DUE_AT,
+      provider: "pinterest", attempt: 1, outcome: "confirmed_absent",
+      remote_id: null, checked_at: "2026-09-01T10:00:00.000Z",
+      publish_intent_id: "intent-row-A",
+      destination_id: DEST_KEY,
+    } as CheckRecord & { destination_id: string }];
+
+    const db = fakeSupabaseClient() as unknown as Parameters<typeof latestConfirmedAbsentCheck>[0];
+
+    const forA = await latestConfirmedAbsentCheck(db, {
+      userId: OWNER, draftId: DRAFT, scheduledAt: DUE_AT,
+      provider: "pinterest", socialConnectionId: CONN,
+    });
+    assert.equal(forA?.id, "chk-A", "account A's own proof is found");
+
+    const forB = await latestConfirmedAbsentCheck(db, {
+      userId: OWNER, draftId: DRAFT, scheduledAt: DUE_AT,
+      provider: "pinterest", socialConnectionId: "conn-pin-2",
+    });
+    assert.equal(
+      forB, null,
+      `account B must get NO proof, saw ${JSON.stringify(forB)} — serving A's proof`
+      + " here hijacks B's ordinary send into A's child intent",
+    );
+    console.log("        P30 evidence: A→chk-A, B→null (a proof vouches for its own destination only)");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

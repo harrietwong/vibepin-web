@@ -614,6 +614,15 @@ export async function latestConfirmedAbsentCheck(
       .eq("draft_id", args.draftId)
       .eq("scheduled_at", args.scheduledAt)
       .eq("provider", args.provider)
+      // ★ THE DESTINATION FILTER IS LOAD-BEARING, NOT DECORATIVE.
+      // Without it a draft with two Pinterest accounts returns account A's
+      // proof while the fan-out loop is evaluating account B: every gate
+      // condition passes, a child intent is built for A, and B's ORDINARY
+      // first send is dispatched under it. B then fails on a child intent that
+      // does not contain it — a send lost and a failure row invented, for a
+      // destination no reconciliation ever examined.
+      // A proof vouches for its own destination and no other.
+      .eq("destination_id", destinationResultKey(args.provider, args.socialConnectionId))
       .eq("outcome", "confirmed_absent")
       .order("checked_at", { ascending: false })
       .limit(1)
