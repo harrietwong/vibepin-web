@@ -700,7 +700,19 @@ test("each destination's outcome is stored the moment it is known", () => {
   assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 16,
     "every image and video branch of the Pinterest loop must go through the recorder — unknown, trial-access and retry-hold included");
   const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
-  const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
+  // Bound the slice at the END OF THAT FUNCTION, not at the next landmark further
+  // down the file. It used to run to `FinalWriteOptions`, which was the same thing
+  // while nothing sat in between — until task 4 added `destinationResultKey`,
+  // `removeDestinationResult` and `recordReconciledPublish` there, and the slice
+  // silently grew to cover them. `removeDestinationResult` legitimately mentions
+  // `scheduled_at` (in a comment explaining that it deliberately does NOT write it),
+  // so the assertion failed while the invariant it names was perfectly intact.
+  // A source-scanning test has to be anchored to the thing it is actually about.
+  const upToFinal = incremental.slice(0, incremental.indexOf("\nexport ", 1));
+  assert.ok(
+    upToFinal.includes("applyDestinationResults") && upToFinal.includes("readMergeWrite"),
+    "the slice must still cover mergeOutcomesIntoRow's body",
+  );
   assert.ok(!/scheduled_at|publish_claimed_at|postedAt/.test(upToFinal),
     "the incremental write records results ONLY — the Content is not finished yet");
 });
