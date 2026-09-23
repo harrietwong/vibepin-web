@@ -400,14 +400,29 @@ language plpgsql security definer set search_path=public,pg_temp
 as $v82_prepare$
 -- vibepin:v82:publish-intent-confirm-prepare
 declare
+  v_result jsonb;
   v_check public.publish_reconcile_checks%rowtype;
   v_prior text := nullif(btrim(coalesce(p_receipt->>'priorIntentId','')),'');
+  v_intent_id text := btrim(coalesce(p_receipt->>'intentId',''));
   v_parent public.publish_intents%rowtype;
+  v_child public.publish_intents%rowtype;
+  v_parent_destination public.publish_intent_destinations%rowtype;
+  v_child_destination public.publish_intent_destinations%rowtype;
+  v_requested jsonb;
+  v_destination jsonb;
+  v_destination_id text;
 begin
   if p_reconcile_check_id is null then
     -- 没有对账凭据 → 完全走 v78 原语义，零行为变化。
     return public.publish_intent_confirm_prepare_v78(
       p_user_id, p_receipt, p_source_identity_fingerprint);
+  end if;
+
+  -- v78 对指纹的校验在它自己的函数体里（migrate_v78:137-140）。这条路径不经过
+  -- v78，所以同样的前置必须在这里重复一遍，否则本 RPC 会成为绕过指纹校验的后门。
+  if p_source_identity_fingerprint is null
+     or p_source_identity_fingerprint !~ '^[0-9a-f]{64}$' then
+    raise exception using errcode='22023', message='invalid_source_identity_fingerprint';
   end if;
 
   select * into v_check from public.publish_reconcile_checks
@@ -416,16 +431,39 @@ begin
   if not found or v_check.outcome <> 'confirmed_absent' then
     raise exception using errcode='P0001', message='reconcile_absent_proof_required';
   end if;
-  if v_prior is null then
+  if v_prior is null or v_intent_id = '' or v_intent_id = v_prior then
+    raise exception using errcode='P0001', message='retry_not_allowed';
+  end if;
+
+  -- receipt 形状校验，逐条对齐 migrate_v78:157-165。本路径不经过 v78，
+  -- 少了这段就没有任何地方校验 dispatch 集合，调用方可以请求任意 destination。
+  if p_receipt->'mode' is distinct from '{"kind":"now"}'::jsonb
+     or p_receipt->'onlyPending' is distinct from 'true'::jsonb
+     or jsonb_typeof(p_receipt->'publishableDestinations')<>'array'
+     or jsonb_typeof(p_receipt->'dispatchDestinationIds')<>'array'
+     or jsonb_array_length(p_receipt->'dispatchDestinationIds')=0
+     or exists (select 1 from jsonb_array_elements_text(p_receipt->'dispatchDestinationIds') ids(value)
+       group by value having nullif(btrim(value),'') is null or count(*)<>1) then
+    raise exception using errcode='P0001', message='retry_not_allowed';
+  end if;
+  -- 对账凭据只为它自己那一个 destination 背书。dispatch 集合必须恰好是它。
+  if nullif(btrim(coalesce(v_check.destination_id,'')),'') is null
+     or jsonb_array_length(p_receipt->'dispatchDestinationIds')<>1
+     or not (p_receipt->'dispatchDestinationIds' @> jsonb_build_array(v_check.destination_id)) then
     raise exception using errcode='P0001', message='retry_not_allowed';
   end if;
 
   select * into v_parent from public.publish_intents
    where user_id = p_user_id and intent_id = v_prior for update;
-  if not found or v_parent.id is distinct from v_check.publish_intent_id then
+  if not found or v_parent.id is distinct from v_check.publish_intent_id
+     or v_parent.draft_id is distinct from p_receipt->>'draftId'
+     or v_parent.content_id is distinct from p_receipt->>'contentId' then
     raise exception using errcode='P0001', message='retry_not_allowed';
   end if;
   -- 父 destination 必须确实停在 delivery_unknown，且对账指向同一 destination。
+  -- ★ 这是与 v78 唯一的语义差别：v78 要求 failed + retry_allowed
+  --   （migrate_v78:189），delivery_unknown 的父行永远不满足那条。放行的凭据
+  --   换成了上面已经校验过的 confirmed_absent 对账行。
   if not exists (
     select 1 from public.publish_intent_destinations d
      where d.publish_intent_id = v_parent.id
@@ -434,18 +472,102 @@ begin
     raise exception using errcode='P0001', message='retry_not_allowed';
   end if;
   -- 一条 confirmed_absent 只能兑换一次重试。
+  -- ★ 排除本次 receipt 自己的 child：child intent id 是确定性派生的，
+  --   prepare 成功后、dispatch 之前崩溃会用同一个 intentId 重放。若不排除，
+  --   重放会撞上自己刚建的 child 并永久 retry_not_allowed——destination 就此卡死。
+  --   模型取自 v78 的 `consumed.id <> v_child_destination.id`（migrate_v78:224）。
   if exists (
     select 1 from public.publish_intents child
      where child.prior_intent_id = v_parent.id
        and child.user_id = p_user_id
-       and child.intent_id <> v_prior) then
+       and child.intent_id <> v_prior
+       and child.intent_id <> v_intent_id) then
     raise exception using errcode='P0001', message='retry_not_allowed';
   end if;
 
   -- 交给 v76 建完整 materialization 图，再由本函数绑定血缘。
-  -- 实现细节（父行状态过渡、attempt 继承）在实施阶段补完，
   -- 结构对齐 migrate_v78:196-231。
-  raise exception using errcode='P0001', message='v82_unknown_retry_not_implemented';
+  select coalesce(jsonb_agg(destination.value order by destination.value->>'id'),'[]'::jsonb)
+    into v_requested
+    from jsonb_array_elements(p_receipt->'publishableDestinations') destination(value)
+   where p_receipt->'dispatchDestinationIds' @> jsonb_build_array(destination.value->>'id');
+  if jsonb_array_length(v_requested)<>jsonb_array_length(p_receipt->'dispatchDestinationIds')
+     or exists (
+       select 1 from jsonb_array_elements(v_requested) requested(value)
+        left join public.publish_intent_destinations parent_destination
+          on parent_destination.publish_intent_id=v_parent.id
+         and parent_destination.destination_id=requested.value->>'id'
+       where parent_destination.id is null
+          or parent_destination.provider is distinct from requested.value->>'provider'
+          or parent_destination.social_connection_id is distinct from requested.value->>'socialConnectionId'
+          or parent_destination.subdestination_id is distinct from nullif(btrim(coalesce(requested.value->>'boardId','')),'')
+          -- v78 在此处要求 failed + retry_allowed；本路径改判 delivery_unknown。
+          or parent_destination.status<>'delivery_unknown'
+          or exists (select 1 from public.publish_intent_destinations consumed
+            where consumed.retry_of_destination_id=parent_destination.id
+              and consumed.publish_intent_id
+                  is distinct from (select id from public.publish_intents
+                                     where user_id=p_user_id and intent_id=v_intent_id))
+     ) then
+    raise exception using errcode='P0001', message='retry_not_allowed';
+  end if;
+
+  v_result := public.publish_intent_confirm_prepare(
+    p_user_id,
+    jsonb_set(p_receipt,'{publishableDestinations}',v_requested,false)
+  );
+  select * into v_child from public.publish_intents
+   where user_id=p_user_id and intent_id=v_intent_id for update;
+  if not found or (v_child.prior_intent_id is not null and v_child.prior_intent_id<>v_parent.id)
+     or (v_child.source_identity_fingerprint is not null
+       and v_child.source_identity_fingerprint<>p_source_identity_fingerprint) then
+    raise exception using errcode='P0001', message='retry_not_allowed';
+  end if;
+  update public.publish_intents set prior_intent_id=v_parent.id,
+    source_identity_fingerprint=p_source_identity_fingerprint,updated_at=now()
+   where id=v_child.id;
+
+  for v_destination in select value from jsonb_array_elements(v_requested) loop
+    v_destination_id := v_destination->>'id';
+    select * into v_parent_destination from public.publish_intent_destinations
+     where publish_intent_id=v_parent.id and destination_id=v_destination_id for update;
+    select * into v_child_destination from public.publish_intent_destinations
+     where publish_intent_id=v_child.id and destination_id=v_destination_id for update;
+    if not found or v_parent_destination.status<>'delivery_unknown'
+       or (v_child_destination.retry_of_destination_id is not null
+         and v_child_destination.retry_of_destination_id<>v_parent_destination.id)
+       or exists (select 1 from public.publish_intent_destinations consumed
+         where consumed.retry_of_destination_id=v_parent_destination.id
+           and consumed.id<>v_child_destination.id) then
+      raise exception using errcode='P0001', message='retry_not_allowed';
+    end if;
+    -- attempt 继承：父 +1。F 节的 ..._v82_attempt_cap 在第 6 个孩子上拒绝，
+    -- 所以五次上限在视频路径同样是数据库强制的，不是应用层自觉。
+    update public.publish_intent_destinations set
+      retry_of_destination_id=v_parent_destination.id,
+      attempt=v_parent_destination.attempt+1,updated_at=now()
+     where id=v_child_destination.id;
+  end loop;
+  return v_result;
+exception when others then
+  -- 错误消息归一化，逐条沿用 v78（migrate_v78:233-248），外加本函数的两个新消息。
+  -- 不归一化会把 v76 内部的措辞泄漏给调用方，应用层的分类就对不上了。
+  raise exception using errcode=sqlstate,message=case sqlerrm
+    when 'reconcile_absent_proof_required' then 'reconcile_absent_proof_required'
+    when 'invalid_source_identity_fingerprint' then 'invalid_source_identity_fingerprint'
+    when 'publish_intent_not_found' then 'publish_intent_not_found'
+    when 'publish_source_identity_conflict' then 'publish_source_identity_conflict'
+    when 'retry_not_allowed' then 'retry_not_allowed'
+    when 'invalid_publish_receipt' then 'invalid_publish_receipt'
+    when 'receipt_destination_set_invalid' then 'receipt_destination_set_invalid'
+    when 'receipt_destination_alias' then 'receipt_destination_alias'
+    when 'receipt_destination_not_connected' then 'receipt_destination_not_connected'
+    when 'receipt_media_set_invalid' then 'receipt_media_set_invalid'
+    when 'receipt_media_key_invalid' then 'receipt_media_key_invalid'
+    when 'receipt_media_metadata_invalid' then 'receipt_media_metadata_invalid'
+    when 'publish_intent_conflict' then 'publish_intent_conflict'
+    when 'publish_intent_graph_conflict' then 'publish_intent_graph_conflict'
+    else 'v82_rpc_error' end;
 end $v82_prepare$;
 comment on function public.publish_intent_confirm_prepare_v82(uuid,jsonb,text,uuid)
   is 'vibepin:v82:publish-intent-confirm-prepare';
