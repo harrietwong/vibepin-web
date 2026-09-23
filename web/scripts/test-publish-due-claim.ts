@@ -690,8 +690,15 @@ test("each destination's outcome is stored the moment it is known", () => {
   );
   assert.ok(!/outcomes\.push\(/.test(pinterestLoop),
     "a Pinterest outcome collected without being stored is one a process death loses");
-  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 11,
-    "every image and video branch of the Pinterest loop must go through the recorder — unknown and trial-access included");
+  // v82 (task 3) added four recorder calls to this loop — the per-destination backoff
+  // filter, the 429 account-wide hold, the video dispatch-failure retry hold, and the
+  // image retry hold. The INVARIANT is unchanged and is what this pins: every branch
+  // that produces an outcome goes through `record`, never `outcomes.push`, so no
+  // outcome can be collected without also being stored. The count moves whenever a
+  // branch is added; the `outcomes.push` assertion above is the one that must never
+  // move.
+  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 15,
+    "every image and video branch of the Pinterest loop must go through the recorder — unknown, trial-access and retry-hold included");
   const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
   const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
   assert.ok(!/scheduled_at|publish_claimed_at|postedAt/.test(upToFinal),
@@ -1062,8 +1069,14 @@ test("(a) the route completes such a row from its own rows, before building any 
   const between = routeSrc.slice(owedAt, inputAt);
   assert.match(between, /if \(!owed\.length && priorResults\.length\) \{/,
     "nothing owed plus a result history means finishing an earlier run, not attempting anything");
-  assert.match(between, /await persistOutcomes\(io, row, \[\]\);/,
+  // v82 (task 3) gave this persist an options argument: while a reconciliation is
+  // still open the row must keep its schedule (design §3.4(b)), because clearing it
+  // makes the row invisible to the due scan and the reconciliation verdict then has
+  // nothing to act on. Still ONE call, still the nothing-owed path, still no outcomes.
+  assert.match(between, /await persistOutcomes\(io, row, \[\],/,
     "it must finalize through the existing nothing-owed path");
+  assert.equal((between.match(/await persistOutcomes\(/g) ?? []).length, 1,
+    "exactly one finalizing write on the nothing-owed path");
   assert.ok(!/publishPinForUser|fanOutDestinations|consumeScheduledPost/.test(between),
     "no provider call and no second charge on a run that publishes nothing");
 });
@@ -1174,7 +1187,15 @@ test("the route bounds the run and passes that bound INTO the fan-out", () => {
 });
 
 test("a fully deferred row is released, not written — and never marked failed", () => {
-  const at = routeSrc.indexOf("if (pending.length && !reported.length) {");
+  // v82 (task 3) narrowed this branch with `&& !retryRounds.length`. Both shapes
+  // produce `status: "pending"`, but they mean opposite things here: a TIME deferral
+  // really did nothing (so writing anything would only bump updatedAt and push a
+  // pointless LWW re-sync), while a RETRY round sent a request, consumed an attempt,
+  // and has a backoff gate that must reach the row. Without the extra clause a
+  // single-destination Content — the common case — would take this exit and the
+  // feature would silently do nothing. The assertion below still pins what this
+  // branch does once it IS taken.
+  const at = routeSrc.indexOf("if (pending.length && !reported.length && !retryRounds.length) {");
   assert.ok(at > 0, "the route must recognise a row where nothing was attempted");
   const body = routeSrc.slice(at, at + 700);
   assert.match(body, /await releaseClaim\(db, row\);/,

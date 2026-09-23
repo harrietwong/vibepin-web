@@ -173,6 +173,23 @@ export interface FinalWriteOptions {
   failureCode?: string;
   /** A destination was deferred — the Content is still scheduled for it. */
   deferred?: boolean;
+  /**
+   * The v82 retry gate: the earliest instant any still-owed destination may be
+   * attempted again (design §4.1 — the MIN across destinations, not the max).
+   *
+   * ★ The KEY'S PRESENCE, not its value, is what decides whether the column is
+   * written. `null` is a meaningful value here — it is how a row whose last waiting
+   * destination just resolved gets its gate CLEARED, so it becomes immediately due
+   * again rather than staying pinned behind a stale timer. "Do not touch the column
+   * at all" therefore has to be expressed as the key being ABSENT.
+   *
+   * That distinction is load-bearing and not stylistic: `publish_next_attempt_at`
+   * does not exist on a database without v82 applied, and naming it in an UPDATE
+   * there fails the write. The caller omits the key entirely whenever the retry flag
+   * is off, which is what keeps the feature-off path runnable on today's production
+   * schema.
+   */
+  nextAttemptAt?: string | null;
 }
 
 /** The row's final persist: results, posted/failure framing, schedule, claim. */
@@ -196,6 +213,10 @@ export async function writeOutcomes(
       // or a destination is still owed: this run must not undo a schedule it did not
       // read, nor drop a Content whose platforms have not all gone out.
       ...(clearSchedule ? { scheduled_at: null } : {}),
+      // Key present only when the caller passed one — see FinalWriteOptions. `in`
+      // rather than a truthiness test, because `null` is a real value here (clear the
+      // gate) and must be distinguishable from "do not name this column at all".
+      ...("nextAttemptAt" in options ? { publish_next_attempt_at: options.nextAttemptAt ?? null } : {}),
       publish_claimed_at: null, // release the claim either way
     };
   });
