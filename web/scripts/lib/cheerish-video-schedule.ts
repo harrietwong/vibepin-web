@@ -111,11 +111,23 @@ export function replaceVideoMediaPayload<T extends Record<string, unknown>>(curr
  * is cover-scaled and cropped to fill the portrait canvas.
  */
 export function buildPortraitTransformFilter(): string {
-  return `[0:v]split=2[bg0][fg0];[bg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,crop=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT},boxblur=luma_radius=24:luma_power=2[bg];[fg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`;
+  return `[0:v]split=2[bg0][fg0];[bg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,crop=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT},boxblur=luma_radius=24:luma_power=2[bg];[fg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,scale=in_range=auto:out_range=tv,format=yuv420p[v]`;
 }
 
 export function buildPortraitTransformCommand(inputPath: string, outputPath: string): string[] {
   return ["-y", "-i", inputPath, "-filter_complex", buildPortraitTransformFilter(), "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "128k", "-movflags", "+faststart", outputPath];
+}
+
+export function buildCompatibilityNormalizeCommand(inputPath: string, outputPath: string, durationMs: number): string[] {
+  const videoBitrateKbps = targetVideoBitrateKbps(durationMs);
+  return [
+    "-y", "-i", inputPath,
+    "-vf", "scale=in_range=auto:out_range=tv,format=yuv420p",
+    "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "medium",
+    "-b:v", `${videoBitrateKbps}k`, "-maxrate", `${videoBitrateKbps}k`, "-bufsize", `${videoBitrateKbps * 2}k`,
+    "-c:a", "aac", "-profile:a", "aac_low", "-ar", "48000", "-ac", "2", "-b:a", "128k",
+    "-movflags", "+faststart", outputPath,
+  ];
 }
 
 export function normalizeManifestMedia<T extends CheerishManifestMedia>(

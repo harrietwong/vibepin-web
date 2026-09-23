@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildCompatibilityNormalizeCommand, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
@@ -83,7 +83,10 @@ const portraitCommand = buildPortraitTransformCommand("source.mp4", "portrait.mp
 assert.match(portraitCommand, /scale=1080:1920:force_original_aspect_ratio=decrease/);
 assert.match(portraitCommand, /boxblur/);
 assert.match(portraitCommand, /crop=1080:1920/);
+assert.match(portraitCommand, /out_range=tv/, "portrait conversion forces standard TV-range yuv420p");
 assert.equal(portraitCommand.includes("crop=iw:ih"), false, "no-crop contract");
+const compatibilityCommand = buildCompatibilityNormalizeCommand("source.mp4", "normalized.mp4", 17_686).join(" ");
+assert.match(compatibilityCommand, /out_range=tv/, "compatibility re-encode converts full-range yuvj420p to TV-range yuv420p");
 const safeOutput = buildPortraitTransformOutputPath("C:/temp", mediaBase.originalDigest);
 assert.equal(/[<>:"/\\|?*]/.test(safeOutput.split(/[\\/]/).at(-1) ?? ""), false, "Windows-safe output filename");
 assert.deepEqual(parsePrivateStorageLocator("private://generated-private/owner-1/uploads/video.mp4", "owner-1"), { bucketId: "generated-private", objectPath: "owner-1/uploads/video.mp4" });
@@ -102,12 +105,26 @@ const ffmpegDir = mkdtempSync(`${tmpdir()}/cheerish-portrait-`);
 try {
   const sourceVideo = `${ffmpegDir}/source.mp4`;
   const outputVideo = buildPortraitTransformOutputPath(ffmpegDir, "b".repeat(64));
+  const fullRangeSourceVideo = `${ffmpegDir}/full-range-source.mp4`;
+  const compatibilityOutputVideo = `${ffmpegDir}/compatibility-output.mp4`;
   execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", sourceVideo], { stdio: "ignore" });
   execFileSync("ffmpeg", buildPortraitTransformCommand(sourceVideo, outputVideo), { stdio: "ignore" });
   const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height", "-of", "json", outputVideo], { encoding: "utf8" })) as { streams: Array<{ codec_type: string; codec_name: string; width?: number; height?: number }> };
   const video = probe.streams.find(stream => stream.codec_type === "video");
   const audio = probe.streams.find(stream => stream.codec_type === "audio");
   assert.deepEqual({ width: video?.width, height: video?.height, videoCodec: video?.codec_name, audioCodec: audio?.codec_name }, { width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac" });
+
+  execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "testsrc=size=360x640:rate=12", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "1", "-vf", "scale=in_range=auto:out_range=pc,format=yuv420p", "-c:v", "libx264", "-color_range", "pc", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", fullRangeSourceVideo], { stdio: "ignore" });
+  const fullRangeProbe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,pix_fmt", "-of", "json", fullRangeSourceVideo], { encoding: "utf8" })) as { streams: Array<{ codec_type: string; pix_fmt?: string }> };
+  assert.equal(fullRangeProbe.streams.find(stream => stream.codec_type === "video")?.pix_fmt, "yuvj420p", "fixture reproduces the rejected full-range pixel format");
+  execFileSync("ffmpeg", buildCompatibilityNormalizeCommand(fullRangeSourceVideo, compatibilityOutputVideo, 1_000), { stdio: "ignore" });
+  const compatibilityProbe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,width,height,sample_rate,channels", "-of", "json", compatibilityOutputVideo], { encoding: "utf8" })) as { streams: Array<{ codec_type: string; codec_name: string; profile?: string; pix_fmt?: string; width?: number; height?: number; sample_rate?: string; channels?: number }> };
+  const compatibilityVideo = compatibilityProbe.streams.find(stream => stream.codec_type === "video");
+  const compatibilityAudio = compatibilityProbe.streams.find(stream => stream.codec_type === "audio");
+  assert.deepEqual(
+    { width: compatibilityVideo?.width, height: compatibilityVideo?.height, pixelFormat: compatibilityVideo?.pix_fmt, videoCodec: compatibilityVideo?.codec_name, audioCodec: compatibilityAudio?.codec_name, audioProfile: compatibilityAudio?.profile, audioSampleRate: compatibilityAudio?.sample_rate, audioChannels: compatibilityAudio?.channels },
+    { width: 360, height: 640, pixelFormat: "yuv420p", videoCodec: "h264", audioCodec: "aac", audioProfile: "LC", audioSampleRate: "48000", audioChannels: 2 },
+  );
 } finally {
   rmSync(ffmpegDir, { recursive: true, force: true });
 }
