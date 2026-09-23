@@ -39,6 +39,7 @@ import {
   markNeedsReconnect,
   type PinterestConnectionRow,
 } from "./connectionStore";
+import { parseRetryAfterSeconds } from "@/lib/server/publish/retryAfter";
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,20 @@ export class PinterestApiError extends Error {
    * case for a rejection.
    */
   providerResourceId?: string | null;
+  /**
+   * Seconds to wait before retrying, parsed from Pinterest's `Retry-After`
+   * response header when present (delta-seconds or HTTP-date form; see
+   * `parseRetryAfterSeconds` in lib/server/publish/retryClassification.ts).
+   * Undefined when the header was absent, malformed, or this error did not
+   * come from a real HTTP response.
+   *
+   * DELIBERATELY a field on the error, never on any evidence object handed to
+   * a settle RPC: v81's settle RPC does a key whitelist on evidence and does
+   * not include this key — adding it there would throw
+   * `provider_evidence_invalid` and strand the attempt at `started` (see
+   * retryClassification.ts module header for the full explanation).
+   */
+  retryAfterSeconds?: number;
   constructor(message: string, status: number, code = "pinterest_error", pinterestApiCode?: string) {
     super(message);
     this.name = "PinterestApiError";
@@ -660,6 +675,10 @@ export class PinterestClient {
       const errorResourceId =
         body && typeof body.id === "string" && body.id.trim() ? body.id.trim() : null;
       apiError.providerResourceId = errorResourceId;
+      // Retry-After informs retry scheduling only (lib/server/publish/retryClassification.ts) —
+      // never persisted into any settle-evidence object; see that field's doc comment above.
+      const retryAfterSeconds = parseRetryAfterSeconds(res.headers.get("retry-after"), () => Date.now());
+      if (retryAfterSeconds !== undefined) apiError.retryAfterSeconds = retryAfterSeconds;
       throw apiError;
     }
     return json as T;
