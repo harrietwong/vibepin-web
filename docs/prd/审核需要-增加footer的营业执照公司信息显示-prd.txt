@@ -1,0 +1,130 @@
+请把 VibePin 的法律主体信息做成“审核可见、品牌低干扰”的结构。
+
+目标：
+1. Meta Business Verification / App Review 能明确确认 VibePin 的法律运营主体。
+2. 正常用户浏览时仍以 VibePin 品牌为主。
+3. 后续如果我要精简 Footer，可以只隐藏 Footer 中的法律主体展示，不影响 Privacy Policy / Terms / Contact 中长期保留的法律信息。
+4. 不要做“审核通过后自动删除”之类逻辑。
+
+一、Footer
+
+当前阶段为了 Meta 审核，在 Footer Legal 区域增加一行低调小字：
+
+VibePin is operated by 海口市忠伊菲商贸有限公司.
+
+样式要求：
+- 字号小于主要导航
+- 使用 Footer 次级文字样式
+- 不要做高亮
+- 不要影响现有布局
+- 不要出现在首页 Hero 或主要营销区域
+
+请把这一行单独封装为一个可配置组件，例如：
+LegalEntityNotice
+
+并增加一个普通前端配置：
+
+SHOW_FOOTER_LEGAL_ENTITY=true
+
+或者沿用项目已有 feature/config 机制。
+
+要求：
+- 默认 true
+- 只控制 Footer 是否展示
+- 不能控制 Privacy / Terms 中的法律主体
+- 不要使用秘密环境变量
+- 不要让关闭 Footer 展示后导致法律页面也消失
+
+这样未来推广前，我可以把 Footer 这一行隐藏，而不是删除法律主体信息。
+
+二、Privacy Policy
+
+长期保留，不受 Footer 开关影响：
+
+VibePin is operated by 海口市忠伊菲商贸有限公司 (“we”, “us”, or “VibePin”).
+
+For privacy-related inquiries:
+support@vibepin.co
+
+如果已有 Data Controller / Who we are 内容，合并，不重复。
+
+三、Terms of Service
+
+长期保留：
+
+These Terms of Service govern your use of VibePin, a service operated by 海口市忠伊菲商贸有限公司.
+
+Contact:
+support@vibepin.co
+
+四、Contact / About
+
+如果已有 Contact 或 About 页面，加入一个低调的 Legal / Company Information 区域：
+
+Legal entity:
+海口市忠伊菲商贸有限公司
+
+Brand:
+VibePin
+
+Website:
+https://vibepin.co
+
+Support:
+support@vibepin.co
+
+不要把法律主体放在页面最显眼位置。
+
+五、结构化数据
+
+如果当前已有 Organization JSON-LD：
+
+name: VibePin
+legalName: 海口市忠伊菲商贸有限公司
+url: https://vibepin.co
+email: support@vibepin.co
+
+如果没有现成 JSON-LD，不要为了这件事重构 SEO 系统。
+
+六、不要公开
+
+不要增加：
+- 法定代表人姓名
+- 身份证信息
+- 私人手机号
+- 完整营业执照号码
+- 私人住址
+- Meta App ID / Secret
+- Access Token
+- 公司内部信息
+
+七、一致性检查
+
+全项目搜索：
+VibePin
+Cheerish
+support@vibepin.co
+Privacy
+Terms
+Contact
+Legal entity
+operated by
+
+确认：
+- VibePin 是品牌
+- 海口市忠伊菲商贸有限公司 是法律运营主体
+- Cheerish 如果只是 Business Portfolio / 内部名称，不要写成 VibePin 的法律主体
+- 不存在其他互相冲突的公司名称
+
+八、验收
+
+完成后给我：
+1. 修改文件
+2. Footer 最终截图或页面位置说明
+3. Privacy 最终文案
+4. Terms 最终文案
+5. Contact/About 最终文案
+6. 控制 Footer 法律主体显示的配置位置
+7. build / typecheck 结果
+
+先提交代码，不部署。

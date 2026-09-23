@@ -1,0 +1,1477 @@
+Implement a complete production-grade credits, usage metering, billing-cache, account-isolation, and referral-reward system for VibePin.
+
+The current problem is that image and text generation succeed without consuming credits, the Credit UI does not show meaningful usage, and the Billing page waits for a slow external subscription request every time it is opened.
+
+This task must fix the backend accounting logic, not only the frontend display.
+
+Do not change existing Creem product prices, checkout links, product IDs, webhook secrets, or subscription mappings unless a verified bug requires it. Preserve the existing moderation flow and ensure rejected prompts never consume credits.
+
+# 1. Inspect the current implementation
+
+Before editing, identify:
+
+* all subscription plans and their existing names
+* the source of plan and pricing configuration
+* all image-generation endpoints
+* all text-generation endpoints
+* regeneration, retry, batch, queue, worker, and fallback paths
+* existing user, account, subscription, and usage tables
+* current Creem webhook handling
+* current Billing page data-loading flow
+* all places where credits or usage are displayed
+* whether the application supports individual accounts only or also supports teams/workspaces
+
+Do not create a second disconnected credit system if one already exists. Migrate or repair the current implementation.
+
+# 2. Establish one source of truth for plan allowances
+
+Every active plan must have an explicit monthly credit allowance.
+
+Use the existing plan identifiers and product mappings. Add a centralized server-side plan-entitlements configuration containing at least:
+
+* internal plan key
+* Creem product or price identifier
+* display name
+* monthly credit allowance
+* permitted product features
+* optional generation limits
+* subscription rank for upgrade comparisons
+
+Example structure:
+
+```ts
+type PlanEntitlement = {
+  planKey: string;
+  displayName: string;
+  monthlyCredits: number;
+  creemProductIds: string[];
+  features: {
+    textGeneration: boolean;
+    imageGeneration: boolean;
+    batchGeneration: boolean;
+  };
+};
+```
+
+Do not hardcode allowance values separately in frontend components, API routes, and webhook handlers.
+
+If current pricing pages already advertise generation allowances, use those values.
+
+If no allowances currently exist, create the configuration structure but clearly report which allowance values require a product decision. Do not silently invent contradictory limits.
+
+# 3. Define generation credit costs centrally
+
+Create one server-side credit-cost configuration.
+
+Recommended initial cost model, unless an existing documented model already exists:
+
+* generate text content: 1 credit per completed request
+* rewrite or regenerate text: 1 credit per completed request
+* generate one image: 5 credits per completed image
+* regenerate one image: 5 credits per completed image
+* batch image generation: number of successfully generated images × 5 credits
+
+The cost must be configurable without editing generation handlers.
+
+Example:
+
+```ts
+export const CREDIT_COSTS = {
+  textGeneration: 1,
+  textRewrite: 1,
+  imageGeneration: 5,
+  imageRegeneration: 5,
+} as const;
+```
+
+The UI must read the same effective cost configuration through a safe server endpoint or server-rendered data. Do not duplicate the values manually in client code.
+
+# 4. Use a ledger-based credit architecture
+
+Do not implement credits as only one mutable `users.credits` number.
+
+Create or repair a ledger-based design containing the equivalent of:
+
+## Credit account
+
+One credit account per authenticated user or billable workspace.
+
+Suggested fields:
+
+* id
+* user_id or workspace_id
+* recurring_balance
+* bonus_balance
+* reserved_balance
+* billing_period_start
+* billing_period_end
+* plan_key
+* version
+* created_at
+* updated_at
+
+## Credit ledger
+
+Every credit change must create an immutable ledger record.
+
+Suggested fields:
+
+* id
+* credit_account_id
+* user_id or workspace_id
+* operation type
+* amount
+* balance before
+* balance after
+* credit bucket
+* source
+* reference type
+* reference ID
+* idempotency key
+* metadata
+* created_at
+
+Operation types should include:
+
+* monthly_allocation
+* generation_reservation
+* generation_charge
+* reservation_release
+* referral_reward
+* promotional_credit
+* manual_adjustment
+* refund_reversal
+* subscription_change
+* expiration
+
+Credit buckets:
+
+* recurring monthly credits
+* bonus or referral credits
+
+Recurring credits reset or expire according to the subscription billing cycle.
+
+Bonus credits should not disappear during a normal monthly reset unless an explicit expiration date exists.
+
+Spend recurring credits before bonus credits so that credits expiring sooner are used first.
+
+# 5. Deduct credits correctly for every generation
+
+Every image and text generation path must use this order:
+
+1. Authenticate the user.
+2. Derive the user or workspace ID on the server.
+3. Validate the request.
+4. Run prompt moderation where required.
+5. Calculate the expected credit cost.
+6. Atomically reserve the required credits.
+7. Start generation only after the reservation succeeds.
+8. On successful generation, settle the reservation as a charge.
+9. On failure, timeout, cancellation, or provider error, release the reservation.
+10. Return the updated balance to the client.
+
+Do not deduct credits when:
+
+* moderation rejects the prompt
+* moderation is unavailable
+* request validation fails
+* the AI provider is never called
+* generation fails
+* generation times out
+* no usable result is returned
+* the user cancels before generation begins
+
+For partial batch success, charge only for successfully completed outputs.
+
+A generation must not start when the available balance is insufficient.
+
+Return a stable error:
+
+```json
+{
+  "code": "insufficient_credits",
+  "message": "You do not have enough credits for this request."
+}
+```
+
+The UI should show:
+
+`You need {required} credits, but only {available} credits are available.`
+
+Include an upgrade or view-plans action.
+
+# 6. Make all credit operations atomic and idempotent
+
+Use database transactions and row locking or an equivalent concurrency-safe mechanism.
+
+Two simultaneous requests must never spend the same credits.
+
+Every generation request must have a unique server-side idempotency key.
+
+Retries of the same request must not create duplicate charges.
+
+Enforce uniqueness for relevant idempotency keys at the database level.
+
+Do not rely on frontend buttons being disabled as the protection against duplicate charges.
+
+# 7. Monthly credit allocation and reset
+
+Monthly allowances must follow the user’s actual subscription billing period, not simply the first day of the calendar month.
+
+Store:
+
+* current period start
+* current period end
+* last allocation event
+* next reset date
+
+When a paid subscription is activated or renewed:
+
+* update the subscription snapshot
+* allocate the plan’s recurring credits exactly once
+* record an immutable monthly allocation entry
+* update the billing-period dates
+
+When a subscription is upgraded:
+
+* apply one documented proration rule
+* do not accidentally allocate the full allowance multiple times
+
+Recommended initial upgrade rule:
+
+* preserve the user’s already consumed amount
+* increase the cycle allowance to the new plan allowance
+* grant only the positive difference when appropriate
+
+When downgraded:
+
+* schedule the lower allowance for the next billing cycle unless the existing billing implementation already applies immediate downgrades
+
+When canceled:
+
+* retain current-cycle access until the subscription period ends when that matches the current Creem subscription behavior
+* do not allocate another recurring allowance after expiration
+
+Webhook retries must not duplicate monthly allocations.
+
+# 8. Credit and Usage UI
+
+Replace any vague Credit display with a meaningful usage card.
+
+In the main application header or account menu, show a compact indicator:
+
+`{remaining} credits left`
+
+Clicking it should open or navigate to Usage or Billing.
+
+In Settings → Billing, show immediately:
+
+## Current plan
+
+* plan name
+* subscription status
+* billing interval
+* current billing-period dates
+* next renewal or expiration date
+* Manage subscription button
+
+## Monthly usage
+
+* total monthly allowance
+* credits used this billing cycle
+* recurring credits remaining
+* bonus credits remaining
+* total spendable credits
+* next reset date
+* progress bar
+
+Recommended labels:
+
+* `Monthly allowance`
+* `Used this cycle`
+* `Monthly credits remaining`
+* `Bonus credits`
+* `Total available`
+* `Resets on {date}`
+
+Do not combine bonus credits into the monthly reset value without explaining them.
+
+Example:
+
+```text
+Credits
+
+720 available
+
+Monthly credits
+500 / 1,000 remaining
+
+Bonus credits
+220
+
+Resets on August 18, 2026
+```
+
+## Usage breakdown
+
+Show at least:
+
+* text requests completed
+* images generated
+* credits spent on text
+* credits spent on images
+
+## Recent activity
+
+Display recent ledger entries:
+
+* date and time
+* action
+* credits added or spent
+* resulting balance
+
+Examples:
+
+```text
+Image generated           -5
+Text content generated    -1
+Monthly plan allocation  +1000
+Referral reward           +100
+```
+
+Do not expose internal IDs, provider details, prompts, or private metadata.
+
+# 9. Improve Billing page loading speed
+
+Do not call Creem synchronously every time the user opens Settings → Billing.
+
+Create a local subscription snapshot table or extend the existing subscription table.
+
+Store at least:
+
+* user or workspace ID
+* Creem customer ID
+* Creem subscription ID
+* plan key
+* product ID
+* status
+* billing interval
+* current period start
+* current period end
+* cancel-at-period-end
+* last synchronized timestamp
+
+Update this snapshot primarily through verified Creem webhooks.
+
+The Billing page should:
+
+1. Render the local subscription snapshot immediately.
+2. Render the local credit account immediately.
+3. Avoid a blocking external Creem request.
+4. Optionally trigger a background refresh when the snapshot is stale.
+5. Keep showing the last verified snapshot while refreshing.
+6. Show a small non-blocking refresh status rather than replacing the page with a spinner.
+
+Use a stale-while-revalidate approach.
+
+Recommended cache behavior:
+
+* recent local snapshot: return immediately
+* stale snapshot: return immediately and refresh in the background
+* missing snapshot: perform one controlled server-side synchronization
+* external API unavailable: continue showing the last verified snapshot with a warning
+
+Do not show the wrong plan while loading.
+
+Do not temporarily show Free when a paid-plan lookup is pending.
+
+# 10. Enforce strict account isolation
+
+All credits, usage, subscriptions, referrals, and billing data must be isolated by authenticated account.
+
+Never accept `userId`, `accountId`, or `workspaceId` from the browser as proof of ownership.
+
+Derive identity from the authenticated server session.
+
+Every query must include the authenticated owner scope.
+
+For workspace-enabled systems, derive the billable workspace through verified membership and role checks.
+
+Add database constraints and row-level security where supported.
+
+A user must never be able to:
+
+* view another user’s balance
+* view another user’s usage history
+* spend another user’s credits
+* access another user’s subscription
+* use another user’s referral data
+* modify another account through an object ID
+* guess IDs to access another account
+
+Administrative access must use an explicit privileged path with audit logging.
+
+Do not mix email-address-based ownership with immutable user IDs.
+
+Account-email changes must not create a new credit account or expose the previous account.
+
+# 11. Add a referral-credit system
+
+Implement credit rewards first. Do not launch cash payouts in this version.
+
+Cashback introduces additional payout, fraud, refund, accounting, and compliance requirements. Keep the architecture extensible for a future affiliate system, but launch referral credits now.
+
+Each eligible user receives:
+
+* a unique referral code
+* a shareable referral URL
+* referral statistics
+* pending rewards
+* granted rewards
+
+Example URL:
+
+`https://vibepin.co/?ref=ABC123`
+
+Capture the referral code at first qualified visit and associate it with signup.
+
+Do not overwrite an existing valid referral attribution on every visit.
+
+Create equivalent tables for:
+
+## Referral code
+
+* owner user ID
+* code
+* active status
+* created_at
+
+## Referral relationship
+
+* referrer user ID
+* referred user ID
+* attribution timestamp
+* status
+* qualifying event
+* reward status
+
+## Referral reward
+
+* referrer user ID
+* referred user ID
+* credit amount
+* source payment or subscription reference
+* pending date
+* granted date
+* reversed date
+* reason
+* idempotency key
+
+# 12. Referral qualification rules
+
+Recommended initial rule:
+
+A referral becomes qualified only after the referred user:
+
+1. creates a new account through a valid referral link
+2. is not the referrer
+3. completes the first successful paid subscription payment
+4. has not already qualified through another referrer
+5. has no refund, cancellation fraud, or chargeback during the configured holding period
+
+Make reward amounts configurable.
+
+Recommended product configuration:
+
+```ts
+export const REFERRAL_REWARDS = {
+  inviterCredits: 100,
+  newUserCredits: 50,
+  qualifyingEvent: "first_paid_subscription",
+  holdDays: 7,
+  maxRewardsPerMonth: 20,
+};
+```
+
+These are proposed defaults and must remain configurable.
+
+If a first payment is refunded or charged back before the reward is released:
+
+* cancel the pending reward
+
+If credits were already granted and the payment is later reversed:
+
+* create a reversal ledger entry
+* never silently edit old ledger entries
+
+Referral webhooks must be idempotent.
+
+# 13. Referral abuse prevention
+
+Block or flag:
+
+* self-referrals
+* multiple accounts controlled by the same authenticated user
+* repeated referrals to the same referred account
+* repeated qualification from the same payment
+* obvious circular referrals
+* referral-code manipulation
+* duplicate webhook reward processing
+* referral rewards for free-plan signup alone
+* rewards generated by failed or refunded payments
+
+Use risk signals carefully. Shared IP addresses alone must not automatically prove fraud, but may be logged as a review signal.
+
+Add configurable reward limits.
+
+Do not expose private information about referred users. Show masked or non-identifying status where appropriate.
+
+# 14. Referral UI
+
+Add a Settings → Referral or Rewards page.
+
+Display:
+
+* personal referral link
+* Copy link button
+* short explanation of the reward
+* successful referrals
+* pending referrals
+* credits earned
+* monthly reward limit
+* referral terms link
+
+Suggested copy:
+
+```text
+Invite friends, earn credits
+
+Share your referral link. When a new user subscribes to a paid VibePin plan and the referral qualifies, you receive 100 credits and they receive 50 bonus credits.
+```
+
+Pending state:
+
+`Pending — reward becomes available after the qualification period.`
+
+Qualified state:
+
+`Reward granted — 100 credits added.`
+
+Reversed state:
+
+`Reward reversed because the qualifying payment was refunded or reversed.`
+
+Add concise Referral Terms explaining eligibility, fraud restrictions, reward reversals, and that rewards have no cash value.
+
+# 15. Keep moderation and credits in the correct order
+
+The mandatory order is:
+
+```text
+Authentication
+→ request validation
+→ prompt moderation
+→ credit reservation
+→ AI generation
+→ credit settlement or release
+```
+
+A rejected prompt must consume zero credits.
+
+A moderation outage must consume zero credits.
+
+A generation-provider failure must release reserved credits.
+
+Never move credit deduction before moderation.
+
+# 16. API response requirements
+
+Successful generation responses should include a safe usage summary:
+
+```json
+{
+  "result": {},
+  "usage": {
+    "creditsCharged": 5,
+    "creditsRemaining": 715,
+    "monthlyCreditsRemaining": 495,
+    "bonusCreditsRemaining": 220
+  }
+}
+```
+
+Do not trust a client-provided cost.
+
+The server calculates all costs.
+
+# 17. Testing requirements
+
+Add automated tests proving:
+
+1. Successful text generation charges the configured text cost.
+2. Successful image generation charges the configured image cost.
+3. Multiple images charge the correct total.
+4. Failed generation consumes zero net credits.
+5. Moderation rejection consumes zero credits.
+6. Moderation failure consumes zero credits.
+7. Insufficient balance prevents the model call.
+8. Concurrent requests cannot overspend the balance.
+9. Retry with the same idempotency key does not charge twice.
+10. Webhook retry does not allocate monthly credits twice.
+11. Monthly reset preserves bonus credits.
+12. Billing page renders from the local snapshot without waiting for Creem.
+13. Stale billing data refresh does not replace the visible plan with Free.
+14. User A cannot view User B’s credit balance.
+15. User A cannot spend User B’s credits.
+16. User A cannot view User B’s ledger.
+17. Referral self-attribution is rejected.
+18. One referred user cannot qualify multiple referrers.
+19. One payment cannot issue duplicate rewards.
+20. Refunded payments do not produce valid rewards.
+21. Reward credits create immutable ledger entries.
+22. Reversed rewards create separate reversal entries.
+23. Account-email changes preserve the correct credit account.
+24. Client-supplied user IDs cannot bypass account isolation.
+
+# 18. Migration and backward compatibility
+
+Create a safe database migration.
+
+For existing users:
+
+* create one credit account per existing authenticated account
+* map existing subscription plans to the correct plan key
+* preserve any legitimate existing credit balances
+* avoid granting duplicate monthly allowances
+* initialize the current billing-period dates from verified subscription data
+* mark unknown subscription states for review rather than guessing
+
+Do not reset every user to Free.
+
+Do not accidentally grant every existing user a new full monthly allowance during deployment.
+
+Provide a dry-run migration report before applying destructive changes.
+
+# 19. Observability
+
+Add structured metrics for:
+
+* generation attempts
+* successful charges
+* released reservations
+* insufficient-credit rejections
+* monthly allocations
+* duplicate idempotency prevention
+* referral rewards
+* reward reversals
+* stale billing snapshots
+* external billing refresh failures
+
+Do not log:
+
+* raw prompts
+* API keys
+* payment secrets
+* full personal addresses
+* complete referral risk data in client logs
+
+# 20. Final report
+
+After implementation, report:
+
+* database schema changes
+* migration results
+* plan allowance source
+* credit cost configuration
+* all text-generation paths audited
+* all image-generation paths audited
+* reservation and settlement implementation
+* monthly allocation behavior
+* Billing cache behavior
+* average Billing page load behavior before and after
+* account-isolation protections
+* referral qualification rules
+* reward values and where they can be configured
+* tests added and results
+* TypeScript check results
+* production build results
+* confirmation that failed or rejected requests consume zero credits
+* confirmation that one account cannot access another account’s billing or usage
+* confirmation that Creem checkout, product mappings, and webhook verification were not broken
+
+Do not claim completion if any text, image, retry, queue, batch, or fallback generation path can bypass credit accounting.
+
+关于文字、图片、发布的限额规则
+
+请基于当前 VibePin 项目代码和现有 PRD，完成一个简化的 MVP 版本。
+
+本阶段的核心原则是：
+
+* 用户不能选择 AI 文字模型
+* 前端不展示模型名称或模型选择器
+* 所有用户默认使用同一个文字模型
+* 暂时不引入 Credit、Points 或积分系统
+* AI 图片、AI 文字和 Scheduled Posts 分别独立统计
+* 为以后增加模型选择和 Credit 计费预留扩展能力，但本次不要实现复杂功能
+
+请不要过度设计，本次以稳定、清晰、可上线为目标。
+
+## 一、MVP 模型方案
+
+AI 文字生成统一使用一个默认模型：
+
+```text
+默认文字模型：Gemini Flash
+```
+
+具体模型 ID 不要直接写死在多个业务文件中。
+
+通过环境变量或统一服务端配置读取：
+
+```env
+TEXT_MODEL_DEFAULT=当前项目可正常调用的稳定 Gemini Flash 模型 ID
+```
+
+代码示例：
+
+```ts
+export const AI_MODEL_CONFIG = {
+  text: {
+    provider: "google",
+    defaultModel:
+      process.env.TEXT_MODEL_DEFAULT || "当前可用的Gemini Flash模型",
+  },
+};
+```
+
+模型名称只能存在于服务端配置层。
+
+不要在以下位置写死模型名称：
+
+* 页面组件
+* API 路由
+* Server Action
+* 数据库业务逻辑
+* Pricing 页面
+* Billing 页面
+* 每个生成按钮中
+* 多个重复配置文件中
+
+以后更换模型时，应只修改环境变量或一个统一配置文件。
+
+## 二、移除用户模型选择
+
+删除或隐藏当前所有文字模型选择相关功能，包括：
+
+* Model selector
+* Gemini / Claude / DeepSeek 模型下拉框
+* Standard / Premium 模型选项
+* 根据套餐选择模型的逻辑
+* 用户偏好的默认模型设置
+* 模型价格说明
+* 不同模型消耗不同 Credit 的逻辑
+* 前端发送 `model` 参数的能力
+
+前端请求不能允许用户自己指定模型。
+
+错误示例：
+
+```json
+{
+  "prompt": "...",
+  "model": "claude-sonnet"
+}
+```
+
+正确示例：
+
+```json
+{
+  "prompt": "...",
+  "generationType": "pinterest_post"
+}
+```
+
+模型必须由服务端配置决定，避免用户篡改请求调用更贵的模型。
+
+## 三、暂时不使用 Credit
+
+本阶段不要实现统一 Credit 余额。
+
+不要展示：
+
+```text
+Credits
+AI Credits
+Points
+Tokens balance
+1 generation = 1 credit
+```
+
+也不要将 AI 图片、AI 文字和 Scheduled Posts 混在一个余额里。
+
+MVP 使用三个独立额度：
+
+```text
+AI images
+AI text generations
+Scheduled posts
+```
+
+每种功能分别统计、分别限制。
+
+## 四、AI 文字计量规则
+
+一次完整的文案生成请求，计为一次：
+
+```text
+AI text generation
+```
+
+一次请求可以同时返回：
+
+* Title
+* Description
+* Hashtags
+* Alt text
+* Platform-specific copy
+
+以上字段作为一个完整结果，只计一次生成。
+
+扣量规则：
+
+```text
+首次成功生成文案：消耗 1 次 AI text generation
+
+点击重新生成：再次消耗 1 次
+
+只重新生成标题：消耗 1 次
+
+只重新生成描述：消耗 1 次
+
+生成失败：不消耗
+
+模型超时：不消耗
+
+内容审核拒绝：不消耗
+
+模型没有返回有效内容：不消耗
+
+用户手动编辑文本：不消耗
+
+保存草稿：不消耗文字额度
+
+发布或定时发布已有文案：不消耗文字额度
+```
+
+只有在成功获得并保存有效结果后才能最终扣量。
+
+如果系统采用预留额度机制，失败时必须释放额度。
+
+## 五、AI 图片规则保持独立
+
+AI 图片继续按实际成功生成的图片数量计算。
+
+```text
+成功生成 1 张图片 = 消耗 1 张 AI image allowance
+
+一次成功生成 4 张 = 消耗 4 张
+
+部分成功 = 只按成功数量消耗
+
+重新生成图片 = 按新成功图片数量消耗
+
+生成失败 = 不消耗
+
+内容审核拒绝 = 不消耗
+
+上传自己的图片 = 不消耗
+
+使用已有图片发帖 = 不消耗
+```
+
+AI 文字生成不能扣 AI 图片额度。
+
+AI 图片生成也不能扣 AI 文字额度。
+
+## 六、Scheduled Posts 保持独立
+
+Scheduled Posts 与 AI 图片、AI 文字完全独立。
+
+推荐计量方式：
+
+```text
+草稿：不消耗
+
+预览：不消耗
+
+成功创建一个有效的定时发布任务：消耗 Scheduled Post allowance
+
+重复执行同一个发布任务：不能重复扣量
+
+发布 worker 重试：不能重复扣量
+```
+
+检查当前产品对多平台发布的定义。
+
+如果当前套餐定义为每个平台一次发布，则：
+
+```text
+同一内容发布到 Pinterest 和 Instagram = 2 次
+```
+
+如果当前产品已经定义为一条内容算一次，则沿用当前规则。
+
+不要自行更改已有套餐承诺，只需要保证代码、Pricing 页面和 PRD 定义一致。
+
+## 七、套餐额度
+
+先读取当前项目中已经存在的真实套餐配置，包括：
+
+* Pricing 页面
+* 套餐配置文件
+* 数据库计划配置
+* Creem 产品映射
+* 现有 PRD
+
+保留当前已经确定的：
+
+* AI image 数量
+* Scheduled posts 数量
+* Connected accounts 数量
+* Workspace 或 Team 权益
+* 其他已有套餐权益
+
+不要擅自修改现有套餐数字。
+
+对于 AI text generations：
+
+* 如果现有套餐已经有明确数量，沿用现有数量
+* 如果尚未定义，建立一个统一配置字段
+* 不要将其设置成 Credit
+* 不要把数量散落写死在多个页面
+
+统一套餐结构建议：
+
+```ts
+type PlanEntitlements = {
+  planKey: string;
+  displayName: string;
+
+  monthlyAiImages: number | null;
+  monthlyAiTextGenerations: number | null;
+  monthlyScheduledPosts: number | null;
+
+  connectedAccounts: number | null;
+
+  features: {
+    aiImageGeneration: boolean;
+    aiTextGeneration: boolean;
+    scheduling: boolean;
+    analytics: boolean;
+    teamWorkspace: boolean;
+  };
+};
+```
+
+规则：
+
+```text
+null = unlimited
+0 = 不提供
+正整数 = 每个订阅周期的额度
+```
+
+前端和后端必须读取相同的套餐配置。
+
+## 八、AI 文字服务封装
+
+不要让业务代码直接调用 Gemini SDK。
+
+建立统一服务接口，例如：
+
+```ts
+type GenerateTextInput = {
+  prompt: string;
+  generationType:
+    | "pinterest_post"
+    | "title"
+    | "description"
+    | "hashtags"
+    | "alt_text"
+    | "rewrite";
+  language?: string;
+  tone?: string;
+};
+
+type GenerateTextOutput = {
+  title?: string;
+  description?: string;
+  hashtags?: string[];
+  altText?: string;
+  rawText?: string;
+  provider: string;
+  model: string;
+};
+```
+
+统一调用方式：
+
+```ts
+await textGenerationService.generate(input);
+```
+
+当前内部只调用 Gemini Flash。
+
+未来增加 Claude、DeepSeek 或 Credit 计费时，只需要扩展这个服务层，不需要重新修改全部业务代码。
+
+模型信息可以记录在服务端日志和 Usage Event 中，但不要返回给普通用户作为可编辑字段。
+
+## 九、结构化输出
+
+AI 文字结果尽量使用结构化 JSON 输出。
+
+例如生成完整帖子时返回：
+
+```json
+{
+  "title": "",
+  "description": "",
+  "hashtags": [],
+  "altText": ""
+}
+```
+
+需要增加：
+
+* Schema 校验
+* JSON 解析失败处理
+* 缺失字段处理
+* 空内容判断
+* 最大长度限制
+* Hashtag 数组清洗
+* 防止返回 Markdown 代码块
+* 防止把解释文字混入最终文案
+
+只有通过服务端校验的结果才算成功生成并扣量。
+
+## 十、用量统计
+
+创建或修复独立 Usage 数据。
+
+建议使用：
+
+```text
+usage_accounts
+```
+
+字段至少包括：
+
+```text
+id
+owner_type
+owner_id
+plan_key
+period_start
+period_end
+ai_images_used
+ai_text_generations_used
+scheduled_posts_used
+created_at
+updated_at
+```
+
+同时建立不可变 Usage Event：
+
+```text
+usage_events
+```
+
+字段：
+
+```text
+id
+owner_type
+owner_id
+usage_type
+quantity
+operation
+reference_type
+reference_id
+idempotency_key
+metadata
+created_at
+```
+
+`usage_type`：
+
+```text
+ai_image
+ai_text_generation
+scheduled_post
+```
+
+`operation`：
+
+```text
+reserve
+consume
+release
+reverse
+reset
+manual_adjustment
+```
+
+要求：
+
+* 原子操作
+* 并发安全
+* 幂等
+* 不允许负数
+* 支持失败释放
+* 可以审计
+* 同一请求不能重复扣量
+
+为 `idempotency_key` 添加唯一约束。
+
+## 十一、正确的文字生成流程
+
+统一流程：
+
+```text
+验证登录状态
+→ 验证请求参数
+→ 验证内容安全
+→ 检查 AI text generations 剩余额度
+→ 原子预留 1 次额度
+→ 调用默认 Gemini Flash 模型
+→ 校验返回结果
+→ 成功后确认消耗
+→ 失败时释放预留额度
+```
+
+额度不足时，不得调用模型。
+
+返回统一错误：
+
+```json
+{
+  "code": "ai_text_limit_reached",
+  "message": "You have reached your AI text generation limit for this billing period."
+}
+```
+
+前端提示：
+
+```text
+You have used all AI text generations included in your current plan.
+
+Upgrade your plan to continue generating AI content.
+```
+
+## 十二、Billing 页面
+
+Settings → Billing 页面显示真实、独立的用量。
+
+示例：
+
+```text
+AI images
+
+32 / 150 used
+118 remaining
+```
+
+```text
+AI text generations
+
+86 / 500 used
+414 remaining
+```
+
+```text
+Scheduled posts
+
+46 / 300 used
+254 remaining
+```
+
+每个项目使用独立进度条。
+
+不要显示模型选择。
+
+不要显示：
+
+```text
+Powered by Gemini
+Model used
+Select model
+Credits remaining
+```
+
+模型属于内部基础设施，不是当前 MVP 的用户功能。
+
+## 十三、优化 Billing 加载
+
+进入 Billing 页面时优先读取本地数据：
+
+* 本地 subscription snapshot
+* 本地套餐配置
+* 本地 usage account
+
+不要每次打开 Billing 都等待 Creem API。
+
+流程：
+
+```text
+立即读取并显示本地套餐数据
+→ 立即读取本地 Usage
+→ 页面完成渲染
+→ 必要时后台刷新 Creem
+→ 刷新成功后更新本地 snapshot
+```
+
+Creem 暂时不可用时：
+
+* 不要显示成 Free
+* 不要清空套餐
+* 不要清空用量
+* 继续展示上一次验证成功的数据
+
+## 十四、账号隔离
+
+所有套餐和用量必须严格绑定当前登录用户或当前 Workspace。
+
+后端不能相信前端传入的：
+
+```text
+userId
+email
+workspaceId
+plan
+model
+usageOwnerId
+```
+
+必须从服务端 Session 中解析身份。
+
+用户 A 不能：
+
+* 查看用户 B 的套餐
+* 查看用户 B 的文字用量
+* 消耗用户 B 的文字额度
+* 查看用户 B 的图片用量
+* 修改请求参数绕过限制
+* 指定其他用户的 ID
+* 指定更贵的模型
+
+如果额度属于 Workspace：
+
+* 验证 Workspace 成员关系
+* 验证当前角色
+* PRD 中写明额度是否共享
+* 所有查询包含 Workspace 所有权条件
+
+## 十五、保留未来扩展能力
+
+本次不要实现 Credit，但代码要便于以后升级。
+
+服务层可以预留内部字段：
+
+```ts
+type InternalModelProfile = {
+  key: string;
+  provider: string;
+  modelId: string;
+  enabled: boolean;
+  internalCostWeight: number;
+};
+```
+
+当前只配置一个：
+
+```ts
+{
+  key: "default",
+  provider: "google",
+  modelId: process.env.TEXT_MODEL_DEFAULT,
+  enabled: true,
+  internalCostWeight: 1
+}
+```
+
+注意：
+
+* 不展示给用户
+* 不允许用户选择
+* 不根据套餐切换模型
+* 不扣 Credit
+* `internalCostWeight` 当前只用于以后扩展，不参与本次计费
+
+以后可以增加：
+
+```text
+Standard model
+Premium model
+Text Credits
+不同模型不同消耗
+```
+
+但本次不要实现。
+
+## 十六、更新现有 PRD
+
+直接修改当前 VibePin PRD，不要再创建一个冲突的新 PRD。
+
+删除或标记为 Future Phase 的内容：
+
+* 用户选择模型
+* Standard / Premium 模型选择
+* Gemini / Claude 模型下拉框
+* 不同模型对应不同 Credit
+* 统一 AI Credit 钱包
+* 根据套餐开放高级模型
+
+MVP PRD 应明确：
+
+### AI Text Generation
+
+* 当前所有用户使用统一默认模型
+* 模型由服务端管理
+* 用户不能选择模型
+* 一次成功请求计一次
+* 失败不计数
+* 重新生成重新计数
+
+### AI Image Generation
+
+* 按成功图片数量计量
+* 与文字额度独立
+
+### Scheduled Posts
+
+* 独立计量
+* 草稿不计数
+* 重试不能重复计数
+
+### Billing
+
+* 显示三种独立额度
+* 不显示 Credit
+* 不显示模型名称
+* 本地快照优先加载
+
+### Future Phase
+
+在未来规划中保留：
+
+```text
+Model selection
+Standard and Premium writing modes
+Text Credit wallet
+Different Credit costs by model
+Model access by subscription plan
+```
+
+明确这些不属于当前 MVP 范围。
+
+## 十七、自动化测试
+
+至少增加以下测试：
+
+```text
+1. 所有用户默认调用服务端配置的唯一文字模型
+2. 前端传入 model 参数不会改变实际模型
+3. 成功生成一次完整文案只消耗一次文字额度
+4. 标题、描述、Hashtag、Alt Text 一起返回只计一次
+5. 重新生成会再次计数
+6. 模型失败不计数
+7. 超时不计数
+8. 审核拒绝不计数
+9. 返回无效 JSON 不计数
+10. 返回空内容不计数
+11. 额度不足时不会调用模型
+12. 并发请求不能突破额度
+13. 重复 idempotency key 不重复计数
+14. 图片生成不消耗文字额度
+15. 文字生成不消耗图片额度
+16. 保存草稿不消耗额度
+17. Scheduled Post 不消耗文字额度
+18. 用户不能指定其他模型
+19. 用户 A 不能读取用户 B 的 Usage
+20. 用户 A 不能消耗用户 B 的额度
+21. Billing 页面优先读取本地数据
+22. Creem 请求失败不会错误显示 Free
+23. 修改环境变量后不需要修改业务代码即可更换模型
+```
+
+## 十八、迁移要求
+
+如果当前系统已经有：
+
+* model selector
+* selected model 字段
+* Credit 余额
+* 不同模型权重
+* 用户模型偏好
+
+本次处理方式：
+
+* 不要直接删除可能有用的历史数据
+* 停止在 MVP 业务流程中使用
+* 前端隐藏相关功能
+* 服务端忽略用户传入的模型偏好
+* 将旧 Credit 数据保留为 legacy 字段
+* 不要把旧 Credit 自动换算成文字次数，除非现有规则明确
+* 无法确认的数据标记为 migration review
+* 输出迁移说明
+
+## 十九、最终交付报告
+
+完成后报告：
+
+* 修改了哪些文件
+* 修改了哪个 PRD
+* 当前默认文字模型从哪里配置
+* 是否还有任何页面允许用户选择模型
+* 是否还有任何接口接受用户传入的模型
+* AI text generations 如何扣量
+* AI images 如何扣量
+* Scheduled Posts 如何扣量
+* 三种额度如何独立存储
+* Billing 如何加载
+* 账号隔离如何实现
+* 数据迁移结果
+* 自动化测试结果
+* TypeScript 检查结果
+* Production build 结果
+* 是否存在绕过额度检查的生成路径
+* 未来接入 Credit 和多模型时需要修改哪些模块
+
+不要只修改 UI。
+
+必须完成：
+
+```text
+前端
+后端
+数据库
+生成服务
+Usage 统计
+Billing
+账号隔离
+测试
+PRD
+```
+
+本次 MVP 的最终用户体验应当非常简单：
+
+```text
+用户输入内容
+→ 点击 Generate
+→ 系统自动使用默认模型
+→ 返回文案
+→ 成功后消耗一次 AI text generation
+```
+
+用户不需要知道、理解或选择底层模型。

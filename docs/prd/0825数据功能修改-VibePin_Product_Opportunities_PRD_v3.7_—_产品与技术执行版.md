@@ -1,8 +1,8 @@
 # VibePin Product Opportunities PRD v3.7
 
-> 状态：业务口径已闭合；本地实现已完成，等待分阶段生产门禁
-> 基于：Product Opportunities PRD v3.6 业务需求版
-> 目的：把 v3.6 的业务方向补充为可实现、可测试、可回滚的产品与技术规格
+> 状态：业务口径已闭合；本地实现已完成，等待分阶段生产门禁  
+> 基于：Product Opportunities PRD v3.6 业务需求版  
+> 目的：把 v3.6 的业务方向补充为可实现、可测试、可回滚的产品与技术规格  
 > 原则：真实证据优先；缺数据就少展示；不以累计 Saves、关键词趋势或内部样本排名冒充近期 Product Demand
 
 ---
@@ -219,9 +219,9 @@ Primary Evidence 必须持久化，不能在每次 API 请求中临时重算。
 
 ```text
 discovered
-→ active ↔ inactive
-   ↓        ↓
-   retired (终态)
+→ active
+→ inactive
+→ retired
 ```
 
 含义：
@@ -230,8 +230,6 @@ discovered
 2. `active`：可进入发现页和 Tracking Set。
 3. `inactive`：暂不出现在默认发现页，但历史保留，可恢复。
 4. `retired`：不再追踪、不出现在用户发现页，历史永久保留。
-
-状态约束：所有新实体必须先以 `discovered` 且不携带生命周期时间戳进入；`discovered` 只能进入 `active` 或 `retired`；`active` 可进入 `inactive` 或 `retired`；`inactive` 可恢复为 `active` 或进入 `retired`；`retired` 为不可逆终态。该约束必须由数据库直接执行，不能只依赖 RPC 或应用代码。Evidence 一旦退役也不能在原记录上恢复，需保留历史并建立新的当前证据记录。
 
 ### 4.2 商品收藏
 
@@ -314,7 +312,6 @@ Product Card 有两个完全独立的动作：
 3. 两个按钮必须使用不同图标、不同文案和不同成功提示。
 4. Create Pin 必须复用已有 Product Picker / Create Pins handoff，不建立第二套创作流程。
 5. Create Pin 使用商品时仍遵守图片来源、商品真实性和用户权限规则。
-6. Product Opportunity handoff 只携带真实商家商品图、真实商品链接、可选真实名称和经过映射的自然分类标签；不得把内部分类值当作机会标题、关键词或商品名。名称为空时，Create Pins 只能描述“所选商品”，不得补造名称。
 
 ### 4.4 Tracking Set
 
@@ -719,7 +716,7 @@ v1 容量与“20 条”口径：
 
 1. 每日趋势追踪上限为 2,499 个去重后的 Primary Evidence Pins，不是 20 个商品。
 2. 每次任务的 Pinterest 实际请求硬预算为 5,000 次；为每个 Pin 预留首次请求和最多一次重试，并为 session/bootstrap 保留 2 次余量。
-3. 多个 Product Opportunities 共用同一 Primary Pin 时，只请求一次，并且每个 Pin 每个 UTC 自然日只保存一条 canonical raw observation；各 Evidence 的健康状态与指标引用同一真实事实，不复制出多条可能漂移的 snapshot，也不得重复消耗请求。
+3. 多个 Product Opportunities 共用同一 Primary Pin 时，只请求一次，再把同一个真实 observation 写入各自 Evidence；不得重复消耗请求。
 4. `MAX_BATCH=20` 只约束“已完成商家页补证的新 Product Opportunity 准入写入批次”，用于保证每批可审计、可回滚；它不是每日全量趋势追踪上限。
 5. 若未来 Active Primary Pins 超过 2,499，任务必须在联网前拒绝，待完成确定性分片和新预算审查后再扩容；不得静默漏追踪仍向用户展示趋势的商品。
 
@@ -746,45 +743,6 @@ duration
 lock released
 orphan count
 ```
-
-### 12.4 Product Supply 到稳定商品的自动准入
-
-Product Supply 与稳定 Product Opportunity 必须保持两个独立写入域。前者只负责发现并写入经过商家页红线的 legacy 候选，后者只消费某一次成功 Product Supply 报告中返回的精确 inserted IDs，不得无界扫描历史表，也不得把 Product Supply 成功等同于用户目录增长。
-
-正式自动链为：
-
-```text
-23:00 Product Supply
-→ 冻结成功报告和精确 legacy IDs
-→ 120 分钟 Pinterest 冷却
-→ 03:15 Product Opportunity Admission
-→ 再次证明 Pin 身份、Pin 到同一 PDP 的直接关系、商家页和真实商品图
-→ 整轮最多 50 行，拆为最多 20 行的独立原子批次
-→ 每批精确回读；失败只按返回 ID 做保留历史的回滚
-→ 120 分钟 Pinterest 冷却
-→ 06:15 全量 Active Product Tracking
-```
-
-自动准入必须满足：
-
-1. 仅接受 `mode=apply`、完整处理 100 个互不重复 Source Pins、类目严格为 Fashion 29 / Women's Fashion 22 / Home Decor 29 / Digital Products 20、无失败批次且生成时间不超过 6 小时的 Product Supply 报告。当前线上仍在运行的 Physical-only 36/28/36 报告不能作为该 Digital 首发自动准入链的输入。
-2. 报告必须证明整轮写入上限 50、原子批次上限 20；顶层写入数、增量写入数、outcome 写入数和精确 inserted IDs 数量必须一致；任何失败行、错误记录、ID 重复、缺失或超过 50 时整轮拒绝。
-3. 零 inserted IDs 是合法自然零，不访问 Pinterest、不访问商家页、不写数据库。
-4. 每个精确 ID 在联网前从数据库回读；缺行、多行或顺序无法重建时拒绝。
-5. 每个准入批次不超过 20；整轮不超过 50；不得通过多次 flush 绕过上限。
-6. 默认 service 为 preflight，安装文件不等于启用 timer；必须先完成手动 dry-run、单批 canary、回读和回滚演练。
-7. Admission 或 Tracking 未满足 `SAFE_FOR_APPLY` 时必须失败关闭，不得用 `SAFE_FOR_DRY_RUN` 或 cooldown waiver 继续。
-
-商家换域或 PDP 规范化允许采用保守重定向证明，但不得把重定向当成 URL 猜测：
-
-1. Pinterest Pin 实际直接链接的原始商家 URL 必须原样保留为证据；最终响应的真实 PDP 才作为稳定商品身份。
-2. 只接受一至两跳的 HTTP 301、302、303、307、308；每一跳必须首尾连续，且受现有最多三次商家请求预算约束。
-3. 必须保留最终解析 URL、完整重定向链和确定性 SHA-256；Python 准入、数据库 RPC 与数据库约束必须使用同一证明规则。
-4. JavaScript 跳转、meta refresh、缺失 Location、断链、错误哈希、超过两跳、Pinterest/Pinimg 目标、非 HTTP 目标或最终 URL 不是 PDP 时一律拒绝。
-5. 同一稳定商品的每条 Primary/Additional Pinterest Evidence 均需独立完成这项证明；不得因已有一条 Evidence 通过而跳过后续 Pin 的验证。
-6. 前端只展示最终真实商品链接和诚实的 Pinterest Evidence 类型，不展示内部重定向字段或技术状态词。
-
-如果 Product Supply 在安全增量写入后、完整成功报告落盘前中断，这些 legacy 行必须保留，但自动准入不得按宽泛时间窗口猜测它们属于哪次运行。恢复只能通过单独的、最多 20 行的审核 manifest 和独立回读凭据完成；不得把中断运行伪装为完整 100-Pin 成功。
 
 ---
 
@@ -1067,212 +1025,6 @@ Digital 当前只有 11 个门槛候选，明显不足以代表完整 Digital �
 3. 当日有效 observation 为 0；7d anchor 覆盖 1，14d anchor 覆盖 2，完整 G30 + Current G7 + Previous G7 仍为 0。
 4. 23 个候选的旧详情抓取状态为可用，99 个为历史未知；该字段仍不能替代新的商家页、PDP 和商品图 provenance 复核。
 5. 122 个候选目前都不能直接激活。先逐批补证并建立稳定实体，再开始每日全量 tracking；在真实历史形成前，用户侧只展示商品与证据，不展示 Demand/Trend 结论。
-
-### 19.2 2026-08-26 Product Supply 切换前复核
-
-本次仍为生产只读审计。与 2026-08-25 基线相比：
-
-```text
-pin_products rows = 4,114（+4）
-legacy pin_save_snapshots rows = 32,597（+106）
-严格迁移候选 = 122（无增长）
-Physical = 111
-Digital = 11
-Product Pin Primary 候选 = 0
-Source Pin Primary 候选 = 122
-detail fetch 已明确 available = 23
-detail fetch 历史未知 = 99
-```
-
-历史覆盖仍为：
-
-```text
-111 个候选 = 0 天 observation
-11 个候选 = 1–9 天 observation
-7d anchor = 1
-14d anchor = 2
-today observation = 0
-完整 G30 + Current G7 + Previous G7 = 0
-```
-
-Pinterest 托管图片排除数由 3,868 增至 3,872，正好增加 4 行；总行数增长没有转化为任何新的严格迁移候选。这证明 Product Supply 的运行成功和 Product Opportunity 的业务资格必须分开报告：扫描量、候选链接或 legacy 写入量不能冒充真实可见商品数量，更不能冒充 Demand/Trend 覆盖。
-
-2026-08-26 的无缝切换采用：每日扫描 100 个 Source Pins，最多写入 50 个通过共享红线的 legacy 发现行，任何原子写入批次不超过 20；正式 timer 仅在零写 dry-run 和一行精确回读 canary 均通过后恢复。该切换用于阻止继续写入 Pinterest 卡片标题、图片或价格，但它本身不会自动创建 v3.7 稳定 Product Opportunity，也不会补出 G30/G7 历史。
-
-### 19.2.1 2026-08-27 自动运行前只读复核
-
-2026-08-27 00:26:49 UTC（上海 08:26:49）的最新生产 GET 审计进一步确认，Supply 扫描能力与可发布趋势数据仍是两件事：
-
-```text
-pin_products rows = 4,115
-legacy pin_save_snapshots rows = 33,521
-严格迁移候选 = 122（Physical 111 / Digital 11，仍无增长）
-当前自动准入口径候选 = 24（Physical 17 / Digital 7）
-自动准入分类 = Fashion 6 / Women's Fashion 2 / Home Decor 9 / Digital Products 7
-自动准入范围外 / Category-Family 不一致 = 91 / 7
-detail available / legacy unknown = 23 / 99
-Pinterest 托管图片排除 = 3,872
-0 天 observation = 111
-1–9 天 observation = 11
-10–19 / 20–29 / 30+ 天 observation = 0 / 0 / 0
-today / 7d / 14d / 30d anchor = 0 / 2 / 2 / 0
-完整 G30 + Current G7 + Previous G7 = 0
-Digital today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
-自动准入口径 today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
-```
-
-审计工具现固定输出所有零值，而不是省略字段。122 只是满足最小 URL / image host / Pin ID / family 条件的技术迁移集合，不能再被描述为当前自动准入可消费的首发库存；按已审查的 Fashion、Women's Fashion、Home Decor、Digital Products Category-Family 组合收紧后只有 24 个。其余包括 91 个当前自动准入未审查类目和 7 个 Category-Family 不一致行。与上一份审计相比，legacy `pin_products` 增加 5 行，但技术迁移集合仍是同一批 122 个，合格增量为 0。`today` 从 1 变成 0、7d anchor 从 1 变成 2，是审计跨过 UTC 自然日边界后的窗口移动，不是 snapshot 被删除；当前 UTC day 确实没有候选 observation。真实结论仍是：商品发现链可以每日运行，但 Demand/Trend 尚无一个候选具备完整历史，当前自动准入口径的 24 个商品连一个有效 anchor 都没有；任何用户侧增长结论继续保持隐藏。
-
-2026-08-27 03:42:05 UTC 又执行了一次仅 GET 的独立复核。`pin_products=4,115`、旧 snapshots `=33,521`、技术迁移候选 `=122`、已审查自动准入候选 `=24`、`available/legacy_unknown=23/99`，以及自动准入范围的 `today/7d/14d/30d/full=0/0/0/0/0` 均与 00:26 审计完全一致。该时间段没有新增合格候选，也没有新增可用趋势历史；因此不因“任务正在准备上线”而推断数据自然达标。
-
-### 19.2.2 2026-08-27 06:58:54 UTC 增量复核
-
-同一 GET-only 审计随后得到：`pin_products=4,115`、旧 snapshots `=34,073`、技术迁移候选 `=123`（Physical 112 / Digital 11）、已审查自动准入候选 `=25`（Physical 18 / Digital 7）、`available/legacy_unknown=24/99`。相对 03:42 审计，snapshot 增加 552，且 Home Decor / Physical 增加一个技术候选和一个已审查自动准入候选；没有重复合格 identity。
-
-这次增长不能被描述为趋势指标已经达标：25 个自动准入候选的 `today/7d/14d/30d/full` 仍为 `0/0/0/0/0`，全体 123 个技术候选的 30-day anchor 和完整 G30 + Current G7 + Previous G7 仍为 0。可确认的业务事实仅是 legacy 发现与 snapshot 数据继续增长；v3.7 稳定实体尚未上线，长期趋势历史尚未建立，Demand/Trend 和 Fastest Growing 必须继续隐藏。完整报告固定为 `backend/docs/product_opportunities_v37_production_audit_20260827T065854.041782Z.json`。
-
-同日 07:05:21 UTC 使用 service-role 只读 GET 检查生产 PostgREST OpenAPI schema：共发现 72 条可见路径，旧 `/pin_products` 与 `/pin_save_snapshots` 控制路径均存在，v63 的 Product Opportunity / Evidence / Metric / Saved Product 表与 RPC 匹配路径为 0。这证明 Stage 0 当前未发现已部署的同名 v63 API 定义冲突，但不构成应用迁移的授权。完整证据固定为 `backend/docs/product_opportunities_v37_schema_presence_audit_20260827T070521Z.json`。
-
-同日 07:11:09 UTC 对 `https://vibepin.co/` 的公开渲染文本复核发现，当前生产首页仍显示 `Opportunity score 94`、`+210% Demand vs last 30 days`、`Low Competition`、静态高保存 Pin / 商品数量，以及伪造的 `Live` 周涨幅。这是当前生产的 P0 数据诚实问题。隔离候选已经不再渲染旧 mock intelligence panels，营销诚实契约也通过，但在候选真正推广并完成线上复核前，不得宣称用户侧旧指标已经退役。当前生产 Web 版本不得作为回滚目标；回滚 SHA 也必须单独证明不包含这些伪造或退役指标。完整证据固定为 `backend/docs/product_opportunities_v37_live_web_truth_audit_20260827T071109Z.json`。
-
-类目准备度的进一步只读拆分显示：`wedding` 有 14 个技术候选，其中 Physical 13、Digital 1；`digital-products` 也同时存在 Digital 7、Physical 7。当前数据没有独立的 `gifts` 或 `jewelry-accessories` 来源类目。这证明“来源类目名直接决定 Product Family”只适用于已经逐对审查的四个组合，不能扩展成通用分类器。Wedding / Celebrations、Gifts、Jewelry / Accessories 仍是 PRD 首发业务类目，但当前自动准入尚未实现它们的完整证据合同，不能宣称已经覆盖。
-
-后续实现必须把获客来源与用户看到的业务分类分开：`source_category` 只记录发现来源；用户侧 Category 必须来自明确审核过的来源映射，或来自商家页可证明的结构化分类。Product Family 仍独立为 Physical / Digital。不得用 Pin 标题、seed keyword 或普通描述猜测 Gifts、Wedding、Jewelry / Accessories，也不得为了让首发类目变绿而把 Wedding 的 Digital 商品强制改成 Physical。正式加入这些类目前，需要固定合法 Category-Family 组合、每日 100 个 Source Pins 内的预算分配、零写 dry-run、精确 ID canary 和独立质量回读。
-
-本地 v63 候选现已完成第一层拆分：每个准入 manifest 必须在 provenance 中独立保存经过审查的 `source_category`，Python 写前校验和数据库 RPC/约束都会验证它与 Product Family 一致；缺失、未知或错配均在写入前拒绝。用户侧 `category` 继续作为单独字段，因此未来选择单标签或多标签都不会抹掉真实获客来源。数据库生命周期守卫现同时把 `source_category` 作为不可改写的采集事实：即使 Fashion 与 Women's Fashion 同属 Physical，也不能在实体建立后把一个来源改写成另一个；其他非来源 provenance 字段仍可按正常审计流程补充。该修改尚未应用到生产。
-
-同日对最近 720 小时 `pin_samples` 做 GET-only 供给池审计，并排除数据库已记录的 492 个 Source Pins 后，Fashion / Women's Fashion / Home Decor / Digital Products / Wedding 各自至少仍可选择 100 个未抓过的 Source Pins；可见候选池分别为 793 / 552 / 1,011 / 1,458 / 565。`gifts` 和 `jewelry-accessories` 独立来源桶均为 0。该结果证明 Wedding 可以进入后续零写 dry-run，但 Gifts 与 Jewelry / Accessories 不能通过给不存在的桶分配额度来伪造覆盖。
-
-不扩大每日 100 个 Source Pins 的建议验证配额为：Fashion 23 / Women's Fashion 18 / Home Decor 24 / Wedding 15 / Digital Products 20。总量仍为 100，Digital 保留 20，Wedding 获得独立样本，Fashion 合计仍有 41。该数字只作为下一阶段 dry-run 候选，不替代生产 36/28/36，也不构成部署许可。Gifts 与 Jewelry / Accessories 先作为商家结构化分类可证明的细分业务标签进行质量统计；在没有稳定证据与样本前不提供对应筛选项。若后续建立独立来源桶，必须重新评估 100 条预算，不得额外叠加请求。
-
-### 19.2.3 2026-08-27 10:22:33 UTC 自动运行前基线
-
-同一 GET-only 审计在永久 Product Supply timer 下一次触发前复跑。除审计时间外，结果与 06:58:54 UTC 报告完全一致：`pin_products=4,115`、旧 snapshots `=34,073`、技术迁移候选 `=123`、已审查自动准入候选 `=25`（Physical 18 / Digital 7），且 25 个候选的 `today/7d/14d/30d/full` 仍全部为 0。该报告只用于精确对比今晚自动运行后的增量，不代表 v3.7 已上线或趋势指标已达标。完整证据固定为 `backend/docs/product_opportunities_v37_production_audit_20260827T102233Z.json`。
-
-### 19.2.4 2026-08-27 10:35:49 UTC Product Supply 触发前复核
-
-永久 Product Supply timer 当前为 enabled + active，下一次真实触发为 `2026-08-27T15:03:44Z`。上一轮 timer 在写入前以 exit 10 拒绝，journal 证明原因是 Pinterest cooldown 只有 91.43 分钟、低于 120 分钟，而不是发生了部分写入。当前只读 preflight 的 cooldown 已达 328.52 分钟，按固定触发时刻预计为 596.38 分钟；真实 VPS 锁均为空、无相关进程、service 本身没有作为 boot target 启用，新的 Admission / Tracking timer 也尚未安装。结论仅为“今晚具备自动尝试条件”，不能提前宣称本次运行通过。完整证据固定为 `backend/docs/product_supply_pretrigger_readiness_20260827T103549Z.json`。
-
-### 19.2.5 2026-08-27 15:03:50 UTC 首次完整自动运行复核
-
-永久 timer 确实自动触发了唯一 service invocation `b0f7bda39ad64aaf8f5e28f9da4c0e5d`，并在 86 分 23 秒后以 service exit 0 自然结束。它完整扫描 100 个 Source Pins，Physical-only 配额仍为 36/28/36；业务漏斗为 937 个原始候选、807 个拒绝、130 个去重前接受、48 个唯一候选、13 次商家页验证、0 个商家验证通过、0 个安全 legacy 写入。数据库运行前后均为 `pin_products=4,115`，排序 ID 校验和均为 `bb72bcd04dfbaef9ffec177b6b8d0dfb`，没有脏写。
-
-这次运行仍然 **BLOCK**，不得宣称首次自动运行通过：第 79 个 Source Pin 触发 120 秒整 Pin 超时，最终报告明确记录 `renderFailureCount=1`、`resultTrust=partial:some_pins_failed_to_render`。严格 `--require-scheduled-run` 审计因此 exit 1，并且该报告不得进入自动 Admission。服务退出后两个真实 VPS 锁均释放、相关进程为 0、内核窗口无 OOM，下一次 timer 已排到 `2026-08-28T15:06:06Z`。完整只读证据固定为 `backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`。
-
-后续静态定位确认，该 Pin 为 Home Decor Source Pin `1127518456800539414`，关键词为 `kids room decor ideas`。整 Pin 内部存在多个 Playwright 默认等待，并且旧实现最多串行读取、点击 10 个通用 tab；这些等待的累计预算可以耗尽 120 秒总墙钟。候选 `f93a29a993594605bffed9115119e8210a6bfcf1` 没有提高 120 秒总预算，也没有放宽零渲染失败门禁，而是将可选 DOM 探测分别限制在 5–8 秒、通用 tab 最多处理 4 个，并在报告中保留精确超时阶段。该修复的本地聚焦回归为 264 passed / 35 subtests；仍须由后续永久 timer 自动运行证明 `renderFailureCount=0`，本次 BLOCK 报告本身不得改判。
-
-同一报告还证明当前主要产量瓶颈不是 50 行安全上限，而是商家图证据覆盖：13 个商家候选全部因缺少可证明的商家商品图被拒绝，其中 5 个为 HTTP 403；8 个 Amazon PDP 返回 200，7 个已经能够证明名称来自页面，但旧抽取器仍未读到商品主图。候选 `6839e7609ddff3f1fe288c48a42918e105a75fc9` 仅新增 Amazon 商品页中明确标识的 `landingImage` / `imgBlkFront` 主图证据，优先页面声明的最大尺寸；非 Amazon 同名元素、Pinterest 托管图、Source Pin/卡片图及任意未标识页面图片仍拒绝。完整证据为 `backend/docs/product_supply_merchant_image_gap_20260828T003013+0800.json`；本地全后端为 898 passed / 2 skipped，真实提升仍必须由后续永久 timer 证明。
-
-### 19.3 自动准入候选实现状态
-
-隔离候选已补齐 Product Supply 与 v3.7 之间的自动准入编排，但本节不表示已部署或已启用：
-
-1. 自动准入只消费一份新鲜 Product Supply apply 报告中的精确 inserted IDs，不扫描无界历史数据。
-2. 整轮最多 50 行，按 20/20/10 的最大原子批次独立生成 manifest、写入、回读和回滚凭据。
-3. 每行仍重新执行 Pinterest Pin 与同一 PDP 的直接关系证明和商家页商品图证明；Product Supply 卡片字段不能升级为 v3.7 证据。
-4. 零新行按自然零报告，零 provider 请求、零数据库写入。
-5. 候选日程为 23:00 Product Supply、03:15 Admission、06:15 Tracking，按所有外层 timeout 的最坏结束时间保留两段完整 120 分钟冷却。
-6. Admission service 和 timer 默认关闭；生产 v63 migration、手动 canary、首次 timer 自动触发和连续运行证据仍是上线前门槛。
-
-### 19.4 2026-08-26 隔离候选验证状态
-
-以下结论只适用于隔离分支候选，不表示已经迁移生产数据库、部署 Web、启用 Admission 或启用 Tracking：
-
-1. Product Supply 新写入行可以按精确 inserted IDs 进入自动准入；新的 Supply 行不依赖已经废弃的 legacy `product_type`，而是只从经过审查的来源类目推导 Physical / Digital 大类。来源类目未知或与声明大类冲突时 fail-closed。
-2. 更细的 Product Type 只能来自商家页可证明的结构化字段；Pinterest 标题、seed keyword、Pin 卡片文本和来源类目都不能伪造更细类型。名称仍可为空。
-3. 数据库层已补充来源证明、Evidence、Primary Evidence、每日幂等 observation、回撤防御、同族同版本校准和发布门禁；缺少关键证明的直接写入会被拒绝，而不是依赖应用调用方自觉。
-4. 数据库层直接约束 Product Opportunity 生命周期：新实体只能从无生命周期时间戳的 `discovered` 开始；允许 `discovered → active/retired`、`active → inactive/retired`、`inactive → active/retired`，拒绝 active 回退 discovered、retired 复活和 retired Evidence 原地复活；状态时间由触发器统一维护。
-5. Demand、Trend 和 Fastest Growing 控件按 Physical / Digital 分开开放。每个数据族必须同时满足：至少一个用户可见商品、有效指标覆盖率不低于 70%、质量复核通过、批准时间存在、同族同版本校准已批准且生效。即使比例字段被错误写成 70%，零可见商品也不能开放控件。
-6. 用户只有主动点击 Apply 时才记录 Demand / Trend 筛选使用事件；收藏与 Create Pin 保持独立入口和独立副作用。
-7. 回滚脚本、发布文件 manifest 和执行 runbook 已纳入自动准入、tracking、metrics、API、UI、analytics、PDP/图片 provenance 及共享 Product Supply core，避免只部署半套功能。
-8. Create Pin 只有在持久化草稿或浏览器一次性副本至少一条成功后才跳转并提示成功；两条路径都失败时必须留在当前页面并显示可重试错误，不能进入空白 Studio。
-9. Saved Products 的状态与时间由数据库统一维护：首次收藏建立收藏时间，重复收藏不得刷新该历史时间；首次取消收藏建立移除时间，重复取消不得刷新该历史时间；取消后再次收藏才开启新的收藏周期。`saved` 与移除时间并存、`removed` 却没有移除时间，以及倒序时间均由数据库拒绝。调用方提交的伪造时间不能覆盖数据库事实。
-10. Saved Products 的写入只能经过执行套餐准入检查的服务端 API。登录用户可读取自己的收藏关系，但不得通过 Supabase/PostgREST 直接插入或修改关系来绕过 Free 固定 10 个的限制；数据库写权限仅授予服务端角色。
-11. 用户看到的商品链接必须与稳定 Product Opportunity 身份及其 Pinterest Evidence 指向同一商品：`canonical_product_url`、`external_product_url` 和 Evidence 的外链必须一致，`canonical_url_hash` 必须等于 canonical URL UTF-8 字节的真实 SHA-256。Active 实体不得在原行偷换为另一商品 URL；真实的新商品应保留旧历史并建立新实体。
-12. 商家名与商品名相同，属于可选但必须可证明的商家页字段。只有 JSON-LD brand、`og:site_name` 等明确商家页字段及其精确值证明同时存在时才写入；否则 `merchant=NULL`，并继续使用真实 PDP 域名作为 Platform，不得根据 Pin 卡片或域名猜出商家名。
-13. Platform/domain 不是可编辑商品字段，必须由 canonical PDP URL 的真实 hostname 确定。数据库拒绝缺失或与商品链接主机名不一致的 domain，避免用可信平台名包装另一条商品链接。
-14. Category 搜索同时支持内部稳定分类值和用户看到的自然名称；例如 `womens-fashion` 必须可被 `Women's Fashion` 或 `Womens Fashion` 命中，`digital-products` 必须可被 `Digital Products` 命中。内部 slug 仍不得直接显示给用户。
-15. Product Opportunity 为空时必须区分“完整目录尚无合格商品”和“当前筛选没有匹配”，不能声称下一次趋势追踪会新增商品。Saved Products 也必须区分“没有收藏”和“当前商品类型没有匹配”。所有筛选空状态提供返回完整结果的入口。无名称商品的无障碍标签使用“来自某商家/平台的商品详情”描述，不把平台名包装成商品标题。
-16. Create Pin handoff 不得复用会把 source category 提升为 opportunity title/keyword 的旧适配行为。`womens-fashion`、`home-decor` 等内部值不得进入 Studio 用户可见上下文；真实名称、商家图和 PDP 必须逐字段原样保持。
-17. Product Supply 的一行 canary 与永久 timer 日常运行必须使用两个互斥的审计口径。Canary 仍严格等于一行；当前 Physical-only 日常运行必须证明 100 Pin、36/28/36、整轮写入 0–50、原子批次不超过 20、精确 inserted IDs、零失败和每批红线回读。不得用 canary 的一行上限误判合法日常运行，也不得让 Physical 审计口径接受尚未授权的 Digital 29/22/29/20 候选。
-18. Product Supply 的每份原子批次回执都必须独立闭合。有写入 ID 时，必须证明精确 expected/actual IDs、相同回读数量、全部红线通过、明确写入时间边界和精确回滚指令；无写入 ID 时不得携带伪造的写后校验、写入时间或回滚证据。所有批次 ID 的并集必须与整轮顶层 inserted IDs 完全一致，自然零也不能跳过该检查。
-19. Saved Products 只表示用户的收藏清单，可用于稍后比较或进入 Create Pin；前端不得用“收藏后追踪”等文案暗示 Save 会启动数据采集。所有 Active Product Opportunities 始终由系统统一追踪，与任何用户是否收藏无关。
-20. Product Supply 定时运行验收必须把每个新增商品精确绑定回原始 `pin_samples`：`parent_pin_id`、`source_pin_id`、Pinterest URL、`source_category` 和 seed keyword 必须逐字段一致，且来源类目必须属于该次已批准配额。只验证整轮 100 条的类目总数，不能证明实际写入商品没有串类目。
-21. Product Supply 的“首次自动运行通过”必须证明报告来自永久 timer 的精确最新一次 service invocation，而不是仅凭报告内容推断。必须同时核对 timer 仍启用且运行中、最近触发时间与 service 启动时间一致、service 成功退出且由该 timer 触发、唯一 invocation identity、报告生成时间与文件落盘时间均落在该 service 执行窗口内，以及下一次 timer 触发仍在未来。手动或 transient apply 即使数据本身合格，也不得冒充自动首跑。
-22. Product Supply 自动运行报告必须同时给出可闭合的业务漏斗：扫描 Source Pins、原始候选、拒绝候选、去重前接受、批内重复、唯一候选、数据库已有/跨批重复、商家页核验尝试/成功/失败、因整轮安全上限跳过、最终安全 legacy 写入，以及商品名称存在/缺失数量。各层算术不闭合时不得宣称数据达标。扫描 100 个 Source Pins 不等于新增 100 个商品；最终写入也只是 discovery feed，不能在 v3.7 Admission 未部署时宣称已新增用户可见 Product Opportunity。
-23. 自动 Admission 不得使用弱于 Product Supply 独立审计工具的上游报告门禁。两条路径必须共用同一原子批次回执合同；报告不是 trusted/authenticated、存在页面渲染失败、单批超过 20、精确 ID 回读或回滚证据缺损、存在隐藏 ID/红线失败，或 Supply 漏斗算术不闭合时，Admission 必须在读取候选数据库行和调用 Pinterest/商家页之前拒绝。Admission 自身报告必须保留已验证的上游漏斗，供后续区分 discovery 写入与稳定 Product Opportunity 写入。
-24. 自动 Admission 的真实 apply 还必须证明其上游报告来自永久 Product Supply timer 的精确最新一次成功 service invocation，并复用 Product Supply 定时验收的同一来源证明合同。手动或 transient 报告只允许用于有界 dry-run/审计，不得进入自动稳定商品写入。timer 未启用或未运行、最近 service 失败、触发来源或 invocation 不匹配、报告生成/落盘时间不在该次 service 窗口内、报告文件内容与已验证来源不完全一致，或下一次触发无效时，必须在读取候选数据库行和调用 Pinterest/商家页之前拒绝。真实 apply 必须重新核验完整来源和精确报告内容，不得只信任调用方传入的“已验证”标志。Admission 报告必须保留已验证的自动运行来源。
-
-当前隔离候选验证：
-
-```text
-release topology = PASS for the local Product-only candidate; functional commit 9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc descends from production remote b22930ebe73847cf35bc44be789414902ae6b599 and remains bounded by the exact 81-artifact Product manifest; the superseded 99efabc whole-tree candidate must not be deployed because it also carries unrelated Usage/Metering production files
-backend = full suite PASS; 1039 passed, 2 live-credential tests skipped and 77 subtests passed from the clean Product-only committed state
-production build = PASS, 70 static pages generated from the Product-only candidate
-TypeScript = PASS
-Web tests = PASS; 132/132 registry tests passed with zero failures after excluding unrelated Usage/Metering tests
-Web dependency security = PASS; clean npm ci installed 417 packages and npm audit --audit-level=low reported 0 known vulnerabilities with Next.js 16.3.3 and the reviewed lockfile
-local rendered Product truth = PASS; the built localhost candidate passed the executable Product-truth verifier
-release manifest contract = PASS; the current 9a22c16 exact 81-artifact manifest binds the live manifest-verifier repair; its focused contract is rerun before release
-shell wrappers = PASS locally; ShellCheck 0.11.0 passed the four exact LF Git blobs inherited unchanged by 9a22c16 for cloud_lib, Product Supply, Product Opportunity Admission and Product Tracking, excluding only the intentional dynamic-source SC1091 diagnostic; focused Admission/canary checks remain PASS. The Admission wrapper changed after the earlier VPS `/tmp` preflight, so exact current-candidate staging/hash/systemd-analyze verification remains a mandatory pre-install host gate
-
-candidate VPS parity = BLOCK FOR DEPLOYMENT / CURRENT READ-ONLY EVIDENCE COMPLETE; 2026-08-29T02:51:49Z 只读 SSH 对比了当前 `9a22c163` 清单中的 11 个关键 runtime/unit 文件：仅现有 Product Supply wrapper 1 个匹配，4 个已安装文件 SHA 不同，Admission/Tracking 的 6 个文件不存在。旧 Product Supply timer 当前 enabled+active 并等待下一次调度；新 Admission/Tracking units 全部不存在，独立 classify timer 仍不存在。此次只执行 `sha256sum` 与 `systemctl show`，没有上传、daemon-reload、重启、enable/disable 或文件修改。部署前仍必须单独暂存精确当前 6 unit/4 wrapper/runtime bytes、逐 SHA-256 回读并跑 systemd-analyze verify，且所有新 timer 必须保持 disabled。证据：`backend/docs/product_opportunities_v37_vps_readonly_parity_20260829T025149Z.json`
-Stage 1 cutover quiescence = REQUIRED; 不再假设旧 Product Supply timer 为 disabled。正式切换时，在抓取不超过 900 秒的 legacy baseline 之前，必须只读证明 Product Supply service 为 inactive，且 timer 下一次触发至少在 30 分钟之后；否则不得抓取/复用 baseline，也不得应用 v63。若另行授权在切换窗口临时停止 timer，必须记录并恢复其原始 enabled/active 状态，不得以部署 v3.7 为由静默退役现有 legacy discovery。新 Admission/Tracking timers 和两类指标发布开关在此阶段仍必须保持 disabled
-local candidate systemd boundary = PASS for current wrapper lint only; 9a22c16 继承的四个精确 LF Git blob 已通过 ShellCheck 0.11.0；历史 6839e760 的六 unit/四 wrapper 本地证据保留于 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`，不得替代当前 VPS systemd-analyze
-production data readiness = BLOCK; the 2026-08-27T12:10:42Z GET-only pre-Supply audit found 123 technical migration candidates but only 25 in the reviewed automatic-Admission scope (18 Physical / 7 Digital), and all 25 had zero today/G7/G14/G30/full-metric coverage; discovery inventory exists but launch-ready trend intelligence does not
-latest Stage 0 production data readiness = BLOCK; the 2026-08-28T00:01:46Z GET-only audit found 4,115 legacy Products / 34,073 snapshots / 123 technical candidates / 39 reviewed automatic-Admission candidates (31 Physical / 8 Digital). All 39 have zero today/G7/G30/full-metric coverage; one Physical candidate has only a G14 anchor. `eligible_categories` is a Top-20 view (118 rows + five omitted one-row categories), not the complete 123-row category distribution. Discovery inventory exists, but stable trend intelligence still does not
-Stage 0 OpenAPI-only checkpoint = PARTIAL PASS; the 2026-08-28T00:08:33Z service-role PostgREST OpenAPI GET returned HTTP 200, preserved both legacy control paths and exposed zero v63 matches. This proves no v63 table/RPC is exposed, not that non-exposed PostgreSQL objects are absent; the following catalog result supersedes this partial checkpoint
-latest Stage 0 PostgreSQL catalog = PASS for data/catalog items; the reproducible `backend/docs/product_opportunities_v37_catalog_query_v1.sql` ran read-only at 2026-08-28T05:05:05Z over pg_class / pg_proc / pg_trigger / pg_policies / pg_constraint and returned HTTP 201 with zero matching v63 tables, views, functions, triggers, policies, indexes, sequences or constraints in public. The receipt binds query SHA-256, canonical LF migration Git-blob SHA-256, project ref and candidate SHA 1946a684. No SQL mutation ran. Flags, contamination and full gates still require a cutover-time refresh; Stage 1 requires separate production-write authorization
-Stage 1 local execution contract = PASS without production mutation; exact PGlite migration/readback/rollback found 238 PGlite catalog-query rows after migration and zero after rollback, while isolated native PostgreSQL 17.11 found 158 broad catalog-query rows. Both passed the authoritative 10 relations / 18 functions / 9 triggers / 3 policies / 4 indexes / 91 constraints / 44 privileges contract with every new table empty; therefore the raw broad count is engine-specific and is not a release gate. Real transactions prove empty-batch rejection, failed multi-row atomic zero-write, valid one-row admission, history-preserving retirement and retired/current coexistence. Manual Admission binds the exact manifest-byte SHA and exact project; automatic Admission requires the expected project before provider/DB access. Claude Opus read-only review returned APPROVE with no P0-P2 finding. This evidence authorizes only the next production-write decision, not the write itself
-real PostgreSQL concurrency/RLS canary = NATIVE PG17 PASS / SUPABASE TEST PLATFORM PASS / PRODUCTION LEGACY-INTEGRITY STILL SEPARATE; the default-zero-network harness remains bound to exact project/manifest/migration/rollback bytes. Under explicit test-project authority, the isolated PostgreSQL 17.6 Supabase project executed the exact migration, created 158 catalog objects, passed the exact two-session `55P03` current-identity duplicate block, two-user Saved Products isolation, anonymous-read denial, server-only writes and `V37_ROLE_CANARY_PASS`, then rolled back to zero objects. An independent final SELECT found no v3.7 Product/Saved relation and zero advisory locks. The accepted one-row manifest uses the pinned audited Source Pin artifact and explicitly records `pin_revalidated_live_this_retry=false`; it must not be described as a successful live Pinterest revalidation. The test project has no production `pin_products` or `pin_save_snapshots`, so it cannot prove production legacy-integrity preservation and no production database mutation occurred. Evidence: `backend/docs/product_opportunities_v37_local_postgres_replay_20260828T084744Z.json`, `backend/docs/product_opportunities_v37_test_project_readiness_20260828T094518Z.json`, `backend/docs/product_opportunities_v37_test_canary_manifest_20260829T021051Z.json`, and `backend/docs/product_opportunities_v37_supabase_test_replay_20260829T021513Z.json`
-production pre-authorization refresh = PASS for read-only readiness, NOT A CUTOVER RECEIPT; at 2026-08-29T02:45:47Z the exact current `9a22c163` baseline query returned 4,115 legacy Products, 35,521 legacy snapshots and zero v63 objects. A separate GET located completed physical backup `1507104432` from 2026-08-28T14:01:57Z; WAL-G is enabled, PITR is disabled and no restore was tested. Both receipts set `cutover_eligible=false`. The 1,308-snapshot increase from the prior 34,213 receipt proves again that the actual migration requires a newly captured baseline no older than 900 seconds plus a refreshed backup inventory. Evidence: `backend/docs/product_opportunities_v37_pre_authorization_baseline_20260829T024547Z.json` and `backend/docs/product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json`
-first complete permanent-timer Product Supply attempt = BLOCK; invocation b0f7bda39ad64aaf8f5e28f9da4c0e5d scanned 100/100 and wrote zero dirty rows, but one render failure made resultTrust partial and the strict scheduled audit exited 1; this receipt is ineligible for automatic Admission
-daily capacity contract = PASS in candidate code; Product Supply scans 100 Source Pins and may write 0-50 legacy discovery rows across atomic batches of at most 20, while Product Tracking independently covers up to 2,499 unique active Primary Pins and at most 5,000 provider requests per day; 20 is not a per-day Product limit
-Web deployment reproducibility = PASS; Vercel installCommand is npm ci, package.json/package-lock.json/vercel.json are one exact release boundary, and deployment must fail review if the lockfile is omitted or dependencies are re-resolved
-Vercel candidate deployment = PASS for non-production Web build qualification only; deployment dpl_CAungjKNgdCrcHnxXtPuTeFbtQvV is READY with target preview. The exact 6839e760:web archive source is operator-controlled provenance because Vercel exposes no Git source SHA, and `6839e760..1946a684` contains no Web change. Platform logs prove npm ci, zero vulnerabilities, Next.js 16.3.3, TypeScript success, 70/70 pages and required route generation. Vercel Protection redirects anonymous checks to SSO; authenticated root HTML was downloaded and replayed unchanged from a local HTTP server through the truth-text verifier, but those bytes were not retained. This proves only the captured root shell/text rules, not authenticated API/middleware behavior, live SSR, interactive Product/Saved workflows or origin assets. Production alias vibepin.co remains on dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn. Preview qualification does not authorize promote
-
-2026-08-27T17:05:44Z 的新一轮 Chrome 只读检查再次证明已登录账号中存在 `web` 项目的 Build and Deployment 页面，且目标设置 URL 与页面标题正确；但两次接管既有页面和一次新同会话页面的 DOM 读取均在权威设置值出现前超时。因此 Root Directory 与候选构建日志仍未证明，不能将“页面存在”误报为平台门槛通过。证据：`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`。
-2026-08-27T17:36:28Z 使用已认证 Vercel CLI 58.4.0 完成只读回读。进一步读取部署 JSON 后确认：最新部署入口为 `.`，没有 Git/source 字段，内嵌配置与 096d921 时期的 `web/vercel.json` 完全一致，因此现行路径是从 `web` 目录上传的强证据，Root Directory=`.` 不应被改成 `web`。最近 Ready 构建的 npm install/Next.js 16.2.6 只能证明旧部署，不能证明 6839e760；Web promotion 仍为 BLOCK，但所需动作是精确候选 Preview 与日志回读，而不是先改 Root Directory。证据：`backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`。
-2026-08-27T23:45:11Z 完成已授权的平台预检：VPS 精确候选 systemd 替代根验证 PASS，Vercel 精确非生产 Preview 构建与 Product truth PASS；两者均未改变生产。完整证据：`backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`。下一阶段仍须单独授权正式部署、schema/Admission/Tracking 分阶段启用及首次自动运行，不得因 Preview 通过而直接 promote。
-database contract / PGlite transaction checks = PASS
-current lifecycle trigger = PASS in an exact PostgreSQL-compatible transaction harness; valid transitions and timestamps passed, invalid rollback and retired reactivation were rejected
-exact schema rollback object scan = PASS; 0 v63 relations and 0 v63 functions remained
-saved-state PGlite transaction = PASS; forged timestamps normalized, repeated Save/Remove idempotent, resave opened a new interval, rollback leftovers 0
-saved-write privilege check = PASS; authenticated SELECT true, authenticated INSERT/UPDATE false, service-role SELECT/INSERT/UPDATE true
-product-link identity transaction = PASS; mismatched entity URLs rejected, mismatched Evidence URL rejected, valid identity activated, active link substitution rejected
-canonical hash transaction = PASS; forged 64-character hash rejected, exact SHA-256 accepted
-merchant provenance transaction = PASS; unproven merchant rejected, NULL accepted, page-proven merchant accepted
-platform identity transaction = PASS; missing/forged domain rejected, exact PDP hostname accepted
-category/family transaction = PASS; missing, unknown and Physical/Digital-mismatched source buckets rejected, exact Digital Products pair accepted
-source category provenance database execution = PASS; v63 migration executed in ephemeral PostgreSQL, missing source and Digital-vs-Physical mismatch both produced zero rows, exact Fashion/Physical source wrote one Active row, same-family Fashion-to-Women's-Fashion source tampering was rejected while an unrelated audit note remained appendable, and full rollback removed Product, Evidence and admission RPC with zero remnants
-category labels = PASS; internal slugs remain query values but are never rendered as user-facing category names
-category search aliases = PASS; Fashion, Women's Fashion/Womens Fashion, Home Decor and Digital Products natural labels resolve through the catalog search text without changing stored category identity
-truthful empty/accessibility copy = PASS; tracking is not described as product discovery and a missing Product Name remains a descriptive product-details label rather than a fabricated title
-filtered empty-state distinction = PASS; catalog filters and Saved Product family filters cannot make an existing catalog/history look globally empty, and both states provide a clear recovery action
-Create Pin evidence-only handoff = PASS; NULL Product Name remains absent, merchant image/PDP remain exact, known categories become natural labels, and no internal category slug is promoted to a title or keyword
-Product Supply receipt contracts = PASS; one-row canary and 0–50-row scheduled execution are mutually exclusive fail-closed audits, with the scheduled authority pinned to the currently deployed Physical 36/28/36 mix
-Product Supply timer-origin contract = PASS; scheduled acceptance binds the permanent timer's exact last trigger to one successful service invocation and to the report generation/mtime window, so a manual canary or transient apply cannot impersonate the first automatic run
-Product Supply business-funnel contract = PASS; source scan, raw/rejected/unique candidates, duplicates, merchant verification, cap skips, safe legacy writes and optional-name completeness are explicit non-negative counts with closed arithmetic; the receipt does not relabel legacy discovery writes as user-visible stable Product Opportunities
-Automatic Admission timer-origin contract = PASS; real apply requires the permanent Product Supply timer's exact latest successful invocation, matching report-time chain and exact report SHA-256 before DB/provider access; the apply entry point revalidates the proof instead of trusting a caller flag, while manual/transient reports remain dry-run/audit-only
-Supply-to-Admission shared receipt contract = PASS; automatic Admission uses the same exact atomic receipt authority as the cutover audit, rejects untrusted/render-failed/unsafe/unclosed reports before DB/provider work, and carries the validated upstream funnel into its own report
-Product Supply response diagnostics = PASS; response parse error count/samples and product JSON totals remain auditable, while only authentication/render/write/readback/red-line failures block a scheduled receipt; a measured non-JSON or released response body is not fabricated into a failed product row
-Product Supply zero/host audit = PASS; natural zero still requires internally consistent atomic receipts, regional pinimg.* and pinterest.* image hosts are rejected by parsed hostname, and an unrelated merchant path containing those words is not falsely rejected
-Product Supply atomic receipt closure = PASS; all 8 receipts in the current production report were structurally audited, the one inserted ID matched exact readback and the seven zero-ID receipts contained no phantom write evidence
-merchant verification freshness transaction = PASS; older than 24 hours and future beyond 5 minutes rejected by RPC, valid current proof activated, active-row future timestamp update rejected by database trigger
-public URL transaction = PASS; loopback/private/internal/credentialed PDP or image URLs rejected, public merchant/CDN domains accepted, rollback helper leftovers 0
-optional display-field bounds = PASS; exact 500-character Product Name, 200-character merchant and 160-character Product Type are preserved, while blank or overlong direct writes are rejected; overlong merchant-page labels are omitted rather than truncated and do not disqualify an otherwise real product
-observation capture-time transaction = PASS; UTC date mismatch, observations older than 24 hours, future timestamps beyond 5 minutes, observations predating their Evidence, owner direct-table bypasses, and service-role direct writes were rejected; the guarded RPC wrote one current observation and rollback leftovers were 0
-Saved Products client boundary = PASS; locked Free records expose no product/image/Evidence/metric payload and browser responses use requiresUpgrade instead of internal lifecycle/access status enums
-working tree = clean before this documentation update
-```
-
-仍未闭合的生产门槛：
-
-1. 生产 v63 migration、122 行历史候选逐批补证、Web/API 部署和生产回读尚未执行。
-2. 当前线上 100-Pin Product Supply 配额仍是 Physical-only（Fashion 36 / Women’s Fashion 28 / Home Decor 36）；它不能被描述为已经供给 Digital。本地发布候选已在不扩大 100-Pin 总预算的前提下改为 Fashion 29 / Women’s Fashion 22 / Home Decor 29 / Digital Products 20，并与自动准入口径一致，但尚未部署。该候选必须单独完成零写 dry-run、精确 ID canary 和明确的部署授权，旧 36/28/36 报告不得被自动准入当作 Digital 首发报告。
-3. 新 Demand / Trend 在真实每日 observations 形成并分别达到 70% 质量门槛前必须保持隐藏；不得用旧指标或迁移前 snapshots 填绿。
-4. Product Supply 的一行生产 canary 和 23:00 timer 恢复属于 legacy 发现链切换，只能证明该链不会继续写入 Pin 卡片商品字段，不能替代 v3.7 上线验收。
-5. 首次完整永久 timer 运行已经发生，但因 1 个 render failure 被严格门禁拒绝；必须先审查根因并由后续自然 timer 运行产生一份零 render failure 的完整报告，才能关闭“首次成功自动 receipt”门槛。不得手工重跑冒充永久 timer 证据。
 
 ---
 

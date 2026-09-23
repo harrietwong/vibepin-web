@@ -1,0 +1,820 @@
+Use the attached VibePin product-workflow research report as product context.
+
+Important:
+- Treat the repository and current production-approved UI as the source of truth.
+- Do not blindly implement every research recommendation.
+- Do not create parallel Product Picker, Reference Picker, product-link, media,
+  or AI-generation systems.
+- Audit first, then implement the smallest coherent architecture.
+- Do not deploy to Production until I review the implementation and Preview QA.
+
+This task covers the current Create Pins product/media/AI workflow only.
+
+Do not include:
+- Custom time scheduling;
+- Landing Page changes;
+- Opportunities admin-page work;
+- production rollback recovery;
+- unrelated support/contact code.
+
+==================================================
+A. Audit the current product-selection architecture first
+==================================================
+
+The project may currently contain more than one product-selection UI:
+
+1. The existing top-level Select product modal with flows such as:
+   - Search products
+   - Shopify
+   - Use a link
+   - Create manually
+
+2. The AI Drawer Product images → Add picker currently showing:
+   - My Products
+   - Product Ideas
+   - From Shopify
+   - source filter chips
+   - Upload product
+   - Import from URL
+
+Before implementation, report:
+
+- every Product Picker component;
+- every route, button and drawer that invokes each picker;
+- whether they read from the same product dataset;
+- whether they return the same ProductSelection shape;
+- whether they persist through the same creatorProductLink path;
+- whether Shopify, uploaded, URL-imported and Product Ideas objects use the
+  same normalized product record;
+- which picker should become the single canonical shared implementation;
+- exact files that would be retired, wrapped or reused.
+
+Final requirement:
+
+There must be one canonical Product Picker used by:
+
+- AI Drawer → Add product;
+- top-level Select product;
+- existing Pin draft → Link product;
+- product replacement inside an existing generation flow.
+
+Do not leave two user-facing pickers with different tabs, behavior or state.
+
+If the old variable-height modal is replaced by the canonical picker, retire
+the old user-facing flow instead of spending time polishing it.
+
+If any part of the old modal must remain, its outer height must remain stable
+when switching tabs, with only the content body scrolling.
+
+==================================================
+B. Keep three clear entry actions, but connect them to one workflow
+==================================================
+
+For the current release, keep the top-level creation actions visible rather
+than hiding them inside a new split-button menu.
+
+Recommended hierarchy:
+
+Primary:
+- Generate AI Pin
+
+Secondary:
+- Upload images / Upload more
+- Select product
+
+These are different entry points into one Create Pin workflow, not separate
+implementations.
+
+1. Generate AI Pin
+
+- Open the existing full AI generation drawer.
+- Product selection is optional.
+- Product images → Add product opens the canonical Product Picker.
+- The user may generate without a product when the current generation model
+  supports prompt-only generation.
+
+2. Select product
+
+- Open the same canonical Product Picker.
+- After a product is selected, open the same AI generation drawer with the
+  product prefilled.
+- Populate product image, title and public Website URL.
+- Start Reference recommendation loading.
+- Generate with AI is the primary next action.
+- Preserve an option to use the original product image without AI if that
+  capability already exists or can be implemented without a parallel flow.
+
+3. Upload images
+
+- Create normal Pin drafts from existing user images.
+- Do not automatically create Product records.
+- Do not automatically start AI generation.
+- Existing uploaded drafts may later:
+  - Link product;
+  - Create AI variations / Regenerate image.
+
+Link product must use the same canonical Product Picker.
+
+Create AI variations must open the same AI drawer and preload the current
+image and linked product context.
+
+==================================================
+C. Refine the canonical Product Picker
+==================================================
+
+The current picker duplicates source concepts between primary tabs and filter
+chips.
+
+Final information architecture:
+
+Primary tabs:
+- My Products
+- Product Ideas
+
+Remove From Shopify as a primary tab.
+
+Shopify is a source of My Products, not a separate product-selection task.
+
+Under My Products, use source filter chips:
+
+- All
+- Shopify
+- Amazon
+- Uploaded
+- URL imported
+
+Rules:
+
+- Only show source chips relevant to the current workspace.
+- Do not show Product Ideas as a My Products source chip.
+- Do not show Recent as a source chip.
+- If a commerce platform is not connected, use the existing Connect action
+  instead of showing an empty grid.
+- Default to My Products.
+- User-owned products take priority over Product Ideas.
+- Do not default to Product Ideas unless opened from an explicit Product Ideas
+  or Product Opportunities context.
+
+Move Recent to sorting.
+
+Sorting options:
+
+- Recently used
+- Recently added
+- Name A–Z
+
+Default to Recently used where reliable usage data exists.
+
+Product Ideas should use discovery-oriented filters, such as:
+
+- All
+- Trending
+- High opportunity
+- Saved
+- Categories
+
+Do not show Shopify, Uploaded or URL imported filters inside Product Ideas.
+
+Card source badges may remain:
+
+- Shopify
+- Amazon
+- Uploaded
+- URL import
+- Product Idea
+
+Source badges must be visually secondary.
+Use the purple border/checkmark only for selection.
+
+Rename the picker header based on selection mode:
+
+- single selection: Choose a product
+- multi-selection: Choose products
+
+Footer CTA:
+
+- 1 product selected → Add 1 product
+- N products selected → Add N products
+
+Do not use a vague Add Selected label.
+
+==================================================
+D. Product images and Style references must stay separate
+==================================================
+
+Product images represent subjects that should appear in the generated Pin.
+
+Style references represent shared visual guidance such as:
+
+- scene;
+- composition;
+- mood;
+- model presentation;
+- product-display approach.
+
+Do not combine Product images and Style references into one ambiguous picker.
+
+Product images → Add product uses the canonical Product Picker.
+
+Style references → Add references uses the existing/reference picker with
+sources such as:
+
+- Recommended or Category inspiration;
+- Saved References;
+- Pin Ideas;
+- Upload reference;
+- Recent.
+
+Do not let users add a Product image as a Style reference without an explicit
+role conversion.
+
+==================================================
+E. Synchronize Recommended References with selected References
+==================================================
+
+REVISED 2026-07-21. Supersedes the original Section E.
+
+Background:
+
+The previous split was intentional, not a bug: recommended Pins come from
+pin_samples, and Pinterest创意智能层 PRD §4 previously forbade sending those
+images to the image model, allowing only derived patternTags. That rule has
+been lifted by the product owner. See Pinterest创意智能层-PRD-v0.2.md §4
+(now v0.3) for the replacement rules and §4.4 for recorded risk.
+
+New requirement:
+
+All Reference entry points must use one shared selectedReferences collection.
+
+Each selectedReference must carry at least:
+
+- id
+- imageUrl
+- source
+- sourceUrl / pinterestUrl
+- title
+- reason
+- patternTags
+- role = style_reference
+
+When a recommended Reference is selected:
+
+- immediately add its thumbnail to the top Style references selected tray;
+- keep the lower recommendation card visibly selected;
+- send its imageUrl into the generation request as role=style_reference.
+
+Uploaded References, Saved References, prior generated images and recommended
+Pins all share the same selection state, but each retains its own provenance
+(source, sourceUrl, patternTags).
+
+The generation request must distinguish roles explicitly:
+
+  image_inputs:
+    - role=product     real product subject, preserved in the output
+    - role=reference   Pin inspiration, guides scene/composition/style only
+
+(The wire value emitted by /api/generate for a style reference is "reference";
+"style_reference" is the client-side role name for the selection state. Do not
+introduce a second vocabulary on the wire.)
+
+patternTags remain an auxiliary prompt signal; they no longer substitute for
+the user-selected Pin image.
+
+Staged delivery (server constraint):
+
+/api/generate currently IGNORES a client-supplied body.image_inputs and rebuilds
+it from product_images plus a single style_ref string (buildImageInputs). One
+request therefore carries at most ONE reference image. Consequently:
+
+- Commit 1 unifies selectedReferences, preserves full provenance and completes
+  two-way sync between the top tray and the recommendation cards. It must NOT
+  claim that multiple recommended Pins reach the model.
+- Commit 2 introduces per-Reference groups, sets each group's Reference as its
+  style_ref, shares product_images across groups, and only then are real Pin
+  Style Reference inputs and result association actually live.
+
+Commits 1 and 2 are consecutive. The intermediate state must not be previewed,
+deployed or delivered as a finished version.
+
+Recommendation labelling (consumes the data session's API contract):
+
+POST /api/reference-candidates returns recommendationBasis. Render:
+
+- product_analysis  → "Recommended for this product"
+- product_text      → "Recommended for this product"
+- category_fallback → "Category inspiration"
+
+Never label category-only results as Recommended for this product.
+
+When deselected:
+
+- remove it from the top selected tray;
+- remove the recommendation-card selected state;
+- remove it from the generation request.
+
+Removing a thumbnail from the top selected tray must also deselect the matching
+card below.
+
+Do not maintain disconnected arrays for:
+
+- recommended references;
+- uploaded references;
+- saved references;
+- drawer references.
+
+A source field may remain, but selected state must be unified.
+
+Preserve the current maximum of 3 selected References unless repository rules
+show a different approved limit.
+
+Do not automatically select recommended References.
+
+==================================================
+F. Recommendation naming and product analysis
+==================================================
+
+The current recommendation logic may only use Product category.
+
+If recommendations are category-only, label the section:
+
+Category inspiration
+
+Do not call category-only results:
+
+Recommended for this product
+
+Only use Recommended for this product when the system actually uses concrete
+product-level information such as:
+
+- product image analysis;
+- title;
+- description;
+- tags;
+- color;
+- material;
+- style;
+- season;
+- occasion;
+- use case.
+
+Selecting, uploading, importing or linking a Product should trigger the
+existing product-analysis/recommendation flow in the background.
+
+Do not block opening the AI drawer while recommendations load.
+
+Use:
+
+- skeleton cards;
+- “Analyzing your product and finding matching inspiration…”
+
+If product-level analysis fails, fall back to Category inspiration.
+
+Do not train a custom model as part of this task.
+Reuse existing multimodal APIs or analysis infrastructure where available.
+
+==================================================
+G. Pins per reference (output quantity)
+==================================================
+
+REVISED 2026-07-21. Supersedes the original Section G, which required Number
+of Pins to be independent from Reference count. The existing production
+multiplication behavior is CORRECT and is retained.
+
+Rule:
+
+  totalPins = max(selectedReferences.length, 1) × pinsPerReference
+
+Examples:
+
+- 0 References, quantity 3 → 3 Pins
+- 1 Reference,  quantity 3 → 3 Pins
+- 2 References, quantity 3 → 6 Pins
+- 3 References, quantity 3 → 9 Pins
+
+UI requirements:
+
+- when at least one Reference is selected, label the control Pins per reference;
+- when no Reference is selected, label it Number of Pins;
+- the CTA shows the resulting total, e.g. Generate 9 Pins;
+- show the calculation near the CTA, e.g. 3 references × 3 Pins each;
+- the CTA must update immediately when the selector or Reference set changes.
+
+Request structure (precise):
+
+  groupRequestCount = pinsPerReference
+  groupCount        = max(selectedReferences.length, 1)
+  totalPins         = groupCount × pinsPerReference
+
+- totalPins governs ONLY the batch CTA, the placeholder count and the final
+  record total.
+- each Reference group issues its own /api/generate call with
+  count = pinsPerReference.
+- the groupCount requests together produce totalPins.
+- never request totalPins in a single call and assign References afterwards.
+
+pinsPerReference is limited to 1, 2 or 3. The maximum batch is therefore
+3 References × 3 Pins each = 9 Pins.
+
+Serial execution (mandatory):
+
+/api/generate holds a per-user "active-generation" TTL lock and returns HTTP
+429 (error_type user_generation_limit) for a concurrent second call. Reference
+groups must therefore run as a serial queue:
+
+- create all totalPins placeholders up front;
+- call /api/generate once per Reference group, strictly sequentially;
+- update that group's placeholders as soon as it returns;
+- on group failure, continue with the next group;
+- do not remove, weaken or bypass the existing single-user generation lock;
+- show batch progress, e.g. "Generating reference 2 of 3".
+
+placeholders, success records and failure records must all reconcile to
+totalPins. Do not maintain separate unsynchronized count states.
+
+==================================================
+G2. References must be linked to generation results
+==================================================
+
+NEW 2026-07-21.
+
+The main production problem is that selected References have no explicit
+relationship to the resulting images.
+
+Required:
+
+1. Each Reference forms its own generation group.
+2. Each group uses exactly one primary Style Reference.
+3. Product images and product metadata are shared across all groups.
+4. Each group generates pinsPerReference images.
+5. Every placeholder and every final Pin must persist referenceId,
+   referenceImageUrl and referenceSource (or an equivalent stable link).
+6. History, Retry, Regenerate and failure recovery must preserve that link.
+7. A failing Reference group affects only that group; other References still
+   produce their results.
+8. Do not generate 9 images in one mixed request and assign References
+   afterwards or at random.
+
+==================================================
+H. Simplify the AI drawer
+==================================================
+
+Remove the visible prompt-weight summary cards:
+
+- Products: {count} / Prompt weight: {percent}
+- References: {count} / Prompt weight: {percent}
+
+Preserve internal prompt weighting.
+Do not expose percentages elsewhere.
+
+Preserve:
+
+- Creative direction;
+- Edit direction;
+- Regenerate direction;
+- Number of Pins;
+- Model;
+- Aspect ratio;
+- Result variety where already approved.
+
+Remove or hide normal-user-facing read-only diagnostic chips under
+Automatically detected, including:
+
+- Style;
+- Scene;
+- Composition;
+- Mood.
+
+Continue using those values internally if they contribute to prompt generation.
+
+Do not delete underlying metadata.
+
+If any of these controls are genuinely editable rather than read-only, report
+that before removing them.
+
+==================================================
+I. Make existing Pin AI actions compact
+==================================================
+
+Current full-width Generate copy and Generate AI Image actions use too much
+space inside an expanded Pin card.
+
+Required layout:
+
+[Generate copy] [Regenerate image]
+
+Requirements:
+
+- compact content-width buttons;
+- approximately 36–40px high;
+- one row on desktop where space permits;
+- wrap on narrow layouts without becoming full-width by default;
+- Generate copy remains the primary gradient action;
+- Regenerate image uses a lighter outlined style;
+- retain focus, disabled and loading states.
+
+Naming:
+
+Top-level:
+- Generate AI Pin
+- creates new drafts.
+
+Existing draft:
+- Regenerate image
+- regenerates/replaces the current draft image.
+
+Do not label the existing-draft action Generate AI Image.
+
+==================================================
+J. Automatically populate Website URL from linked Product
+==================================================
+
+Website URL must derive from the linked Product source.
+
+Source rules:
+
+My Products:
+- use the stored public product URL.
+
+Shopify:
+- use the public storefront/canonical product URL;
+- never use a Shopify Admin URL.
+
+URL import:
+- use the imported URL.
+
+Manual product:
+- use the manually entered Product URL.
+
+Product Ideas:
+- use a valid public destination/affiliate URL where the product model already
+  supports it;
+- otherwise leave Website URL empty.
+
+If no valid public URL exists:
+
+- leave Website URL empty;
+- do not invent a URL.
+
+Persist through the existing ProductSelection / creatorProductLink model:
+
+- product ID;
+- title;
+- image;
+- public URL;
+- source type;
+- existing commerce identifiers.
+
+Do not create a second Website URL field.
+
+The URL must persist after:
+
+- closing/reopening Edit Pin;
+- refresh;
+- cross-device loading;
+- scheduling;
+- publishing.
+
+Manual override rules:
+
+- first Product selection may populate an empty Website URL;
+- changing Products may update the URL only while it is still the untouched
+  product-derived URL;
+- never silently overwrite a manually edited URL;
+- unlinking a Product clears the URL only if it still matches the auto-filled
+  Product URL.
+
+Validation:
+
+- trim whitespace;
+- preserve valid attribution query parameters;
+- reject javascript:, data:, localhost and malformed publishing URLs;
+- use the existing field-error UI.
+
+==================================================
+K. Failed Pin media fallback
+==================================================
+
+Create Pins → Failed must never show:
+
+- No image;
+- broken-image icon;
+- empty gray media block;
+- solid blue block;
+- blue gradient failure art.
+
+Publish failure media priority:
+
+1. final imageUrl / generatedImageUrl;
+2. mediaAssetId-resolved final asset;
+3. persisted draft final image;
+4. sourceImageUrl;
+5. linked Product main image;
+6. local bundled fallback image.
+
+Publish failure should normally display the exact final image that was prepared
+for Pinterest.
+
+Generation failure media priority:
+
+1. valid partial generation result;
+2. sourceImageUrl;
+3. sourceAssetId-resolved image;
+4. parentDraftId / parent asset;
+5. Product main image;
+6. selected Reference image;
+7. local bundled fallback image.
+
+Expected behavior:
+
+- Product generation failure → Product original image.
+- Reference-based generation failure → original Reference.
+- Regeneration failure → parent/current draft image.
+- Prompt-only failure with no image → local bundled fallback.
+
+If no suitable asset exists, use an existing neutral Pin placeholder or add a
+local bundled asset such as:
+
+/public/images/pin-image-fallback.svg
+
+The fallback must:
+
+- be a neutral image-style 2:3 visual;
+- not simulate a real product;
+- not depend on an external URL;
+- ship in the production build;
+- use alt text: Pin image unavailable.
+
+Implement a finite fallback chain:
+
+- each candidate URL attempted at most once;
+- onError advances to the next candidate;
+- no infinite loop;
+- never rewrite a failed URL back into src.
+
+Do not rely on transient:
+
+- blob URLs;
+- object URLs;
+- localhost URLs;
+- expired signed URLs.
+
+Reuse the existing server asset resolver for protected/signed media.
+
+Preserve existing media relationships through:
+
+- refresh;
+- re-login;
+- cross-device;
+- Retry publish;
+- Move to Unscheduled;
+- Plan → Create Pins navigation.
+
+Maintain distinct actions:
+
+Publish failure:
+- Retry publish;
+- Edit;
+- Move to Unscheduled;
+- Delete.
+
+Generation failure:
+- Try again / Regenerate;
+- Edit;
+- Delete.
+
+Both may share one media fallback resolver, but not one failure state machine.
+
+==================================================
+L. Constraints
+==================================================
+
+- Do not build a second Product Picker.
+- Do not build a second AI generation drawer.
+- Do not introduce parallel Product or Reference state.
+- Do not change Pinterest publishing behavior except preserving failed media.
+- Do not change Shopify sync behavior beyond reading the correct storefront URL.
+- Do not train a new recommendation model.
+- Do not modify referenceScoring, the reference-candidates ranking algorithm,
+  Pin Idea data or Product Idea data (owned by the data session).
+- Do not deploy Production during this task.
+- Keep unrelated worktree files out of the diff.
+
+==================================================
+M. Acceptance tests
+==================================================
+
+Architecture:
+
+1. All product-selection entry points use one canonical Product Picker.
+2. No second user-facing legacy picker remains.
+3. AI Add product, top-level Select product and Link product return the same
+   ProductSelection shape.
+4. Product URL derivation is identical across all entry points.
+
+Picker:
+
+5. Primary tabs are My Products and Product Ideas.
+6. From Shopify is not a primary tab.
+7. My Products source chips contain no Product Ideas or Recent.
+8. Recent is a sorting mode.
+9. Product Ideas uses discovery filters.
+10. Footer CTA shows Add 1 product / Add N products.
+
+References:
+
+11. Recommended selection appears immediately in the top selected tray.
+12. Removing from either location synchronizes the other.
+13. A selected recommended Pin's imageUrl reaches the generation payload as
+    role=style_reference, and product images are sent as role=product.
+14. recommendationBasis product_analysis / product_text render "Recommended for
+    this product"; category_fallback renders "Category inspiration".
+15. Selection is capped at 3 References and never happens automatically.
+16. Each selectedReference retains its own provenance (source, sourceUrl,
+    patternTags) while sharing one selection state.
+
+Generation:
+
+17. 0 References + quantity 3 → CTA "Generate 3 Pins", 3 placeholders, 3 records.
+18. 1 Reference  + quantity 3 → CTA "Generate 3 Pins", 3 placeholders, 3 records.
+19. 2 References + quantity 3 → CTA "Generate 6 Pins", 6 placeholders, 6 records.
+20. 3 References + quantity 3 → CTA "Generate 9 Pins", 9 placeholders, 9 records.
+21. The CTA shows the calculation, e.g. "3 references × 3 Pins each".
+22. The control reads Pins per reference when References exist, Number of Pins
+    when none exist.
+23. Every result Pin carries referenceId / referenceImageUrl / referenceSource
+    matching the group it came from.
+24. That association survives History, Retry, Regenerate and failure recovery.
+25. One failing Reference group does not prevent other groups from producing
+    results.
+26. CTA, payload, placeholders and result records always match totalPins.
+27. Reference groups are issued serially; a 3-group batch never triggers the
+    user_generation_limit 429.
+28. All totalPins placeholders exist before the first group returns, and each
+    group's placeholders resolve as that group completes.
+29. Batch progress is visible, e.g. "Generating reference 2 of 3".
+30. pinsPerReference offers only 1, 2, 3; the batch never exceeds 9 Pins.
+31. Prompt-only generation is enabled only if verified against the live model;
+    otherwise the button stays disabled and the limitation is recorded.
+
+Edit Pin:
+
+32. Generate copy and Regenerate image are compact.
+33. Product selection fills Website URL.
+34. Shopify uses a public storefront URL.
+35. Manual URL edits are not overwritten.
+36. Refresh and cross-device loading preserve the URL.
+
+Failure media:
+
+37. Publish failure shows the final prepared image where available.
+38. Product generation failure shows the Product image.
+39. Reference generation failure shows the Reference image.
+40. Regeneration failure shows the parent image.
+41. Prompt-only failure shows the local fallback.
+42. No Failed card displays No image or a blue block.
+43. Image onError cannot loop infinitely.
+44. Product / Reference / parent fallback images are labeled Original image or
+    Generation failed and never pass as a successful generation result.
+
+Quality:
+
+45. Desktop and mobile browser QA pass.
+46. Typecheck passes.
+47. Production build passes.
+48. Relevant automated tests pass.
+
+==================================================
+N. First response and final delivery
+==================================================
+
+First response must report:
+
+- all current Product Picker implementations;
+- the canonical picker recommendation;
+- invocation points;
+- current product data normalization;
+- Number of Pins state and payload path;
+- selected Reference state path;
+- Website URL persistence path;
+- failed media fields and current fallback logic;
+- exact files to modify;
+- migration/compatibility risks.
+
+Do not implement until the audit is complete.
+
+After implementation return:
+
+- files changed;
+- removed/retired duplicate picker paths;
+- before/after flow diagram;
+- before/after screenshots;
+- complete picker tests;
+- pins-per-reference tests (0×3, 1×3, 2×3, 3×3);
+- reference-to-result association tests;
+- Reference synchronization tests;
+- Website URL source and manual-override tests;
+- Publish and Generation failure fallback screenshots;
+- typecheck/build/browser QA results;
+- remaining risks.
+
+Do not deploy Production until I explicitly approve it.
