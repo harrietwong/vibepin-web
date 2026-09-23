@@ -307,6 +307,33 @@ export type CreatedPin = {
   url: string;
 };
 
+/**
+ * One Pin as the reconciliation worker reads it back (design §5.2).
+ *
+ * Deliberately NOT `CreatedPin`: reconciliation has to answer "is the Pin that
+ * may or may not have been created actually on the board we aimed at, and does
+ * it match the content we tried to send" — so `boardId`, `createdAt`, `title`
+ * and `link` are all part of the answer, and every one of them is optional
+ * because a verdict must never depend on a field Pinterest happened to omit. A
+ * missing field resolves toward `still_unknown`, never toward "absent".
+ */
+export type FetchedPin = {
+  id: string;
+  boardId: string | null;
+  url: string;
+  title: string | null;
+  link: string | null;
+  /** Pinterest's own creation instant, used for the ±window match. */
+  createdAt: string | null;
+};
+
+/** Terminal-vs-pending media states, as the reconciliation worker reads them. */
+export type PinterestMediaStatus = {
+  mediaId: string;
+  /** Raw provider status, upper-cased. Interpretation belongs to the caller. */
+  status: string | null;
+};
+
 const REFRESH_SKEW_MS = 60_000; // refresh if the access token expires within 60s
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -734,6 +761,116 @@ export class PinterestClient {
         description: typeof data.description === "string" ? data.description : undefined,
         privacy: typeof data.privacy === "string" ? data.privacy : undefined,
       };
+    } catch (err) {
+      if (err instanceof PinterestApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Fetch one Pin by id. Returns null on 404 (design §5.2 step 1).
+   *
+   * ── THE 404 IS THE LOAD-BEARING PART, AND IT IS WHY THIS MIRRORS getBoard ──
+   * The reconciliation worker turns "null" into `confirmed_absent`, and
+   * `confirmed_absent` is the ONLY thing that can authorize re-sending a Pin
+   * whose delivery is unknown. So the null must mean exactly one thing:
+   * Pinterest, answering with THIS user's own token, said the Pin does not
+   * exist. Every other failure mode — 401, 403, 429, 5xx, a socket error —
+   * must THROW, so the caller records `still_unknown` and nothing is re-sent.
+   * Swallowing any of those into null would turn a transient outage into a
+   * duplicate Pin, which is the one outcome this whole feature exists to avoid.
+   *
+   * `pins:read` (config.ts PRODUCTION_SCOPES / PINTEREST_REQUIRED_SCOPES).
+   */
+  async getPin(pinId: string): Promise<FetchedPin | null> {
+    try {
+      const data = await this.request<Record<string, unknown>>(
+        `/pins/${encodeURIComponent(pinId)}`,
+        { method: "GET" },
+      );
+      const id = typeof data.id === "string" ? data.id : "";
+      // A 200 with no id is not evidence of anything. Treated as "not found"
+      // would be a lie in the dangerous direction, so it throws instead.
+      if (!id) throw new PinterestApiError("Pinterest returned a Pin with no id", 502);
+      return {
+        id,
+        boardId: typeof data.board_id === "string" && data.board_id ? data.board_id : null,
+        url: typeof data.url === "string" && data.url
+          ? data.url
+          : `https://www.pinterest.com/pin/${id}/`,
+        title: typeof data.title === "string" ? data.title : null,
+        link: typeof data.link === "string" ? data.link : null,
+        createdAt: typeof data.created_at === "string" ? data.created_at : null,
+      };
+    } catch (err) {
+      if (err instanceof PinterestApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * One page of a board's Pins, newest first (design §5.2 step 3).
+   *
+   * The last-resort anchor: used only when no pin id and no decisive media
+   * status exist, to ask "did anything matching what we tried to send land on
+   * this board in the window". Returns the raw page; the window and field
+   * matching are the caller's, because they are verdict logic and belong where
+   * they can be tested without a network.
+   *
+   * A 404 board is NOT null here, unlike `getBoard`: a board that has vanished
+   * tells us nothing about whether a Pin was created before it vanished, and
+   * the caller must treat that as unknown rather than absent. It throws.
+   *
+   * `boards:read` + `pins:read`.
+   */
+  async listBoardPins(
+    boardId: string,
+    bookmark?: string,
+  ): Promise<{ items: FetchedPin[]; bookmark: string | null }> {
+    const qs = new URLSearchParams({ page_size: "50" });
+    if (bookmark) qs.set("bookmark", bookmark);
+    const data = await this.request<{ items?: unknown[]; bookmark?: string | null }>(
+      `/boards/${encodeURIComponent(boardId)}/pins?${qs.toString()}`,
+      { method: "GET" },
+    );
+    const items: FetchedPin[] = (data.items ?? [])
+      .map(p => p as Record<string, unknown>)
+      .filter(p => typeof p.id === "string" && p.id)
+      .map(p => ({
+        id: p.id as string,
+        boardId: typeof p.board_id === "string" && p.board_id ? p.board_id : boardId,
+        url: typeof p.url === "string" && p.url
+          ? p.url
+          : `https://www.pinterest.com/pin/${p.id as string}/`,
+        title: typeof p.title === "string" ? p.title : null,
+        link: typeof p.link === "string" ? p.link : null,
+        createdAt: typeof p.created_at === "string" ? p.created_at : null,
+      }));
+    return { items, bookmark: data.bookmark ?? null };
+  }
+
+  /**
+   * The status of a registered media upload (design §5.2 step 2).
+   *
+   * An idempotent GET, which is what makes it safe to ask during
+   * reconciliation (PRD Video-Specific rule 5). It answers a NARROWER question
+   * than it looks: a failed/rejected media proves no Pin was created from it,
+   * while a succeeded one proves nothing at all about the Pin — the create call
+   * is a separate request. The caller encodes that asymmetry; this method only
+   * reports.
+   *
+   * 404 ⇒ null. Pinterest expires media ids, and an expired id is not evidence
+   * that the Pin is absent, so the caller must fall through to the board
+   * listing rather than conclude anything from it.
+   */
+  async getMediaStatus(mediaId: string): Promise<PinterestMediaStatus | null> {
+    try {
+      const data = await this.request<Record<string, unknown>>(
+        `/media/${encodeURIComponent(mediaId)}`,
+        { method: "GET" },
+      );
+      const status = typeof data.status === "string" ? data.status.trim().toUpperCase() : "";
+      return { mediaId, status: status || null };
     } catch (err) {
       if (err instanceof PinterestApiError && err.status === 404) return null;
       throw err;
