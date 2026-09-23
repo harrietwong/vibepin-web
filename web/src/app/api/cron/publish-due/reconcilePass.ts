@@ -32,6 +32,37 @@
  * browser's last-write-wins merge compares — so a pass that touched the row
  * every five minutes would push a re-sync to every connected client forever,
  * and would make the "payload is unchanged" promise (§5.3) untrue.
+ *
+ * ── ★ KNOWN LIMITATION: VIDEO `confirmed_absent` DOES NOT RE-SEND ───────────
+ * This pass is COMPLETE for images and INCOMPLETE for video, deliberately, and
+ * the incomplete half fails safe. Stated here because the behaviour is not
+ * obvious from any single file:
+ *
+ * Removing the stored result row re-opens the destination, which is all an
+ * image needs. A video row instead goes back through `dispatchV76PinterestVideo`,
+ * which inspects the v76 ledger, finds the PARENT destination still sitting at
+ * `delivery_unknown`, and early-returns `unknownResult`
+ * (v76PinterestVideoPublish.ts:358) — before any claim and before any provider
+ * call. The route records a fresh `delivery_unknown` row and re-flags
+ * reconciliation at the next attempt number.
+ *
+ * So a video whose delivery is confirmed absent cycles reconcile → absent →
+ * re-dispatch → unknown, advancing one attempt each time, until attempt 5
+ * stamps `final_failure_at`. The consequences, precisely:
+ *
+ *   · ZERO provider create calls at any point — no duplicate Pin is possible.
+ *   · The merchant's video is NOT re-sent; it ends as a final failure they can
+ *     retry by hand through the existing v78 path.
+ *
+ * Fixing it needs a CHILD intent via `publish_intent_confirm_prepare_v82`,
+ * which is built and verified (probe_v82_task4.py) but not wired. Two things
+ * must happen first, and the second is a real defect in this file:
+ *   1. a child receipt with its own deterministic actionId, and
+ *   2. ★ `recordVerdict` currently passes `p_intent_row_id: null`, so every
+ *      video check row written today is UNREDEEMABLE — the RPC requires
+ *      `v_parent.id = v_check.publish_intent_id` and refuses otherwise.
+ *      Whoever wires the child path must resolve the parent intent's database
+ *      id and record it here, or nothing downstream can consume the proof.
  */
 
 import type { createServerClient } from "@/lib/supabase";

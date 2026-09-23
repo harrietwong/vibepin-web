@@ -103,11 +103,11 @@ import {
   type AttemptRow,
 } from "./retrySchedule";
 import { loadAttemptLedger, recordAttempt, type AttemptEvidence } from "./attemptLedger";
-import {
-  latestConfirmedAbsentCheck,
-  runReconcilePass,
-  type ReconcilePassResult,
-} from "./reconcilePass";
+// `latestConfirmedAbsentCheck` is deliberately NOT imported yet: it is the
+// entry point for the VIDEO re-send path, which is not wired (see the
+// reconcilePass header and the task handoff). Importing it unused would be a
+// lint error, and leaving a call site half-built would be worse.
+import { runReconcilePass, type ReconcilePassResult } from "./reconcilePass";
 import {
   classifyDurableVideoResult,
   classifyPinterestApiError,
