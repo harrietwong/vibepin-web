@@ -25,6 +25,7 @@ import { latestAttemptByDestination, type AttemptRow } from "./retrySchedule";
 
 const ATTEMPTS_TABLE = "scheduled_publish_attempts";
 const RECORD_RPC = "scheduled_publish_attempt_record_v82";
+const NOTICE_RPC = "scheduled_publish_claim_terminal_notice_v82";
 
 type Db = ReturnType<typeof createServerClient>;
 
@@ -131,5 +132,105 @@ export async function recordAttempt(
     if (error) console.error("[cron/publish-due] attempt record:", error.message);
   } catch (err) {
     console.error("[cron/publish-due] attempt record threw:", (err as Error).message);
+  }
+}
+
+// ── Terminal-failure notification, exactly once (design T14, PRD Risk 8) ────────
+
+/**
+ * The id of a destination's attempt row that has reached final failure, if it has.
+ *
+ * Needed because the CAS below is keyed on the ROW id and the route does not have
+ * one: `scheduled_publish_attempt_record_v82` returns the attempt's state but not its
+ * `id`, and the ledger map the row loaded at the top of the round predates this
+ * round's write — a fifth attempt's `final_failure_at` was stamped seconds ago by the
+ * RPC and cannot be in a map read before it.
+ *
+ * So the terminal round pays for one targeted read. The alternative — changing the
+ * record RPC's return shape — would edit a migration that has already been applied to
+ * the test database and verified (M1-M7), for one field the route can simply select.
+ *
+ * Returns null on any error or when the row is not terminal. Null means "do not claim
+ * a notice", and the caller's fallback for that is the UNCHANGED legacy behaviour:
+ * the notice is sent. A read failure must not silence a genuine final failure.
+ */
+export async function findTerminalAttemptId(
+  db: Db,
+  args: {
+    userId: string;
+    draftId: string;
+    scheduledAt: string;
+    provider: string;
+    connectionId: string | null;
+  },
+): Promise<string | null> {
+  try {
+    let query = db
+      .from(ATTEMPTS_TABLE)
+      .select("id, final_failure_at, terminal_notified_at")
+      .eq("owner_user_id", args.userId)
+      .eq("draft_id", args.draftId)
+      .eq("scheduled_at", args.scheduledAt)
+      .eq("provider", args.provider)
+      .not("final_failure_at", "is", null);
+    // `.eq` never matches NULL in SQL; a destination with no connection id stores
+    // NULL and has to be filtered with `.is`, the same split rowIo's CAS update makes.
+    query = args.connectionId === null
+      ? query.is("social_connection_id", null)
+      : query.eq("social_connection_id", args.connectionId);
+    const { data, error } = await query.order("attempt", { ascending: false }).limit(1);
+    if (error) {
+      console.error("[cron/publish-due] terminal attempt lookup:", error.message);
+      return null;
+    }
+    const row = Array.isArray(data) ? (data[0] as { id?: unknown } | undefined) : undefined;
+    return typeof row?.id === "string" ? row.id : null;
+  } catch (err) {
+    console.error("[cron/publish-due] terminal attempt lookup threw:", (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Claim the right to send THE final-failure notification for one attempt row.
+ *
+ * `scheduled_publish_claim_terminal_notice_v82` is a compare-and-set: it stamps
+ * `terminal_notified_at` only while that column is still null, and reports whether
+ * this caller is the one that stamped it. Exactly one caller can win, whatever
+ * happens concurrently — which is the guarantee PRD Risk 8 asks for and which no
+ * amount of application-side "check then send" can provide.
+ *
+ * Why the race is real rather than theoretical: the publish cron is a plain HTTP
+ * endpoint on a five-minute crontab. A tick that overruns overlaps the next one, the
+ * claim it holds expires after ten minutes, and a manual invocation can be issued at
+ * any moment. Two workers reaching the same destination's fifth attempt is an
+ * ordinary Tuesday, and without the CAS the merchant gets the same "your publish
+ * failed" twice.
+ *
+ * ── FAILURE DIRECTION: ERRORS SEND ─────────────────────────────────────────────
+ * Returns TRUE on any RPC error, and that asymmetry is deliberate. The two ways to be
+ * wrong are not equal: a duplicate failure notice is an annoyance, while a swallowed
+ * one means a merchant is never told their scheduled post is dead. So the de-duplicator
+ * only ever suppresses on a definite `false` — a real answer from a real CAS that
+ * somebody else already sent it.
+ */
+export async function claimTerminalNotice(
+  db: Db,
+  userId: string,
+  attemptRowId: string,
+): Promise<boolean> {
+  try {
+    const { data, error } = await db.rpc(NOTICE_RPC, {
+      p_user_id: userId,
+      p_attempt_row_id: attemptRowId,
+    });
+    if (error) {
+      console.error("[cron/publish-due] terminal notice claim:", error.message);
+      return true; // see FAILURE DIRECTION above
+    }
+    return data !== false;
+  } catch (err) {
+    console.error("[cron/publish-due] terminal notice claim threw:", (err as Error).message);
+    return true;
   }
 }

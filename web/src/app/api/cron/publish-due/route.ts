@@ -106,7 +106,11 @@ import {
   stripRetryMarkers,
   type AttemptRow,
 } from "./retrySchedule";
-import { loadAttemptLedger, recordAttempt, type AttemptEvidence } from "./attemptLedger";
+import {
+  loadAttemptLedger, recordAttempt, findTerminalAttemptId, claimTerminalNotice,
+  type AttemptEvidence,
+} from "./attemptLedger";
+import { ensureV82Capability } from "./v82Capability";
 // The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
 // is on, the row is a video, and a `confirmed_absent` proof exists for the
 // destination — see `childVideoReceipt` below, which is the single gate.
@@ -303,6 +307,41 @@ export async function GET(req: Request): Promise<Response> {
   // A reconciliation that cannot be settled is a delayed publish, while a stage
   // 1 that never runs is every due Pin missing its slot, so stage 1 wins every
   // time budget is contested.
+  // ── v82 capability check — FAIL CLOSED (design §9 task 5, PRD Risk 3) ────────
+  //
+  // Everything after this point that the flag enables assumes six v82 objects
+  // exist: two tables and four RPCs. `attemptLedger` and `reconcilePass` both
+  // swallow their own errors — correctly, so a transient bookkeeping failure never
+  // becomes a delivery failure — but that same tolerance turns a database WITHOUT
+  // the objects into silent nonsense: the five-attempt cap is not enforced, the
+  // terminal notice cannot de-duplicate, and `delivery_unknown` rows are held open
+  // by a §3.4(b) check reading a table that is not there. The route would believe
+  // it is retrying safely while having none of the evidence that makes it safe.
+  //
+  // So the run is REFUSED rather than degraded. 503 on purpose: the VPS crontab
+  // logs a non-200 and that log is the internal alarm PRD Risk 3 asks for, which a
+  // 200-with-a-console-line would not be. The cost of being wrong in this direction
+  // is bounded and loud — one five-minute tick of delayed publishing, with the
+  // missing object names in the log — whereas being wrong the other way is the
+  // evidence-less mode this check exists to prevent.
+  //
+  // ★ Inside `retryEnabled` and nowhere else. With the flag off this costs zero
+  // queries and cannot fail; design §9 lists "a fail-closed check written wrong
+  // blocks ordinary publishing" as this task's own risk, and the flag-off case is
+  // the one where that would hurt most. A test counts the probe queries with the
+  // flag off and expects zero.
+  if (retryEnabled) {
+    const capability = await ensureV82Capability(db);
+    if (!capability.ok) {
+      console.error(
+        "[cron/publish-due] PUBLISH_RETRY_WORKER_ENABLED is on but the v82 schema is "
+        + `incomplete — refusing to run. Missing: ${capability.missing.join(", ")}. `
+        + "Apply backend/db/migrate_v82_publish_retry_reconcile.sql, or unset the flag.",
+      );
+      return json({ error: "v82_capability_missing", code: "v82_capability_missing" }, 503);
+    }
+  }
+
   let reconciled: ReconcilePassResult | null = null;
   if (retryEnabled) {
     reconciled = await runReconcilePass(db, io, { startedMs });
@@ -737,6 +776,18 @@ export async function GET(req: Request): Promise<Response> {
       // holding the schedule for a reconciliation that was never recorded would pin the
       // row open forever with nothing able to close it.
       let reconcileFlagged = false;
+      // ── T14: which destinations exhausted their budget in THIS round ──────────
+      //
+      // Collected here rather than derived from the outcomes afterwards, because
+      // "this outcome is a failure" and "this destination just spent its fifth and
+      // last attempt" are different questions and only the second one earns a
+      // terminal notice. A `blocked_user` failure, a payload that cannot be
+      // published, a board that vanished — all produce failed outcomes, none of them
+      // is the end of a five-attempt lifecycle, and none of them has a v82 attempt
+      // row with `final_failure_at` to de-duplicate against. `retryFork` is the one
+      // place that knows the difference, because it is the place that asked the RPC
+      // for a fifth attempt with nowhere to go next.
+      const terminalDestinations: Array<{ provider: string; connectionId: string | null }> = [];
       const retryFork = async (
         destination: { provider: string; socialConnectionId?: string | null },
         retryClass: RetryClass,
@@ -752,7 +803,25 @@ export async function GET(req: Request): Promise<Response> {
         // A destination that has already reached a final failure is not retried again,
         // whatever this round says. The ledger, not this round's classification, is the
         // authority on whether the budget is spent.
-        if (prior?.final_failure_at) return null;
+        //
+        // ★ AND IT IS STILL A TERMINAL DESTINATION, which is the whole reason the CAS
+        // exists. This branch is the SECOND worker's path: worker A wrote
+        // `final_failure_at` and sent the notice, worker B re-claims the same row —
+        // an overrunning tick, an expired ten-minute claim, a manual invocation —
+        // reaches here, and takes the ordinary failure path. Without recording the
+        // destination as terminal, worker B's notice would be sent unconditionally
+        // and the merchant would be told twice that the same post failed. Recording
+        // it routes B through the CAS, which refuses it because A already stamped
+        // `terminal_notified_at`. (Found by P15b failing, not by reading the code.)
+        if (prior?.final_failure_at) {
+          terminalDestinations.push({
+            provider: destination.provider,
+            connectionId: typeof destination.socialConnectionId === "string"
+              && destination.socialConnectionId.trim()
+              ? destination.socialConnectionId.trim() : null,
+          });
+          return null;
+        }
 
         if (retryClass === "blocked_user") {
           // Does not consume the budget (PRD Story 5 AC-2): the SAME attempt number is
@@ -801,7 +870,18 @@ export async function GET(req: Request): Promise<Response> {
           nextAttemptAt: next ? next.toISOString() : null,
           reconcileRequiredAt: null, evidence,
         });
-        if (!next) return null; // attempt 5 exhausted ⇒ the ordinary failure path
+        if (!next) {
+          // Attempt 5 exhausted. The RPC has just stamped `final_failure_at`; this
+          // remembers WHICH destination so the row's single notification can be
+          // claimed through the CAS below instead of simply fired.
+          terminalDestinations.push({
+            provider: destination.provider,
+            connectionId: typeof destination.socialConnectionId === "string"
+              && destination.socialConnectionId.trim()
+              ? destination.socialConnectionId.trim() : null,
+          });
+          return null; // ⇒ the ordinary failure path
+        }
 
         const nextIso = next.toISOString();
         retryBackoffs.push(nextIso);
@@ -1333,10 +1413,58 @@ export async function GET(req: Request): Promise<Response> {
         // still owed, coming back on its own.
         deferred++;
       } else {
-        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
-          code: firstFailure?.code,
-          message: firstFailure?.message ?? "Publish failed",
-        });
+        // ── T14: the final-failure notice is CLAIMED, not simply sent ───────────
+        //
+        // When this round exhausted a destination's five attempts, the notification
+        // right is taken through `scheduled_publish_claim_terminal_notice_v82` — a
+        // compare-and-set that stamps `terminal_notified_at` only while it is still
+        // null. Exactly one caller can win. The race is ordinary, not exotic: this
+        // is an HTTP endpoint on a five-minute crontab whose row claim lasts ten
+        // minutes, so an overrunning tick and the next one can both arrive at the
+        // same fifth attempt, and without the CAS the merchant is told twice that
+        // the same post failed.
+        //
+        // Scope, deliberately narrow: only a v82-terminal round is gated. A
+        // `blocked_user` failure, an unpublishable payload, a thrown connection
+        // error — none of those end a five-attempt lifecycle, none has a
+        // `final_failure_at` row to de-duplicate against, and all of them keep
+        // today's behaviour exactly.
+        //
+        // And the gate only ever SUPPRESSES on a definite `false`. A missing row or
+        // an RPC error resolves to "send": a duplicate failure notice is an
+        // annoyance, a swallowed one leaves a merchant never told their scheduled
+        // post is dead. (`claimTerminalNotice` returns true on error for this
+        // reason; `findTerminalAttemptId` returning null means the same thing here.)
+        let notify = true;
+        if (retryEnabled && terminalDestinations.length && row.scheduled_at) {
+          // One notice per ROW (that is what `recordFailedPublishEvent` is), so the
+          // row's right is claimed if ANY of its terminal destinations is unclaimed.
+          // Claiming all of them, rather than stopping at the first win, is what
+          // makes a second worker find every one of them already stamped.
+          let won = false;
+          let resolvedAny = false;
+          for (const terminal of terminalDestinations) {
+            const attemptRowId = await findTerminalAttemptId(db, {
+              userId: row.vibepin_user_id,
+              draftId: String(row.draft_id ?? ""),
+              scheduledAt: row.scheduled_at,
+              provider: terminal.provider,
+              connectionId: terminal.connectionId,
+            });
+            if (!attemptRowId) continue;
+            resolvedAny = true;
+            if (await claimTerminalNotice(db, row.vibepin_user_id, attemptRowId)) won = true;
+          }
+          // `resolvedAny` false ⇒ no ledger row could be identified at all, so there
+          // was nothing to de-duplicate against and the unchanged behaviour applies.
+          if (resolvedAny) notify = won;
+        }
+        if (notify) {
+          void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+            code: firstFailure?.code,
+            message: firstFailure?.message ?? "Publish failed",
+          });
+        }
         failed++;
       }
     } catch (err) {

@@ -344,6 +344,16 @@ function fakeSupabaseClient() {
       }
       if (fn === "publish_reconcile_record_v82") {
         const outcome = String(args.p_outcome);
+        // The migration's FIRST statement, before any INSERT: an outcome outside
+        // the three-value domain raises `v82_reconcile_outcome_invalid`
+        // (migrate_v82, §2.2 E). The fake has to refuse it too, because task 5's
+        // capability probe calls this RPC with a deliberately-invalid outcome to
+        // prove the function EXISTS without writing anything. A fake that accepted
+        // it would record a phantom reconciliation row and make this suite's
+        // `checks.length` assertions count the probe as a verdict.
+        if (!["confirmed_published", "confirmed_absent", "still_unknown"].includes(outcome)) {
+          return { data: null, error: { message: "v82_reconcile_outcome_invalid", code: "22023" } };
+        }
         const id = `chk-${checks.length + 1}`;
         checks.push({
           id, owner_user_id: String(args.p_user_id), draft_id: String(args.p_draft_id),

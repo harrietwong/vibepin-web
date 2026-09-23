@@ -53,6 +53,7 @@ export const CORE: string[] = [
   "test-publish-retry-classification",
   "test-publish-retry-worker",
   "test-publish-reconcile-worker",
+  "test-publish-v82-capability",
   "test-v76-pinterest-video-publish",
   "test-v76-pinterest-video-recovery",
   "test-v78-pinterest-video-recovery",
