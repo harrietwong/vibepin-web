@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Plus, RefreshCw, Check, AlertCircle, Clock } from "lucide-react";
 import { apiFetch } from "@/lib/utils";
+import { isHiddenSocialProvider } from "@/lib/social/visibleProviders";
 
 type TaskStatus = "pending" | "scraping" | "generating" | "copywriting" | "awaiting_review" | "publishing" | "done" | "failed";
 
@@ -157,12 +158,14 @@ export default function DashboardPage() {
                 username={auth.pinterest_username}
                 connectHref={`${API}/api/auth/pinterest`}
               />
-              <ConnectionCard
-                label="Instagram"
-                connected={auth.instagram_connected}
-                username={auth.instagram_ig_user_id}
-                connectHref={`${API}/api/auth/instagram`}
-              />
+              {!isHiddenSocialProvider("instagram") && (
+                <ConnectionCard
+                  label="Instagram"
+                  connected={auth.instagram_connected}
+                  username={auth.instagram_ig_user_id}
+                  connectHref={`${API}/api/auth/instagram`}
+                />
+              )}
             </div>
           </div>
         </div>
