@@ -25,7 +25,8 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatPublicPricingComparisonValue } from "@/lib/i18n/pricingComparisonValue";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
-import { PLATFORMS, VISIBLE_SOCIAL_PROVIDERS } from "@/lib/social/platforms";
+import { PLATFORMS } from "@/lib/social/platforms";
+import { customerVisibleSocialProviders } from "@/lib/social/visibleProviders";
 import {
   createPricingAuthState,
   getPricingHeaderState,
@@ -41,7 +42,11 @@ const ACCOUNT_BULLET_INDEX: Record<PlanKey, number> = { free: 2, starter: 0, pro
 
 function PricingPlatformIcons() {
   const { t } = useLocale();
-  const accessibleNames = VISIBLE_SOCIAL_PROVIDERS.map(provider => PLATFORMS[provider].name).join(", ");
+  // Product decision: hide Instagram/Facebook behind NEXT_PUBLIC_HIDE_IG_FB. This
+  // is a static marketing surface (no per-user connection state), so a plain
+  // filter is enough — no "keep if connected" carve-out applies here.
+  const visibleProviders = customerVisibleSocialProviders();
+  const accessibleNames = visibleProviders.map(provider => PLATFORMS[provider].name).join(", ");
 
   return (
     <>
@@ -51,7 +56,7 @@ function PricingPlatformIcons() {
         data-pricing-platform-icons="true"
         className="inline-flex max-w-full flex-wrap items-center gap-1"
       >
-        {VISIBLE_SOCIAL_PROVIDERS.map(provider => (
+        {visibleProviders.map(provider => (
           <PlatformIcon key={provider} provider={provider} size={16} />
         ))}
       </span>
