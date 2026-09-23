@@ -3076,6 +3076,18 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Hai richiesto {requested} immagini ma nel tuo piano attuale ne restano solo {remaining}. Genera invece le immagini rimanenti oppure passa a un piano superiore.",
   "studioBoard.limit.image.generateRemaining": "Genera invece {remaining}",
   "studioBoard.limit.image.generateOneRemaining": "Genera invece 1",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Pubblica su Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Pubblica su Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Scopri prodotti molto salvati, Pin di tendenza e idee di parole chiave. Genera contenuti con l'IA. Pubblica su Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Un account è un account/pagina Pinterest collegato. Starter include 1 account per piattaforma, Pro include 2 account per piattaforma e Business include 3 account per piattaforma.",
+  "public.pricing.finalCta.description.pinterestOnly": "Scopri prodotti e idee per i Pin, genera contenuti con l'IA e pubblica su Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Posso pubblicare su Pinterest?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Sì. I piani a pagamento supportano la pubblicazione su Pinterest. Gli utenti gratuiti hanno accesso limitato alla pubblicazione.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter include 1 account per piattaforma (Pinterest). Pro include 2 account per piattaforma. Business include 3 account per piattaforma. Free include 1 account per piattaforma.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Solo Starter, Pro e Business possono aggiungere slot account social per Pinterest. Ogni account costa $7 al mese con fatturazione mensile, o $5 al mese con fatturazione annuale.",
 };
 
 export default it;

@@ -2783,6 +2783,18 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Bạn đã yêu cầu {requested} ảnh nhưng gói hiện tại chỉ còn {remaining}. Hãy tạo số ảnh còn lại, hoặc nâng cấp gói để có thêm.",
   "studioBoard.limit.image.generateRemaining": "Tạo {remaining} thay vì vậy",
   "studioBoard.limit.image.generateOneRemaining": "Tạo 1 thay vì vậy",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Đăng lên Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Đăng lên Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Khám phá sản phẩm được lưu nhiều, Pin thịnh hành và ý tưởng từ khóa. Tạo nội dung bằng AI. Đăng lên Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Một tài khoản nghĩa là một tài khoản/trang Pinterest đã kết nối. Starter gồm 1 tài khoản mỗi nền tảng, Pro gồm 2 tài khoản mỗi nền tảng, và Business gồm 3 tài khoản mỗi nền tảng.",
+  "public.pricing.finalCta.description.pinterestOnly": "Khám phá sản phẩm và ý tưởng Pin, tạo nội dung bằng AI, và đăng lên Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Tôi có thể đăng lên Pinterest không?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Có. Các gói trả phí hỗ trợ đăng lên Pinterest. Người dùng miễn phí có quyền đăng bài hạn chế.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter gồm 1 tài khoản mỗi nền tảng (Pinterest). Pro gồm 2 tài khoản mỗi nền tảng. Business gồm 3 tài khoản mỗi nền tảng. Free gồm 1 tài khoản mỗi nền tảng.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Chỉ Starter, Pro và Business mới có thể thêm chỗ tài khoản xã hội cho Pinterest. Mỗi tài khoản có giá 7 đô la/tháng khi thanh toán hàng tháng, hoặc 5 đô la/tháng khi thanh toán hàng năm.",
 };
 
 export default vi;

@@ -2687,6 +2687,18 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Poprosiłeś o {requested} obrazów, ale w Twoim obecnym planie pozostało tylko {remaining}. Wygeneruj pozostałe obrazy albo ulepsz plan, aby uzyskać więcej.",
   "studioBoard.limit.image.generateRemaining": "Wygeneruj zamiast tego {remaining}",
   "studioBoard.limit.image.generateOneRemaining": "Wygeneruj zamiast tego 1",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publikuj na Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publikuj na Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Odkryj produkty z dużą liczbą zapisów, popularne Piny i pomysły na słowa kluczowe. Twórz treści z AI. Publikuj na Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Konto oznacza jedno połączone konto/stronę Pinterest. Starter obejmuje 1 konto na platformę, Pro obejmuje 2 konta na platformę, a Business obejmuje 3 konta na platformę.",
+  "public.pricing.finalCta.description.pinterestOnly": "Odkrywaj produkty i pomysły na Piny, twórz treści z AI i publikuj na Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Czy mogę publikować na Pinterest?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Tak. Płatne plany obsługują publikowanie na Pinterest. Użytkownicy darmowi mają ograniczony dostęp do publikowania.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter obejmuje 1 konto na platformę (Pinterest). Pro obejmuje 2 konta na platformę. Business obejmuje 3 konta na platformę. Free obejmuje 1 konto na platformę.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Tylko Starter, Pro i Business mogą dodać dodatkowe miejsca na konta społecznościowe dla Pinterest. Każde konto kosztuje 7 USD miesięcznie przy rozliczeniu miesięcznym lub 5 USD miesięcznie przy rozliczeniu rocznym.",
 };
 
 export default pl;

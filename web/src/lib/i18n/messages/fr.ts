@@ -2718,6 +2718,18 @@ const fr: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Vous avez demandé {requested} images mais il n'en reste que {remaining} dans votre forfait actuel. Générez les images restantes ou passez à un forfait supérieur.",
   "studioBoard.limit.image.generateRemaining": "Générer {remaining} à la place",
   "studioBoard.limit.image.generateOneRemaining": "Générer 1 à la place",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publier sur Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publier sur Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Découvrez des produits très enregistrés, des Pins tendance et des idées de mots-clés. Générez du contenu avec l'IA. Publiez sur Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Un compte correspond à un compte ou une page Pinterest connecté. Starter inclut 1 compte par plateforme, Pro inclut 2 comptes par plateforme et Business inclut 3 comptes par plateforme.",
+  "public.pricing.finalCta.description.pinterestOnly": "Découvrez des produits et des idées de Pins, générez du contenu avec l'IA, et publiez sur Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Puis-je publier sur Pinterest ?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Oui. Les forfaits payants permettent de publier sur Pinterest. Les utilisateurs gratuits ont un accès de publication limité.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter inclut 1 compte par plateforme (Pinterest). Pro inclut 2 comptes par plateforme. Business inclut 3 comptes par plateforme. Free inclut 1 compte par plateforme.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Seuls Starter, Pro et Business peuvent ajouter des emplacements de compte social pour Pinterest. Chaque compte coûte 7 $ par mois en facturation mensuelle, ou 5 $ par mois en facturation annuelle.",
 };
 
 export default fr;

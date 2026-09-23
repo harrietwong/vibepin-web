@@ -2731,6 +2731,18 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Je vroeg om {requested} afbeeldingen, maar er zijn er nog maar {remaining} over in je huidige abonnement. Genereer in plaats daarvan de resterende afbeeldingen of upgrade je abonnement.",
   "studioBoard.limit.image.generateRemaining": "In plaats daarvan {remaining} genereren",
   "studioBoard.limit.image.generateOneRemaining": "In plaats daarvan 1 genereren",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publiceer op Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publiceer op Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Ontdek veelbewaarde producten, trending Pins en zoekwoordideeën. Genereer content met AI. Publiceer op Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Een account betekent één verbonden Pinterest-account/-pagina. Starter bevat 1 account per platform, Pro bevat 2 accounts per platform en Business bevat 3 accounts per platform.",
+  "public.pricing.finalCta.description.pinterestOnly": "Ontdek producten en Pin-ideeën, genereer content met AI en publiceer op Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Kan ik publiceren op Pinterest?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Ja. Betaalde abonnementen ondersteunen publiceren op Pinterest. Gratis gebruikers hebben beperkte publicatietoegang.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter bevat 1 account per platform (Pinterest). Pro bevat 2 accounts per platform. Business bevat 3 accounts per platform. Free bevat 1 account per platform.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Alleen Starter, Pro en Business kunnen extra social-accountplekken voor Pinterest toevoegen. Elk account kost $7 per maand bij maandelijkse facturering, of $5 per maand bij jaarlijkse facturering.",
 };
 
 export default nl;

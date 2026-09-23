@@ -2968,6 +2968,18 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Solicitaste {requested} imágenes, pero solo quedan {remaining} en tu plan actual. Genera las imágenes restantes o mejora tu plan para obtener más.",
   "studioBoard.limit.image.generateRemaining": "Generar {remaining} en su lugar",
   "studioBoard.limit.image.generateOneRemaining": "Generar 1 en su lugar",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publica en Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publica en Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "Descubre productos con muchos guardados, Pins de tendencia e ideas de palabras clave. Genera contenido con IA. Publica en Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Una cuenta es una cuenta o página de Pinterest conectada. Starter incluye 1 cuenta por plataforma, Pro incluye 2 cuentas por plataforma y Business incluye 3 cuentas por plataforma.",
+  "public.pricing.finalCta.description.pinterestOnly": "Descubre productos e ideas de Pins, genera contenido con IA y publica en Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "¿Puedo publicar en Pinterest?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Sí. Los planes de pago admiten la publicación en Pinterest. Los usuarios gratuitos tienen acceso de publicación limitado.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter incluye 1 cuenta por plataforma (Pinterest). Pro incluye 2 cuentas por plataforma. Business incluye 3 cuentas por plataforma. Free incluye 1 cuenta por plataforma.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Solo Starter, Pro y Business pueden agregar espacios de cuentas sociales para Pinterest. Cada cuenta cuesta $7 al mes con facturación mensual, o $5 al mes con facturación anual.",
 };
 
 export default es;
