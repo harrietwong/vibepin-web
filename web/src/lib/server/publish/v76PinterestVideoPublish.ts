@@ -41,6 +41,16 @@ export type DurableVideoPublishInput = {
   /** Cron deadline: no destination starts after this instant. */
   latestStartMs?: number;
   nowMs?: number;
+  /**
+   * The `publish_reconcile_checks` row proving this destination's delivery was
+   * confirmed ABSENT — set only when re-sending a video after reconciliation.
+   *
+   * Its presence is what switches `confirmPrepare` from v78 to v82. Absent (the
+   * overwhelmingly common case, and every case with the retry flag off) the v78
+   * call is byte-identical to what it always was, so no ordinary publish can
+   * take the new path by accident.
+   */
+  reconcileCheckId?: string;
 };
 
 export type DurableVideoPublishResult = {
@@ -194,6 +204,23 @@ export function createV76RpcVideoPublishDependencies(
   return {
     inspect: boundary.inspect,
     async confirmPrepare(input) {
+      // ── The ONE place the v82 retry entrance is taken ──────────────────────
+      // A reconciliation proof re-opens a destination the v78 path cannot: v78
+      // requires the parent at `failed` + `retry_allowed` (migrate_v78:189),
+      // and a `delivery_unknown` parent never satisfies that. v82 swaps that
+      // precondition for a `confirmed_absent` check row and nothing else — so
+      // the proof, not the caller, is what authorizes the re-send.
+      //
+      // With no proof this is the v78 call unchanged, argument for argument.
+      if (input.reconcileCheckId) {
+        await boundary.rpc("publish_intent_confirm_prepare_v82", {
+          p_user_id: input.uid,
+          p_receipt: input.receipt,
+          p_source_identity_fingerprint: videoPublishSourceIdentityFingerprint(input.receipt),
+          p_reconcile_check_id: input.reconcileCheckId,
+        });
+        return;
+      }
       await boundary.rpc("publish_intent_confirm_prepare_v78", {
         p_user_id: input.uid,
         p_receipt: input.receipt,

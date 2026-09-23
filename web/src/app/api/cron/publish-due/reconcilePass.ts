@@ -598,11 +598,18 @@ export async function latestConfirmedAbsentCheck(
     userId: string; draftId: string; scheduledAt: string;
     provider: string; socialConnectionId: string | null;
   },
-): Promise<{ id: string; attempt: number } | null> {
+): Promise<{
+  id: string;
+  attempt: number;
+  /** The parent intent's DATABASE id. Null on rows written before that fix. */
+  publishIntentId: string | null;
+  /** The destination this proof vouches for — the RPC accepts no other. */
+  destinationId: string | null;
+} | null> {
   try {
     const { data, error } = await db
       .from(CHECKS_TABLE)
-      .select("id, attempt, outcome, checked_at")
+      .select("id, attempt, outcome, checked_at, publish_intent_id, destination_id")
       .eq("owner_user_id", args.userId)
       .eq("draft_id", args.draftId)
       .eq("scheduled_at", args.scheduledAt)
@@ -615,12 +622,60 @@ export async function latestConfirmedAbsentCheck(
       if (error) console.error("[cron/publish-due] reconcile check read:", error.message);
       return null;
     }
-    const row = data as { id?: unknown; attempt?: unknown };
+    const row = data as {
+      id?: unknown; attempt?: unknown;
+      publish_intent_id?: unknown; destination_id?: unknown;
+    };
     return typeof row.id === "string"
-      ? { id: row.id, attempt: Number(row.attempt) || 1 }
+      ? {
+        id: row.id,
+        attempt: Number(row.attempt) || 1,
+        publishIntentId: typeof row.publish_intent_id === "string" && row.publish_intent_id
+          ? row.publish_intent_id
+          : null,
+        destinationId: typeof row.destination_id === "string" && row.destination_id
+          ? row.destination_id
+          : null,
+      }
       : null;
   } catch (err) {
     console.error("[cron/publish-due] reconcile check read threw:", (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * The parent intent's TEXT `intent_id`, given its database id.
+ *
+ * Two different identifiers are in play and confusing them is silent: the check
+ * row stores the parent's UUID (`publish_intents.id`), while the receipt's
+ * `priorIntentId` is matched against the TEXT `intent_id`
+ * (migrate_v82:457). The child receipt needs the text form, so one more read is
+ * unavoidable.
+ *
+ * Null on anything unexpected, which the caller treats as "no credential" and
+ * therefore "do not re-send".
+ */
+export async function parentIntentTextId(
+  db: Db,
+  userId: string,
+  intentRowId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await db
+      .from("publish_intents")
+      .select("intent_id")
+      .eq("id", intentRowId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) {
+      if (error) console.error("[cron/publish-due] parent intent read:", error.message);
+      return null;
+    }
+    const id = (data as { intent_id?: unknown }).intent_id;
+    return typeof id === "string" && id ? id : null;
+  } catch (err) {
+    console.error("[cron/publish-due] parent intent read threw:", (err as Error).message);
     return null;
   }
 }

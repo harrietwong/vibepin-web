@@ -44,7 +44,10 @@ import {
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
 import { dispatchSupabaseV76PinterestVideo } from "@/lib/server/publish/v76PinterestVideoServer";
-import { buildDueVideoReceipt } from "@/lib/server/publish/v76PinterestVideoBindings";
+import {
+  buildDueVideoReceipt,
+  buildReconcileChildVideoReceipt,
+} from "@/lib/server/publish/v76PinterestVideoBindings";
 import {
   NeedsReconnectError,
   NotConnectedError,
@@ -103,11 +106,15 @@ import {
   type AttemptRow,
 } from "./retrySchedule";
 import { loadAttemptLedger, recordAttempt, type AttemptEvidence } from "./attemptLedger";
-// `latestConfirmedAbsentCheck` is deliberately NOT imported yet: it is the
-// entry point for the VIDEO re-send path, which is not wired (see the
-// reconcilePass header and the task handoff). Importing it unused would be a
-// lint error, and leaving a call site half-built would be worse.
-import { runReconcilePass, type ReconcilePassResult } from "./reconcilePass";
+// The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
+// is on, the row is a video, and a `confirmed_absent` proof exists for the
+// destination — see `childVideoReceipt` below, which is the single gate.
+import {
+  latestConfirmedAbsentCheck,
+  parentIntentTextId,
+  runReconcilePass,
+  type ReconcilePassResult,
+} from "./reconcilePass";
 import {
   classifyDurableVideoResult,
   classifyPinterestApiError,
@@ -869,12 +876,69 @@ export async function GET(req: Request): Promise<Response> {
               if (!firstFailure) firstFailure = { code: "invalid_confirmation", message: "The scheduled Pinterest destination no longer matches the frozen intent." };
               continue;
             }
+            /**
+             * ── THE VIDEO RE-SEND GATE (design §2.2 G, §5.4) ────────────────
+             * A video whose delivery was confirmed ABSENT cannot simply be
+             * re-dispatched: `dispatchV76PinterestVideo` inspects the v76
+             * ledger, finds the parent destination still at `delivery_unknown`
+             * and early-returns `unknown` before any claim and before any
+             * provider call. It needs a CHILD intent, and only a
+             * `confirmed_absent` check row can open one.
+             *
+             * Every condition below must hold or `child` stays null and the
+             * behaviour is exactly what it was — the parent receipt, the v78
+             * RPC, the early return. In particular NOTHING here can reach a
+             * provider create: a null `child` changes no argument at all.
+             *
+             *   · `retryEnabled`      flag off ⇒ this block is inert
+             *   · a `confirmed_absent` proof exists for this destination
+             *   · the proof carries the parent intent's row id — rows written
+             *     before that fix have null and are correctly unredeemable
+             *   · the proof names the destination it vouches for
+             *   · the parent's TEXT intent_id resolves
+             *
+             * A throw from the child builder (the draft no longer schedules
+             * this destination; the dispatch set came out wrong) is caught by
+             * the enclosing handler and recorded as a failure. It must NOT
+             * fall back to the parent receipt: that would re-send under an
+             * intent the reconciliation never vouched for.
+             */
+            let child: { receipt: typeof videoReceipt; checkId: string } | null = null;
+            if (retryEnabled && row.scheduled_at) {
+              const proof = await latestConfirmedAbsentCheck(db, {
+                userId: row.vibepin_user_id,
+                draftId: row.draft_id,
+                scheduledAt: row.scheduled_at,
+                provider: "pinterest",
+                socialConnectionId: destination.socialConnectionId ?? null,
+              });
+              if (proof?.publishIntentId && proof.destinationId) {
+                const parentIntentId = await parentIntentTextId(
+                  db, row.vibepin_user_id, proof.publishIntentId,
+                );
+                if (parentIntentId) {
+                  child = {
+                    receipt: buildReconcileChildVideoReceipt({
+                      draftId: row.draft_id,
+                      updatedAt: row.updated_at,
+                      scheduledAt: row.scheduled_at,
+                      payload: row.payload,
+                      reconcileCheckId: proof.id,
+                      parentIntentId,
+                      destinationId: proof.destinationId,
+                    }),
+                    checkId: proof.id,
+                  };
+                }
+              }
+            }
             const durable = await dispatchSupabaseV76PinterestVideo(db, {
               uid: row.vibepin_user_id,
-              receipt: videoReceipt,
+              receipt: child?.receipt ?? videoReceipt,
               destination: frozenDestination,
               scheduleAt: row.scheduled_at ?? undefined,
               latestStartMs: deadlineMs,
+              ...(child ? { reconcileCheckId: child.checkId } : {}),
             });
             if (durable.outcome === "published") {
               deliveries.push(classifyDelivery({ ok: true }));
