@@ -41,7 +41,8 @@ import {
   type PublishingMode,
   type PublishingFormat,
 } from "@/lib/publishingPrefsStore";
-import { VISIBLE_SOCIAL_PROVIDERS, platformName } from "@/lib/social/platforms";
+import { platformName } from "@/lib/social/platforms";
+import { customerVisibleSocialProviders } from "@/lib/social/visibleProviders";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections } from "@/lib/social/connectionsCache";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
@@ -1012,7 +1013,13 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>{t("socialPanel.loading")}</p>
         ) : null}
 
-        {VISIBLE_SOCIAL_PROVIDERS.map(provider => {
+        {/* Product decision: hide Instagram/Facebook behind NEXT_PUBLIC_HIDE_IG_FB.
+            The accounts.length guard below already keeps a platform with an existing
+            connected account visible, so passing the connected set here is
+            defense-in-depth consistent with the other gated surfaces. */}
+        {customerVisibleSocialProviders(
+          platforms.filter(p => p.connected).map(p => p.provider),
+        ).map(provider => {
           const summary = platforms.find(p => p.provider === provider);
           const accounts = (summary?.accounts ?? []).filter(a => a.connectionStatus === "connected");
           // A platform with no connected account offers nothing to default TO. Showing

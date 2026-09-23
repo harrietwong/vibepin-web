@@ -19,7 +19,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
-import { PLATFORMS, SOCIAL_PROVIDERS, VISIBLE_SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
+import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
+import { customerVisibleSocialProviders } from "@/lib/social/visibleProviders";
 import type { PlatformConnectionSummary, SocialConnection } from "@/lib/social/types";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
@@ -2143,7 +2144,13 @@ export function SocialAccountsPanel() {
       )}
 
       {(summaries !== null || loadError) &&
-        VISIBLE_SOCIAL_PROVIDERS.map(provider => {
+        // Product decision: hide Instagram/Facebook behind NEXT_PUBLIC_HIDE_IG_FB.
+        // A provider with an existing connected account stays visible so the
+        // merchant can still see/manage (e.g. disconnect) it — the flag hides new
+        // entry points, it does not orphan an account already connected.
+        customerVisibleSocialProviders(
+          (summaries ?? []).filter(s => s.connected).map(s => s.provider),
+        ).map(provider => {
           const summary =
             (summaries ?? notConnectedSummaries()).find(s => s.provider === provider);
           if (!summary) return null;
