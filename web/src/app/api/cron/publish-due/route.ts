@@ -104,6 +104,11 @@ import {
 } from "./retrySchedule";
 import { loadAttemptLedger, recordAttempt, type AttemptEvidence } from "./attemptLedger";
 import {
+  latestConfirmedAbsentCheck,
+  runReconcilePass,
+  type ReconcilePassResult,
+} from "./reconcilePass";
+import {
   classifyDurableVideoResult,
   classifyPinterestApiError,
   computeNextAttemptAt,
@@ -274,6 +279,37 @@ export async function GET(req: Request): Promise<Response> {
   // published are published again ten minutes later.
   const deadlineMs = startedMs + RUN_DEADLINE_MS;
 
+  // ── 0) RECONCILE deliveries nobody knows the outcome of (design §5) ──────────
+  //
+  // Runs before the due scan, in the same invocation, on its own sub-budget.
+  // These are the destinations where the request left and the answer never came
+  // back: the Pin may exist, so nothing will re-send them, and without someone
+  // going to ask Pinterest they sit closed forever. Stage 0 asks.
+  //
+  // Guarded by the flag for the same reason every other v82 site is: with the
+  // flag off the v82 tables are never NAMED, because a PostgREST filter against
+  // a table this database does not have returns 42703 and the route degrades to
+  // an empty run — i.e. all scheduled publishing stops.
+  //
+  // Its errors are contained inside `runReconcilePass`; this call cannot throw.
+  // A reconciliation that cannot be settled is a delayed publish, while a stage
+  // 1 that never runs is every due Pin missing its slot, so stage 1 wins every
+  // time budget is contested.
+  let reconciled: ReconcilePassResult | null = null;
+  if (retryEnabled) {
+    reconciled = await runReconcilePass(db, io, { startedMs });
+  }
+  /**
+   * The run summary, with stage 0's counts attached only when stage 0 ran.
+   *
+   * The key is ABSENT with the flag off, so the response body is byte-identical
+   * to the baseline's — which is what makes "flag off equals today's behaviour"
+   * checkable from the outside rather than only by reading the code.
+   */
+  const runBody = (body: {
+    claimed: number; published: number; failed: number; skipped: number; deferred: number;
+  }) => (reconciled ? { ...body, reconciled } : body);
+
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
   let scanQuery = db
     .from(TABLE)
@@ -301,13 +337,13 @@ export async function GET(req: Request): Promise<Response> {
     .limit(DUE_LIMIT);
 
   if (scanError) {
-    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
+    if (isMissingSchemaError(scanError)) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 }));
     console.error("[cron/publish-due] scan error:", scanError.message);
     return json({ error: "scan_failed", code: "database_unavailable" }, 503);
   }
 
   let candidates = (dueRows ?? []) as DueRow[];
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
+  if (candidates.length === 0) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 }));
 
   // Private video is resolved by the owner-scoped v76 materializer after claim.
   // Protected legacy images and mixed/multi-video shapes still defer before claim.
@@ -325,7 +361,7 @@ export async function GET(req: Request): Promise<Response> {
   });
   const deferredMedia = candidates.length - safeCandidates.length;
   candidates = safeCandidates;
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: deferredMedia });
+  if (candidates.length === 0) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: deferredMedia }));
 
   // ── 2+3) CLAIM then PUBLISH, one row at a time ───────────────────────────────
   //
@@ -1277,7 +1313,7 @@ export async function GET(req: Request): Promise<Response> {
       + `${deferred} due row(s) left for the next run`,
     );
   }
-  return json({ claimed: claimedCount, published, failed, skipped, deferred });
+  return json(runBody({ claimed: claimedCount, published, failed, skipped, deferred }));
 }
 
 /**
