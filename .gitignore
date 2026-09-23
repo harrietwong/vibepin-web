@@ -56,3 +56,6 @@ screenshots/
 # OS
 .DS_Store
 backend/pinterest_profile/
+
+# E2E probe scratch (generated receipts; never source of truth)
+.e2e-tmp/
