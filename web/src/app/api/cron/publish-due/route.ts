@@ -88,6 +88,7 @@ import {
   failedRowsForUnattempted,
   didNotCompleteMessage,
 } from "./publishDueLogic";
+import { publishRetryWorkerEnabled } from "./retrySchedule";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -226,6 +227,22 @@ export async function GET(req: Request): Promise<Response> {
 
   const db = createServerClient();
   const io = rowIo(db);
+  // ── v82 automatic retry (design §7): read ONCE per request, never at module scope ──
+  //
+  // Per-request because a rollback must take effect on the very next tick without a
+  // redeploy, and because the retry tests flip this between ticks inside one process.
+  //
+  // Read here, held in a local, and consulted everywhere below — rather than calling
+  // the helper at each site — so one request can never see the flag change halfway
+  // through and, say, write a backoff gate it then refuses to scan on.
+  //
+  // ★ INVARIANT, and the reason the column name appears nowhere outside a branch
+  // guarded by this local: v82 is NOT applied in production. A PostgREST filter that
+  // names `publish_next_attempt_at` on a database without that column returns 42703,
+  // which `isMissingSchemaError` classifies as "schema not ready" and the route
+  // degrades to an empty run — i.e. ALL scheduled publishing silently stops. Off must
+  // therefore mean the column is never mentioned, not merely never matched.
+  const retryEnabled = publishRetryWorkerEnabled();
   // The run's wall clock. Everything time-bounded below measures from here.
   const startedMs = Date.now();
   const nowMs = startedMs;
@@ -238,7 +255,7 @@ export async function GET(req: Request): Promise<Response> {
   const deadlineMs = startedMs + RUN_DEADLINE_MS;
 
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
-  const { data: dueRows, error: scanError } = await db
+  let scanQuery = db
     .from(TABLE)
     // scheduled_at is selected because it is the STABLE half of the metering
     // idempotency key (Phase 5B). Claim time is not usable: it is regenerated on
@@ -247,7 +264,19 @@ export async function GET(req: Request): Promise<Response> {
     .lte("scheduled_at", nowIso)
     .not("scheduled_at", "is", null)
     .is("deleted_at", null)
-    .is("archived_at", null)
+    .is("archived_at", null);
+  if (retryEnabled) {
+    // The backoff gate (design §6.2). NULL means "no backoff constraint" — the value
+    // every pre-v82 row has and keeps, which is why this filter cannot change the
+    // behaviour of any row the feature has not itself touched.
+    //
+    // `pgQuote` for the same reason the claim's `.or()` uses it: an ISO timestamp
+    // contains ':' and '+', both of which are PostgREST filter syntax.
+    scanQuery = scanQuery.or(
+      `publish_next_attempt_at.is.null,publish_next_attempt_at.lte.${pgQuote(nowIso)}`,
+    );
+  }
+  const { data: dueRows, error: scanError } = await scanQuery
     .order("scheduled_at", { ascending: true })
     .limit(DUE_LIMIT);
 
@@ -308,7 +337,7 @@ export async function GET(req: Request): Promise<Response> {
     // claimed minutes in, and a start-of-run stamp would shorten its 10-minute lock by
     // exactly that much — another worker could steal a row still being published.
     const claimIso = new Date().toISOString();
-    const { data: won, error: claimError } = await db
+    let claimQuery = db
       .from(TABLE)
       .update({ publish_claimed_at: claimIso })
       .eq("vibepin_user_id", candidate.vibepin_user_id)
@@ -321,7 +350,21 @@ export async function GET(req: Request): Promise<Response> {
       .lte("scheduled_at", claimIso)
       .is("deleted_at", null)
       .is("archived_at", null)
-      .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
+      .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`);
+    if (retryEnabled) {
+      // The same gate as the scan, repeated here on purpose (design §6.2): between the
+      // scan and this UPDATE another worker can finish a round and push the backoff
+      // forward. Re-asserting it makes the claim itself the thing that enforces the
+      // gate, rather than a scan whose answer may already be stale.
+      //
+      // Two `.or()` calls on one builder AND together (each becomes its own `or=(…)`
+      // query parameter), which is what is wanted: claimable AND past its backoff.
+      // Asserted in test-publish-retry-schedule.ts rather than assumed.
+      claimQuery = claimQuery.or(
+        `publish_next_attempt_at.is.null,publish_next_attempt_at.lte.${pgQuote(claimIso)}`,
+      );
+    }
+    const { data: won, error: claimError } = await claimQuery
       .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at, publish_claimed_at");
 
     if (claimError) {
