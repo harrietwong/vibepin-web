@@ -26,7 +26,7 @@ import { formatPublicPricingComparisonValue } from "@/lib/i18n/pricingComparison
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 import { PLATFORMS } from "@/lib/social/platforms";
-import { customerVisibleSocialProviders } from "@/lib/social/visibleProviders";
+import { customerVisibleSocialProviders, igFbHidden, isHiddenSocialProvider } from "@/lib/social/visibleProviders";
 import {
   createPricingAuthState,
   getPricingHeaderState,
@@ -39,6 +39,18 @@ const MONO: React.CSSProperties = {
 };
 
 const ACCOUNT_BULLET_INDEX: Record<PlanKey, number> = { free: 2, starter: 0, pro: 0, business: 0 };
+
+/**
+ * When NEXT_PUBLIC_HIDE_IG_FB is on, swap a translation key for its
+ * ".pinterestOnly" variant IF the English source string at this position
+ * mentions Instagram/Facebook. `source` is always the untranslated English
+ * value from pricingPlans.ts (stable regardless of active locale), so this is
+ * a pure marker check — it never renders `source` itself.
+ */
+function pricingKey(baseKey: string, source: string): string {
+  if (igFbHidden() && /Instagram|Facebook/.test(source)) return `${baseKey}.pinterestOnly`;
+  return baseKey;
+}
 
 function PricingPlatformIcons() {
   const { t } = useLocale();
@@ -195,8 +207,8 @@ function PlanCards({
               {t(`public.pricing.plan.${plan.id}.description` as never)}
             </p>
             <ul className="flex-1 space-y-2.5 mb-6">
-              {plan.bullets.map((_, index) => {
-                const bullet = t(`public.pricing.plan.${plan.id}.bullet.${index}` as never);
+              {plan.bullets.map((source, index) => {
+                const bullet = t(pricingKey(`public.pricing.plan.${plan.id}.bullet.${index}`, source) as never);
                 return <li key={bullet} className="flex items-start gap-2.5 text-[12px]">
                   <Check
                     className="mt-0.5 h-3.5 w-3.5 shrink-0"
@@ -369,7 +381,13 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
                 {t(`public.pricing.compare.section.${sectionIndex}` as never)}
               </td>
             </tr>
-            {section.rows.map((row, rowIndex) => (
+            {section.rows.map((row, rowIndex) => {
+              // Skip rows flagged for a hidden platform WITHOUT renumbering the
+              // array — rowIndex stays the row's original position so every
+              // other row's i18n key (public.pricing.compare.row.${sectionIndex}.${rowIndex})
+              // keeps pointing at the same translated string.
+              if (row.provider && isHiddenSocialProvider(row.provider)) return null;
+              return (
               <tr key={row.label} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                 <td className="px-5 py-3 text-[13px]" style={{ color: "#C8CDD6" }}>
                   <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -392,7 +410,8 @@ function ComparisonTable({ yearly }: { yearly: boolean }) {
                   </td>
                 ))}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         ))}
       </table>
@@ -731,7 +750,7 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
               {t("public.pricing.compare.title")} <GradientText>{t("public.pricing.compare.titleAccent")}</GradientText>
             </h2>
             <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
-              {t("public.pricing.compare.description")}
+              {t((igFbHidden() ? "public.pricing.compare.description.pinterestOnly" : "public.pricing.compare.description") as never)}
             </p>
           </div>
           <ComparisonTable yearly={yearly} />
@@ -739,7 +758,7 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
             {t("public.pricing.footnote.scheduledPosts")}
           </p>
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#6B7280" }}>
-            {t("public.pricing.footnote.accounts")}
+            {t((igFbHidden() ? "public.pricing.footnote.accounts.pinterestOnly" : "public.pricing.footnote.accounts") as never)}
           </p>
           {/* The add-on, stated where the account numbers are: someone reading
               "1 account per platform" is exactly who needs to know it can be raised. */}
@@ -773,8 +792,8 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
               {PRICING_FAQ.map((item, i) => (
                 <FaqAccordionItem
                   key={i}
-                  question={t(`public.pricing.faq.item.${i}.question` as never)}
-                  answer={t(`public.pricing.faq.item.${i}.answer` as never)}
+                  question={t(pricingKey(`public.pricing.faq.item.${i}.question`, item.question) as never)}
+                  answer={t(pricingKey(`public.pricing.faq.item.${i}.answer`, item.answer) as never)}
                   defaultOpen={i === 0}
                 />
               ))}
@@ -790,7 +809,7 @@ function PricingPageContent({ billingEnabled, initialSessionHint }: { billingEna
             {t("public.pricing.finalCta.title")} <GradientText>{t("public.pricing.finalCta.titleAccent")}</GradientText>
           </h2>
           <p className="text-[14px] leading-relaxed max-w-[560px] mx-auto mb-8" style={{ color: "#8B93A1" }}>
-            {t("public.pricing.finalCta.description")}
+            {t((igFbHidden() ? "public.pricing.finalCta.description.pinterestOnly" : "public.pricing.finalCta.description") as never)}
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Link href="/signup?plan=free" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>

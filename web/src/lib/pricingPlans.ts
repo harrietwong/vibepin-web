@@ -183,6 +183,14 @@ export type ComparisonRow = {
   /** Small helper line rendered under the label. */
   note?: string;
   values: [string, string, string, string];
+  /**
+   * Marks a row as belonging to one specific social platform, so the render
+   * site can skip it when that platform is hidden (NEXT_PUBLIC_HIDE_IG_FB)
+   * without reordering or renumbering the array — every row's position (and
+   * therefore its i18n key index) must stay stable. Copy is untouched; this
+   * is a structural marker only.
+   */
+  provider?: "instagram" | "facebook";
 };
 
 export type ComparisonSection = {
@@ -242,8 +250,8 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
     title: "Publishing",
     rows: [
       { label: "Pinterest publishing", values: ["Limited", "✓", "✓", "✓"] },
-      { label: "Instagram publishing", values: ["Limited", "✓", "✓", "✓"] },
-      { label: "Facebook publishing", values: ["Limited", "✓", "✓", "✓"] },
+      { label: "Instagram publishing", values: ["Limited", "✓", "✓", "✓"], provider: "instagram" },
+      { label: "Facebook publishing", values: ["Limited", "✓", "✓", "✓"], provider: "facebook" },
       { label: "Calendar planning", values: ["Basic", "✓", "✓", "✓"] },
       { label: "Auto-publishing", values: ["—", "✓", "✓", "✓"] },
     ],

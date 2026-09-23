@@ -41,3 +41,8 @@ export function customerVisibleSocialProviders(
 export function isHiddenSocialProvider(provider: SocialProvider): boolean {
   return HIDE_IG_FB && HIDDEN_WHEN_FLAGGED.has(provider);
 }
+
+/** Plain boolean form of the flag, for render-site ternaries that don't need a provider check. */
+export function igFbHidden(): boolean {
+  return HIDE_IG_FB;
+}
