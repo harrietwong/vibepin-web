@@ -159,12 +159,12 @@ export type BulkCopySummary = {
   resumedAfterRateLimit: boolean;
 };
 
-export type RunBulkCopyInput = {
+export type RunBulkCopyInput<G extends GeneratedCopy = GeneratedCopy> = {
   /** Cards to send, in order (normally `preflight.ready`). */
   cards: BulkCopyCard[];
-  generate: (card: BulkCopyCard) => Promise<GeneratedCopy>;
+  generate: (card: BulkCopyCard) => Promise<G>;
   /** Merge against FRESH state and persist; returns what was written / kept. */
-  apply: (cardId: string, generated: GeneratedCopy) => Pick<MergeResult, "written" | "kept">;
+  apply: (cardId: string, generated: G) => Pick<MergeResult, "written" | "kept">;
   classifyError: (error: unknown) => BulkCopyErrorKind;
   concurrency?: number;
   isCancelled?: () => boolean;
@@ -177,7 +177,7 @@ export type RunBulkCopyInput = {
 
 export const BULK_COPY_CONCURRENCY = 2;
 
-export async function runBulkGenerateCopy(input: RunBulkCopyInput): Promise<BulkCopySummary> {
+export async function runBulkGenerateCopy<G extends GeneratedCopy = GeneratedCopy>(input: RunBulkCopyInput<G>): Promise<BulkCopySummary> {
   const concurrency = Math.max(1, Math.min(BULK_COPY_CONCURRENCY, Math.floor(input.concurrency ?? BULK_COPY_CONCURRENCY)));
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const items = new Map<string, BulkCopyItem>(input.cards.map(card => [card.id, { id: card.id, status: "queued" as const }]));
@@ -198,7 +198,7 @@ export async function runBulkGenerateCopy(input: RunBulkCopyInput): Promise<Bulk
       const card = queue.shift();
       if (!card) return;
       set(card.id, { status: "running", reason: undefined });
-      let generated: GeneratedCopy;
+      let generated: G;
       try {
         generated = await input.generate(card);
       } catch (error) {

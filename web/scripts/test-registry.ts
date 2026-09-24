@@ -42,6 +42,8 @@ export const CORE: string[] = [
   "test-amazon-copy-mapping",
   "test-amazon-card-ui",
   "test-amazon-risk-notice",
+  // T4: Amazon context + #ad on the Plan drawer / Batch Edit entry points.
+  "test-amazon-entry-points",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",

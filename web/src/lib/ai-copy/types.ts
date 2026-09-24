@@ -127,6 +127,12 @@ export type GeneratePinterestPinCopyInput = {
   category?: string;
   keyword?: string;
   destinationUrl?: string;
+  /**
+   * The caller owns an unsaved, fresher Website URL (Plan drawer, Batch Edit rows):
+   * the Amazon decision reads `destinationUrl` instead of the stored draft's URL.
+   * Studio cards leave it unset (their prop can lag one debounce behind the store).
+   */
+  destinationUrlIsCurrent?: boolean;
   setupSnapshot?: SetupSnapshot;
   promptSnapshot?: string;
   opportunity?: string;

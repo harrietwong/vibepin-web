@@ -18,6 +18,7 @@ import type {
 import { generatePinterestPinCopyV2, isAICopyV2ClientEnabled } from "./generatePinCopyV2";
 import type { AffiliateDisclosureKind } from "./affiliateDisclosure";
 import {
+  amazonSourceForUrl,
   buildAmazonCopyContext,
   canGenerateAmazonCopy,
   isAmazonAffiliateDraft,
@@ -161,13 +162,20 @@ function resolvePrimaryShopifyProduct(storeDraft?: pinDraftStore.PinDraft | null
  * it carries an amazonSource (a stale source behind a changed URL is ignored).
  */
 export function resolveAmazonCopyContext(
-  input: Pick<GeneratePinterestPinCopyInput, "destinationUrl">,
+  input: Pick<GeneratePinterestPinCopyInput, "destinationUrl" | "destinationUrlIsCurrent">,
   storeDraft?: pinDraftStore.PinDraft | null,
 ): (AmazonCopyContext & { affiliateDisclosure: AffiliateDisclosureKind; canGenerate: boolean }) | null {
-  const source = storeDraft?.amazonSource;
-  // The stored draft is fresh (the card flushes pending edits before generating);
-  // the prop copy of the URL can lag one debounce behind.
-  const destinationUrl = storeDraft?.destinationUrl ?? input.destinationUrl;
+  // Studio card: the stored draft is fresh (the card flushes pending edits before
+  // generating); the prop copy of the URL can lag one debounce behind. Plan drawer /
+  // Batch Edit: the caller's own unsaved URL is the current one.
+  const destinationUrl = input.destinationUrlIsCurrent
+    ? input.destinationUrl
+    : storeDraft?.destinationUrl ?? input.destinationUrl;
+  // T4: an Amazon URL is an Amazon card on EVERY entry point (Plan drawer, Batch Edit),
+  // even when it never passed through the Studio card that records amazonSource. The
+  // context is derived from the URL (same pure function the card uses), carrying any
+  // stored manual facts; without a product name the §2.3 gate applies as on the card.
+  const source = amazonSourceForUrl(destinationUrl, storeDraft?.amazonSource) ?? undefined;
   if (!source || !isAmazonAffiliateDraft({ destinationUrl, amazonSource: source })) return null;
   return { ...buildAmazonCopyContext(source), affiliateDisclosure: "ad_hashtag", canGenerate: canGenerateAmazonCopy(source) };
 }

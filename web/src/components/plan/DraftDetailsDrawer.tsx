@@ -1769,6 +1769,9 @@ export function PinDetailsModal({
               title={title} description={description} altText={altText}
               boardId={boardId || draft.boardId} boardName={draft.boardName}
               category={draft.category} keyword={draft.keyword} destinationUrl={destinationUrl}
+              // The drawer edits the URL locally until Save: an Amazon link typed here
+              // gets the Amazon context + #ad disclosure (T4) without saving first.
+              destinationUrlIsCurrent
               imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
               boards={boards}
               analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}

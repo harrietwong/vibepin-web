@@ -76,6 +76,8 @@ export type PinAICopyPanelProps = {
   category?: string;
   keyword?: string;
   destinationUrl?: string;
+  /** The host owns an unsaved, fresher Website URL (Plan drawer): Amazon context reads it. */
+  destinationUrlIsCurrent?: boolean;
   setupSnapshot?: SetupSnapshot;
   promptSnapshot?: string;
   opportunity?: string;
@@ -176,6 +178,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
           category: props.category,
           keyword: props.keyword,
           destinationUrl: props.destinationUrl,
+          ...(props.destinationUrlIsCurrent ? { destinationUrlIsCurrent: true } : {}),
           setupSnapshot: props.setupSnapshot,
           promptSnapshot: props.promptSnapshot,
           opportunity: props.opportunity,

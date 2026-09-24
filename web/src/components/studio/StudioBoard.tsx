@@ -621,6 +621,11 @@ export function StudioBoard() {
         targetConnectionId: edit.targetConnectionId,
         targetAccountLabel: edit.targetAccountLabel,
       };
+      // Copy the user typed in Batch Edit is theirs: bulk Generate copy keeps it (T4).
+      if (edit.copyTouched && Object.values(edit.copyTouched).some(Boolean)) {
+        const existing = pinDraftStore.getDraft(id);
+        patch.metadataTouched = { ...EMPTY_TOUCHED, ...existing?.metadataTouched, ...Object.fromEntries(Object.entries(edit.copyTouched).filter(([, v]) => v)) };
+      }
       Object.keys(patch).forEach(key => patch[key as keyof PinDraft] === undefined && delete patch[key as keyof PinDraft]);
       pinDraftStore.updateDraft(id, patch);
     });
@@ -1051,7 +1056,8 @@ export function StudioBoard() {
         next = {
           ...patch,
           destinationUrlSource: "manual",
-          metadataTouched: { ...EMPTY_TOUCHED, ...existing?.metadataTouched, destinationUrlTouched: true },
+          // Keep any copy-touched flags the same patch carries (the card marks typed copy).
+          metadataTouched: { ...EMPTY_TOUCHED, ...existing?.metadataTouched, ...patch.metadataTouched, destinationUrlTouched: true },
         };
       }
     }

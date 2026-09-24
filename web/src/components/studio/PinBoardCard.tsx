@@ -61,6 +61,8 @@ import {
   type AmazonCardSource,
   type AmazonClaimHint,
 } from "@/lib/studio/amazonCardSource";
+import { manualCopyTouched } from "@/lib/studio/bulkCopyDrafts";
+import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
 import { runAmazonCardImport } from "@/lib/studio/amazonCardImport";
 import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
 import { appendAffiliateDisclosure, hasAffiliateDisclosure } from "@/lib/ai-copy/affiliateDisclosure";
@@ -389,7 +391,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     // STORED entries, and it runs ONLY when the board actually changed — a title
     // keystroke can never reach destinations.
     const boardChanged = nextBoardId !== (current.boardId ?? "").trim();
+    // This path is only ever the user typing (AI copy is applied via applyCopy), so a
+    // changed title / description / alt text is theirs: bulk Generate copy keeps it (T4).
+    const copyTouched = manualCopyTouched(current, { title: f.title, description: f.description, altText: f.altText });
     props.onPersist(draft.id, {
+      ...(copyTouched ? { metadataTouched: { ...EMPTY_TOUCHED, ...copyTouched } } : {}),
       title: f.title,
       description: f.description,
       destinationUrl: f.websiteUrl.trim(),
