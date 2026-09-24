@@ -97,6 +97,73 @@ export function canReplaceManifestMedia(input: {
     && !alreadyPublished;
 }
 
+/**
+ * Extracts the private-bucket object path a `/api/storage-media?path=` proxy URL
+ * resolves to. Returns null for anything that is not such a proxy URL, so callers
+ * can fail closed rather than guess at a locator.
+ */
+export function parseStorageMediaObjectPath(proxyUrl: string): string | null {
+  const value = String(proxyUrl ?? "").trim();
+  if (!value.startsWith("/api/storage-media?")) return null;
+  const query = value.slice(value.indexOf("?") + 1);
+  const raw = new URLSearchParams(query).get("path");
+  if (!raw) return null;
+  const objectPath = raw.trim();
+  if (!objectPath || objectPath.includes("..") || objectPath.includes("\\")) return null;
+  return objectPath;
+}
+
+/**
+ * The publish-time contract every single-video draft must satisfy
+ * (`v76PinterestVideoRuntime` re-checks exactly these predicates before upload).
+ * Staging a draft whose media has no registration row — or a row whose declared
+ * facts disagree with the payload — produces a draft that is guaranteed to fail
+ * at its scheduled hour, so the scheduler refuses to write it in the first place.
+ */
+export function assertRegisteredVideoMedia(input: {
+  ownerUserId: string;
+  bucketId: string;
+  objectPath: string;
+  media: { width: number; height: number; durationMs: number };
+  provenance: {
+    owner_user_id?: string | null;
+    bucket_id?: string | null;
+    object_path?: string | null;
+    media_kind?: string | null;
+    width?: number | null;
+    height?: number | null;
+    duration_ms?: number | null;
+    content_type_source?: string | null;
+    byte_size_source?: string | null;
+    dimensions_source?: string | null;
+    duration_source?: string | null;
+    lifecycle_state?: string | null;
+  } | null;
+}): void {
+  const { provenance: row } = input;
+  if (!row) throw new Error(`media_provenance_missing:${input.objectPath}`);
+  if (row.owner_user_id !== input.ownerUserId) throw new Error(`media_provenance_owner_mismatch:${input.objectPath}`);
+  if (row.bucket_id !== input.bucketId) throw new Error(`media_provenance_bucket_mismatch:${input.objectPath}`);
+  if (row.object_path !== input.objectPath) throw new Error(`media_provenance_path_mismatch:${input.objectPath}`);
+  if (row.media_kind !== "video") throw new Error(`media_provenance_kind_mismatch:${input.objectPath}`);
+  if (row.content_type_source !== "storage_head_verified" || row.byte_size_source !== "storage_head_verified") {
+    throw new Error(`media_provenance_storage_labels_invalid:${input.objectPath}`);
+  }
+  if (row.dimensions_source !== "browser_declared" || row.duration_source !== "browser_declared") {
+    throw new Error(`media_provenance_declaration_labels_invalid:${input.objectPath}`);
+  }
+  if (!["draft", "publish_pending", "published", "retained"].includes(String(row.lifecycle_state ?? ""))) {
+    throw new Error(`media_provenance_lifecycle_invalid:${input.objectPath}`);
+  }
+  if (row.width !== input.media.width || row.height !== input.media.height || row.duration_ms !== input.media.durationMs) {
+    throw new Error(`media_provenance_facts_mismatch:${input.objectPath}`);
+  }
+  const duration = Number(row.duration_ms);
+  if (!Number.isSafeInteger(duration) || duration < 4_000 || duration > 300_000) {
+    throw new Error(`media_provenance_duration_out_of_range:${input.objectPath}`);
+  }
+}
+
 export function replaceVideoMediaPayload<T extends Record<string, unknown>>(current: T, replacement: { url: string; width: number; height: number; durationMs: number; provenance?: Record<string, unknown> }): T {
   const media = Array.isArray(current.media) ? current.media as Array<Record<string, unknown>> : [];
   if (!media.length) throw new Error("portrait_media_missing");
@@ -111,11 +178,23 @@ export function replaceVideoMediaPayload<T extends Record<string, unknown>>(curr
  * is cover-scaled and cropped to fill the portrait canvas.
  */
 export function buildPortraitTransformFilter(): string {
-  return `[0:v]split=2[bg0][fg0];[bg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,crop=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT},boxblur=luma_radius=24:luma_power=2[bg];[fg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`;
+  return `[0:v]split=2[bg0][fg0];[bg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,crop=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT},boxblur=luma_radius=24:luma_power=2[bg];[fg0]scale=${PORTRAIT_WIDTH}:${PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,scale=in_range=auto:out_range=tv,format=yuv420p[v]`;
 }
 
 export function buildPortraitTransformCommand(inputPath: string, outputPath: string): string[] {
   return ["-y", "-i", inputPath, "-filter_complex", buildPortraitTransformFilter(), "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "128k", "-movflags", "+faststart", outputPath];
+}
+
+export function buildCompatibilityNormalizeCommand(inputPath: string, outputPath: string, durationMs: number): string[] {
+  const videoBitrateKbps = targetVideoBitrateKbps(durationMs);
+  return [
+    "-y", "-i", inputPath,
+    "-vf", "scale=in_range=auto:out_range=tv,format=yuv420p",
+    "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "medium",
+    "-b:v", `${videoBitrateKbps}k`, "-maxrate", `${videoBitrateKbps}k`, "-bufsize", `${videoBitrateKbps * 2}k`,
+    "-c:a", "aac", "-profile:a", "aac_low", "-ar", "48000", "-ac", "2", "-b:a", "128k",
+    "-movflags", "+faststart", outputPath,
+  ];
 }
 
 export function normalizeManifestMedia<T extends CheerishManifestMedia>(

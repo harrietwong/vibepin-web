@@ -87,6 +87,7 @@ import * as pinMetadataStore from "@/lib/pinMetadataStore";
 import { preserveAffiliateContextOnRegenerate, applyCreatorProductLinkToPinDraft } from "@/lib/affiliate/pinAffiliateInheritance";
 import { getAmazonAffiliateSettings, type AmazonAffiliateSettings } from "@/lib/affiliate/amazonAffiliateSettings";
 import { resolveStudioAffiliateContext, type StudioAffiliateContext } from "@/lib/studio/affiliateContext";
+import { canonicalMediaUrl } from "@/lib/studio/failureMedia";
 import { canViewGenerationDebug } from "@/lib/generationDebugAccess";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { readResolvedContentLanguage, type LanguageCode } from "@/lib/i18n/config";
@@ -302,7 +303,7 @@ function devLogSnapshot(event: string, payload: Record<string, unknown>): void {
 // Falls back to minimal { imageUrl, title: "", source: "uploaded" } when no asset record exists
 // (e.g. raw data-URL uploads that were never passed through the picker).
 function productUrlToSnapshot(imageUrl: string): ProductSnapshot {
-  const asset = assetStore.getAssets().find(a => a.imageUrl === imageUrl && a.role === "product");
+  const asset = assetStore.getAssets().find(a => canonicalMediaUrl(a.imageUrl) === canonicalMediaUrl(imageUrl) && a.role === "product");
   return {
     imageUrl,
     title:        asset?.title?.trim()    ?? "",
@@ -1029,7 +1030,7 @@ function CompactAssetEntry({
     : tr("page.studio.referencesHelper");
   const addLabel = isProduct ? tr("page.studio.addProductImages") : tr("page.studio.addPinReferences");
   const selectedItems: SelectedAssetPreviewItem[] = selectedUrls.map(url => {
-    const asset = assetStore.getAssets().find(a => a.imageUrl === url && a.role === role);
+    const asset = assetStore.getAssets().find(a => canonicalMediaUrl(a.imageUrl) === canonicalMediaUrl(url) && a.role === role);
     return {
       imageUrl: url,
       title: asset?.title,
