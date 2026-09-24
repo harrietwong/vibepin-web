@@ -1,0 +1,1240 @@
+# VibePin Create Pins × Plan 一体化与失败处理 PRD
+
+版本：V1.0
+日期：2026-07-31
+状态：需求确认稿
+适用范围：Create Pins、Weekly Plan、Publish failures、Generation failures
+不包含：AI 生图流程重构、Product Picker、Landing Page、Pinterest OAuth、推荐系统
+
+---
+
+# 1. 背景
+
+目前 VibePin 的 Create Pins 与 Weekly Plan 存在以下问题：
+
+1. Weekly Plan 是独立一级入口，Create Pins 也是独立一级入口；
+2. 用户在两个页面之间来回切换，但实际操作的是同一批 Pin；
+3. Plan 显示大量发布失败，但 Create Pins 中只显示少部分；
+4. Plan 与 Create Pins 的失败计数口径不一致；
+5. 用户点击 Plan 的失败提示后，无法看到对应的全部失败图片；
+6. Create Pins 同时包含：
+   - AI 生成失败；
+   - Pinterest 发布失败；
+   但两种失败的含义和恢复方式不同；
+7. 错误卡片可能显示：
+   - 后台测试名称；
+   - 原始技术错误；
+   - 中英文重复文案；
+   - 空白图、No image 或蓝色占位块；
+8. 用户已经点击查看失败后，Plan 的大提示仍可能持续出现；
+9. Plan 与 Create Pins 可能对同一 Pin 维护不同的展示或状态分支。
+
+当前体验容易让用户误以为：
+
+- 失败图片丢失；
+- Plan 和 Create Pins 不是同一套数据；
+- 点击失败提示没有实际作用；
+- 同一张 Pin 需要在不同页面分别处理。
+
+---
+
+# 2. 产品目标
+
+本轮目标是建立一个统一的 Pinterest 内容生产与失败恢复工作台。
+
+最终产品原则：
+
+1. Create Pins 是唯一内容工作台；
+2. Weekly Plan 并入 Create Pins，成为其中一个视图；
+3. 不再保留独立 Weekly Plan 一级入口；
+4. Draft、Scheduled、Plan、Posted、Failed 是同一条 Pin 记录的不同视图或状态；
+5. 所有发布失败统一在 Create Pins 中处理；
+6. 所有生成失败也统一在 Create Pins 中处理；
+7. Plan 只统计发布失败，不统计生成失败；
+8. Plan 中计数的每一条失败，必须能够在 Create Pins 中找到；
+9. 不复制失败 Pin，不创建第二条草稿；
+10. 客户只看到简单、可理解、可操作的失败提示；
+11. 原始技术错误仅供后台诊断，不直接展示给客户。
+
+---
+
+# 3. 最终信息架构
+
+## 3.1 一级导航
+
+调整前：
+
+- Create Pins
+- Weekly Plan
+
+调整后：
+
+- Create Pins
+
+移除左侧导航中的独立：
+
+- Weekly Plan
+
+其他导航不受影响。
+
+---
+
+## 3.2 Create Pins 内部结构
+
+Create Pins 最终包含：
+
+- All
+- Drafts / Unscheduled
+- Scheduled
+- Plan
+- Posted
+- Failed
+
+Failed 下包含二级筛选：
+
+- All
+- Publish failures
+- Generation failures
+
+说明：
+
+- Drafts 与 Unscheduled 是否合并或保留当前名称，以现有代码和用户界面为准；
+- 本 PRD 不要求重新命名所有生命周期状态；
+- Plan 使用现有 Weekly Plan 组件，不重新设计一套；
+- Failed 是统一失败恢复区域。
+
+---
+
+# 4. Plan 并入 Create Pins
+
+## 4.1 Plan 的位置
+
+Plan 作为 Create Pins 内部的一个视图或 Tab。
+
+推荐入口：
+
+Create Pins
+→ Plan
+
+Plan 页面继续保留现有主要能力：
+
+- 周切换；
+- Calendar / List 视图；
+- 已排程 Pins；
+- Unscheduled Pins；
+- Smart Schedule；
+- Edit Plan；
+- Board 与发布时间；
+- 现有拖拽或排程能力；
+- 发布失败提示与数量。
+
+本轮不要求重新设计 Plan 的视觉布局。
+
+---
+
+## 4.2 不创建第二套 Plan
+
+实现时必须复用：
+
+- 当前 Weekly Plan 组件；
+- 当前 Plan 数据查询；
+- 当前排程逻辑；
+- 当前 Smart Schedule；
+- 当前 Pin draft 数据模型。
+
+禁止：
+
+- 在 Create Pins 中复制一份 Weekly Plan 页面代码；
+- 维护两个不同的 Plan 组件；
+- 让 `/app/plan` 与 Create Pins Plan 显示不同数据；
+- 建立新的 Plan-only Pin 实体。
+
+---
+
+## 4.3 旧路由兼容
+
+旧路径：
+
+`/app/plan`
+
+必须继续可用，以避免旧链接、书签和登录回跳失效。
+
+允许两种实现方式：
+
+### 方式 A：重定向
+
+`/app/plan`
+→ `/app/studio?view=plan`
+
+### 方式 B：共享渲染
+
+`/app/plan` 与 Create Pins Plan 调用同一共享组件。
+
+无论采用哪种方式：
+
+- 用户看到的必须是同一套 Plan；
+- 不能保留两套不同实现；
+- 不能因入口不同而读取不同数据；
+- 刷新后必须保持 Plan 视图。
+
+---
+
+# 5. 统一 Pin 生命周期
+
+Draft、Scheduled、Plan、Posted 和 Failed 必须使用同一条 Pin/draft 记录。
+
+推荐生命周期语义：
+
+draft / unscheduled
+→ scheduled
+→ publishing
+→ published
+
+失败时：
+
+publishing
+→ publish_failed
+
+AI 生图失败时：
+
+generating
+→ generation_failed
+
+修复后：
+
+publish_failed
+→ scheduled / draft / published
+
+generation_failed
+→ generating / draft / deleted
+
+硬性要求：
+
+- Pin 在整个生命周期中保持同一个 ID；
+- 不复制一张失败 Pin 到另一套工作台；
+- 不创建 Plan Pin 和 Create Pins Pin 两种用户实体；
+- 发布尝试历史可单独保存，但不能替代当前 Pin 状态；
+- 同一 Pin 多次失败，在用户当前失败队列中只显示一次。
+
+---
+
+# 6. 失败类型定义
+
+失败分成两种。
+
+---
+
+## 6.1 Publish failure
+
+定义：
+
+Pin 已经拥有可发布图片，并进入立即发布或定时发布流程，但 Pinterest 发布失败。
+
+可能来源：
+
+- Create Pins 立即发布；
+- Create Pins 定时发布；
+- Plan 排程；
+- Smart Schedule；
+- 历史 Weekly Plan 工作流；
+- 自动发布 Cron。
+
+展示位置：
+
+Create Pins
+→ Failed
+→ Publish failures
+
+Plan：
+
+- 只展示当前 Plan / 当前周范围内的 Publish failures 数量；
+- 不维护独立失败恢复页；
+- 点击后进入 Create Pins 的 Publish failures。
+
+---
+
+## 6.2 Generation failure
+
+定义：
+
+AI 图片生成阶段失败，尚未成功得到可发布 Pin 图片。
+
+展示位置：
+
+Create Pins
+→ Failed
+→ Generation failures
+
+不得：
+
+- 进入 Plan；
+- 计入 Plan failed；
+- 出现在 Plan Banner；
+- 出现在 Plan 的失败统计；
+- 被误分类为 Pinterest 发布失败。
+
+---
+
+# 7. 数量关系
+
+三个数字可以不同，但必须满足明确关系。
+
+## 7.1 Create Pins Publish failures
+
+表示：
+
+当前 workspace 中全部尚未解决的唯一发布失败 Pin。
+
+---
+
+## 7.2 Plan failed
+
+表示：
+
+当前 Plan、当前周或当前筛选范围内的 Publish failures。
+
+因此：
+
+Plan failed
+是
+Create Pins Publish failures
+的范围子集。
+
+---
+
+## 7.3 Create Pins All failed
+
+表示：
+
+Publish failures
++
+Generation failures
+
+---
+
+## 7.4 硬性一致性规则
+
+1. Plan 中计数的每一条失败都必须在 Create Pins Publish failures 中存在；
+2. 点击 Plan 的 `N failed`，必须看到与该 N 对应的记录；
+3. 如果 Plan 显示 28 failed，点击后不能只显示 3 条；
+4. 同一 Pin 失败 3 次，当前失败数量只能计 1；
+5. 已经成功发布的 Pin 不再计入当前失败；
+6. 已删除或归档 Pin 不再计入；
+7. 没有对应可处理 Pin 的孤儿 Job 不计入客户失败数量；
+8. Generation failures 不计入 Plan 数字。
+
+---
+
+# 8. Plan 失败提示
+
+## 8.1 大提示卡
+
+Plan 视图可显示浅色提示卡：
+
+标题：
+
+`{n} Pins failed to publish`
+
+正文：
+
+`Review the Pins that couldn’t be published.`
+
+按钮：
+
+`Review failed Pins`
+
+允许右上角关闭按钮。
+
+不使用大面积深红 Banner。
+
+---
+
+## 8.2 点击行为
+
+用户点击：
+
+`Review failed Pins`
+
+应在 Create Pins 内切换至：
+
+Failed
+→ Publish failures
+
+同时保留当前 Plan 范围，例如：
+
+- 当前 planId；
+- 当前 week；
+- 当前 workspace；
+- 当前必要筛选。
+
+URL 或路由状态必须能够在刷新后恢复。
+
+不能仅依赖临时客户端 state。
+
+---
+
+## 8.3 Dismiss 规则
+
+点击 Review failed Pins：
+
+- 等同于用户已查看；
+- Plan 的大提示卡在当前会话内隐藏；
+- Compact failed count 继续显示；
+- Failed Pin 本身不会消失；
+- 只有出现新的失败时，大提示重新出现。
+
+点击关闭按钮：
+
+- 当前会话内隐藏大提示；
+- Compact failed count 继续显示。
+
+失败数量归零：
+
+- 大提示消失；
+- Compact failed count 也消失。
+
+新失败规则：
+
+- 不能只按“总数上升”判断；
+- 推荐按新的唯一 failure ID 判断；
+- 即使用户解决一条后又新增一条、总数不变，也应视为新失败并重新提示。
+
+---
+
+## 8.4 Failed 视图中的提示
+
+用户已经处于：
+
+Create Pins
+→ Failed
+
+时，不显示 Plan 的大失败提示。
+
+保留：
+
+- Failed Tab 数量；
+- Publish failures 数量；
+- Generation failures 数量；
+- 每张失败卡的状态与操作。
+
+---
+
+# 9. Failed 筛选
+
+Create Pins 的 Failed 视图包含：
+
+- All
+- Publish failures
+- Generation failures
+
+## 9.1 从 Plan 进入
+
+Plan 的：
+
+- Review failed Pins；
+- Compact N failed；
+
+点击后默认进入：
+
+Publish failures
+
+并应用 Plan/week 范围。
+
+---
+
+## 9.2 手动进入 Failed
+
+用户手动点击 Failed：
+
+默认进入：
+
+All
+
+或恢复用户本会话上次选择的 Failed 子筛选。
+
+---
+
+## 9.3 数量定义
+
+All：
+
+Publish failures + Generation failures
+
+Publish failures：
+
+唯一 actionable publish-failed Pins
+
+Generation failures：
+
+唯一 generation-failed tasks/drafts
+
+每个数字必须来自统一的服务端判定逻辑，不能在不同前端组件中分别复制条件。
+
+---
+
+# 10. Publish failure 卡片
+
+## 10.1 卡片内容
+
+每张 Publish failure 卡片显示：
+
+- 最终 Pin 图片；
+- Pin 标题；
+- Board；
+- 原排程时间；
+- 简短通用失败说明；
+- Retry publish；
+- Edit；
+- Delete。
+
+可在 More 菜单中保留现有合理操作，但本 PRD不新增独立失败处理页面。
+
+---
+
+## 10.2 客户提示文案
+
+统一提示：
+
+`Pinterest couldn’t publish this Pin. Review the Pin and try again.`
+
+不需要在客户界面展示大量技术错误分类。
+
+只有 Pinterest 连接明确失效时，可显示：
+
+`Reconnect Pinterest to continue publishing.`
+
+---
+
+## 10.3 不增加“送回 Drafts”
+
+不增加以下按钮：
+
+- Send back to drafts
+- Move to Drafts
+- Add to Create Pins
+- Move to Create Pins
+- Copy to Create Pins
+
+原因：
+
+- Publish failed Pin 本身已经属于 Create Pins 工作台；
+- Failed 只是该 Pin 当前状态或视图；
+- 用户可以直接 Edit；
+- 不需要复制或重新放回；
+- 不应产生第二条 draft。
+
+用户点击 Edit：
+
+- 打开同一条 Pin；
+- 保留图片、标题、描述、URL、商品、Board 和排程上下文；
+- 编辑保存后仍是同一条记录；
+- 用户可以重新发布或重新排程。
+
+---
+
+## 10.4 Retry publish
+
+Retry publish：
+
+- 使用同一条 Pin；
+- 使用当前最终图片；
+- 使用当前标题、描述、URL 和 Board；
+- 不创建新草稿；
+- 不创建重复用户卡片；
+- 可以新增内部 publish attempt；
+- Retry 成功后：
+  - 清除 active publish failure；
+  - 状态改为 published；
+  - 从 Failed 移除；
+  - Plan failed 数量同步减少；
+  - Posted 数量同步增加。
+
+Retry 失败：
+
+- 仍保留一张失败卡；
+- 更新最新失败时间；
+- 不因多次失败重复计数；
+- 原始尝试历史保留在内部。
+
+---
+
+## 10.5 Delete
+
+Delete：
+
+- 使用现有确认交互；
+- 删除或归档同一条 Pin；
+- 立即从 Publish failures 移除；
+- Plan failed 数量同步减少；
+- 不保留一个用户可见孤儿失败项。
+
+---
+
+# 11. Generation failure 卡片
+
+## 11.1 卡片内容
+
+显示：
+
+- Product、Reference、source 或 parent 图片；
+- 任务标题或草稿标题；
+- 简短通用提示；
+- Try again / Regenerate；
+- Edit；
+- Delete。
+
+通用提示：
+
+`We couldn’t generate this image. Review the source images and try again.`
+
+---
+
+## 11.2 Try again
+
+Try again / Regenerate：
+
+- 复用原 Product；
+- 复用原 Reference；
+- 复用原 Creative direction；
+- 复用原生成参数；
+- 不创建重复失败卡；
+- 新任务成功后，用成功结果替代或关联原失败记录；
+- 新任务失败时，保持一条当前失败记录并更新最新状态。
+
+---
+
+## 11.3 Plan 隔离
+
+Generation failures：
+
+- 不进入 Plan；
+- 不计入 Plan failed；
+- 不触发 Plan Banner；
+- 不显示 Plan 排程信息，除非该图片后续已经形成独立可发布 Pin。
+
+---
+
+# 12. 客户错误信息规范
+
+## 12.1 客户可见
+
+客户只需要知道：
+
+- 发布没有成功；
+- 生成没有成功；
+- 是否需要重新连接 Pinterest；
+- 可以执行什么下一步。
+
+---
+
+## 12.2 客户不可见
+
+禁止展示：
+
+- 原始 Pinterest JSON；
+- HTTP response body；
+- HTTP endpoint；
+- stack trace；
+- database error；
+- cron ID；
+- job ID；
+- token；
+- secret；
+-内部分类名称；
+- Demo failed transient；
+- Demo failed content；
+- Sandbox Demo Board；
+- 测试账号数据；
+- 中英文重复文案。
+
+---
+
+## 12.3 内部诊断
+
+内部仍可保存：
+
+- raw error；
+- status code；
+- Pinterest response；
+- publish attempt；
+- error category；
+- failedAt；
+- request correlation ID。
+
+这些信息仅允许：
+
+- Server logs；
+- Admin diagnostics；
+- 内部 debug 工具。
+
+不得通过普通客户 API 返回完整原始内容。
+
+---
+
+# 13. 失败图片规则
+
+失败卡片不能显示：
+
+- No image；
+- 破图图标；
+- 空白灰块；
+- 纯蓝色块；
+- 蓝色渐变 failure art。
+
+---
+
+## 13.1 Publish failure 图片优先级
+
+1. 最终 `imageUrl` / `generatedImageUrl`
+2. `mediaAssetId` 对应最终资源
+3. draft 持久化的最终图片
+4. `sourceImageUrl`
+5. 关联 Product 主图
+6. 本地静态 fallback
+
+原则：
+
+Publish failure 优先显示当时准备发布到 Pinterest 的最终图片。
+
+---
+
+## 13.2 Generation failure 图片优先级
+
+1. 有效的部分生成结果
+2. `sourceImageUrl`
+3. `sourceAssetId` 对应图片
+4. parent draft / parent asset
+5. Product 主图
+6. Reference 图片
+7. 本地静态 fallback
+
+行为：
+
+- Product 生图失败 → Product 原图；
+- Reference 生图失败 → Reference 原图；
+- Regenerate 失败 → 父图；
+- Prompt-only 且没有图片 → 本地 fallback。
+
+---
+
+## 13.3 本地 fallback
+
+优先复用现有中性占位图。
+
+没有适用资源时新增：
+
+`/public/images/pin-image-fallback.svg`
+
+要求：
+
+- 2:3 Pin 构图；
+- 中性浅色；
+- 不模拟真实商品；
+- 不依赖外部 URL；
+- 包含在 Production build；
+- alt：
+  `Pin image unavailable`
+
+---
+
+## 13.4 onError fallback chain
+
+- 每个候选 URL 最多尝试一次；
+- 图片加载失败后尝试下一候选；
+- 最终使用本地 fallback；
+- 禁止无限 onError 循环；
+- 禁止将失败 URL 重复写回 src；
+- 不依赖 blob URL、object URL、localhost URL 或过期签名 URL。
+
+---
+
+# 14. 统一失败数据来源
+
+必须建立一个 canonical 服务端查询或共享服务。
+
+语义示例：
+
+`getActionablePublishFailures(workspaceId, scope?)`
+
+返回：
+
+- draft / Pin ID；
+- 当前状态；
+- latest publish error category；
+- customer-facing message key；
+- failedAt；
+- previousScheduledTime；
+- Board；
+- final image；
+- retry eligibility；
+- Plan/week scope 信息。
+
+实际名称以当前架构为准。
+
+---
+
+## 14.1 使用同一来源的界面
+
+以下全部必须使用同一 canonical publish-failure 结果：
+
+- Plan Banner count；
+- Plan Compact failed count；
+- Plan scoped failed list；
+- Create Pins Failed count；
+- Publish failures count；
+- Publish failures cards；
+- Retry 后状态；
+- Delete 后状态。
+
+不得在不同前端组件中分别手写：
+
+- `publishError != null`
+- `status === failed`
+- cron attempt count
+- 其他独立判定。
+
+---
+
+## 14.2 计数语义
+
+Publish failed count 表示：
+
+当前仍需用户操作的唯一 Pin 数量。
+
+不包括：
+
+- 同一 Pin 的重复失败 attempts；
+- 成功后的历史失败；
+- 已删除 Pin；
+- 已归档 Pin；
+- 孤儿 Job；
+- Generation failures；
+- 仅后台存在但客户无法处理的记录。
+
+---
+
+## 14.3 孤儿记录
+
+如果存在 publish job，但找不到对应 Pin/draft：
+
+- 不计入客户 failed 数量；
+- 不显示在普通用户列表；
+- 保留至 Admin diagnostics；
+- 记录产生原因；
+- 后续通过数据修复或清理任务处理。
+
+---
+
+# 15. 同步规则
+
+以下动作发生后，Plan 与 Create Pins 必须同步更新：
+
+- 新 Publish failure；
+- Retry publish 成功；
+- Retry publish 再次失败；
+- Edit 后成功发布；
+- Delete；
+- Pinterest 重新连接；
+- Cron 发布成功；
+- Cron 发布失败。
+
+不得要求用户手动刷新。
+
+应复用现有：
+
+- Query invalidation；
+- Store update；
+- Realtime；
+- Polling；
+- Server revalidation。
+
+不得新增第二套状态同步系统。
+
+---
+
+# 16. 多设备与持久化
+
+失败状态和提示状态需区分。
+
+## 16.1 失败状态
+
+失败状态属于业务数据，必须服务端持久化。
+
+跨设备必须一致：
+
+- 失败 Pin；
+- 图片；
+- Board；
+- 原排程时间；
+- 当前状态；
+- Retry 结果；
+- Delete 结果。
+
+---
+
+## 16.2 Banner dismiss
+
+Plan 大提示的 dismiss 可采用：
+
+- 当前会话级；
+- 每个账号/设备单独记忆。
+
+它只影响通知是否显示，不影响失败数据。
+
+用户关闭 Banner 后：
+
+- Failed count 仍存在；
+- Failed cards 仍存在；
+- 另一设备可按自己的会话规则显示提示。
+
+---
+
+# 17. 权限与隔离
+
+所有失败数据必须按：
+
+- user；
+- workspace；
+- account ownership；
+
+进行服务端校验。
+
+禁止：
+
+- 用户 A 看到用户 B 的失败；
+- Workspace A 看到 Workspace B 的失败；
+- 仅靠前端筛选隐藏其他用户数据；
+- 通过修改 URL 参数读取其他 workspace 的失败列表。
+
+Plan/week scope 只能缩小当前用户有权访问的数据，不得扩大权限。
+
+---
+
+# 18. 导航和 URL 状态
+
+推荐支持明确的 Create Pins 状态 URL，例如：
+
+`/app/studio?view=plan`
+
+`/app/studio?view=failed&type=publish`
+
+`/app/studio?view=failed&type=generation`
+
+Plan 范围入口可包含：
+
+`planId`
+
+或：
+
+`week`
+
+具体参数以当前路由设计为准。
+
+要求：
+
+- 刷新后保持当前视图；
+- 浏览器前进/后退可用；
+- 登录回跳后保持目标视图；
+- 不依赖 `demo=true`；
+- 不依赖仅存在于内存的 setState。
+
+---
+
+# 19. 非目标
+
+本轮不做：
+
+- 独立 Failed Pins 页面；
+- 复制 Plan Pin 到 Create Pins；
+- Send back to drafts；
+- Move to Drafts；
+- 新增复杂客户错误分类中心；
+- 邮件失败通知；
+- 原始 Pinterest 错误展示；
+- 重写 Weekly Plan UI；
+- 重写 Smart Schedule；
+- 改 Pinterest OAuth；
+- 改 Pinterest Token 刷新；
+- 改 AI 生成算法；
+- 改 Product Picker；
+- 改 Landing Page；
+- 全量清理历史死代码。
+
+---
+
+# 20. 实施前审计要求
+
+Claude 第一次回复必须先返回：
+
+1. 当前 Weekly Plan 路由；
+2. 当前 Weekly Plan 主要组件；
+3. 当前 Create Pins shell 与 Tabs；
+4. Plan 与 Create Pins 是否共享同一 draft ID；
+5. 两边当前数据源；
+6. Plan 显示 20+ failed、Create Pins 只显示少量失败的精确原因；
+7. 额外失败记录属于：
+   - 不同实体；
+   - 不同 scope；
+   - 重复 attempts；
+   - legacy records；
+   - orphan jobs；
+   - 其他；
+8. Publish failure 当前判断条件；
+9. Generation failure 当前判断条件；
+10. Plan Banner 当前 dismiss 逻辑；
+11. Failed 卡片当前错误文案来源；
+12. Failed 图片当前候选字段与 fallback；
+13. `/app/plan` 的兼容方案；
+14. 预计修改文件；
+15. 是否需要数据库迁移；
+16. 历史记录兼容风险。
+
+未完成审计前，不直接实施。
+
+---
+
+# 21. 验收测试
+
+## 21.1 Plan 合并
+
+1. 左侧导航不再显示独立 Weekly Plan；
+2. Create Pins 内有 Plan 视图；
+3. Plan 原有周切换正常；
+4. Calendar / List 正常；
+5. Smart Schedule 正常；
+6. Edit Plan 正常；
+7. `/app/plan` 能进入同一 Plan 视图；
+8. 两个入口不渲染不同组件；
+9. 移动端 Plan 仍可使用。
+
+---
+
+## 21.2 Publish failure 一致性
+
+准备：
+
+- 3 个唯一 Publish failed Pins；
+- 其中一个连续失败 3 次；
+- 至少一个来自 Plan；
+- 至少一个来自 Create Pins 立即发布。
+
+预期：
+
+1. Create Pins Publish failures 显示 3；
+2. Plan 当前范围内如包含全部 3，则显示 3；
+3. 不显示 5；
+4. 点击 Plan failed 后看到对应 3 条；
+5. 每条拥有相同 draft ID；
+6. 不复制 Pin；
+7. 每张显示图片；
+8. 每张显示 Board；
+9. 每张显示原排程时间；
+10. 每张显示通用客户提示。
+
+---
+
+## 21.3 Generation failure 隔离
+
+准备：
+
+- 2 条 AI generation failures。
+
+预期：
+
+1. Create Pins Generation failures 显示 2；
+2. Create Pins All failed 增加 2；
+3. Plan failed 数量不增加；
+4. Plan Banner 不因生成失败出现；
+5. Generation failure 操作为 Try again / Edit / Delete；
+6. 不显示 Retry publish。
+
+---
+
+## 21.4 Retry
+
+对一条 Publish failure 执行 Retry publish。
+
+成功后：
+
+- 从 Publish failures 移除；
+- Plan failed 数量减少；
+- Posted 数量增加；
+- 同一 Pin ID 保持；
+- 不创建重复卡片；
+- 不要求刷新。
+
+再次失败：
+
+- 仍只显示一张；
+- 更新最新失败状态；
+- 不重复计数。
+
+---
+
+## 21.5 Edit
+
+点击 Edit：
+
+- 打开同一条 Pin；
+- 图片保留；
+- 标题保留；
+- 描述保留；
+- URL 保留；
+- Product 保留；
+- Board 保留；
+- 原排程信息可查看；
+- 不复制草稿。
+
+编辑后重新发布成功：
+
+- 从 Failed 移除；
+- Plan 与 Create Pins 同步。
+
+---
+
+## 21.6 Delete
+
+删除 Publish failure：
+
+- 使用确认交互；
+- 从 Create Pins 移除；
+- 从 Plan failed 移除；
+- 不保留客户可见孤儿记录；
+- 其他 Pins 不受影响。
+
+---
+
+## 21.7 Banner
+
+1. 新失败出现时 Plan 显示浅色提示卡；
+2. 点击 Review failed Pins 后进入 Publish failures；
+3. 返回 Plan 后大提示不再显示；
+4. Compact N failed 继续显示；
+5. 新 failure ID 出现后大提示重新显示；
+6. 失败归零后所有提示消失；
+7. Failed 视图内不显示大 Banner。
+
+---
+
+## 21.8 客户文案
+
+确认客户页面不出现：
+
+- 原始 JSON；
+- HTTP body；
+- stack trace；
+- cron ID；
+- Demo failed transient；
+- Demo failed content；
+- Sandbox Demo Board；
+- 中英文重复；
+- 后台字段名。
+
+---
+
+## 21.9 图片 fallback
+
+分别测试：
+
+1. Publish failure 有最终图片；
+2. 最终 URL 404，但 media asset 有效；
+3. 仅有 source image；
+4. Product generation failure；
+5. Reference generation failure；
+6. Regenerate failure；
+7. Prompt-only failure；
+8. 所有远程图片均失效；
+9. 历史 legacy 记录；
+10. 跨设备。
+
+不得出现：
+
+- No image；
+- 蓝色块；
+- 无限 onError；
+- blob URL 跨设备失效。
+
+---
+
+## 21.10 权限与质量
+
+1. 用户 A 看不到用户 B 的失败；
+2. Workspace A 看不到 Workspace B；
+3. 未登录不能访问；
+4. 不使用 E2E_TEST_MODE 制造假绿；
+5. Typecheck 通过；
+6. Production build 通过；
+7. Unit tests 通过；
+8. 数据查询测试通过；
+9. Browser QA 通过；
+10. Mobile QA 通过；
+11. Console 无新增未处理错误；
+12. Network 无循环请求。
+
+---
+
+# 22. 实施阶段
+
+## Phase 1：审计与数据统一
+
+- 审计 Plan / Create Pins 数据关系；
+- 建立 canonical publish-failure query；
+- 统一计数；
+- 处理重复 attempts；
+- 隔离 orphan jobs；
+- 确保同一 draft ID。
+
+## Phase 2：Plan 合并
+
+- Plan 加入 Create Pins；
+- 移除独立侧边栏入口；
+- 兼容 `/app/plan`；
+- 保持现有 Plan 功能。
+
+## Phase 3：失败 UX
+
+- Failed 子筛选；
+- Plan Banner 与 compact count；
+- 通用客户文案；
+- 卡片操作；
+- URL 视图状态。
+
+## Phase 4：图片与历史兼容
+
+- 媒体 fallback resolver；
+- 本地 fallback；
+- 历史失败记录兼容；
+- 跨设备测试。
+
+---
+
+# 23. 最终交付要求
+
+实施完成后返回：
+
+- Audit 结论；
+- Plan 与 Create Pins 原数据关系；
+- 数量不一致的根因；
+- files changed；
+- 数据库 migration；
+- canonical failure query；
+- 旧 `/app/plan` 兼容方案；
+- before / after 导航图；
+- Create Pins Plan 截图；
+- Publish failures 截图；
+- Generation failures 截图；
+- Plan Banner 截图；
+- Retry 测试；
+- Edit 测试；
+- Delete 测试；
+- 图片 fallback 截图；
+- Plan / Create Pins 计数一致性证据；
+- branch；
+- commit hash；
+- Preview URL；
+- typecheck；
+- build；
+- unit / integration / browser QA；
+- remaining risks。
+
+未经用户明确确认，不得部署 Production。

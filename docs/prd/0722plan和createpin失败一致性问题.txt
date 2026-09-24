@@ -1,0 +1,282 @@
+当前 Create Pins & Plan 失败工作流存在数据一致性事故。
+
+实际账号现象：
+
+- Plan 页面显示二十多张 Pins failed to publish；
+- 点击失败入口后看不到具体失败原因；
+- 跳转到 Create Pins 后找不到对应失败 Pins；
+- Plan 的失败数量与 Create Pins 的 Publish failures 数量不一致。
+
+这已经违反现有 PRD 的验收标准。先停止继续调整 Banner 样式和失败卡文案，优先审计失败数据链路。
+
+==================================================
+一、先判断当前 PRD 实施是否通过
+==================================================
+
+按照现有 PRD，以下必须成立：
+
+1. Plan 的失败 Banner 数字与 Create Pins → Failed →
+   Publish failures 数量一致。
+2. 点击 Banner 或 N failed 后进入 Create Pins Failed 视图，
+   且默认选择 Publish failures。
+3. 每个失败记录都能显示具体 publishError。
+4. 每个失败记录能找到对应 Pin 草稿、原排程时间和 Board。
+5. 失败归零后 Plan 与 Create Pins 同时归零。
+
+请根据真实账号和数据库逐条报告 Passed / Failed。
+不要把当前问题解释成 UI 差异。
+
+==================================================
+二、审计 Plan 和 Create Pins 的实际数据源
+==================================================
+
+分别列出：
+
+Plan failed count：
+- 组件；
+- API；
+- 数据库表或 view；
+- 查询条件；
+- workspace/user scope；
+- 时间范围；
+- 是否包含历史记录；
+- 是否包含重复 publish attempts；
+- 是否包含已删除或已归档 Pin；
+- 是否使用缓存。
+
+Create Pins Publish failures：
+- 组件；
+- API；
+- 数据库表或 view；
+- 查询条件；
+- workspace/user scope；
+- 时间范围；
+- Failed 判定条件；
+- 是否要求 publishError 非空；
+- 是否排除已删除、归档或缺失图片的记录；
+- 是否使用缓存。
+
+输出两条查询的并排对比。
+
+==================================================
+三、建立失败记录逐条对账
+==================================================
+
+使用当前测试账号，对 Plan 显示的所有失败项建立对账表：
+
+| failure/job ID | draft/pin ID | workspace | Plan 是否统计 |
+| Create Pins 是否显示 | publishError | errorCategory |
+| previousScheduledTime | board | image | 状态 |
+
+必须回答：
+
+- Plan 显示的二十多条分别是什么记录；
+- 其中多少有对应 Pin draft；
+- 多少是重复尝试；
+- 多少是孤儿记录；
+- 多少缺失 publishError；
+- 多少被 Create Pins 的过滤条件排除；
+- 多少属于历史而不是当前失败；
+- 是否存在跨 workspace 或跨账号数据。
+
+不要只看总数，必须逐条对账。
+
+==================================================
+四、定义唯一计数语义
+==================================================
+
+需要明确：
+
+“2 Pins failed to publish” 中的 2，必须表示：
+
+- 2 个当前仍需用户处理的唯一 Pin drafts；
+
+而不是：
+
+- 2 次 API 请求失败；
+- 2 条 cron attempt；
+- 同一 Pin 的多次重试；
+- 已成功后仍残留的历史失败；
+- 已删除 Pin 的孤儿任务。
+
+同一个 Pin 无论失败重试多少次，在当前待处理失败数中只能计为 1。
+
+历史 publish attempts 可以保留用于诊断，但不能重复进入用户失败计数。
+
+==================================================
+五、建立一个事实来源
+==================================================
+
+先审计现有模型，再决定唯一事实来源，不要未经审计新建平行表。
+
+最终必须满足：
+
+- Plan failed count；
+- Create Pins Publish failures count；
+- Banner 数量；
+- CompactSummaryBar 的 N failed；
+- Failed tab chip；
+- Publish failures 子筛选；
+- 点击后的列表；
+
+全部由同一个规范化查询或共享服务计算。
+
+不要在前端分别复制 Failed 判定逻辑。
+
+建议提供一个共享的 server-side query/service，例如语义上：
+
+getActionablePublishFailures(workspaceId)
+
+它返回：
+
+- 唯一 Pin/draft ID；
+- 当前失败状态；
+- latest publish error；
+- error category；
+- latest failed attempt time；
+- previous scheduled time；
+- board；
+- image；
+- retry eligibility。
+
+具体命名以当前架构为准。
+
+==================================================
+六、失败原因必须可见
+==================================================
+
+检查失败原因当前保存在哪里：
+
+- draft.publishError；
+- publish attempt；
+- cron job；
+- server log；
+- Pinterest response；
+-其他字段。
+
+用户界面不能依赖短期 server logs。
+
+每个 actionable publish failure 必须持久化并能展示：
+
+- 安全、脱敏的用户可读错误；
+- error category；
+- failedAt；
+- previousScheduledTime；
+- board；
+- latest attempt；
+- reconnect-required 等恢复信息。
+
+不得展示 token、secret、完整请求头或敏感 Pinterest 响应。
+
+如果旧记录没有 publishError：
+
+- 尝试从最新 publish attempt 兼容恢复；
+- 仍找不到时显示明确兜底：
+  “Publishing failed, but detailed error information was not recorded.”
+- 不要显示空白区域。
+
+==================================================
+七、孤儿记录和重复记录处理
+==================================================
+
+如果存在失败 job 但找不到 draft：
+
+- 不得继续计入普通用户的 Pins failed 数量；
+- 保留到管理员诊断或 orphan queue；
+- 报告形成原因；
+- 提供安全清理或修复关联方案。
+
+如果同一 Pin 有多条失败 attempt：
+
+-用户失败列表仅显示一张 Pin；
+-显示最新错误；
+-可在内部诊断中查看 attempt history；
+-成功发布后当前失败状态必须清除；
+-历史 attempt 不得继续贡献失败计数。
+
+==================================================
+八、导航必须携带明确视图意图
+==================================================
+
+Plan Banner 和 N failed 点击后应进入当前真实路由，并明确设置：
+
+- Failed 主筛选；
+- Publish failures 子筛选；
+-必要时携带 workspace；
+-不得携带旧 demo 参数。
+
+刷新后仍应保持 Publish failures 视图。
+
+不要只在客户端临时 setState，导致页面跳转后丢失筛选。
+
+==================================================
+九、刷新与一致性
+==================================================
+
+失败状态发生以下操作后，Plan 和 Create Pins 必须同步刷新：
+
+- Retry publish 成功；
+- Move to Unscheduled；
+- Delete；
+- Edit 后重新发布；
+- Reconnect Pinterest；
+- cron 新增失败；
+-发布最终成功。
+
+不得要求用户强制刷新才能看到一致数量。
+
+审计：
+
+- query invalidation；
+- realtime subscription；
+- polling；
+-缓存 TTL；
+-跨设备刷新。
+
+选择最符合当前架构的方式，不要建立第二套同步系统。
+
+==================================================
+十、验收测试
+==================================================
+
+1. 制造 3 个不同 Pin 的发布失败。
+2. 其中一个 Pin 连续失败 3 次。
+3. Plan 必须显示 3 failed，而不是 5。
+4. Create Pins Publish failures 必须显示同样 3 张。
+5. 每张卡显示具体错误原因。
+6. 点击 Plan Banner 后能看到这 3 张。
+7. 刷新后仍保持正确列表。
+8. Retry 其中一张成功后，两边都变成 2。
+9. Move to Unscheduled 一张后，两边都变成 1。
+10. 删除最后一张后，两边都变成 0。
+11. Generation failures 不计入 Plan 的 publish failed 数字。
+12. 同一 Pin 的历史失败 attempt 不重复计数。
+13. 已经成功发布的 Pin 不再计入失败。
+14. 已删除 draft 的孤儿 job 不计入用户失败数。
+15. 旧记录缺失错误时显示安全兜底文案。
+16. 账号 A 不得看到账号 B 的失败。
+17. 跨设备打开后数量一致。
+18. 不依赖 E2E_TEST_MODE 或伪造 session。
+19. Typecheck、build、数据库查询测试和 browser QA 通过。
+
+==================================================
+十一、第一次回复
+==================================================
+
+先不要直接修改。
+
+第一次回复必须返回：
+
+- Plan failed count 的精确数据来源和查询；
+- Create Pins Publish failures 的数据来源和查询；
+- 当前账号逐条对账结果；
+- 数量不一致的精确根因；
+- 看不到失败原因的精确根因；
+- 找不到失败卡片的精确根因；
+-是否存在重复 attempts；
+-是否存在孤儿记录；
+-建议的唯一事实来源；
+-涉及的数据兼容或迁移风险；
+-预计修改文件和数据库对象。
+
+我确认后再实施。

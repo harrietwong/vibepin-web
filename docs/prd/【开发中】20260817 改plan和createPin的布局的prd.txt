@@ -1,0 +1,2164 @@
+# VibePin Create Pins / Plan / Scheduling 一致性与失败恢复 PRD V1.0
+
+**版本状态：产品评审稿 / Audit-ready**
+**日期：2026-08-16**
+
+本 PRD 聚焦：
+
+* Create Pins 信息架构
+* Plan 入口与响应式布局
+* Scheduled Pin 多平台发布
+* 默认发布目标
+* Pinterest Board 记忆
+* Unscheduled 数据语义
+* Failed 图片与错误文案
+* AI 创建入口
+
+本 PRD 不重新定义 Social Account 底层架构，不取代 Social Accounts PRD 中已经确认的账号身份、Reconnect、多账号和 Workspace 隔离原则。
+
+在 Audit 获批前，不允许大范围实施。
+
+---
+
+# 1. 背景与当前问题
+
+当前 Create Pins 已同时承担：
+
+* 内容创建
+* 编辑
+* 排程
+* Weekly Plan
+* 发布
+* 多平台发布
+* Posted
+* Failed
+* AI 编辑
+
+但当前界面出现了多处概念混用。
+
+主要问题：
+
+1. `Plan` 与 `All / Unscheduled / Scheduled / Posted / Failed` 放在同一状态栏，但 Plan 并不是内容状态。
+2. Scheduled Pin 是否真正向多个选择的平台执行发布缺少清晰的产品规则。
+3. 用户下一次排程时，之前使用过的 Pinterest Board 没有合理复用。
+4. Plan 右侧 `Unscheduled Pins` 出现已经发布的内容。
+5. Plan 底部又出现 `Added to plan · assign a date`，与 Unscheduled Pins 概念重复。
+6. Plan 占用整个主页面，但 Create Pins 本身还有大量创建和编辑工作，页面切换成本较高。
+7. AI 创建入口和 AI 编辑操作层级仍可优化。
+8. Failed 页面存在大量重复、技术化、互相冲突的错误信息。
+9. Publish failure 存在 `No image`、空白图、图片加载失败等情况。
+10. 多平台发布结果、计划状态与失败恢复仍需使用同一业务事实。
+
+---
+
+# 2. 产品目标
+
+本轮目标：
+
+1. 将 Create Pins 生命周期状态与 Plan 工作视图区分开。
+2. 让用户无需离开 Create Pins 即可快速查看和操作 Weekly Plan。
+3. 确保 Scheduled Pin 在执行时真正使用排程时保存的发布平台、账号和目标。
+4. 为新内容提供合理的默认发布目标，同时禁止 Settings 改动影响历史排程。
+5. 清除 Unscheduled / In Plan / Scheduled 等重复概念。
+6. Failed 页面始终提供可理解的图片、原因和下一步操作。
+7. 所有客户界面彻底移除 `No image`、raw provider error 和重复错误。
+8. 保持 AI 创建入口明显，但避免 Create Pins 变成工具按钮集合。
+
+---
+
+# 3. 非目标
+
+本轮不做：
+
+* 新建第二套 Pin entity
+* 新建独立 Plan Pin entity
+* 新建第二套 Schedule 时间字段
+* 重做 Social Account credential 模型
+* Facebook / Instagram 新的多账号架构
+* 账号级团队 ACL
+* 把 Board 管理加入 Social accounts
+* 自动把失败内容迁移到其他账号
+* 自动使用 Workspace default 替换失效的 Scheduled destination
+* 新建独立 Failed Pins 页面
+* Production 部署
+
+---
+
+# 4. Create Pins 信息架构
+
+## 4.1 Lifecycle navigation
+
+顶部内容状态只保留：
+
+```text
+All
+Unscheduled
+Scheduled
+Posted
+Failed
+```
+
+移除：
+
+```text
+Plan
+```
+
+原因：
+
+`Unscheduled / Scheduled / Posted / Failed` 描述 Pin 生命周期。
+
+`Plan` 描述用户工作的方式和页面视图。
+
+二者不能继续作为同一层级状态。
+
+---
+
+# 5. Plan 新入口
+
+## 5.1 推荐结构
+
+Create Pins 顶部右侧增加明确入口：
+
+```text
+[ Plan ]
+```
+
+可带 calendar icon。
+
+不要依赖 hover 才能进入。
+
+---
+
+## 5.2 Desktop 宽屏
+
+点击 Plan 后，从右侧展开约 380–440px 的 Plan panel。
+
+推荐结构：
+
+```text
+Create Pins                         Weekly Plan
+───────────────────────┬────────────────────────
+内容工作区               │ This week
+                        │ 5 scheduled
+                        │ 6 published
+                        │ 2 failed
+                        │
+                        │ Today
+                        │ 09:38  Pin...
+                        │ 15:05  Pin...
+                        │
+                        │ Needs scheduling
+                        │ Pin...
+                        │ Pin...
+                        │
+                        │ [Open full plan]
+───────────────────────┴────────────────────────
+```
+
+右侧 panel 是快速工作区，不要求在 400px 内塞入完整七列日历。
+
+---
+
+## 5.3 Full Plan
+
+点击：
+
+```text
+Open full plan
+```
+
+进入 Create Pins 内的 full Plan workspace。
+
+仍属于：
+
+```text
+Create Pins
+```
+
+不得恢复成独立一级产品导航。
+
+Full Plan 才提供：
+
+* Week calendar
+* Month
+* List
+* Filters
+* Smart Schedule
+* drag & drop
+* Published / Scheduled / Failed 状态
+* Account filter
+
+---
+
+## 5.4 Tablet
+
+不固定左右双栏。
+
+点击：
+
+```text
+Plan
+```
+
+打开 right drawer。
+
+可继续：
+
+```text
+Open full plan
+```
+
+---
+
+## 5.5 Mobile
+
+禁止 hover。
+
+Plan 按钮必须明确可点击。
+
+打开后使用：
+
+```text
+full-screen Plan
+```
+
+优先使用：
+
+* List
+* Day
+* compact week
+
+不要强行把桌面七列 calendar 缩成手机宽度。
+
+---
+
+# 6. 移除重复的 “Added to plan · assign a date”
+
+当前 Plan 下方：
+
+```text
+Added to plan · assign a date
+```
+
+客户很难理解它与：
+
+```text
+Unscheduled Pins
+```
+
+有什么业务区别。
+
+本 PRD 推荐取消这一客户概念。
+
+未确定发布时间的内容统一视为：
+
+```text
+Unscheduled
+```
+
+Plan 侧边栏可以显示其中符合 Plan 条件的内容：
+
+```text
+Needs scheduling
+```
+
+但这只是 Unscheduled 的一个 Plan 工作队列，不创建新的 lifecycle state。
+
+禁止形成：
+
+```text
+Draft
+Unscheduled
+Added to Plan
+Plan Unscheduled
+```
+
+四种相似客户状态。
+
+如果现有代码存在 `plan membership` 数据，Audit 必须先解释其业务必要性。
+
+不得直接删除数据字段。
+
+---
+
+# 7. Unscheduled Pins 数据语义
+
+## 7.1 Canonical 定义
+
+Unscheduled Pins 必须满足：
+
+```text
+该 Pin 当前仍是 draft / unscheduled
+AND
+没有有效 scheduledAt
+AND
+没有完成 publish
+AND
+不是当前 unresolved publish failure
+```
+
+同一个 Pin ID：
+
+* 已 Scheduled → 不出现在 Unscheduled
+* 已 Posted → 不出现在 Unscheduled
+* Publish failed → 进入 Failed
+* Generation failed → 进入 Failed
+
+不得因为图片相同而判断为同一个 Pin。
+
+判断依据必须是 Pin identity / lifecycle state。
+
+---
+
+## 7.2 已发布内容出现在 Unscheduled
+
+当前截图中已经出现该问题。
+
+必须 Audit：
+
+* Unscheduled query
+* Plan sidebar query
+* Posted query
+* cache
+* client filtering
+* server filtering
+
+禁止通过前端：
+
+```text
+filter(status !== "posted")
+```
+
+临时遮盖错误，而底层 canonical query 仍不一致。
+
+---
+
+# 8. Scheduled Pin 的多平台发布规则
+
+这是本 PRD 的核心数据规则。
+
+## 8.1 不采用“所有 Connected 平台自动发布”
+
+仅仅因为某个平台 Connected，不代表客户想让每条内容都发布到该平台。
+
+因此：
+
+```text
+Connected accounts
+≠
+selected publish destinations
+```
+
+禁止默认向所有已连接 Social Accounts 自动发布。
+
+---
+
+# 9. Default Publishing Destinations
+
+在：
+
+```text
+Settings
+→ Publishing
+```
+
+增加：
+
+```text
+Default publishing destinations
+```
+
+这是发布偏好，不是 Social Account 管理。
+
+示例：
+
+```text
+Default publishing destinations
+
+✓ Pinterest
+  @VibePin Home
+
+✓ Instagram
+  @vibepin.co
+
+✓ Facebook Page
+  VibePin
+
+Apply these destinations to new Pins and new schedules by default.
+```
+
+用户可以修改。
+
+---
+
+## 9.1 Default 的含义
+
+Default publishing destinations 只能：
+
+> 为新内容预填选项。
+
+它绝不能：
+
+* 修改已有 Draft 的 destination
+* 修改已有 Scheduled Pins
+* 修改 Plan 中已确定目标的内容
+* 修改 Failed Retry 的原目标
+* 修改历史 Posted 内容
+* 在 Job 执行时充当 fallback
+
+---
+
+# 10. Schedule 时冻结发布目标
+
+用户点击：
+
+```text
+Schedule
+Update schedule
+Smart Schedule
+Add to Plan（如流程仍保留）
+```
+
+时，必须保存确定的 publish destinations。
+
+概念至少包含：
+
+```text
+social_account_id
+destination_id
+platform
+account snapshot
+destination snapshot
+```
+
+Pinterest：
+
+```text
+Pinterest Account
+→ Board
+```
+
+Instagram：
+
+```text
+Instagram Account
+```
+
+Facebook：
+
+```text
+Facebook Page
+```
+
+具体 schema 等待 Audit，不要求直接创建上述字段名。
+
+---
+
+## 10.1 Settings 修改不能影响历史 Schedule
+
+例如：
+
+星期一：
+
+```text
+Pin A
+Pinterest Account A
+Board X
+Instagram Account A
+Facebook Page A
+```
+
+星期二用户修改 Settings default。
+
+星期三 Pin A 执行时仍必须使用星期一保存的目标。
+
+禁止读取：
+
+```text
+current workspace default
+recently used account
+newly connected account
+current Settings selection
+```
+
+---
+
+# 11. Multi-platform execution
+
+一条 Scheduled Pin 到达发布时间：
+
+```text
+Pin
+├── Pinterest destination
+├── Instagram destination
+└── Facebook destination
+```
+
+每个 destination 独立执行并独立记录结果。
+
+可能产生：
+
+```text
+Pinterest      Published
+Instagram      Published
+Facebook       Failed
+```
+
+客户详情必须能看到这种真实情况。
+
+---
+
+## 11.1 Pin overall lifecycle
+
+推荐：
+
+全部目标成功：
+
+```text
+Posted
+```
+
+存在至少一个 unresolved publish failure：
+
+```text
+Failed
+```
+
+Failed detail 同时保留已经成功的平台信息。
+
+失败目标 Retry 成功后：
+
+```text
+Failed
+→ Posted
+```
+
+不创建第二个客户可见 Pin。
+
+---
+
+# 12. Pinterest Board 记忆
+
+当前问题：
+
+用户已经选择：
+
+```text
+Pinterest Account A
+Board：家居
+```
+
+下一次创建或排程时又完全为空。
+
+体验成本过高。
+
+---
+
+## 12.1 推荐方案
+
+为每个 Pinterest Account 保存：
+
+```text
+last used Board preference
+```
+
+这是用户体验偏好，不是 Pin 的发布事实。
+
+例如：
+
+```text
+Account A → last used Board：家居
+Account B → last used Board：Living Room
+```
+
+---
+
+## 12.2 新 Pin
+
+创建新的 Pin 时：
+
+如果系统预选 Account A：
+
+可以预填：
+
+```text
+Board：家居
+```
+
+前提：
+
+* Board 仍存在
+* Board 仍属于 Account A
+* 用户仍有发布权限
+
+否则保持为空。
+
+---
+
+## 12.3 当前 Pin 中切换 Account
+
+这是安全边界。
+
+用户在编辑当前 Pin 时：
+
+```text
+Account A
+Board：家居
+```
+
+改为：
+
+```text
+Account B
+```
+
+必须：
+
+```text
+立即清除 Board
+```
+
+不得静默自动选 Account B 的 last-used Board。
+
+可以在 dropdown 中提示：
+
+```text
+Recently used: Living Room
+```
+
+但必须由用户确认。
+
+---
+
+## 12.4 Settings 边界
+
+Social accounts 仍然不承担 Board 管理。
+
+本轮不在：
+
+```text
+Settings → Social accounts
+```
+
+加入：
+
+* Default Board
+* Board list
+* Board sync
+* Board diagnostics
+
+Default publishing accounts 属于：
+
+```text
+Settings → Publishing
+```
+
+Board 选择仍主要属于实际内容发布工作流。
+
+---
+
+# 13. Failed 图片规则
+
+核心原则：
+
+> 客户界面不允许出现 `No image`。
+
+也不允许：
+
+* broken image
+* 空白蓝灰块
+* 无限 onError
+* 技术图片 URL
+* 图片请求错误文字
+
+---
+
+# 14. Publish failure 图片
+
+Publish failure 的含义是：
+
+> 最终内容已经存在，只是发布过程失败。
+
+因此首选图片必须是：
+
+```text
+当时准备发布的最终图片
+```
+
+禁止默认使用失败占位图代替真实内容。
+
+建议视觉：
+
+```text
+真实 Pin 图片
++
+Publish failed badge
+```
+
+可以使用轻微 dark overlay，但不得让图片失去可辨认性。
+
+不建议把所有 Publish failed 图片强制变成黑白。
+
+用户需要看见：
+
+> 到底是哪张图发布失败了。
+
+---
+
+# 15. Publish failure 图片 fallback
+
+解析顺序：
+
+```text
+final publish image
+→ persisted draft image
+→ source image
+→ product image
+→ parent image
+→ cached/local safe fallback
+→ generic failed thumbnail
+```
+
+只有前面所有来源均不可用，才进入最后 fallback。
+
+最后 fallback 使用统一灰度视觉：
+
+```text
+generic Pin thumbnail
++
+failure icon
+```
+
+但不得写：
+
+```text
+No image
+```
+
+这类 fallback 同时应产生内部 diagnostic，方便后续修复真正的数据问题。
+
+---
+
+# 16. Generation failure 图片
+
+Generation failure 没有最终 AI result。
+
+依次使用：
+
+```text
+source image
+→ Product image
+→ Style reference
+→ parent image
+→ safe local fallback
+→ AI generation failure thumbnail
+```
+
+同样禁止 `No image`。
+
+---
+
+# 17. Failed UI 简化
+
+当前错误存在：
+
+* 同一卡片多次重复说明
+* 泛化原因过长
+* 技术原因直接暴露
+* Banner + card + toast 同时重复
+* Publish failure / Generation failure 表达混乱
+
+统一成：
+
+```text
+[Publish failed]
+
+Pinterest couldn't publish this Pin.
+Review the Pin and try again.
+
+[Edit] [Retry]
+```
+
+---
+
+# 18. Failure message mapping
+
+## Generic publish failure
+
+```text
+Pinterest couldn’t publish this Pin.
+Review the Pin and try again.
+```
+
+其他平台同理：
+
+```text
+Facebook couldn’t publish this post.
+Review it and try again.
+```
+
+---
+
+## Authentication
+
+```text
+Reconnect Pinterest to publish this Pin.
+```
+
+Action：
+
+```text
+Reconnect
+```
+
+---
+
+## Board unavailable
+
+```text
+This Pinterest board is no longer available.
+Choose another board and try again.
+```
+
+Action：
+
+```text
+Choose board
+```
+
+---
+
+## Generation failure
+
+```text
+We couldn’t generate this image.
+Review the source images and try again.
+```
+
+Actions：
+
+```text
+Try again
+Edit
+```
+
+---
+
+# 19. 禁止客户错误内容
+
+不得显示：
+
+```text
+raw provider error
+HTTP 400
+HTTP 500
+stack trace
+cron/job ID
+database ID
+OAuth scope
+token
+Publishing not yet wired
+Demo failed transient
+Sandbox Demo Board
+```
+
+内部 error code 可以保存。
+
+客户只看到：
+
+```text
+发生了什么
++
+下一步应该做什么
+```
+
+---
+
+# 20. Failed Banner
+
+Plan 只对当前周、当前 Plan scope 中的 unresolved Publish failures 显示提醒。
+
+推荐简化：
+
+```text
+2 Pins need attention
+[Review failed Pins]
+```
+
+不再显示：
+
+```text
+2 Pins failed to publish
+Review the errors and choose how to continue.
+```
+
+避免过度强调错误。
+
+点击：
+
+```text
+Review failed Pins
+```
+
+进入：
+
+```text
+Create Pins
+→ Failed
+→ Publish failures
+```
+
+并保留 week / Plan scope。
+
+---
+
+# 21. AI 创建入口
+
+Tailwind 的布局可以借鉴“创建工具集中在工作区顶部”的概念，但不复制它大量工具按钮。
+
+VibePin 顶部保持三个核心入口：
+
+```text
+Generate AI Pin
+Upload images
+Select product
+```
+
+三者属于同一个 Create Pins workflow。
+
+---
+
+# 22. Desktop AI layout
+
+建议：
+
+```text
+Create Pins
+
+[Generate AI Pin] [Upload images] [Select product]         [Plan]
+```
+
+优先级：
+
+```text
+Generate AI Pin
+```
+
+可以作为视觉主按钮。
+
+但不得因为强调 AI，让 Upload / Product 变成隐藏的二级设置。
+
+---
+
+# 23. Mobile AI layout
+
+手机不同时展示三个大按钮。
+
+使用：
+
+```text
+[+ Create]
+```
+
+点击 action sheet：
+
+```text
+Generate AI Pin
+Upload images
+Select product
+```
+
+---
+
+# 24. Edit Pin AI actions
+
+Edit Pin 内继续保留：
+
+```text
+Generate copy
+Regenerate image
+```
+
+作为紧凑 contextual actions。
+
+不要把整个 Generate AI workflow 永久嵌入 Edit Pin 页面。
+
+点击：
+
+```text
+Regenerate image
+```
+
+继续打开统一 AI Drawer。
+
+---
+
+# 25. AI Drawer
+
+现有 Drawer 方向继续保持：
+
+```text
+Product images
+Style references
+Recommended references
+Number of Pins
+Generate N Pins
+```
+
+不改为 Tailwind 式永久右栏。
+
+原因：
+
+Create Pins 右侧空间未来还要承担 Plan。
+
+AI 是临时任务。
+
+Plan 是持续工作上下文。
+
+两者不应竞争同一个永久 sidebar。
+
+---
+
+# 26. Tailwind 可借鉴与不可借鉴部分
+
+## 值得借鉴
+
+```text
+创建入口集中
+SmartSchedule 作为独立工作区
+发布计划长期可见
+完整 calendar 可以 expand
+```
+
+## 不建议复制
+
+```text
+大量顶部工具按钮
+左侧再重复一套创建菜单
+持续占用过宽的 scheduler
+桌面布局直接压缩到移动端
+```
+
+VibePin 信息架构应更少、更集中。
+
+---
+
+# 27. Plan 卡片状态
+
+视觉继续区分：
+
+## Scheduled
+
+```text
+clock icon
+Scheduled
+紫色 accent
+```
+
+## Published
+
+```text
+check icon
+Published
+绿色 accent
+```
+
+## Failed
+
+```text
+warning icon
+Failed
+橙/红 accent
+```
+
+颜色不能作为唯一识别方式。
+
+必须同时存在：
+
+* icon
+* text
+
+---
+
+# 28. Plan 中的多账号信息
+
+每个内容卡片至少能够识别：
+
+```text
+platform
+account identity
+```
+
+Pinterest 可在 detail 中进一步显示：
+
+```text
+Board
+```
+
+Plan 不需要在日历小卡片上塞完整 Board 名称。
+
+---
+
+# 29. Published detail
+
+多平台内容使用 destination 级结果：
+
+```text
+Published destinations
+
+Pinterest
+@account
+Board: 家居
+Published
+View on Pinterest
+
+Instagram
+@account
+Published
+View on Instagram
+
+Facebook Page
+Page Name
+Published
+View on Facebook
+```
+
+如果部分失败：
+
+```text
+Facebook Page
+Failed
+Retry
+```
+
+不再提供一个全局：
+
+```text
+View Pin
+```
+
+---
+
+# 30. 实施前 Audit
+
+Claude 第一轮只允许 Audit。
+
+至少报告：
+
+1. 当前 Plan route、component 和 tab state。
+2. Plan 为什么和 lifecycle tabs 使用同一导航。
+3. 当前右侧 Unscheduled Pins query。
+4. 为什么 Posted 内容会进入 Unscheduled Pins。
+5. `Added to plan · assign a date` 的真实数据来源。
+6. 是否存在独立 plan membership / plan state。
+7. 删除该 UI 是否会破坏现有 Plan 数据。
+8. Scheduled Pin 当前保存哪些 destination。
+9. Scheduled Job 当前到底发布哪些平台。
+10. 多平台 destination 是否在 schedule time 已固定保存。
+11. Settings 是否已有 default publishing preferences。
+12. 当前发布页面如何决定 Pinterest / IG / FB 默认选择。
+13. Pinterest Board 当前保存在哪里。
+14. 是否已有 last-used Board 数据或 preference。
+15. Failed 图片当前从哪些字段读取。
+16. `No image` 是哪些具体路径造成。
+17. Publish failure 是否仍然保存 final publish image。
+18. Generation failure 当前保存哪些 source image。
+19. 当前 error code → customer message 在哪里计算。
+20. Plan / Failed / Create Pins 是否存在重复 error formatting。
+21. multi-platform partial failure 当前如何决定 Pin lifecycle。
+22. 当前 desktop / tablet / mobile Plan component 是否共享。
+23. 预计修改文件。
+24. 是否需要 migration。
+25. migration / historical data 风险。
+
+Audit 必须区分：
+
+```text
+代码事实
+推断
+无法确认
+```
+
+没有 Audit 批准，不实施。
+
+---
+
+# 31. 推荐实施阶段
+
+## Phase A — Data correctness
+
+先处理：
+
+* Unscheduled query
+* Posted / Scheduled contamination
+* Failed image source
+* No image
+* failure canonical state
+* Scheduled destination execution
+
+---
+
+## Phase B — Publishing preferences
+
+处理：
+
+* Settings → Publishing defaults
+* new Pin destination prefill
+* Pinterest last-used Board
+* schedule-time destination snapshot
+
+---
+
+## Phase C — Failed UX
+
+处理：
+
+* customer error mapping
+* cards
+* image fallback
+* banner
+* multi-platform failure details
+
+---
+
+## Phase D — Plan information architecture
+
+最后实施：
+
+* 从 lifecycle tabs 移除 Plan
+* Plan button
+* desktop right panel
+* tablet drawer
+* mobile full-screen
+* full Plan workspace
+* 删除/合并 Added to plan section
+
+不要把 Phase D 与数据 bug 修复做成一个巨大 commit。
+
+---
+
+# 32. 验收标准
+
+必须验证：
+
+1. lifecycle tabs 只有 All / Unscheduled / Scheduled / Posted / Failed。
+2. Plan 有独立入口。
+3. Desktop Plan panel 可以打开和关闭。
+4. Plan 可以 Expand 成 full Plan。
+5. Mobile 不依赖 hover。
+6. Posted Pin 不出现在 Unscheduled。
+7. Scheduled Pin 不出现在 Unscheduled。
+8. Failed Pin 不出
+
+# 35. 发布反馈改为异步任务模型
+
+当前多平台发布存在明显的重复反馈问题：
+
+```text
+先显示 Pinterest Published
+→ 等待
+→ 再显示 Pinterest / Instagram / Facebook Published
+→ 同时出现多个 Toast
+```
+
+这会让客户误以为系统重复发布，或者无法判断哪一次才是最终结果。
+
+新的产品规则：
+
+> Publish action 与 Publish result 必须分开。
+
+---
+
+## 35.1 用户点击 Publish now 后
+
+用户点击：
+
+```text
+Publish now
+```
+
+系统首先完成：
+
+```text
+创建 canonical publish job
+→ 保存本次 publish destinations
+→ 创建/确认各 destination publish task
+→ 返回 accepted
+```
+
+一旦 VibePin 已经可靠接受任务，不要求客户继续停留在 Drawer 等待 Pinterest / Instagram / Facebook Provider 完成。
+
+即时反馈只出现一次：
+
+```text
+Publishing started
+Results will update automatically.
+```
+
+或者等价的简洁客户文案。
+
+禁止此时显示：
+
+```text
+Published successfully
+```
+
+因为 job accepted 不等于 Provider 已经发布成功。
+
+---
+
+## 35.2 Publish CTA 状态
+
+点击后按钮可以短暂进入：
+
+```text
+Starting…
+```
+
+canonical publish job 创建成功后：
+
+```text
+Publishing
+```
+
+不得为了等待全部 Provider 返回而让整个 Drawer 长时间处于 blocking loading。
+
+客户可以：
+
+* 关闭 Drawer
+* 切换页面
+* 继续其他操作
+
+发布任务继续执行。
+
+---
+
+## 35.3 Publish results 后台更新
+
+Publish results 是最终事实来源。
+
+初始：
+
+```text
+Publish results
+
+Pinterest
+Publishing…
+
+Instagram
+Publishing…
+
+Facebook Page
+Publishing…
+```
+
+成功后：
+
+```text
+Pinterest
+Published
+View on Pinterest
+
+Instagram
+Published
+View on Instagram
+
+Facebook Page
+Published
+View on Facebook
+```
+
+部分失败：
+
+```text
+Pinterest
+Published
+View on Pinterest
+
+Instagram
+Published
+View on Instagram
+
+Facebook Page
+Failed
+Retry
+```
+
+必须支持刷新后恢复相同结果。
+
+不得依赖 Toast 保存发布结果。
+
+---
+
+## 35.4 Toast 规则
+
+同一次 publish operation：
+
+```text
+最多显示一个即时 Toast
+```
+
+推荐：
+
+```text
+Publishing started
+Results will update automatically.
+```
+
+禁止：
+
+```text
+Pinterest published successfully
+```
+
+随后再出现：
+
+```text
+Also published to Instagram
+```
+
+随后再出现：
+
+```text
+Facebook published successfully
+```
+
+这种连续 Toast。
+
+多个平台结果必须收敛到 `Publish results`。
+
+---
+
+## 35.5 最终完成后
+
+如果用户仍停留在当前详情中：
+
+Publish results 自动更新即可。
+
+不要求再次弹 Toast。
+
+如果未来需要全局通知能力，可以单独设计：
+
+```text
+Publishing complete
+```
+
+但不属于本轮 MVP 必需范围。
+
+---
+
+# 36. Publish result 的 canonical 状态
+
+必须明确区分：
+
+```text
+accepted
+publishing
+published
+failed
+```
+
+语义：
+
+### accepted
+
+VibePin 已可靠创建 publish job 并保存 destination。
+
+### publishing
+
+Provider 发布任务正在执行。
+
+### published
+
+Provider 已返回明确成功结果，并保存：
+
+```text
+external_post_id
+external_post_url
+published_at
+```
+
+或对应平台可验证的成功事实。
+
+### failed
+
+该 destination 当前发布失败，需要恢复操作。
+
+禁止：
+
+```text
+job 创建成功
+=
+Published
+```
+
+也禁止：
+
+```text
+HTTP request 已发送
+=
+Published
+```
+
+---
+
+# 37. 删除全局 View Pin
+
+多平台发布后：
+
+```text
+View Pin
+```
+
+语义已经不成立。
+
+必须删除 Drawer 底部全局：
+
+```text
+View Pin
+```
+
+改成 destination 自己的操作：
+
+```text
+View on Pinterest
+View on Instagram
+View on Facebook
+```
+
+只有：
+
+```text
+status = published
+AND
+存在合法 external_post_url
+```
+
+时才显示。
+
+---
+
+# 38. Plan 卡片的信息层级
+
+Plan 中的卡片不能只显示：
+
+```text
+图片
+时间
+状态 Badge
+```
+
+用户至少需要快速回答：
+
+```text
+什么时候发布？
+发布到哪里？
+当前结果是什么？
+```
+
+---
+
+## 38.1 Published 卡片
+
+卡片本体建议保留简洁信息：
+
+```text
+[Pin image]
+
+09:38
+✓ Published
+
+Pinterest · Instagram · Facebook
+```
+
+平台空间不足时可以只显示 icon。
+
+例如：
+
+```text
+[Pinterest icon]
+[Instagram icon]
+[Facebook icon]
+```
+
+不得要求用户必须打开详情以后才能知道发布到了哪些平台。
+
+---
+
+## 38.2 Desktop Published hover
+
+Desktop hover 显示轻量结果摘要：
+
+```text
+Ideas for your home
+
+Published
+Aug 18 · 9:38 AM
+
+Published to 3 destinations
+
+Pinterest       ✓
+Instagram       ✓
+Facebook Page   ✓
+
+[View results]   [Edit]
+```
+
+不要在 hover 中塞入完整：
+
+* description
+* Website URL
+* raw post ID
+* Provider error
+* 所有 Board metadata
+
+完整信息在 Detail 中查看。
+
+---
+
+## 38.3 Partial failure hover
+
+如果一条 Pin 部分发布成功：
+
+```text
+2 published · 1 needs attention
+
+Pinterest       ✓
+Instagram       ✓
+Facebook Page   !
+
+[Review results]
+```
+
+用户不需要打开详情才能发现某个平台失败。
+
+---
+
+## 38.4 Scheduled card hover
+
+Scheduled 内容显示：
+
+```text
+Scheduled
+Aug 19 · 9:38 AM
+
+Pinterest
+Instagram
+Facebook Page
+
+[Edit]   [Publish now]
+```
+
+Account identity 可以显示短 username / Page name。
+
+Pinterest Board 可在 Detail 中显示，不要求塞进小 hover。
+
+---
+
+## 38.5 Failed card hover
+
+推荐：
+
+```text
+1 destination needs attention
+
+Facebook Page
+Publish failed
+
+[Review]   [Retry]
+```
+
+如果失败涉及 destination configuration：
+
+```text
+Pinterest
+Board unavailable
+
+[Review]
+```
+
+禁止在 hover 中显示 raw technical error。
+
+---
+
+## 38.6 Mobile
+
+移动端没有 hover。
+
+点击 Plan card：
+
+```text
+Tap
+→ compact detail sheet
+```
+
+Compact sheet 显示与 Desktop hover 等价的信息。
+
+因此：
+
+> Hover 只能作为 Desktop enhancement，不能成为访问发布结果的唯一方式。
+
+---
+
+# 39. Published Pin 的动作规则
+
+已经 Published 的内容不能继续默认显示：
+
+```text
+Publish now
+```
+
+因为客户会理解为：
+
+> 这条内容是不是还没有发出去？
+
+Published 状态允许：
+
+```text
+View results
+Edit for reuse
+```
+
+如果未来支持再次发布，必须明确使用：
+
+```text
+Publish again
+```
+
+而不是 `Publish now`。
+
+`Publish again` 属于新的发布操作，需要重新确认 destinations。
+
+---
+
+# 40. Edit Scheduled Pin CTA hierarchy
+
+当前 Edit Scheduled Pin 同时出现：
+
+```text
+Edit date & time
+Generate copy
+Publish now
+Select a custom time
+Update schedule
+```
+
+动作过多，而且多个按钮都具有类似 Primary 权重。
+
+需要重新排序。
+
+核心用户任务是：
+
+> 修改当前 Scheduled Pin 并保存。
+
+---
+
+## 40.1 Schedule 信息
+
+Drawer 顶部显示：
+
+```text
+[thumbnail]
+
+Wed Aug 19 · 9:38 AM
+[Change]
+```
+
+点击：
+
+```text
+Change
+```
+
+打开现有 date/time picker。
+
+因此删除重复入口：
+
+```text
+Edit date & time
+Select a custom time
+```
+
+二者只能保留一套交互。
+
+推荐统一为：
+
+```text
+Change
+```
+
+---
+
+## 40.2 Primary CTA
+
+底部唯一 Primary CTA：
+
+```text
+Save changes
+```
+
+不要继续使用：
+
+```text
+Update schedule
+```
+
+作为通用按钮。
+
+因为用户可能修改：
+
+* Title
+* Description
+* Website URL
+* Product
+* Destination
+* Board
+* Time
+
+这些并不全部属于“Schedule”。
+
+---
+
+## 40.3 Publish now
+
+`Publish now` 是 Secondary action。
+
+底部结构推荐：
+
+```text
+[Publish now]                     [Save changes]
+```
+
+其中：
+
+```text
+Save changes
+```
+
+使用 Primary style。
+
+```text
+Publish now
+```
+
+使用 Secondary / outline style。
+
+---
+
+## 40.4 Publish now confirmation
+
+对于已经 Scheduled 的 Pin：
+
+用户点击：
+
+```text
+Publish now
+```
+
+意味着：
+
+> 不再等待原 scheduledAt，立即发布。
+
+应显示简洁确认：
+
+```text
+Publish this Pin now?
+
+It is currently scheduled for
+Aug 19 at 9:38 AM.
+
+[Cancel] [Publish now]
+```
+
+确认成功后再创建 publish job。
+
+---
+
+# 41. Edit Pin 中 AI action 降级
+
+当前：
+
+```text
+Generate copy
+```
+
+占据整行紫色大按钮，视觉权重过高。
+
+在 Edit Pin 中，AI 是辅助工具，不是页面主任务。
+
+改为：
+
+```text
+AI tools
+
+[Generate copy] [Regenerate image]
+```
+
+或放在 Content 区标题旁：
+
+```text
+Content                         ✨ Generate copy
+```
+
+两个按钮都使用 compact secondary style。
+
+---
+
+## 41.1 AI action 的职责
+
+```text
+Generate copy
+```
+
+负责：
+
+* Title
+* Description
+* 可允许用户确认后应用
+
+```text
+Regenerate image
+```
+
+打开统一 AI Drawer。
+
+不要把完整 AI generation controls 永久铺在 Edit Scheduled Pin 中。
+
+---
+
+# 42. Drawer 底部按钮按生命周期变化
+
+不要所有状态复用同一套 Footer。
+
+---
+
+## Unscheduled
+
+推荐：
+
+```text
+[Save draft]                  [Schedule]
+```
+
+---
+
+## Scheduled
+
+推荐：
+
+```text
+[Publish now]             [Save changes]
+```
+
+---
+
+## Published
+
+推荐：
+
+```text
+[Edit for reuse]          [View results]
+```
+
+不得默认出现：
+
+```text
+Publish now
+```
+
+---
+
+## Failed
+
+推荐：
+
+```text
+[Edit]                         [Retry]
+```
+
+认证失效时才替换/增加：
+
+```text
+Reconnect
+```
+
+---
+
+# 43. Publish results UI
+
+Publish results 不需要整个区域全部染成绿色。
+
+推荐每个 destination 独立表达状态：
+
+```text
+Publish results
+
+Pinterest
+@account
+Board: Home Decor
+✓ Published
+View on Pinterest
+
+Instagram
+@account
+✓ Published
+View on Instagram
+
+Facebook Page
+VibePin
+Publishing…
+```
+
+如果全部成功，可以在标题处轻量显示：
+
+```text
+All 3 destinations published
+```
+
+但不能让一个绿色大框把三个 destination 合并成一个状态。
+
+因为未来部分失败是正常情况。
+
+---
+
+# 44. 不允许 Publish result 闪烁成多个不同事实
+
+当前行为存在：
+
+```text
+先显示 Pinterest published
+→ UI reload
+→ 突然变成三个平台 published
+```
+
+客户容易认为系统又执行了一次发布。
+
+新的规则：
+
+publish job 创建后应立即建立完整 destination list。
+
+例如用户本次选了：
+
+```text
+Pinterest
+Instagram
+Facebook Page
+```
+
+Publish results 从第一帧就显示：
+
+```text
+Pinterest       Publishing…
+Instagram       Publishing…
+Facebook Page   Publishing…
+```
+
+随后 destination 独立更新。
+
+禁止先渲染 Pinterest-only success，再追加其他平台。
+
+---
+
+# 45. 本部分实施前追加 Audit
+
+Claude 在实现以上部分之前必须确认：
+
+1. 点击 `Publish now` 后 canonical publish job 在哪个时点创建。
+2. API 返回给客户端时 job 是否已经持久化。
+3. destination records 在 publish 前还是 publish 后创建。
+4. 当前为什么先出现 Pinterest-only result。
+5. 当前三个平台的状态分别从哪里读取。
+6. Toast 当前由哪些 component / callbacks 触发。
+7. 是否存在多个 success handler。
+8. Pinterest 是否仍通过单独的 `remotePinUrl` path 更新 UI。
+9. IG / Facebook 是否通过 destination result 更新。
+10. 如何让第一帧就拿到完整 destination list。
+11. Published Plan card 当前 hover component。
+12. hover 信息从哪一个 canonical result source 获取。
+13. Published 卡为什么仍然显示 `Publish now`。
+14. `Edit date & time` 和 `Select a custom time` 当前是否调用同一个 scheduledAt。
+15. Generate copy 为什么使用 Primary CTA style。
+16. Drawer footer 是否按 lifecycle state 分支。
+17. Mobile Plan card 点击行为。
+18. 上述修改是否需要 schema / migration。
+
+如果需要 migration：
+
+```text
+先停下来报告
+```
+
+不得擅自执行。
+
+---
+
+# 46. 本部分新增验收标准
+
+必须验证：
+
+1. 点击多平台 Publish 后只出现一次即时反馈。
+2. 即时反馈使用 `Publishing started` 或等价语义。
+3. job accepted 时不得显示 `Published successfully`。
+4. 客户不需要等待三个 Provider 全部返回。
+5. 关闭 Drawer 后 publish job 继续执行。
+6. refresh 后 publish result 可以恢复。
+7. Publish results 第一帧就包含本次所有 selected destinations。
+8. 不再先显示 Pinterest-only success，再追加其他平台。
+9. 每个 destination 可以独立：
+
+   * Publishing
+   * Published
+   * Failed
+10. 部分失败不会覆盖其他平台的成功结果。
+11. Toast 不作为 publish result source of truth。
+12. Drawer 底部不存在全局 `View Pin`。
+13. 每个平台使用自己的 `View on {Platform}`。
+14. Published Plan card 在 Desktop hover 时可以看到发布平台摘要。
+15. 部分失败在 hover 就可以识别。
+16. Mobile tap 可以看到同等信息。
+17. Published Pin 默认不再出现 `Publish now`。
+18. Scheduled Drawer 只有一个时间修改入口。
+19. Scheduled Drawer Primary CTA 为 `Save changes`。
+20. `Publish now` 为 Secondary action。
+21. Generate copy 不再使用整行 Primary button。
+22. Generate copy / Regenerate image 使用 compact AI tools。
+23. Footer 操作根据：
+
+    * Unscheduled
+    * Scheduled
+    * Published
+    * Failed
+      显示正确动作。
+24. `Publish now` 取消原 schedule 前有明确确认。
+25. 发布结果不因 React refresh / polling 出现明显重复成功闪烁。
+26. Desktop 和 Mobile Browser QA 都通过。
+
+---
+
+# 47. 本部分必须保护的额外原则
+
+```text
+Publish accepted ≠ Published.
+
+Provider success 才能显示 Published。
+
+一个 Publish operation 只给一次即时反馈。
+
+最终结果属于 Publish results，不属于 Toast。
+
+完整 destination list 应从发布任务开始时就确定。
+
+多平台结果允许部分成功。
+
+Published 内容不应继续显示 Publish now。
+
+Schedule 时间只能有一个编辑入口。
+
+Save changes 是 Edit Scheduled Pin 的主动作。
+
+AI 是编辑辅助工具，不是 Edit Pin 的主 CTA。
+
+Desktop hover 提供快速信息，但不能成为唯一信息入口。
+```
+

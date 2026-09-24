@@ -1,0 +1,413 @@
+
+当前先针对已经实施的 Social Accounts / multi-platform publishing / Plan 1.0 做一轮 focused audit + 修正。
+
+不要扩大到新的数据库架构重构，也不要部署 Production。
+
+目标是修复当前截图中已经暴露的产品一致性和交互问题。
+
+====================
+一、先做 focused audit
+====================
+
+修改前先确认以下现状，不要猜：
+
+1. Settings → Social accounts 中 Pinterest 的
+   `5522278466b6972`
+   当前究竟是什么字段：
+   - provider external account ID
+   - username
+   - display name
+   - connection ID
+   - 还是其他字段。
+
+2. Pinterest OAuth/profile API 当前是否已经取得：
+   - username
+   - display name
+   - avatar
+   - immutable external account ID。
+
+3. Settings、Edit Pin 的 Publishing accounts、
+   Pinterest Account selector 分别从哪个 API / state / query
+   获取 Social Account connection 状态。
+
+4. 为什么发布前 Instagram / Facebook Page 显示 Connected，
+   发布后同一个 Edit Pin 页面却变成 Not connected。
+
+5. 发布完成后 Pinterest / Instagram / Facebook 的结果目前分别保存在哪里：
+   - status
+   - external_post_id
+   - external_post_url
+   - social_account_id
+   - destination。
+
+6. 当前 “View Pin” 实际链接到什么。
+7. 当前 “Publishing not yet wired for this platform”
+   是从哪里生成的。
+8. 当前是否存在“Connected 但实际上不支持 publishing”
+   的平台。
+
+先报告以上事实，然后实施下面的 UI / state 修正。
+如果发现需要数据库 migration，先停下来报告，不要擅自 migration。
+
+====================
+二、Settings Social accounts
+====================
+
+Pinterest Account 不要向普通客户优先显示完整 numeric external ID。
+
+显示优先级：
+
+1. provider display name
+2. username / @username
+3. 如果确实拿不到用户可识别身份，再 fallback：
+   `Pinterest account •••6972`
+
+禁止伪造账号名。
+
+平台标题改成类似：
+
+Pinterest · 2 accounts
+
+不要在 Pinterest 平台标题上统一显示一个 Connected badge。
+
+Connected / Needs attention / Needs reconnect / Disconnected
+应该属于具体 Social Account row。
+
+如果有两个 Pinterest Accounts：
+每个 Account 独立显示：
+- identity
+- status
+- account actions
+
+删除/重新设计当前平台级：
+
+`Disconnect Pinterest`
+
+因为多个 account 存在后这个操作语义不明确。
+
+Disconnect / Reconnect / Remove 应作用于具体 social account。
+
+保留：
+
+`Add another Pinterest account`
+
+但本轮不要因此擅自实现 Instagram / Facebook 多账号。
+
+架构/UI component 不要写死“只有 Pinterest 永远允许多账号”；
+其他平台多账号范围留给 V1.2。
+
+====================
+三、统一 Publish destinations
+====================
+
+当前 Pinterest Account / Board selector
+与下面 Publishing accounts 区域距离太远，必须合并。
+
+不要继续维护：
+
+顶部：
+Pinterest account
+Board
+
+底部：
+Publishing accounts
+
+两套视觉区域。
+
+改成一个 canonical：
+
+Publish destinations
+
+例如：
+
+[✓] Pinterest
+    Account
+    [ @vibepinvibepin ▼ ]
+
+    Board
+    [ 家居 ▼ ]
+
+[✓] Instagram
+    @vibepin.co
+
+[✓] Facebook Page
+    VibePin
+
+Pinterest Account 和 Pinterest Board
+必须紧邻 Pinterest destination。
+
+切换 Pinterest Account：
+必须立即清除原 Board。
+
+不要建立第二套 account/board state。
+
+现有保存字段和 API 如需改变，
+先报告，不要擅自建平行字段。
+
+====================
+四、发布能力与 Connected 分离
+====================
+
+如果某平台虽然 Connected，
+但当前代码实际上还不能 production publish：
+
+不要允许用户勾选该平台然后发布后才显示：
+
+`Publishing not yet wired for this platform`
+
+该技术文案禁止出现在客户 UI。
+
+发布前应该：
+- disabled
+或
+- 明确显示 Publishing coming soon / unavailable
+
+具体文案保持客户可理解。
+
+Connected 表示账号连接状态，
+不等于 publishing capability。
+
+====================
+五、发布完成结果
+====================
+
+删除当前以 Pinterest 为中心的单一：
+
+`Published successfully`
++
+底部全局
+`View Pin`
+
+因为多平台发布后 “View Pin” 指向 Pinterest 已经语义不明确。
+
+改成 per-destination publish results。
+
+例如：
+
+Publish results
+
+Pinterest
+@vibepinvibepin
+Board: 家居
+Published
+[View on Pinterest]
+
+Instagram
+@vibepin.co
+Published
+[View on Instagram]
+
+Facebook Page
+VibePin
+Published
+[View on Facebook]
+
+失败的平台显示自己的客户状态和对应 action。
+
+只有真正成功且存在 external_post_url 的平台
+才显示 View on {Platform}。
+
+不要再用多个互相矛盾的 toast
+作为最终发布结果 source of truth。
+
+Toast 可以作为即时反馈，
+但 modal / content detail 中必须存在持久结果。
+
+刷新后结果仍应一致。
+
+====================
+六、Posted / Published Pin detail
+====================
+
+Plan / Posted 中已发布内容也同步修改。
+
+不能只显示：
+
+Pinterest
+Board
+Account
+
+如果内容发布到多个 destination，
+显示每个平台真实结果：
+
+Pinterest
+- Account
+- Board
+- status
+- View on Pinterest
+
+Instagram
+- Account
+- status
+- View on Instagram
+
+Facebook Page
+- Page/account
+- status
+- View on Facebook
+
+账号身份必须使用客户可识别名称，
+不能优先显示 raw numeric ID。
+
+====================
+七、修复 connection state 不一致
+====================
+
+这是本轮 blocker。
+
+当前截图显示：
+
+发布前：
+Pinterest Connected
+Instagram Connected
+Facebook Page Connected
+
+发布后：
+Pinterest Connected
+Instagram Not connected
+Facebook Page Not connected
+
+必须找到真实原因。
+
+Settings、Edit Pin、Publish destinations
+不得使用互相冲突的 connection source。
+
+不要通过前端 hardcode / temporary fallback 掩盖。
+
+修复后验证：
+
+1. 三个平台连接。
+2. 打开 Edit Pin。
+3. 三个平台状态正确。
+4. 发布内容。
+5. 发布结束后状态仍正确。
+6. 关闭 drawer 再打开。
+7. refresh 页面。
+8. 重新登录。
+9. 状态仍一致。
+
+====================
+八、Plan 卡片状态视觉
+====================
+
+当前 Scheduled 和 Published 在 calendar 中
+主要都是图片 + 时间，很难辨认。
+
+增加清晰状态识别。
+
+建议：
+
+Scheduled
+- purple accent
+- clock icon
+- Scheduled label
+
+Published
+- green accent
+- check icon
+- Published label
+
+Failed
+- orange/red accent
+- warning icon
+- Failed label
+
+不要给整张图片大面积染色。
+
+颜色只能辅助，
+必须同时有 icon / text，
+不能只靠颜色区分。
+
+====================
+九、Plan 入口调整
+====================
+
+把 Plan 从当前：
+
+All
+Unscheduled
+Scheduled
+Plan
+Posted
+Failed
+
+状态栏中移出。
+
+因为 Plan 是工作视图，不是 Pin lifecycle status。
+
+改成：
+
+All | Unscheduled | Scheduled | Posted | Failed
+
+右侧提供独立 Plan 入口。
+
+推荐 responsive 行为：
+
+Desktop wide：
+- Create Pins 主内容区
+- 右侧可折叠 Weekly Plan panel
+- 有明确 Plan / Open Plan 按钮
+
+Tablet / narrower desktop：
+- 点击 Plan 按钮打开 right drawer
+
+Mobile：
+- 明确 Plan 按钮
+- 打开 full-screen / bottom sheet
+
+禁止把 hover 作为唯一交互，
+因为移动端没有 hover。
+
+可以参考 Tailwind 的右侧 SmartSchedule 信息架构，
+但不要直接复制视觉。
+
+Plan 仍然属于 Create Pins，
+不要恢复成独立一级导航。
+
+====================
+十、本轮不要做
+====================
+
+不要：
+- 开始 V1.2
+- 扩展 Facebook / Instagram 多账号
+- 创建新的平行 Pin entity
+- 创建第二套 Publish destination state
+- 擅自 migration
+- 部署 Production
+
+如果修复只涉及现有 UI/state/API，
+可以正常实施并完成测试。
+
+====================
+十一、完成报告
+====================
+
+完成后请分别报告：
+
+1. Audit 发现的真实原因
+2. 修改文件
+3. connection canonical source
+4. Publish destination state source
+5. 各平台 publish result 如何保存/读取
+6. 是否修改 schema / migration
+7. Typecheck
+8. Build
+9. Tests
+10. Browser QA：
+   - Settings 2 Pinterest accounts
+   - account identity
+   - account → board
+   - 3 platform connection persistence
+   - multi-platform publish result
+   - refresh persistence
+   - Plan status differentiation
+   - desktop Plan panel
+   - mobile Plan entry
+11. branch
+12. HEAD SHA
+13. worktree clean/dirty
+
+先做到 Preview-ready。
+
+未经我确认，不部署 Production。

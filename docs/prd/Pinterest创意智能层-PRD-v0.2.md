@@ -1,7 +1,7 @@
 # VibePin Pinterest Creative Intelligence Layer PRD
 
-**版本：** v0.2（修订版，取代 v0.1 初稿 `docs/根据商品图推荐参考的pinterest图-prd初稿.txt`）
-**状态：** Approved for Phase A
+**版本：** v0.3（修订版，取代 v0.1 初稿 `docs/根据商品图推荐参考的pinterest图-prd初稿.txt`）
+**状态：** Approved for Phase A；第 4 章合规规则于 2026-07-21 由产品负责人修订（见 §4 变更说明与 §4.4 风险记录）
 **范围：** Create Pins → Generate AI Image Drawer（AiVersionDrawer）、AI Copy、Pinterest Keywords、Reference、Quality Evaluation
 **产品原则：** Pinterest-first · Pin-draft-first · Product-aware · Reference-aware · AI on demand
 
@@ -13,6 +13,20 @@
 4. **阶段计划改为 Phase A/B/C/D**，每阶段带验收标准；A 先做"生成图→trend keyword"（现状已接近完成，改动最小），B 做"商品图→推荐参考图"。
 5. **大模型方向（原 13 章）冻结为愿景章节**，写死训练触发条件，采纳调研报告《是否训练大模型的report.md》结论：现在不训练。
 6. **事件清单从 20+ 砍到 8 个关键事件**先落地。
+
+## v0.3 相对 v0.2 的关键修订（2026-07-21）
+
+1. **第 4 章合规规则改写**：解除"pin_samples 原图不得进入生图请求"的限制。用户主动选择的 Pin 图
+   现在与 Product images 一同发送给生图模型，角色为 `style_reference`；Product image 角色为 `product`。
+   patternTags 降为辅助信号，不再是唯一通道。上限 3 张、不自动选中、保留 Pinterest 来源与 linkback 不变。
+2. **新增 §4.2 角色区分强制要求**：生成请求必须显式区分 `role=product` 与 `role=style_reference`。
+3. **新增 §4.4 风险与限制**：如实记录规则 6（不复制可识别内容）当前无技术强制手段，以及第三方版权
+   素材使用面扩大的事实。该节是风险记录，不是合规结论。
+4. **Reference ↔ 生成结果关联成为硬要求**：每张 Reference 独立成 generation group，结果需持久化
+   referenceId / referenceImageUrl / referenceSource（详见 `create pin流程变更0721-prd.txt` Section G/G2）。
+5. **数量规则**：`totalPins = max(refs,1) × pinsPerReference`，pinsPerReference ∈ {1,2,3}，
+   单批上限 9 Pins；group 之间串行调用（受单用户生成锁约束）。
+6. **无商品生成不再被禁止**（§4.1 第 7 条修正 + §4.5）：需实测验证后才放开按钮。
 
 ---
 
@@ -83,14 +97,80 @@ Shopify / Etsy / WooCommerce sellers、Pinterest creators、affiliate marketers�
 
 ## 4. 合规硬规则（必须遵守，覆盖所有 Phase）
 
+> **v0.3 变更（2026-07-21，产品决策）**：本章原第 2、3 条禁止 `pin_samples` 原图进入生图请求，
+> 只允许派生 patternTags。该限制已由产品负责人明确解除，替换为下列 Pin Style Reference 规则。
+> 变更的已知边界见本章末"风险与限制"，未经产品负责人书面确认不得再次收紧或放宽。
+
 针对 `pin_samples`（VPS 爬虫抓取的 Pinterest 图片库）与 Pinterest API 数据：
 
-1. **pin_samples 来源的参考图只做"灵感展示"**：UI 必须标注来源为 Pinterest，提供 linkback（source_url / pinterest_url），不得遮蔽来源。
-2. **绝不作为生成的图像条件输入**：pin_samples 图片不得作为 style reference 图片喂给图像模型，不得用于生成衍生内容。生成条件参考图仅限：用户上传素材、用户自有/品牌素材、明确授权的素材、用户自己的历史生成结果。
-3. **进入 prompt 的只能是派生模式标签**：从 pin_samples 学到的规律以结构化标签形式使用（visual_format、composition_type、human_presence、scene 类型等），不携带原图。
-4. 不新增任何 Pinterest 图片永久缓存流程；现存 pin_samples 缓存管线的合规审查作为独立事项跟进，本 PRD 功能不扩大其使用面。
-5. 关键词展示遵守数据诚实原则：无依据不标 Trending、不展示未实际使用的关键词、不将英文关键词伪装为本地化关键词。
-6. 不展示内部 judge 分数 / chain of thought；不将参考描述为"复制这个 Pin"。
+### 4.1 Pin Style Reference 使用规则
+
+1. **用户明确选择的 pin_samples Pin 图，必须和 Product images 一起发送给生图模型。**
+2. Pin 图在请求中的角色必须是 `style_reference`。
+3. Product image 的角色必须是 `product`。
+4. Pin 图只用于指导场景、构图、氛围、色彩关系、商品展示方式和 Pinterest 版式。
+5. Pin 图绝不能作为 product、content reference、商品主体或需要复刻的内容条件。
+6. 生成结果不得复制 Pin 图中的具体商品、人物身份、品牌标识、文字、水印或其他可识别内容。
+7. **当存在 Product image 时**，Product image 始终是生成结果中的商品主体和事实来源。
+   没有 Product image 时，若当前模型支持 prompt-only / style-reference-only，
+   可基于 prompt + style_reference 生成。**不得理解为所有 Style Reference 生成都
+   强制要求存在 Product image。** 无商品生成的开关必须经实测验证（见 §4.5）。
+8. patternTags 可以继续作为辅助 prompt 信号，但不能代替用户选择的 Pin 原图。
+9. 系统不得自动选择推荐 Pin，必须由用户主动选择。
+10. 最多选择 3 张 Pin Style References；每张 Reference 生成 1–3 张，单批上限
+    3 References × 3 Pins = 9 Pins。
+11. UI 继续显示 Pinterest 来源和原 Pin linkback，不得遮蔽来源。
+
+### 4.5 无商品生成的放开条件
+
+`AiVersionDrawer` 的 Generate 按钮当前为 `disabled={productUrls.length === 0}`。
+放开该限制必须满足：
+
+1. Commit 3 实测当前模型（gemini_image / gpt_image）在无 product_images、
+   仅 prompt（可选 style_ref）条件下是否真能返回图片；
+2. 实测通过才放开按钮，且 Creative direction 不得为空；
+3. 实测不通过则保持禁用，并在本节记录实测结论与限制，不得凭假设放开；
+4. 不得为此新增模型或新建生成系统。
+
+### 4.2 生成请求的角色区分（强制）
+
+生成请求必须显式区分两类图像输入，不允许合并成一个无角色的图片数组：
+
+```text
+image_inputs:
+  - role=product     真实商品主体，需要在生成结果中保留
+  - role=reference   Pin 灵感图，只指导场景、构图和风格
+```
+
+线上 wire 值说明：`/api/generate` 现有实现对风格参考发出的 role 值是 `reference`
+（见 `buildImageInputs`）；`style_reference` 是客户端选择状态的角色名。不要在
+wire 上引入第二套词汇。
+
+**已知服务端限制（Commit 2 必须解决）**：`/api/generate` 当前忽略客户端传入的
+`body.image_inputs`，改由 `product_images` + 单个 `style_ref` 字符串重建，
+因此单次请求只能携带一张参考图。多张 Reference 必须拆成多个 group 串行请求，
+且 `/api/generate` 持有单用户 `active-generation` 锁，并发第二次调用返回 429。
+
+### 4.3 其余合规规则（不变）
+
+12. 不新增任何 Pinterest 图片永久缓存流程；现存 pin_samples 缓存管线的合规审查作为独立事项跟进。
+13. 关键词展示遵守数据诚实原则：无依据不标 Trending、不展示未实际使用的关键词、不将英文关键词伪装为本地化关键词。
+14. 不展示内部 judge 分数 / chain of thought；不将参考描述为"复制这个 Pin"。
+
+### 4.4 风险与限制（如实记录，非免责声明）
+
+以下为 v0.3 变更引入的已知问题，工程实现无法消除，记录在此避免后续被误读为"已通过合规评估"：
+
+1. **规则 6 目前没有技术强制手段。** 生成结果"不得复制具体商品、人物身份、品牌标识、文字、水印"依赖
+   prompt 层指令与 `role=style_reference` 语义提示，不是对模型输出的硬约束。以参考图作条件的图像模型
+   确实会复现参考图中的可识别元素（reference strength 越高越明显）。当前管线**没有**对输出做
+   相似度检测、人脸/商标识别或水印检测。规则 6 应被理解为产品意图，而非已实现的保证。
+2. **本次变更扩大了第三方版权素材的使用面。** `pin_samples` 是爬取的第三方 Pinterest 图片，
+   常含可识别人物与品牌标识。将其作为生图条件产出用户的商业发布物，与"展示并标注来源"是
+   不同性质的使用；linkback 与来源角标缓解的是展示侧主张，不覆盖衍生作品主张。且产物通常
+   被用户发布回 Pinterest——即素材的来源平台。
+3. **建议法务复核后再上生产。** 本 PRD 记录的是产品决策，不构成合规结论。Preview/QA 阶段不受影响。
+4. 若后续引入输出侧检测（近重复检测、商标/人脸过滤），应回到本章补充为规则 6 的强制手段。
 
 ---
 

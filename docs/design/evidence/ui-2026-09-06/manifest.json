@@ -1,0 +1,1001 @@
+[
+  {
+    "file": "dark/1440/studio.png",
+    "finalUrl": "http://127.0.0.1:3000/app/studio",
+    "heading": "Create Pins",
+    "height": 1000,
+    "key": "/app/studio|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:44.905Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:44.310Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/studio",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/weekly-plan.png",
+    "finalUrl": "http://127.0.0.1:3000/app/plan",
+    "heading": "Weekly Plan",
+    "height": 1000,
+    "key": "/app/plan|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:52.259Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "empty",
+      "pageStateEvidence": [
+        "empty-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:52.103Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "empty",
+      "pageStateEvidence": [
+        "empty-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/plan",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/my-pins.png",
+    "finalUrl": "http://127.0.0.1:3000/app/history",
+    "heading": "My Pins",
+    "height": 1000,
+    "key": "/app/history|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:57.084Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:17:56.982Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/history",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/opportunities.png",
+    "finalUrl": "http://127.0.0.1:3000/app/workspace/home-decor",
+    "heading": "🏠 Home Decor Workspace",
+    "height": 1000,
+    "key": "/app/workspace/home-decor|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:04.111Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "error",
+      "pageStateEvidence": [
+        "error-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:03.946Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "error",
+      "pageStateEvidence": [
+        "error-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/workspace/home-decor",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/keyword-trends.png",
+    "finalUrl": "http://127.0.0.1:3000/app/trends",
+    "heading": "Pinterest Keyword Trends",
+    "height": 1000,
+    "key": "/app/trends|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:09.559Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:09.337Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/trends",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/pin-ideas.png",
+    "finalUrl": "http://127.0.0.1:3000/app/discover",
+    "heading": "Pin Ideas",
+    "height": 1000,
+    "key": "/app/discover|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:30.116Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:29.985Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/discover",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/product-opportunities.png",
+    "finalUrl": "http://127.0.0.1:3000/app/products",
+    "heading": "Product Opportunity Finder",
+    "height": 1000,
+    "key": "/app/products|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:42.825Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:42.682Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/products",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/insights.png",
+    "finalUrl": "http://127.0.0.1:3000/app/insights",
+    "heading": "See what brings people to your business.",
+    "height": 1000,
+    "key": "/app/insights|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:47.492Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:18:47.309Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/insights",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/settings.png",
+    "finalUrl": "http://127.0.0.1:3000/app/settings/pinterest",
+    "heading": "Settings",
+    "height": 1000,
+    "key": "/app/settings/pinterest|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:02.165Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(8, 10, 18)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:01.997Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(8, 10, 18)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/settings/pinterest",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/help.png",
+    "finalUrl": "http://127.0.0.1:3000/app/help",
+    "heading": "Help & Support",
+    "height": 1000,
+    "key": "/app/help|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:09.982Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:09.880Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/help",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1440/help-article.png",
+    "finalUrl": "http://127.0.0.1:3000/app/help/connect-pinterest",
+    "heading": "How to connect Pinterest",
+    "height": 1000,
+    "key": "/app/help/connect-pinterest|dark|1440",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:20.133Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:20.047Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 1000,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1440
+    },
+    "route": "/app/help/connect-pinterest",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "file": "dark/1024/studio.png",
+    "finalUrl": "http://127.0.0.1:3000/app/studio",
+    "heading": "Create Pins",
+    "height": 900,
+    "key": "/app/studio|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:26.104Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "error",
+      "pageStateEvidence": [
+        "error-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:19:25.944Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "error",
+      "pageStateEvidence": [
+        "error-selector/text"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/studio",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/weekly-plan.png",
+    "finalUrl": "http://127.0.0.1:3000/app/plan",
+    "heading": "Weekly Plan",
+    "height": 900,
+    "key": "/app/plan|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:20:54.493Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:20:54.307Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/plan",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/my-pins.png",
+    "finalUrl": "http://127.0.0.1:3000/app/history",
+    "heading": "My Pins",
+    "height": 900,
+    "key": "/app/history|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:06.362Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:06.264Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/history",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/opportunities.png",
+    "finalUrl": "http://127.0.0.1:3000/app/workspace/home-decor",
+    "heading": "🏠 Home Decor Workspace",
+    "height": 900,
+    "key": "/app/workspace/home-decor|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:17.813Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:17.715Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/workspace/home-decor",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/keyword-trends.png",
+    "finalUrl": "http://127.0.0.1:3000/app/trends",
+    "heading": "Pinterest Keyword Trends",
+    "height": 900,
+    "key": "/app/trends|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:31.868Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:29.442Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/trends",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/pin-ideas.png",
+    "finalUrl": "http://127.0.0.1:3000/app/discover",
+    "heading": "Pin Ideas",
+    "height": 900,
+    "key": "/app/discover|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:38.648Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:38.564Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/discover",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/product-opportunities.png",
+    "finalUrl": "http://127.0.0.1:3000/app/products",
+    "heading": "Product Opportunity Finder",
+    "height": 900,
+    "key": "/app/products|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:52.858Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:21:52.531Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/products",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/insights.png",
+    "finalUrl": "http://127.0.0.1:3000/app/insights",
+    "heading": "See what brings people to your business.",
+    "height": 900,
+    "key": "/app/insights|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:22:13.502Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:22:13.322Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/insights",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/settings.png",
+    "finalUrl": "http://127.0.0.1:3000/app/settings/pinterest",
+    "heading": "Settings",
+    "height": 900,
+    "key": "/app/settings/pinterest|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:23:07.018Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(8, 10, 18)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:23:06.824Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(8, 10, 18)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/settings/pinterest",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/help.png",
+    "finalUrl": "http://127.0.0.1:3000/app/help",
+    "heading": "Help & Support",
+    "height": 900,
+    "key": "/app/help|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:23:45.835Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:23:44.179Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/help",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/1024/help-article.png",
+    "finalUrl": "http://127.0.0.1:3000/app/help/connect-pinterest",
+    "heading": "How to connect Pinterest",
+    "height": 900,
+    "key": "/app/help/connect-pinterest|dark|1024",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:06.590Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:06.506Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 1024
+    },
+    "route": "/app/help/connect-pinterest",
+    "status": "captured",
+    "theme": "dark",
+    "width": 1024
+  },
+  {
+    "file": "dark/768/studio.png",
+    "finalUrl": "http://127.0.0.1:3000/app/studio",
+    "heading": "Create Pins",
+    "height": 900,
+    "key": "/app/studio|dark|768",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:21.970Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:21.837Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "route": "/app/studio",
+    "status": "captured",
+    "theme": "dark",
+    "width": 768
+  },
+  {
+    "file": "dark/768/weekly-plan.png",
+    "finalUrl": "http://127.0.0.1:3000/app/plan",
+    "heading": "Weekly Plan",
+    "height": 900,
+    "key": "/app/plan|dark|768",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:26.505Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:26.003Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "skeleton",
+      "pageStateEvidence": [
+        "skeleton-selector"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "route": "/app/plan",
+    "status": "captured",
+    "theme": "dark",
+    "width": 768
+  },
+  {
+    "file": "dark/768/my-pins.png",
+    "finalUrl": "http://127.0.0.1:3000/app/history",
+    "heading": "My Pins",
+    "height": 900,
+    "key": "/app/history|dark|768",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:58.902Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:24:58.811Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "route": "/app/history",
+    "status": "captured",
+    "theme": "dark",
+    "width": 768
+  },
+  {
+    "file": "dark/768/opportunities.png",
+    "finalUrl": "http://127.0.0.1:3000/app/workspace/home-decor",
+    "heading": "🏠 Home Decor Workspace",
+    "height": 900,
+    "key": "/app/workspace/home-decor|dark|768",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:25:19.327Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:25:19.098Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgb(247, 248, 250)",
+      "height": 900,
+      "pageState": "loading",
+      "pageStateEvidence": [
+        "aria-busy/data-loading"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "route": "/app/workspace/home-decor",
+    "status": "captured",
+    "theme": "dark",
+    "width": 768
+  },
+  {
+    "file": "dark/768/keyword-trends.png",
+    "finalUrl": "http://127.0.0.1:3000/app/trends",
+    "heading": "Pinterest Keyword Trends",
+    "height": 900,
+    "key": "/app/trends|dark|768",
+    "after": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:25:31.703Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "before": {
+      "bodyBackground": "rgb(247, 248, 250)",
+      "capturedAt": "2026-09-06T15:25:31.524Z",
+      "htmlBackground": "rgba(0, 0, 0, 0)",
+      "mainBackground": "rgba(0, 0, 0, 0)",
+      "height": 900,
+      "pageState": "success",
+      "pageStateEvidence": [
+        "ready-content"
+      ],
+      "theme": "dark",
+      "width": 768
+    },
+    "route": "/app/trends",
+    "status": "captured",
+    "theme": "dark",
+    "width": 768
+  }
+]

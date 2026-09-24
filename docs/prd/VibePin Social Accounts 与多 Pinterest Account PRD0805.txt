@@ -1,0 +1,807 @@
+# VibePin Social Accounts 与多 Pinterest Account PRD
+
+版本：V1.1  
+日期：2026-08-04  
+状态：产品评审稿  
+本次调整：
+- Settings 不展示 Board
+- 客户可见账号状态精简
+- Board 只在 Create Pins、Plan 和发布流程中出现
+
+---
+
+# 1. 核心产品原则
+
+1. Pinterest 并入统一的 Social accounts。
+2. Settings 只管理账号连接，不管理 Board。
+3. Board 只在创建、编辑、排程和发布时选择。
+4. 普通客户不看到 Developer tools、Sandbox、Token、API Access Tier 等技术信息。
+5. 支持同一 Workspace 连接多个 Pinterest Account。
+6. 每条 Pin 明确保存目标 Pinterest Account 和 Board。
+7. Scheduled Pin 的目标账号和 Board 不受默认账号变化影响。
+8. Reconnect 只修复原账号，不创建新账号，不占用新额度。
+
+---
+
+# 2. Settings 信息架构
+
+调整后：
+
+Settings
+├── Account
+├── Billing & plan
+├── Social accounts
+├── Publishing
+├── Amazon Associates
+├── Shopify
+├── Smart Schedule
+├── AI Settings
+├── Appearance
+├── Language
+└── Support
+
+移除独立：
+
+- Pinterest
+
+Pinterest、Facebook 和 Instagram 统一进入：
+
+Settings
+→ Social accounts
+
+---
+
+# 3. Social accounts 页面
+
+## 3.1 页面职责
+
+Social accounts 页面只负责：
+
+- 查看已连接账号
+- 添加账号
+- Reconnect
+- 设置默认账号
+- Disconnect
+- Remove
+- 查看套餐账号用量
+
+不负责：
+
+- 展示 Boards
+- 同步或管理 Board 默认值
+- 选择发布 Board
+- 展示 Website verification
+- 展示 Catalog
+- 展示 API Access Tier
+- 展示 Developer diagnostics
+
+---
+
+## 3.2 Header
+
+```text
+Social accounts
+
+Connect and manage the accounts your team publishes to.
+
+2 of 5 social accounts connected
+
+[All] [Pinterest] [Facebook] [Instagram]
+
+[Upgrade] [Add account]
+````
+
+规则：
+
+ 有剩余额度时显示 Add account
+ 达到额度时显示 Upgrade
+ Reconnect 不占新增额度
+ Remove 后释放额度
+
+---
+
+# 4. Account 卡片
+
+每张账号卡片只显示：
+
+ 平台图标
+ 头像
+ Display name
+ Username
+ 平台名称
+ 简化状态
+ Default 标记，可选
+ Manage
+ More 菜单
+
+正常示例：
+
+```text
+[Pinterest] [avatar]
+
+Cheerish
+@cheerishcheerish
+
+Connected
+
+[Manage] [•••]
+```
+
+异常示例：
+
+```text
+[Pinterest] [avatar]
+
+Brand Store
+@brandstore
+
+Needs reconnect
+
+[Reconnect] [•••]
+```
+
+不显示：
+
+ Board 数量
+ Default Board
+ Last Board sync
+ Board sync diagnostics
+ 完整 Pinterest Account ID
+ Token
+ API environment
+ Sandbox
+ Trial  Standard Access
+ Provider diagnostics
+ Connection source
+ Raw error
+
+---
+
+# 5. 客户可见账号状态
+
+普通客户只使用 4 个状态。
+
+## 5.1 Connected
+
+```text
+Connected
+```
+
+含义：
+
+账号已经连接，可以正常使用。
+
+操作：
+
+ Manage
+ Disconnect
+
+---
+
+## 5.2 Needs attention
+
+```text
+Needs attention
+```
+
+含义：
+
+账号仍然存在，但有一项问题可能影响发布。
+
+适用于：
+
+ 暂时无法同步账号信息
+ 部分权限需要更新
+ 平台暂时返回异常
+ 非立即阻断的问题
+
+文案：
+
+```text
+There’s an issue with this account that may affect publishing.
+```
+
+操作根据实际问题显示其中一个：
+
+ Try again
+ Update permissions
+ Contact support
+
+不同时展示多个技术原因。
+
+---
+
+## 5.3 Needs reconnect
+
+```text
+Needs reconnect
+```
+
+含义：
+
+Token 已失效、授权被撤销或自动刷新失败，需要重新授权。
+
+文案：
+
+```text
+Reconnect this account to continue publishing.
+Your drafts and scheduled content will stay safe.
+```
+
+操作：
+
+ Reconnect
+ Remove account
+
+---
+
+## 5.4 Disconnected
+
+```text
+Disconnected
+```
+
+含义：
+
+账号记录仍保留，但目前未连接，不能发布。
+
+文案：
+
+```text
+This account is not currently connected.
+```
+
+操作：
+
+ Reconnect
+ Remove account
+
+---
+
+# 6. 状态显示规则
+
+一个账号一次只显示一个客户状态。
+
+优先级：
+
+```text
+Needs reconnect
+→ Needs attention
+→ Disconnected
+→ Connected
+```
+
+不得同时出现：
+
+ Connected
+ Limited Access
+ Boards Enabled
+ Pin publishing Enabled
+ Could not sync boards
+ Standard publishing access
+
+这类互相冲突的多状态组合。
+
+内部可以保存更细的状态，但客户端必须归一成以上 4 种。
+
+---
+
+# 7. 移出普通客户界面的内容
+
+以下全部移至 Internal Admin：
+
+ Developer tools
+ Connection diagnostics
+ Provider diagnostics
+ API environment
+ Sandbox
+ Trial  Standard Access
+ Token present
+ Token expiry
+ Connection source
+ Last status fetch
+ Raw provider error
+ HTTP status
+ Provider request ID
+ Database status
+ lastKnown
+ Raw scopes
+
+Internal Admin 必须：
+
+ 服务端权限控制
+ 敏感字段脱敏
+ 访问记录审计
+ 普通 Workspace Owner 也不能默认访问
+
+---
+
+# 8. Account details
+
+点击 Manage 后进入账号详情。
+
+仅展示：
+
+```text
+@cheerishcheerish
+Pinterest · Connected
+```
+
+## Connection
+
+ 当前状态
+ Connected date
+ Connected by
+ Reconnect，仅异常时
+ Disconnect
+
+## Account preferences
+
+ Set as workspace default
+ 是否允许团队成员选择此账号发布
+
+## Danger zone
+
+ Disconnect
+ Remove account
+
+不展示 Board。
+
+不展示 Default Board。
+
+不展示 Website verification 或 Catalog。
+
+Pinterest 相关高级设置后续可放在独立 Integrations 或 Publishing 页面，本 PRD 不处理。
+
+---
+
+# 9. 多 Pinterest Account
+
+## 9.1 连接规则
+
+ 每个独立 Pinterest Account 分别 OAuth
+ 每个账号创建一条独立 Social Account
+ 同一账号重复连接时不创建第二条记录
+ Add account 占用一个套餐额度
+ Reconnect 不占用新额度
+ 新连接账号不自动成为默认账号
+
+---
+
+## 9.2 Add account
+
+```text
+Add account
+→ Select platform
+→ Check plan limit
+→ Pinterest OAuth
+→ Verify callback
+→ Get authorized account identity
+→ Check duplicate
+→ Save account
+→ Show success
+```
+
+成功：
+
+```text
+Pinterest connected
+
+@account-name is ready to use.
+
+[Use this account]
+[Manage account]
+```
+
+达到额度：
+
+```text
+You’ve reached your social account limit.
+
+Your current plan includes 5 connected accounts.
+
+[Upgrade]
+[Manage accounts]
+```
+
+重复连接：
+
+```text
+This Pinterest account is already connected.
+
+[View account]
+```
+
+---
+
+# 10. Reconnect
+
+Reconnect 必须：
+
+ 继续使用原 social_account_id
+ 更新原 credential
+ 不新增账号
+ 不占用额度
+ 不改变已有 Draft 和 Scheduled Pin
+ 验证 OAuth 返回的账号是否为原账号
+
+如果用户登录了另一个账号：
+
+```text
+This isn’t the original Pinterest account.
+
+You signed in as @newaccount.
+This connection belongs to @oldaccount.
+
+[Sign in to @oldaccount]
+[Add @newaccount as a new account]
+```
+
+禁止直接覆盖。
+
+---
+
+# 11. Disconnect 与 Remove
+
+## Disconnect
+
+ 停止当前授权
+ 保留账号记录
+ 保留 Draft
+ 保留 Scheduled Pins
+ 保留历史发布记录
+ 继续占用额度
+ 相关排程显示 Needs reconnect
+
+## Remove
+
+ 从 Workspace 中移除账号
+ 释放额度
+ 删除前检查未来排程
+ 有未来排程时禁止直接移除
+
+提示：
+
+```text
+This account has 14 scheduled Pins.
+
+Choose what to do before removing it
+
+- Keep the account
+- Reassign scheduled Pins
+- Cancel scheduled Pins and remove
+```
+
+---
+
+# 12. Board 的产品归属
+
+Board 不进入 Settings。
+
+Board 只在以下位置出现：
+
+ Create Pin
+ Edit Pin
+ Publish now
+ Schedule
+ Plan
+ Smart Schedule
+ Failed publish retry
+
+关系：
+
+```text
+Pinterest Account
+→ Board
+```
+
+用户先选择 Pinterest Account，再选择该账号下的 Board。
+
+Settings 不需要展示、编辑或同步 Board。
+
+后台仍可同步 Board 数据，但同步结果只在用户需要选择 Board 时使用。
+
+---
+
+# 13. Publish destination
+
+Create Pins 中提供统一组件：
+
+```text
+Publish destination
+```
+
+内容：
+
+```text
+Pinterest account
+@cheerishcheerish
+
+Board
+Summer recipes
+```
+
+选择顺序：
+
+```text
+Choose account
+→ Choose Board
+```
+
+用户切换 Account：
+
+ 立即清除原 Board
+ 必须重新选择新账号下的 Board
+ 不自动匹配同名 Board
+
+提示：
+
+```text
+Changing the Pinterest account will clear the selected Board.
+```
+
+---
+
+# 14. Draft、Publish 与 Schedule
+
+## Draft
+
+Draft 可以暂时不选择发布目标。
+
+显示：
+
+```text
+Destination not selected
+```
+
+以下操作前必须选择账号和 Board：
+
+ Publish now
+ Schedule
+ Add to Plan
+ Smart Schedule
+
+## Publish now
+
+最终弹窗只确认：
+
+```text
+Publish 1 Pin now
+
+Pinterest account
+@account-a
+
+Board
+Summer recipes
+
+[Back]
+[Publish now]
+```
+
+不在确认弹窗里维护另一套目标选择状态。
+
+## Schedule
+
+Scheduled Pin 固定保存：
+
+ target_social_account_id
+ target_destination_id
+ account snapshot
+ destination snapshot
+ scheduled_at
+
+执行发布时不得读取当前默认账号。
+
+---
+
+# 15. 默认账号
+
+支持 Workspace default account。
+
+规则：
+
+ 仅 OwnerAdmin 设置
+ 新连接账号不自动设为默认
+ 修改默认账号不影响已有 Draft
+ 修改默认账号不影响已排程内容
+ 删除默认账号前要求选择替代账号或清除默认
+
+不在 Settings 设置 Default Board。
+
+Default Board 是否需要，后续在发布体验中单独评估。
+
+---
+
+# 16. Plan 多账号交互
+
+Plan 默认显示当前 Workspace 的全部账号内容。
+
+提供 Account filter：
+
+ All accounts
+ 单账号
+ 多账号
+
+卡片显示：
+
+ Account avatar
+ 平台图标
+ Username
+ 内容标题
+ 发布时间
+ Board
+
+Account 用于识别发布身份，Board 只在内容卡片或详情中显示。
+
+拖动卡片：
+
+ 只修改时间
+ 不修改 Account
+ 不修改 Board
+
+切换目标账号：
+
+ 清除 Board
+ 要求重新选择
+
+---
+
+# 17. 失败重试
+
+Publish failure 重试必须使用原：
+
+ Pinterest Account
+ Board
+
+不得改用：
+
+ 当前默认账号
+ 最近使用账号
+ 新连接账号
+
+如果账号需要重连：
+
+```text
+Reconnect @account-name to retry publishing.
+```
+
+如果 Board 已不可用：
+
+```text
+This Board is no longer available.
+Choose another Board before retrying.
+```
+
+---
+
+# 18. 套餐额度
+
+一个 Social Account 定义为一个可独立接收发布内容的外部账号或页面。
+
+计数：
+
+ 对象                 是否占额度 
+ -----------------  ---- 
+ Pinterest Account      是 
+ Pinterest Board        否 
+ Facebook Page          是 
+ Instagram Account      是 
+ Reconnect              否 
+ Disconnect             是 
+ Remove                 否 
+
+额度建议仍作为商业假设：
+
+ 套餐            建议额度 
+ ----------  ----- 
+ Free             1 
+ Starter          3 
+ Pro              5 
+ Business        10 
+ Enterprise  Custom 
+
+---
+
+# 19. MVP 范围
+
+必须包含：
+
+ Pinterest 并入 Social accounts
+ 移除独立 Pinterest Settings 入口
+ 移除 Developer tools
+ 精简为 4 个客户状态
+ 多 Pinterest Account
+ Add account
+ Reconnect
+ Disconnect
+ Remove
+ 套餐额度
+ Workspace default account
+ Account + Board Publish destination
+ Scheduled Pin 固定目标
+ Plan Account filter
+ Retry 原目标
+ Workspace 隔离
+ 角色权限
+ 审计日志
+
+不包含：
+
+ Settings 展示 Board
+ Settings 管理 Default Board
+ Board 数量展示
+ Board sync diagnostics
+ Website verification
+ Catalog
+ Pinterest Tag
+ 高级账号分析
+
+---
+
+# 20. 验收标准
+
+1. Settings 不再有独立 Pinterest 一级入口。
+2. Pinterest 账号统一显示在 Social accounts。
+3. Settings 中不显示 Board。
+4. Account 卡片不显示 Board 数量。
+5. Account details 不显示 Default Board。
+6. 普通用户不看到 Developer tools。
+7. 普通用户不看到 Sandbox、Token 或 Access Tier。
+8. 一个账号一次只显示一个状态。
+9. 客户状态仅包含：
+
+    Connected
+    Needs attention
+    Needs reconnect
+    Disconnected
+10. 可以连接多个 Pinterest Account。
+11. Reconnect 不创建新账号。
+12. Reconnect 不占用新额度。
+13. 登录错误账号时不会覆盖原账号。
+14. CreateEdit 中先选 Account，再选 Board。
+15. 改 Account 会清除原 Board。
+16. Schedule 固定保存 Account 和 Board。
+17. 修改默认账号不影响已排程内容。
+18. Plan 可以按 Account 筛选。
+19. Retry 使用原 Account 和 Board。
+20. Remove 前必须处理未来排程。
+
+---
+
+# 21. 实施前审计要求
+
+Claude 首次仅返回审计，不实施：
+
+1. 当前 Pinterest Settings 路由和组件
+2. 当前 Social accounts 路由和组件
+3. 当前 Developer tools 的显示条件
+4. 当前账号状态来源
+5. 当前是否会同时显示多个矛盾状态
+6. 当前 Pinterest connection 数据模型
+7. 当前是否支持多条 Pinterest connection
+8. 当前 Pin 如何保存 Account 和 Board
+9. 当前 Scheduled Job 如何取得账号 token
+10. 当前 Retry 如何确定目标账号
+11. 当前 Reconnect 是否可能覆盖不同账号
+12. 当前套餐额度模型
+13. 当前 Plan 是否有 Account filter
+14. 当前 Board 同步在哪里发生
+15. 移除 Settings Board UI 是否影响其他业务
+16. 所需数据库 migration
+17. 历史数据回填风险
+18. 预计修改文件
+19. 分阶段实施方案
+
+未经审计批准，不直接实施。
+
+````
+
+这样 Settings 会干净很多。客户进入 Social accounts，主要看到的就是：
+
+```text
+哪个账号
+是否正常
+需要做什么
+````
+
+Board 留到真正发布内容时再选，不在设置页提前增加认知负担。

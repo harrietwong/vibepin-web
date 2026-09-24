@@ -1,0 +1,532 @@
+# VibePin PRD 修订补充版 v1.1
+
+## 一、当前产品决策状态
+
+VibePin 当前仍处于 MVP 收敛阶段。
+
+已经确认的产品方向：
+
+* 使用单一默认 AI 文字模型
+* 用户暂时不能选择 AI 模型
+* 服务端统一决定实际调用模型
+* AI 图片、AI 文案和 Scheduled Posts 必须有明确、可审计的用量记录
+* Billing 页面必须显示真实套餐、订阅周期和用量
+* 套餐配置、前后端限制和支付平台产品必须保持一致
+* 所有生成、用量和订阅数据必须严格绑定当前用户或 Workspace
+
+尚未最终确认的产品决策：
+
+* 是否正式采用统一 AI Credit
+* AI 文案和 AI 图片是否共用 Credit
+* 是否允许购买额外 Credit
+* 是否允许 Credit 结转
+* 是否上线 Auto-Refill
+* 每种 AI 操作具体消耗多少 Credit
+
+竞品调研只作为决策依据，不代表相关功能已经获准进入 MVP。
+
+在产品负责人明确确认之前，不得因为 Tailwind 或其他竞品使用 Credit，就直接修改数据库、套餐、Billing 页面或生成扣量逻辑。
+
+---
+
+## 二、套餐与价格的唯一事实来源
+
+不得自行新增、推测或设计当前不存在的套餐。
+
+尤其不得未经确认增加：
+
+* $9 Starter
+* 新的免费套餐权益
+* 新的 Pro 或 Advanced 价格
+* 新的 Credit 数量
+* 新的 Scheduled Posts 数量
+* 新的账号连接数量
+* 新的年付折扣
+* 新的 Credit 加购包
+
+当前套餐名称、价格和权益必须以以下真实数据为准：
+
+1. 当前 Pricing 页面
+2. 服务端套餐权益配置
+3. Creem 产品及价格配置
+4. 数据库订阅记录
+5. 当前正式 PRD
+6. 产品负责人当前确认的套餐表
+
+如果这些来源存在冲突，必须先输出冲突清单，不得自行选择其中一个作为最终方案。
+
+建议建立唯一的服务端套餐配置：
+
+```ts
+type PlanEntitlements = {
+  planKey: string;
+  displayName: string;
+
+  monthlyAiImages: number | null;
+  monthlyAiTextGenerations: number | null;
+  monthlyScheduledPosts: number | null;
+
+  monthlyAiCredits?: number | null;
+
+  connectedAccounts: number | null;
+
+  features: {
+    aiImageGeneration: boolean;
+    aiTextGeneration: boolean;
+    scheduling: boolean;
+    analytics: boolean;
+    research: boolean;
+    teamWorkspace: boolean;
+  };
+};
+```
+
+在 Credit 未正式启用前，`monthlyAiCredits` 不参与用户扣量，也不应显示在前端。
+
+---
+
+## 三、当前 MVP 用量模式
+
+在 Credit 方案未正式批准前，继续使用三项独立额度：
+
+* AI images
+* AI text generations
+* Scheduled posts
+
+计量规则保持不变。
+
+### AI 图片
+
+* 每成功生成一张图片，消耗一次 AI image allowance
+* 一次返回四张成功图片，消耗四次
+* 部分成功只计算成功图片数量
+* 失败、超时、审核拒绝或空结果不消耗
+* 用户上传图片不消耗
+* 使用已有图片不消耗
+
+### AI 文案
+
+一次成功且通过服务端校验的生成请求，消耗一次 AI text generation。
+
+一次请求可以同时返回：
+
+* Title
+* Description
+* Hashtags
+* Alt Text
+* 平台专属文案
+
+这些字段合计只计算一次。
+
+重新生成、只生成标题或只生成描述，均视为新的生成请求。
+
+失败、超时、审核拒绝、无效 JSON、空结果或不可用结果不消耗。
+
+### Scheduled Posts
+
+* 创建草稿不消耗
+* 保存内容不消耗
+* 预览不消耗
+* 成功创建有效定时发布任务后消耗
+* Worker 重试不重复消耗
+* 重复请求和重复 Webhook 不重复消耗
+
+多平台发布的计量单位必须以现有套餐承诺和代码逻辑为准，未确认前不得调整。
+
+---
+
+## 四、Credit 方案的决策门槛
+
+只有完成以下工作后，才能决定是否采用 Credit。
+
+### 1. 确认真实成本
+
+必须确认：
+
+* 默认文字模型的输入价格
+* 默认文字模型的输出价格
+* 单次完整文案的平均输入 Token
+* 单次完整文案的平均输出 Token
+* 不同图片模型的单张实际成本
+* 不同尺寸和质量的图片成本
+* 失败请求是否产生供应商成本
+* 重试和部分成功的实际成本
+* 汇率、支付手续费和税费
+
+不得使用未经验证的截图价格直接作为长期定价依据。
+
+### 2. 确认真实套餐
+
+必须提供当前实际套餐表，包括：
+
+* 套餐名称
+* 月付价格
+* 年付价格
+* 图片额度
+* 文案额度
+* Scheduled Posts
+* 连接账号数量
+* Research 或 Analytics 权益
+* 团队功能
+* Creem 产品 ID
+
+### 3. 完成压力测算
+
+每档套餐至少计算：
+
+* 正常用户场景
+* 图片重度使用场景
+* 全部额度用于最高成本图片的极端场景
+* 供应商价格上涨 20% 的场景
+* 用户集中生成导致的并发成本
+* 支付渠道费用
+* 退款和欺诈损失
+
+统一计算：
+
+```text
+毛利润 = 套餐实收收入 - AI 成本 - 支付手续费 - 其他可变成本
+
+毛利率 = 毛利润 ÷ 套餐实收收入 × 100%
+```
+
+### 4. 完成用户理解测试
+
+需要验证用户是否能理解：
+
+* 一个 Credit 能做什么
+* 文案和图片为什么消耗不同
+* 一次生成多张图片如何扣量
+* 重新生成是否再次扣量
+* 失败是否扣量
+* 套餐额度和额外购买额度是否分开
+* Credit 是否会过期
+
+如果需要大量说明才能让用户理解，则暂不适合进入 MVP。
+
+---
+
+## 五、Credit 未来候选方案
+
+如果后续确认采用 Credit，优先考虑混合模式：
+
+```text
+AI 文案 + AI 图片 = 共用 AI Credits
+Scheduled Posts = 独立月度额度
+```
+
+不建议第一阶段将 Scheduled Posts 纳入 Credit。
+
+原因：
+
+* Scheduled Posts 的边际 AI 成本较低
+* 它属于产品核心工作流，不应让用户每次排程都计算 Credit
+* 单独显示更容易理解
+* 有利于区分 AI 成本与发布服务权益
+
+未来可能采用：
+
+```text
+AI 文案生成：X Credits
+标准图片生成：Y Credits
+高质量图片生成：Z Credits
+Scheduled Posts：独立计数
+```
+
+具体数值必须根据实际成本和套餐测算确定，不得预先写死为“文案 1 Credit、图片 5 Credits”。
+
+---
+
+## 六、Credit 加购和 Auto-Refill
+
+Credit 加购不属于当前默认 MVP 范围。
+
+只有满足以下条件后才能上线：
+
+* Credit 主体系已经稳定运行
+* 每种操作扣量透明
+* 有完整 Usage Event
+* 支持幂等扣量和退款反转
+* 能区分订阅 Credit 与购买 Credit
+* 明确额外 Credit 是否过期
+* 明确套餐取消后的处理方式
+* 已完成支付、退款和欺诈测试
+
+Auto-Refill 不进入第一版。
+
+后续上线时必须支持：
+
+* 用户主动开启
+* 明确触发余额
+* 明确每次购买数量和价格
+* 设置月度消费上限
+* 购买前通知或购买后即时通知
+* 随时关闭
+* 支付失败处理
+* 重复 Webhook 幂等
+* 退款反转
+
+---
+
+## 七、Billing 页面修订
+
+### 当前独立额度模式
+
+Billing 页面应显示：
+
+```text
+Current Plan
+Plan name
+Subscription status
+Current billing period
+
+AI images
+used / limit
+remaining
+
+AI text generations
+used / limit
+remaining
+
+Scheduled posts
+used / limit
+remaining
+```
+
+Free 用户也必须看到自己的真实额度和用量。
+
+不得因为用户没有 Creem 付费账户就隐藏 Free 套餐额度。
+
+页面必须区分：
+
+* Free
+* Active
+* Trialing
+* Past due
+* Canceled
+* Expired
+* Loading
+* Sync error
+
+Creem 同步失败时，不得自动把用户显示为 Free。
+
+### Credit 模式正式启用后
+
+才允许切换为：
+
+```text
+AI Credits
+used / total
+remaining
+reset date
+
+Scheduled Posts
+used / total
+remaining
+reset date
+```
+
+只有系统已经支持 Credit 加购时，才显示：
+
+```text
+Extra Credits
+Buy Credits
+```
+
+只有 Auto-Refill 正式完成时，才显示 Auto-Refill 设置。
+
+不得提前展示不可用按钮或占位功能。
+
+---
+
+## 八、Usage 数据结构
+
+无论采用独立额度还是 Credit，都应保留不可变 Usage Event。
+
+```ts
+type UsageEvent = {
+  id: string;
+  ownerType: "user" | "workspace";
+  ownerId: string;
+
+  usageType:
+    | "ai_image"
+    | "ai_text_generation"
+    | "scheduled_post"
+    | "ai_credit";
+
+  operation:
+    | "reserve"
+    | "consume"
+    | "release"
+    | "reverse"
+    | "reset"
+    | "purchase"
+    | "manual_adjustment";
+
+  quantity: number;
+  referenceType: string;
+  referenceId: string;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
+};
+```
+
+不建议只依赖一个可以直接修改的 `credit_balance` 字段。
+
+可以保存聚合余额或当期计数用于快速读取，但 Usage Event 必须作为审计依据。
+
+系统需要支持：
+
+* 原子操作
+* 并发安全
+* 幂等
+* 失败释放
+* 退款反转
+* 不允许负余额
+* 不允许重复扣量
+* 可追踪每次消耗来源
+
+---
+
+## 九、成本监控
+
+即使 MVP 暂不显示 Credit，也必须开始记录内部成本。
+
+每次 AI 请求建议记录：
+
+```text
+provider
+model
+operation type
+input tokens
+output tokens
+requested image count
+successful image count
+image resolution
+estimated supplier cost
+actual supplier cost
+currency
+request status
+user or workspace
+subscription plan
+```
+
+这些成本数据只用于后台分析，暂不向普通用户展示。
+
+这样可以根据真实用户行为判断：
+
+* 文案实际成本
+* 单张图片实际成本
+* 每个套餐平均成本
+* 每个套餐极端成本
+* 用户是否集中使用高成本功能
+* 是否需要 Credit
+* Credit 权重应该如何设置
+
+---
+
+## 十、更新后的工作优先级
+
+### P0：审计真实套餐、成本和现有代码
+
+优先确认：
+
+* 当前真实套餐名称和价格
+* 是否存在 $9 套餐
+* Pricing 页面套餐权益
+* Creem 产品和价格
+* 服务端权益配置
+* 数据库订阅状态
+* Billing 页面数据来源
+* 当前是否存在 Credit 或 Token 旧代码
+* LinAPI 实际调用价格
+* 图片模型、分辨率和成本
+* 当前 Usage 数据结构
+
+输出：
+
+```text
+项目
+真实来源
+当前值
+冲突来源
+是否阻塞上线
+建议处理
+```
+
+### P1：完成现有独立额度闭环
+
+在 Credit 未确认前，先确保：
+
+* AI 图片正确计量
+* AI 文案正确计量
+* Scheduled Posts 正确计量
+* 成功后扣量
+* 失败不扣量
+* 重复请求不重复扣量
+* Billing 显示真实用量
+
+### P2：统一套餐配置
+
+所有套餐数字使用唯一服务端配置，不允许前端、后端和支付平台各自维护不同数字。
+
+### P3：记录真实 AI 成本
+
+增加内部成本日志和套餐成本分析。
+
+### P4：Credit 产品决策
+
+基于真实数据决定：
+
+* 是否使用 Credit
+* 哪些功能进入 Credit
+* 每项操作消耗多少
+* 是否允许加购
+* 是否结转
+* 是否 Auto-Refill
+
+### P5：如果批准，再实施 Credit
+
+不得先开发完整 Credit 钱包，再寻找商业理由。
+
+---
+
+## 十一、更新后的核心判断
+
+VibePin 当前不应因为竞品使用 Credit 就立即重构整个计费系统。
+
+当前最重要的仍然是：
+
+```text
+真实套餐
++ 真实 AI 成本
++ 正确的独立用量
++ 可靠的 Billing
++ 严格账号隔离
++ 幂等扣量
++ 与代码一致的 PRD
+```
+
+Credit 是可能的商业化升级方向，但目前属于待决策功能。
+
+现阶段默认方案保持：
+
+```text
+AI images
+AI text generations
+Scheduled posts
+```
+
+三项独立计量。
+
+完成真实成本和用户行为验证后，再决定是否升级为：
+
+```text
+AI Credits
++
+Scheduled Posts
+```
+
+任何套餐、价格、Credit 数量和扣量权重，都必须来自产品负责人确认或真实成本测算，不得自行新增。
