@@ -195,7 +195,7 @@ export function buildWinningHunterPlan(items: WinningHunterQueueItem[], now: Dat
 export type ExistingShiftPlanRow = { draftId: string; plannedAt: string; scheduledAt: string };
 
 /** Move only smart/unlocked scheduled rows to the first slot after the new batch. */
-export function buildExistingShiftPlan(existing: Array<ExistingScheduleRow & { draftId?: string }>, now: Date, newCount = 48): ExistingShiftPlanRow[] {
+export function buildExistingShiftPlan(existing: Array<ExistingScheduleRow & { draftId?: string; draft_id?: string }>, now: Date, newCount = 48): ExistingShiftPlanRow[] {
   const shiftable = existing.filter((row) => classifyExistingDraft(row) === "shiftable");
   if (!shiftable.length) return [];
   const slots = buildEtSlots(now, newCount + shiftable.length).slice(newCount);
