@@ -118,10 +118,14 @@ section("/api/cron/publish-due actually uses it");
 const route = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
 const catchAt = route.indexOf("catch (fanErr)");
 check("the fan-out catch records failure rows instead of only logging",
-  catchAt > 0 && /catch \(fanErr\)[\s\S]{0,900}failedRowsForUnattempted\(extras, described\.message\)/.test(route),
+  // The third argument (rows this block already recorded — scheduled Instagram
+  // Reels) keeps a Reel that went out from being overwritten by a failure row.
+  catchAt > 0 && /catch \(fanErr\)[\s\S]{0,1100}failedRowsForUnattempted\(extras, described\.message, outcomes\.slice\(outcomesBeforeExtras\)\)/.test(route),
   "a thrown fan-out must leave the merchant a result row per owed destination");
 check("the successful path also fills in destinations the fan-out did not report",
-  /failedRowsForUnattempted\(extras, didNotCompleteMessage, fanned\)/.test(route));
+  // `fanOutExtras` = the owed non-Pinterest destinations minus scheduled Reels,
+  // which are dispatched (and always recorded) by their own loop.
+  /failedRowsForUnattempted\(fanOutExtras, didNotCompleteMessage, fanned\)/.test(route));
 check("the job id is declared outside the try, so a throw can still finalize the attempt",
   /let jobId: string \| null = null;[\s\S]{0,120}try \{/.test(route),
   "otherwise the job row stays 'publishing' forever and the failure rows are never recorded");

@@ -44,6 +44,9 @@ import {
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
 import { dispatchSupabaseV76PinterestVideo } from "@/lib/server/publish/v76PinterestVideoServer";
+// A single-video Content's Instagram destinations go out as Reels through the same
+// v76 durable chain as Pinterest video — never through the image fan-out.
+import { dispatchDueInstagramReel } from "@/lib/server/publish/v76InstagramReelsDue";
 import {
   buildDueVideoReceipt,
   buildReconcileChildVideoReceipt,
@@ -119,6 +122,7 @@ import {
   attemptEvidenceFrom,
   describeVideoEvidence,
   readDurableVideoEvidence,
+  type DurableVideoEvidence,
 } from "@/lib/server/publish/videoEvidence";
 // The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
 // is on, the row is a video, and a `confirmed_absent` proof exists for the
@@ -1394,6 +1398,166 @@ export async function GET(req: Request): Promise<Response> {
         continue;
       }
 
+      // ── Instagram Reels: a single-video Content's Instagram destinations ───────
+      //
+      // The image fan-out below cannot publish a video: it hands `input.imageUrls`
+      // (for a video row, the private mp4) to Instagram's IMAGE branch, which refuses
+      // it before the network. So when the row is a single video (`videoReceipt` is
+      // built exactly then), every Instagram destination is taken OUT of the fan-out
+      // and dispatched through the v76 durable Reels chain instead — the same
+      // receipt, frozen destination, materializer, provenance and `latestStartMs`
+      // deadline the Pinterest video branch above uses.
+      //
+      // Unconditional on PUBLISH_RETRY_WORKER_ENABLED: this is a missing capability,
+      // not retry behaviour. What the flag DOES change is deliberately nothing here —
+      // see the `failed` and `delivery_unknown` branches below for why an Instagram
+      // Reel neither enters the Pinterest retry classifier nor the reconcile ledger.
+      //
+      // Out of scope, unchanged: Facebook video destinations still go through the
+      // fan-out (and fail there as before); image rows are untouched — for them
+      // `reelTargets` is empty and `fanOutExtras` is exactly `extras`.
+      const reelTargets = videoReceipt ? extras.filter(d => d.provider === "instagram") : [];
+      const fanOutExtras = videoReceipt ? extras.filter(d => d.provider !== "instagram") : extras;
+      /**
+       * Publish ONE Instagram Reel destination and record its result row. Never throws.
+       *
+       * Result mapping mirrors the Pinterest video branch:
+       *   published         remote id + permalink recorded; `sent` (charged).
+       *   delivery_unknown  recorded as unknown and NEVER re-sent: the stored
+       *                     `delivery_unknown` row closes the destination for every
+       *                     later tick (`pendingDestinations`), and the v76 ledger
+       *                     early-returns unknown on replay. Charged (cannot be
+       *                     disproved). NOT flagged into the v82 reconcile ledger —
+       *                     stage 0 (reconcilePass.ts) is Pinterest-only and skips
+       *                     other providers without closing them, and its scan takes
+       *                     the oldest RECONCILE_LIMIT open rows regardless of
+       *                     provider, so an Instagram entry nobody can close would
+       *                     permanently occupy a slot Pinterest reconciliation needs.
+       *                     Instagram reconciliation (29bb6884's recent-media read)
+       *                     is a manual/ops surface today, not wired into stage 0.
+       *   failed            Instagram's own sanitized error text in the row (not a
+       *                     fixed sentence); refundable like the Pinterest branch.
+       *                     TERMINAL even with the retry flag on: `retryClassification`
+       *                     is Pinterest's table (Pinterest codes, Pinterest 4xx
+       *                     semantics) and must not be applied to Meta's answers.
+       *   in_progress/not_due  deferred: nothing new happened, still owed.
+       */
+      const publishReelDestination = async (destination: (typeof extras)[number]): Promise<void> => {
+        const socialConnectionId = destination.socialConnectionId ?? null;
+        // ── Pinterest + Instagram on ONE video intent: refused, like publish-now ──
+        //
+        // `/api/publish/social` refuses this shape (`instagram_reels_private_fanout_
+        // unsupported`), and the cron keeps the same contract until a real-database
+        // canary has shown that two providers can share one v76 intent: whether a
+        // settled Pinterest destination moves the intent to `settled` before the
+        // Reel can lease, and whether the shared asset/copy lets the two interfere,
+        // are both unverified. Pinterest is dispatched as usual by its own loop;
+        // only the Instagram side is refused.
+        //
+        // Decided from the FROZEN receipt, not from what is still owed: a re-claim
+        // after Pinterest already published owes only Instagram, but it is still
+        // the same shared intent. `preNetwork` ⇒ `not_sent`: this side is never
+        // charged. The code maps to `content` (pinLifecycle.ts), so it is not
+        // presented as retryable, and nothing here schedules a retry.
+        if (videoReceipt?.destinations.some(item => item.provider === "pinterest")) {
+          const message = "A scheduled video cannot go to Pinterest and Instagram from one draft yet. "
+            + "Create a separate draft for the Instagram Reel and schedule it on its own.";
+          deliveries.push(classifyDelivery({ preNetwork: true }));
+          await record({
+            provider: "instagram", status: "failed", socialConnectionId, error: message, preNetwork: true,
+          });
+          if (!firstFailure) firstFailure = { code: "instagram_reels_private_fanout_unsupported", message };
+          return;
+        }
+        if (!videoReceipt || !hasTimeForDestination(Date.now(), deadlineMs)) {
+          await record(deferredOutcome(destination));
+          return;
+        }
+        const frozenDestination = videoReceipt.destinations.find(item =>
+          item.provider === "instagram" && item.socialConnectionId === socialConnectionId);
+        if (!frozenDestination) {
+          const message = "The scheduled Instagram destination no longer matches the frozen intent.";
+          deliveries.push(classifyDelivery({ preNetwork: true }));
+          await record({
+            provider: "instagram", status: "failed", socialConnectionId, error: message, preNetwork: true,
+          });
+          if (!firstFailure) firstFailure = { code: "invalid_confirmation", message };
+          return;
+        }
+        try {
+          const { result: durable, observed } = await dispatchDueInstagramReel(db, {
+            uid: row.vibepin_user_id,
+            receipt: videoReceipt,
+            destination: frozenDestination,
+            scheduleAt: row.scheduled_at ?? undefined,
+            latestStartMs: deadlineMs,
+          });
+          // What was actually observed. The provider's status only when the provider
+          // was really asked this round and answered on the network — the dispatcher's
+          // own pre-network refusal carries a SYNTHESIZED 400 that must not be shown
+          // as something Instagram said. Otherwise only the orchestration `reason`.
+          const stored = readDurableVideoEvidence(durable.evidence);
+          const evidence: DurableVideoEvidence = observed
+            ? {
+              ...(observed.providerStatus !== undefined ? { providerStatus: observed.providerStatus } : {}),
+              ...(observed.message ? { providerMessage: observed.message } : {}),
+              ...(stored.reason ? { reason: stored.reason } : {}),
+            }
+            : (stored.reason ? { reason: stored.reason } : {});
+          if (durable.outcome === "published") {
+            deliveries.push(classifyDelivery({ ok: true }));
+            await record({
+              provider: "instagram", status: "published", socialConnectionId,
+              externalPostId: durable.remoteId ?? null,
+              externalPostUrl: durable.remoteUrl ?? null,
+            });
+          } else if (durable.outcome === "delivery_unknown") {
+            // Hardcoded `delivery_unknown` ⇒ the unit is KEPT, for the same reason as
+            // the Pinterest branch: a delivery we cannot disprove is never refunded,
+            // whatever status survived into the evidence.
+            deliveries.push(classifyDelivery({}));
+            const message = describeVideoEvidence(
+              "Instagram Reel delivery is unknown. Check the Instagram account before publishing it again.",
+              evidence,
+            );
+            await record({ provider: "instagram", status: "delivery_unknown", socialConnectionId, error: message });
+            if (!firstFailure) firstFailure = { code: "delivery_unknown", message };
+          } else if (durable.outcome === "in_progress" || durable.outcome === "not_due") {
+            await record(deferredOutcome(destination));
+          } else {
+            // A `failed` durable result is a DISPROVED delivery (the Reels dispatcher
+            // turns any failure without a provider 4xx into unknown). Money: refundable,
+            // `not_sent` when decided before the network, otherwise `rejected` with the
+            // real 4xx, falling back to 400 exactly like the Pinterest branch.
+            const rejectionStatus = observed?.providerStatus !== undefined
+              && observed.providerStatus >= 400 && observed.providerStatus < 500
+              ? observed.providerStatus
+              : 400;
+            deliveries.push(classifyDelivery(observed?.preNetwork
+              ? { preNetwork: true }
+              : { providerStatus: rejectionStatus }));
+            const message = describeVideoEvidence("Instagram rejected the Reel publish.", evidence);
+            await record({
+              provider: "instagram", status: "failed", socialConnectionId, error: message,
+              ...(observed?.preNetwork ? { preNetwork: true } : {}),
+            });
+            if (!firstFailure) firstFailure = { code: "instagram_reel_publish_failed", message };
+          }
+        } catch (err) {
+          // Every throw that escapes the durable dispatcher is BEFORE the provider
+          // boundary (confirm/lease/materialize/claim/start RPCs): once an attempt has
+          // started, the dispatcher converts provider and settlement throws into
+          // `delivery_unknown` itself. So this is not_sent, like the video branch's
+          // `preNetwork` classification of the same throws.
+          deliveries.push(classifyDelivery({ preNetwork: true }));
+          const described = describeThrown(err);
+          await record({
+            provider: "instagram", status: "failed", socialConnectionId, error: described.message, preNetwork: true,
+          });
+          if (!firstFailure) firstFailure = described;
+        }
+      };
+
       // ── Fan out to the non-Pinterest destinations ─────────────────────────────
       // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
       // posted with no record of the platforms that were still owed.
@@ -1408,6 +1572,10 @@ export async function GET(req: Request): Promise<Response> {
         // The job id must outlive the try: when the fan-out throws, the attempt still
         // has to be finalized with the failure rows below. A job row left in
         // `publishing` forever reads as a publish that is still in flight.
+        // Outcomes the Reels loop records from here on are known to the catch below,
+        // so a later fan-out throw does not write a second (failed) row over a Reel
+        // that really went out.
+        const outcomesBeforeExtras = outcomes.length;
         let jobId: string | null = null;
         try {
           jobId = await createPublishJob(
@@ -1416,32 +1584,38 @@ export async function GET(req: Request): Promise<Response> {
             typeof row.draft_id === "string" ? row.draft_id : null,
             null,
           );
-          const fanned = await fanOutDestinations(row.vibepin_user_id, extras, {
-            // The whole media set, in display order — a Content scheduled as a
-            // carousel must fan out as one, not as its cover image.
-            imageUrls: input.imageUrls,
-            title: input.title,
-            caption: input.description,
-            destinationUrl: input.link,
-            altText: input.altText,
-          }, { deadlineMs, onOutcome: persistOne });
-          outcomes.push(...fanned);
-          // Defensive: an owed destination the fan-out returned no row for is not
-          // "nothing happened", it is "nobody knows" — and silence there reads to the
-          // merchant as a platform that was never even selected.
-          const unreported = failedRowsForUnattempted(extras, didNotCompleteMessage, fanned);
-          outcomes.push(...unreported);
-          if (unreported.length && !firstFailure) {
-            firstFailure = { message: unreported[0].error ?? "Publish failed" };
-          }
-          for (const f of fanned) {
-            if (f.status === "skipped") continue; // never attempted, not a delivery failure
-            deliveries.push(classifyDelivery({
-              ok: f.status === "published",
-              preNetwork: f.preNetwork,
-              providerStatus: f.providerStatus,
-              providerResourceId: f.providerResourceId ?? f.externalPostId ?? null,
-            }));
+          // Sequential, like the fan-out: each Reel is a ~minute-long container poll,
+          // and the per-destination deadline check inside is what keeps a slow one
+          // from pushing the next past the run's ceiling.
+          for (const destination of reelTargets) await publishReelDestination(destination);
+          if (fanOutExtras.length) {
+            const fanned = await fanOutDestinations(row.vibepin_user_id, fanOutExtras, {
+              // The whole media set, in display order — a Content scheduled as a
+              // carousel must fan out as one, not as its cover image.
+              imageUrls: input.imageUrls,
+              title: input.title,
+              caption: input.description,
+              destinationUrl: input.link,
+              altText: input.altText,
+            }, { deadlineMs, onOutcome: persistOne });
+            outcomes.push(...fanned);
+            // Defensive: an owed destination the fan-out returned no row for is not
+            // "nothing happened", it is "nobody knows" — and silence there reads to the
+            // merchant as a platform that was never even selected.
+            const unreported = failedRowsForUnattempted(fanOutExtras, didNotCompleteMessage, fanned);
+            outcomes.push(...unreported);
+            if (unreported.length && !firstFailure) {
+              firstFailure = { message: unreported[0].error ?? "Publish failed" };
+            }
+            for (const f of fanned) {
+              if (f.status === "skipped") continue; // never attempted, not a delivery failure
+              deliveries.push(classifyDelivery({
+                ok: f.status === "published",
+                preNetwork: f.preNetwork,
+                providerStatus: f.providerStatus,
+                providerResourceId: f.providerResourceId ?? f.externalPostId ?? null,
+              }));
+            }
           }
         } catch (fanErr) {
           // A fan-out failure must never undo a Pinterest publish that already
@@ -1452,7 +1626,9 @@ export async function GET(req: Request): Promise<Response> {
           // went out. Every owed destination now gets a failed row carrying the reason.
           const described = describeThrown(fanErr);
           console.error("[cron/publish-due] fan-out:", described.message);
-          outcomes.push(...failedRowsForUnattempted(extras, described.message));
+          // Destinations that already have a row from THIS block (a Reel dispatched
+          // before the throw) keep it — only the ones never reached get a failure.
+          outcomes.push(...failedRowsForUnattempted(extras, described.message, outcomes.slice(outcomesBeforeExtras)));
           if (!firstFailure) firstFailure = described;
         }
         // Recording the attempt must not itself become the reason a delivered publish
