@@ -95,10 +95,16 @@ export function looksLikeAmazon(hints: {
 
 /**
  * A product ASIN as it appears in a URL: `B0`/`BT` prefix + 8 more UPPERCASE
- * alphanumerics. Deliberately excludes ISBN-10 book ASINs (all digits) — see
- * extractAsinFromUrl.
+ * alphanumerics.
  */
 export const STRICT_URL_ASIN_RE = /^(?:B0|BT)[A-Z0-9]{8}$/;
+
+/** Book ASINs are the ISBN-10: nine digits + a digit or `X` check character. */
+export const ISBN10_ASIN_RE = /^\d{9}[\dX]$/;
+
+function isUrlAsinToken(token: string): boolean {
+  return STRICT_URL_ASIN_RE.test(token) || ISBN10_ASIN_RE.test(token);
+}
 
 /**
  * Path shapes that actually carry an ASIN. Anchored on a known keyword segment; the
@@ -114,19 +120,18 @@ const ASIN_PATH_PATTERNS: readonly RegExp[] = [
 
 /**
  * Strict ASIN extraction from a parsed URL: only the known path shapes above or an
- * `asin=` query parameter, and only tokens matching STRICT_URL_ASIN_RE.
- *
- * Known narrowing: ISBN-10 book ASINs (`/dp/0316769487`) return null. For a pasted
- * link that means "no ASIN" (link kept as-is, not rebuilt) — never a wrong ASIN.
+ * `asin=` query parameter, and only tokens that are a B0/BT product ASIN or an
+ * ISBN-10 book ASIN (`/dp/0316769487`, `/gp/product/030640615X`). Words such as
+ * `ELECTRONIC` never qualify, in any position.
  */
 export function extractAsinFromUrl(url: URL): string | null {
   const path = url.pathname;
   for (const re of ASIN_PATH_PATTERNS) {
     const token = path.match(re)?.[1];
-    if (token && STRICT_URL_ASIN_RE.test(token)) return token;
+    if (token && isUrlAsinToken(token)) return token;
   }
   for (const [key, value] of url.searchParams) {
-    if (key.toLowerCase() === "asin" && STRICT_URL_ASIN_RE.test(value.trim())) return value.trim();
+    if (key.toLowerCase() === "asin" && isUrlAsinToken(value.trim())) return value.trim();
   }
   return null;
 }

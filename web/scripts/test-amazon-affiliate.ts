@@ -99,6 +99,14 @@ test("extractAsin: no wildcard 10-char path segment (regression /electronic/)", 
   assert.equal(extractAsin("amazon.com/dp/B08N5WRWNW"), "B08N5WRWNW", "scheme-less rows still parse");
 });
 
+test("extractAsin: ISBN-10 book ASINs on known paths", () => {
+  assert.equal(extractAsin("https://www.amazon.com/dp/0316769487"), "0316769487");
+  assert.equal(extractAsin("https://www.amazon.com/gp/product/030640615X"), "030640615X");
+  assert.equal(extractAsin("https://www.amazon.com/dp/ELECTRONIC"), null);
+  assert.equal(extractAsin("https://www.amazon.com/electronic/"), null);
+  assert.equal(extractAsin("https://www.amazon.com/books/0316769487/"), null, "ISBN only on a known ASIN path");
+});
+
 test("isAmazonUrl: exact host whitelist (no substring bypass)", () => {
   assert.equal(isAmazonUrl("https://amazon.com.evil.io/x"), false);
   assert.equal(isAmazonUrl("https://evil.io/?r=amzn.to"), false);

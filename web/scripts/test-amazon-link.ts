@@ -133,7 +133,12 @@ async function run() {
     ["https://www.amazon.com/dp/ELECTRONIC", null],      // no B0/BT prefix
     ["https://www.amazon.com/dp/B08N5WRWNWX", null],     // 11 chars
     ["https://www.amazon.com/product/B08N5WRWNW", null], // not an Amazon path shape
-    ["https://www.amazon.com/dp/0316769487", null],      // ISBN-10: documented narrowing
+    ["https://www.amazon.com/dp/0316769487", "0316769487"],             // ISBN-10 book
+    ["https://www.amazon.com/Catcher-Rye/dp/0316769487/ref=x", "0316769487"],
+    ["https://www.amazon.com/gp/product/030640615X", "030640615X"],     // ISBN-10 with X check char
+    ["https://www.amazon.com/dp/030640615x", null],                     // lowercase x is not a URL ASIN
+    ["https://www.amazon.com/dp/03164X9487", null],                     // X only as the last char
+    ["https://www.amazon.com/dp/031676948", null],                      // 9 digits
   ];
   for (const [raw, want] of asinCases) {
     await test(`asin(${raw.replace("https://www.amazon.com", "")}) = ${want}`, () => {
