@@ -36,6 +36,12 @@ export const CORE: string[] = [
   "test-amazon-link",
   "test-amazon-adapter",
   "test-amazon-import",
+  // Amazon URL → copy (T3): disclosure budget, card fact mapping, card UI smoke,
+  // one-time risk notice. Registered in T4 (they were left dangling by T3).
+  "test-amazon-copy-disclosure",
+  "test-amazon-copy-mapping",
+  "test-amazon-card-ui",
+  "test-amazon-risk-notice",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",
@@ -254,6 +260,9 @@ export const STUDIO: string[] = [
   // publish partition (fully-published items must never be re-sent), the
   // per-lifecycle delete impact, and the result summary's reason contract.
   "test-bulk-actions",
+  // Bulk "Generate copy" orchestration (Amazon T4, design §4): independent
+  // success/failure, touched fields never overwritten, concurrency ≤ 2, 402 / 429.
+  "test-bulk-generate-copy",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
