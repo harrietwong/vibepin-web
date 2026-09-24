@@ -15,7 +15,7 @@
  */
 
 import { useState } from "react";
-import { X, AlertTriangle, Check, Loader2, Trash2 } from "lucide-react";
+import { X, AlertTriangle, Check, Loader2, Trash2, Sparkles } from "lucide-react";
 import { PinConfirmList } from "@/components/studio/PinConfirmList";
 import { canSubmitConfirmList, remainingIds, type ConfirmListItem } from "@/lib/studio/pinConfirmList";
 import { BUI } from "@/components/studio/boardUI";
@@ -28,6 +28,13 @@ import type { PublishBlocker } from "@/lib/studio/publishContent";
 import type { PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import { platformName } from "@/lib/social/platforms";
 import type { MessageKey } from "@/lib/i18n/messages/en";
+import type {
+  BulkCopyItem,
+  BulkCopyPreflight,
+  BulkCopySummary,
+  CopyField,
+  QuotaPreflight,
+} from "@/lib/studio/bulkGenerateCopy";
 
 type Translate = (key: MessageKey) => string;
 
@@ -364,6 +371,231 @@ export function BulkDeleteConfirm({ tr, impact, onConfirm, onClose }: BulkDelete
           <button type="button" data-testid="bulk-delete-confirm-action" onClick={onConfirm} style={dangerBtn}>
             <Trash2 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulkDelete.confirm")}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Generate copy (T4b: Studio bulk bar entry) ──────────────────────────────────
+// Same dumb-panel contract as the two sheets above: every decision (who is ready,
+// who is skipped and why, quota math, per-card progress) is made by
+// lib/studio/bulkGenerateCopy + bulkCopyDrafts and handed in as data. This component
+// only renders it and reports button presses — it never calls the AI Copy client or
+// the orchestrator itself (design §4, T4).
+
+const COPY_FIELD_LABEL: Record<CopyField, "title" | "description" | "altText"> = {
+  title: "title", description: "description", altText: "altText",
+};
+
+export type BulkGenerateCopySheetProps = {
+  tr: Translate;
+  /** Selection frozen at open time (design: a running batch must not see cards added mid-run). */
+  total: number;
+  preflight: BulkCopyPreflight;
+  quota: QuotaPreflight | null;
+  items: Record<string, BulkCopyItem>;
+  /** null = still on the start step; set = running or finished. */
+  progress: { done: number; total: number } | null;
+  summary: BulkCopySummary | null;
+  replaceTouched: boolean;
+  /** The user just checked "replace text I wrote" — asking for the second confirmation. */
+  replacePending: boolean;
+  onRequestReplace: () => void;
+  onConfirmReplace: () => void;
+  onCancelReplace: () => void;
+  onStart: () => void;
+  onStop: () => void;
+  onRetryFailed: () => void;
+  onClose: () => void;
+  /** Focus returns here on close (0918 PRD NFR: focus never gets lost behind a dismissed sheet). */
+  triggerRef?: React.RefObject<HTMLElement | null>;
+};
+
+function quotaLine(tr: Translate, quota: QuotaPreflight | null): string | null {
+  if (!quota || quota.needed <= 0) return null;
+  if (quota.kind === "unknown") return fill(tr("studioBoard.bulkCopy.quotaUnknown"), { n: quota.needed });
+  if (quota.kind === "unlimited") return fill(tr("studioBoard.bulkCopy.quotaUnlimited"), { n: quota.needed });
+  if (quota.kind === "enough") return fill(tr("studioBoard.bulkCopy.quotaEnough"), { n: quota.needed, remaining: quota.remaining });
+  return fill(tr("studioBoard.bulkCopy.quotaShort"), { n: quota.needed, remaining: quota.remaining });
+}
+
+export function BulkGenerateCopySheet({
+  tr, total, preflight, quota, items, progress, summary, replaceTouched, replacePending,
+  onRequestReplace, onConfirmReplace, onCancelReplace, onStart, onStop, onRetryFailed, onClose, triggerRef,
+}: BulkGenerateCopySheetProps) {
+  const running = !!progress && !summary;
+  const failedCount = summary ? summary.items.filter(item => item.status === "failed").length : 0;
+
+  const handleClose = () => {
+    if (running) return;
+    onClose();
+    // Minimal keyboard-accessible focus return (0918 PRD NFR): the trigger button is
+    // still in the DOM (the bulk bar does not unmount on close), so give it focus back
+    // on the next frame rather than leaving focus on a node the sheet just removed.
+    if (triggerRef?.current) requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  return (
+    <div style={overlay} role="dialog" aria-modal="true" aria-labelledby="bulk-copy-title" data-testid="bulk-copy-sheet"
+      onKeyDown={e => { if (e.key === "Escape" && !running) handleClose(); }}>
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <h2 id="bulk-copy-title" style={{ margin: 0, fontSize: 17, color: BUI.text }}>
+            {summary ? tr("studioBoard.bulkCopy.title").replace("{n}", String(total)) : fill(tr("studioBoard.bulkCopy.title"), { n: total })}
+          </h2>
+          {!running && (
+            <button type="button" aria-label={tr("studioBoard.bulkCopy.close")} onClick={handleClose}
+              style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 10, minWidth: 44, minHeight: 44 }}>
+              <X style={{ width: 17, height: 17 }} />
+            </button>
+          )}
+        </div>
+
+        {!summary && <p style={{ margin: "8px 0 0", fontSize: 12.5, color: BUI.textSec }}>{tr("studioBoard.bulkCopy.intro")}</p>}
+
+        {!summary && (
+          <div data-testid="bulk-copy-groups" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+            {preflight.ready.length > 0 && (
+              <p data-testid="bulk-copy-group-ready" style={{ margin: 0, fontSize: 12.5, color: BUI.text }}>
+                {fill(tr("studioBoard.bulkCopy.groupReady"), { n: preflight.ready.length })}
+              </p>
+            )}
+            {preflight.needsProductName.length > 0 && (
+              <p data-testid="bulk-copy-group-needs-product-name" style={{ margin: 0, fontSize: 12.5, color: "#b45309" }}>
+                {fill(tr("studioBoard.bulkCopy.groupNeedsProductName"), { n: preflight.needsProductName.length })}
+              </p>
+            )}
+            {preflight.generating.length > 0 && (
+              <p data-testid="bulk-copy-group-generating" style={{ margin: 0, fontSize: 12.5, color: BUI.textSec }}>
+                {fill(tr("studioBoard.bulkCopy.groupGenerating"), { n: preflight.generating.length })}
+              </p>
+            )}
+            {preflight.alreadyCopyComplete.length > 0 && (
+              <p data-testid="bulk-copy-group-complete" style={{ margin: 0, fontSize: 12.5, color: BUI.textSec }}>
+                {fill(tr("studioBoard.bulkCopy.groupComplete"), { n: preflight.alreadyCopyComplete.length })}
+              </p>
+            )}
+          </div>
+        )}
+
+        {!summary && quotaLine(tr, quota) && (
+          <p data-testid="bulk-copy-quota" style={{ margin: "10px 0 0", fontSize: 12, color: BUI.textSec }}>{quotaLine(tr, quota)}</p>
+        )}
+
+        {/* Default: keep the user's own text. Replacing it is a separate, explicit,
+            second-confirmed choice (design §4.2 / 0918 §2.5 rule 5). */}
+        {!summary && !running && (
+          <div style={{ marginTop: 14 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 44, fontSize: 12.5, color: BUI.text, cursor: "pointer" }}>
+              <input type="checkbox" data-testid="bulk-copy-replace-toggle" checked={replaceTouched}
+                style={{ width: 16, height: 16 }}
+                onChange={e => { if (e.target.checked) onRequestReplace(); else onCancelReplace(); }} />
+              {tr("studioBoard.bulkCopy.replaceToggle")}
+            </label>
+            {replacePending && (
+              <div data-testid="bulk-copy-replace-confirm" style={{ marginTop: 8, padding: 10, borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
+                <p style={{ margin: 0, fontSize: 12, color: BUI.text, fontWeight: 700 }}>{tr("studioBoard.bulkCopy.replaceConfirmTitle")}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: BUI.textSec }}>{tr("studioBoard.bulkCopy.replaceConfirmBody")}</p>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button type="button" data-testid="bulk-copy-replace-cancel" onClick={onCancelReplace}
+                    style={{ ...quietBtn, minHeight: 44 }}>{tr("studioBoard.bulk.cancel")}</button>
+                  <button type="button" data-testid="bulk-copy-replace-confirm-action" onClick={onConfirmReplace}
+                    style={{ ...dangerBtn, minHeight: 44 }}>{tr("studioBoard.bulkCopy.replaceConfirm")}</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {running && progress && (
+          <p data-testid="bulk-copy-progress" style={{ margin: "12px 0 0", fontSize: 12.5, color: BUI.text, display: "flex", alignItems: "center", gap: 6 }}>
+            <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" />
+            {fill(tr("studioBoard.bulkCopy.progress"), { done: progress.done, total: progress.total })}
+          </p>
+        )}
+
+        {(running || summary) && (
+          <div data-testid="bulk-copy-rows" style={{ marginTop: 14, maxHeight: 260, overflowY: "auto" }}>
+            {preflight.ready.map(card => {
+              const item = items[card.id];
+              if (!item) return null;
+              return (
+                <div key={card.id} style={listRow} data-testid={`bulk-copy-row-${item.status}`}>
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    {item.status === "failed"
+                      ? <AlertTriangle style={{ width: 13, height: 13, color: "#dc2626", flexShrink: 0, marginTop: 2 }} />
+                      : item.status === "succeeded"
+                        ? <Check style={{ width: 13, height: 13, color: "#16a34a", flexShrink: 0, marginTop: 2 }} />
+                        : item.status === "running"
+                          ? <Loader2 style={{ width: 13, height: 13, flexShrink: 0, marginTop: 2 }} className="animate-spin" />
+                          : null}
+                    <span style={{ display: "inline-block", marginLeft: 6, fontSize: 12.5, color: BUI.text }}>{card.title || tr("studioBoard.bulk.untitled")}</span>
+                    <span style={{ display: "block", marginTop: 2, fontSize: 12, color: item.status === "failed" ? "#dc2626" : BUI.textSec }}>
+                      {tr(`studioBoard.bulkCopy.status.${item.status}` as MessageKey)}
+                      {item.status === "failed" && item.reason ? ` · ${item.reason}` : ""}
+                      {item.status !== "failed" && item.status !== "succeeded" && item.reason
+                        ? ` · ${tr(`studioBoard.bulkCopy.reason.${item.reason}` as MessageKey)}` : ""}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {summary && (
+          <div data-testid="bulk-copy-summary" style={{ marginTop: 14 }}>
+            <p style={{ margin: 0, fontSize: 12.5, color: BUI.text }}>
+              {fill(tr("studioBoard.bulkCopy.summary"), {
+                succeeded: summary.succeeded, failed: summary.failed,
+                skipped: summary.skipped + preflight.needsProductName.length + preflight.generating.length + preflight.alreadyCopyComplete.length,
+                notStarted: summary.notStarted,
+              })}
+            </p>
+            {(Object.keys(COPY_FIELD_LABEL) as CopyField[]).some(field => summary.keptByField[field] > 0) && (
+              <p data-testid="bulk-copy-kept-fields" style={{ margin: "4px 0 0", fontSize: 12, color: BUI.textSec }}>
+                {fill(tr("studioBoard.bulkCopy.keptFields"), {
+                  title: summary.keptByField.title, description: summary.keptByField.description, altText: summary.keptByField.altText,
+                })}
+              </p>
+            )}
+            {summary.stoppedBy === "text_limit" && (
+              <p data-testid="bulk-copy-stopped-text-limit" style={{ margin: "8px 0 0", fontSize: 12, color: "#b45309" }}>{tr("studioBoard.bulkCopy.stoppedTextLimit")}</p>
+            )}
+            {summary.stoppedBy === "rate_limited" && (
+              <p data-testid="bulk-copy-stopped-rate-limited" style={{ margin: "8px 0 0", fontSize: 12, color: "#b45309" }}>{tr("studioBoard.bulkCopy.stoppedRateLimited")}</p>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+          {summary ? (
+            <>
+              {failedCount > 0 && (
+                <button type="button" data-testid="bulk-copy-retry-failed" onClick={onRetryFailed} style={{ ...quietBtn, minHeight: 44 }}>
+                  {tr("studioBoard.bulkCopy.retryFailed")}
+                </button>
+              )}
+              <button type="button" data-testid="bulk-copy-done" onClick={handleClose} style={{ ...primaryBtn, minHeight: 44 }}>
+                {tr("studioBoard.bulkCopy.close")}
+              </button>
+            </>
+          ) : running ? (
+            <button type="button" data-testid="bulk-copy-stop" onClick={onStop} style={{ ...quietBtn, minHeight: 44 }}>
+              {tr("studioBoard.bulkCopy.stop")}
+            </button>
+          ) : (
+            <>
+              <button type="button" data-testid="bulk-copy-cancel" onClick={handleClose} style={{ ...quietBtn, minHeight: 44 }}>
+                {tr("studioBoard.bulk.cancel")}
+              </button>
+              <button type="button" data-testid="bulk-copy-start" onClick={onStart} disabled={preflight.ready.length === 0 || replacePending}
+                style={{ ...primaryBtn, minHeight: 44, opacity: preflight.ready.length === 0 || replacePending ? 0.55 : 1, cursor: preflight.ready.length === 0 || replacePending ? "not-allowed" : "pointer" }}>
+                <Sparkles style={{ width: 13, height: 13 }} /> {fill(tr("studioBoard.bulkCopy.start"), { n: preflight.ready.length })}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -9,7 +9,7 @@ import {
   isTextLimitReachedError,
 } from "@/lib/ai-copy/generatePinCopy";
 import type { MetadataTouchedFlags } from "@/lib/pinMetadata";
-import type { BulkCopyErrorKind, CopyTouchedFlags } from "./bulkGenerateCopy";
+import type { BulkCopyErrorKind, CopyTouchedFlags, TextUsage } from "./bulkGenerateCopy";
 
 /** Thrown by a bulk `generate` when the card already has a copy request running. */
 export class BulkCopyBusyError extends Error {
@@ -57,4 +57,21 @@ export function copyTouchedOf(
     descriptionTouched: !!(draftTouched?.descriptionTouched || rowTouched?.descriptionTouched),
     altTextTouched: !!(draftTouched?.altTextTouched || rowTouched?.altTextTouched),
   };
+}
+
+/** The shape GET /api/billing/usage returns for the aiTextGenerations bucket. */
+export type AiTextUsageResponse = { metered: boolean; aiTextGenerations?: { used: number | null; limit: number | null } } | null;
+
+/**
+ * Map the billing usage response onto the bulk runner's `TextUsage`.
+ *
+ * `metered: false` means there is no usage account yet (lazy/shadow metering) — `used`
+ * would read as 0, which is NOT a measurement. Treating that as "0 used, N left" would
+ * assert a count we never took (same rule SettingsModal's UsageRow already follows), so
+ * an unmetered or unreadable response becomes `null` → the preflight says "unknown"
+ * rather than a confident number.
+ */
+export function textUsageFromBillingResponse(response: AiTextUsageResponse): TextUsage {
+  if (!response || !response.metered || !response.aiTextGenerations) return null;
+  return { used: response.aiTextGenerations.used, limit: response.aiTextGenerations.limit };
 }

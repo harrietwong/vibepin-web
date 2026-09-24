@@ -112,12 +112,21 @@ import {
   partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
   type BulkPublishOutcomeRow, type BulkPublishSummary,
 } from "@/lib/studio/bulkActions";
-import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
+import { BulkPublishSheet, BulkDeleteConfirm, BulkGenerateCopySheet, blockerText } from "@/components/studio/BulkActionSheets";
 import { confirmItemFromSnapshot, isAiCopyUnedited, selectConfirmedTargets, toggleExcluded } from "@/lib/studio/pinConfirmList";
 import { platformName } from "@/lib/social/platforms";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 import { AmazonRiskNoticeBanner } from "@/components/studio/AmazonRiskNoticeBanner";
 import { isAmazonLink } from "@/lib/studio/amazonCardSource";
+import { generatePinterestPinCopy, resolveAmazonCopyContext } from "@/lib/ai-copy/generatePinCopy";
+import { readResolvedContentLanguage } from "@/lib/i18n/config";
+import { runWithBusyGuard, isBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
+import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
+import {
+  preflightBulkCopy, runBulkGenerateCopy, mergeGeneratedCopy, failedIds, quotaPreflight,
+  type BulkCopyCard, type BulkCopyItem, type BulkCopyPreflight, type BulkCopySummary, type QuotaPreflight,
+} from "@/lib/studio/bulkGenerateCopy";
+import { BulkCopyBusyError, classifyBulkCopyError, copyTouchedOf, textUsageFromBillingResponse } from "@/lib/studio/bulkCopyDrafts";
 
 const IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 const VIDEO_AND_IMAGE_ACCEPT = `${IMAGE_ACCEPT},video/mp4,video/x-m4v,video/quicktime,.mp4,.m4v,.mov`;
@@ -1515,6 +1524,123 @@ export function StudioBoard() {
     () => allItems.filter(item => selectedIds.has(item.draft.id)).map(item => item.draft),
     [allItems, selectedIds],
   );
+
+  // ── Bulk Generate copy (T4b) ─────────────────────────────────────────────────
+  // Studio bulk bar entry to the ONE shared orchestration (lib/studio/bulkGenerateCopy,
+  // T4 / design §4). Same rules as BatchEditDrawer's runSharedGenerateCopy: independent
+  // per-Pin tasks, at most 2 in flight, text the merchant wrote is kept unless they
+  // explicitly opt into replacing it (fixes D8), 402 stops the batch, 429 pauses once.
+  // This entry reads the STORED draft directly (no unsaved row edits exist on the
+  // board), so `resolveAmazonCopyContext` is called WITHOUT `destinationUrlIsCurrent` —
+  // that flag is for Plan drawer / Batch Edit's own unsaved URL, not this path.
+  const bulkCopyTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [bulkCopyOpen, setBulkCopyOpen] = useState(false);
+  const [bulkCopyTargetIds, setBulkCopyTargetIds] = useState<string[]>([]);
+  const [bulkCopyReplaceTouched, setBulkCopyReplaceTouched] = useState(false);
+  const [bulkCopyReplacePending, setBulkCopyReplacePending] = useState(false);
+  const [bulkCopyUsage, setBulkCopyUsage] = useState<QuotaPreflight | null>(null);
+  const [bulkCopyItems, setBulkCopyItems] = useState<Record<string, BulkCopyItem>>({});
+  const [bulkCopyProgress, setBulkCopyProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkCopySummary, setBulkCopySummary] = useState<BulkCopySummary | null>(null);
+  const bulkCopyCancelRef = useRef(false);
+
+  const bulkCopyCardFor = useCallback((id: string): BulkCopyCard => {
+    const draft = pinDraftStore.getDraft(id);
+    const amazon = draft ? resolveAmazonCopyContext({ destinationUrl: draft.destinationUrl }, draft) : null;
+    return {
+      id,
+      title: draft?.title || "",
+      description: draft?.description || "",
+      altText: draft?.altText || "",
+      touched: copyTouchedOf(draft?.metadataTouched),
+      amazon: amazon ? { canGenerate: amazon.canGenerate } : null,
+      busy: isBusyKey(id) || (draft ? getPinLifecycle(draft) === "generating" : false),
+    };
+  }, []);
+
+  const bulkCopyPreflight = useMemo<BulkCopyPreflight>(
+    () => preflightBulkCopy(bulkCopyTargetIds.map(bulkCopyCardFor), { replaceTouched: bulkCopyReplaceTouched }),
+    [bulkCopyTargetIds, bulkCopyCardFor, bulkCopyReplaceTouched],
+  );
+
+  const openBulkCopy = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    setBulkCopyTargetIds(ids);
+    setBulkCopyReplaceTouched(false);
+    setBulkCopyReplacePending(false);
+    setBulkCopyItems({});
+    setBulkCopyProgress(null);
+    setBulkCopySummary(null);
+    setBulkCopyUsage(null);
+    setBulkCopyOpen(true);
+    fetch("/api/billing/usage", { credentials: "include" })
+      .then(res => (res.ok ? res.json() : null))
+      .then(json => {
+        const pre = preflightBulkCopy(ids.map(bulkCopyCardFor), { replaceTouched: false });
+        setBulkCopyUsage(quotaPreflight(textUsageFromBillingResponse(json), pre.ready.length));
+      })
+      .catch(() => {
+        const pre = preflightBulkCopy(ids.map(bulkCopyCardFor), { replaceTouched: false });
+        setBulkCopyUsage(quotaPreflight(null, pre.ready.length));
+      });
+  }, [selectedIds, bulkCopyCardFor]);
+
+  const closeBulkCopy = useCallback(() => {
+    setBulkCopyOpen(false);
+    setBulkCopyReplacePending(false);
+  }, []);
+
+  const runBulkCopyOn = useCallback(async (cards: BulkCopyCard[]) => {
+    const language = readResolvedContentLanguage();
+    bulkCopyCancelRef.current = false;
+    setBulkCopyProgress({ done: 0, total: cards.length });
+    setBulkCopySummary(null);
+    const summary = await runBulkGenerateCopy({
+      cards,
+      generate: async card => {
+        const draft = pinDraftStore.getDraft(card.id);
+        const out = await runWithBusyGuard({ current: false }, undefined, undefined, () => generatePinterestPinCopy({
+          draftId: card.id,
+          imageUrl: draft?.imageUrl || "",
+          title: draft?.title,
+          description: draft?.description,
+          boardId: draft?.boardId,
+          boardName: draft?.boardName,
+          category: draft?.category,
+          destinationUrl: draft?.destinationUrl,
+          boards: customerBoards,
+          language,
+        }), card.id);
+        if (!out) throw new BulkCopyBusyError();
+        return { ...out.fields, metadataDraft: out.metadataDraft };
+      },
+      // Merge against the FRESH stored draft: the merchant may have edited the card
+      // while its request was in flight.
+      apply: (id, generated) => {
+        const merged = mergeGeneratedCopy(bulkCopyCardFor(id), generated, { replaceTouched: bulkCopyReplaceTouched });
+        if (merged.written.length) handlePersist(id, { ...merged.patch, metadataDraft: generated.metadataDraft });
+        return merged;
+      },
+      classifyError: classifyBulkCopyError,
+      isCancelled: () => bulkCopyCancelRef.current,
+      onUpdate: itemsUpdate => {
+        setBulkCopyItems(prev => ({ ...prev, ...Object.fromEntries(itemsUpdate.map(item => [item.id, item])) }));
+        const done = itemsUpdate.filter(item => item.status !== "queued" && item.status !== "running").length;
+        setBulkCopyProgress({ done, total: cards.length });
+      },
+    });
+    setBulkCopyProgress(null);
+    setBulkCopySummary(summary);
+  }, [bulkCopyCardFor, bulkCopyReplaceTouched, customerBoards, handlePersist]);
+
+  const startBulkCopy = useCallback(() => { void runBulkCopyOn(bulkCopyPreflight.ready); }, [runBulkCopyOn, bulkCopyPreflight]);
+  const stopBulkCopy = useCallback(() => { bulkCopyCancelRef.current = true; }, []);
+  const retryFailedBulkCopy = useCallback(() => {
+    if (!bulkCopySummary) return;
+    const ids = failedIds(bulkCopySummary);
+    void runBulkCopyOn(ids.map(bulkCopyCardFor));
+  }, [bulkCopySummary, bulkCopyCardFor, runBulkCopyOn]);
+
   const deleteImpact = useMemo(() => {
     if (!pendingDeleteIds) return null;
     const byId = new Map(allItems.map(item => [item.draft.id, item.draft]));
@@ -1966,6 +2092,10 @@ export function StudioBoard() {
                   style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                   <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
                 </button>
+                <button type="button" ref={bulkCopyTriggerRef} data-testid="bulk-generate-copy" onClick={openBulkCopy} disabled={bulkCopyOpen}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: bulkCopyOpen ? "default" : "pointer", fontFamily: "inherit", opacity: bulkCopyOpen ? 0.7 : 1, minHeight: 44 }}>
+                  <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulkCopy.button")}
+                </button>
                 <button type="button" data-testid="bulk-publish" onClick={openBulkPublish}
                   style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                   {tr("studioBoard.bulk.publish")}
@@ -2234,6 +2364,27 @@ export function StudioBoard() {
           impact={deleteImpact}
           onConfirm={runDelete}
           onClose={() => setPendingDeleteIds(null)}
+        />
+      )}
+      {bulkCopyOpen && (
+        <BulkGenerateCopySheet
+          tr={tr}
+          total={bulkCopyTargetIds.length}
+          preflight={bulkCopyPreflight}
+          quota={bulkCopyUsage}
+          items={bulkCopyItems}
+          progress={bulkCopyProgress}
+          summary={bulkCopySummary}
+          replaceTouched={bulkCopyReplaceTouched}
+          replacePending={bulkCopyReplacePending}
+          onRequestReplace={() => setBulkCopyReplacePending(true)}
+          onConfirmReplace={() => { setBulkCopyReplaceTouched(true); setBulkCopyReplacePending(false); }}
+          onCancelReplace={() => { setBulkCopyReplaceTouched(false); setBulkCopyReplacePending(false); }}
+          onStart={startBulkCopy}
+          onStop={stopBulkCopy}
+          onRetryFailed={retryFailedBulkCopy}
+          onClose={closeBulkCopy}
+          triggerRef={bulkCopyTriggerRef}
         />
       )}
       {pendingUploadFiles && (
