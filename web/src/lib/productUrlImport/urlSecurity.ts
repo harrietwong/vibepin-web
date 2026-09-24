@@ -1,8 +1,22 @@
 import { isIP } from "node:net";
 import { isPublicIpAddress } from "@/app/api/fetch-og/safeOutboundUrl";
 
+import {
+  AMAZON_FETCHABLE_RETAIL_HOSTS,
+  AMAZON_FETCHABLE_SHORT_HOSTS,
+  allKnownAmazonHosts,
+  classifyAmazonHost,
+} from "@/lib/affiliate/amazonHosts";
+
+/**
+ * Generic-channel blocklist. The Amazon part is DERIVED from amazonHosts.ts (single
+ * source of truth): every known retail site AND every short-link host. Before this,
+ * only six Amazon domains were listed, so amazon.it / amazon.co.jp / amzn.to went
+ * through the generic image-extracting fetch. Amazon now only goes through
+ * validateAmazonUrl (text-only channel).
+ */
 const BLOCKED_HOST_SUFFIXES = [
-  "amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.ca", "amazon.com.au",
+  ...allKnownAmazonHosts(),
   "temu.com", "shein.com", "aliexpress.com", "aliexpress.us",
   "instagram.com", "tiktok.com", "tiktokshop.com",
 ];
@@ -56,6 +70,54 @@ export function validateImportUrl(raw: string): { ok: true; url: URL } | { ok: f
   }
 
   return { ok: true, url };
+}
+
+export type AmazonUrlValidation =
+  | { ok: true; url: URL; kind: "retail" | "short"; host: string }
+  | { ok: false; error: string };
+
+/**
+ * Amazon channel gate. Separate from validateImportUrl (which blocks all of Amazon).
+ *
+ * - Exact host whitelist: the nine supported retail marketplaces (bare, www., smile.,
+ *   m.) plus amzn.to and a.co. Nothing else — not other Amazon subdomains, not the
+ *   recognised-but-unsupported marketplaces, not amzn.eu/amzn.asia.
+ * - https only; `http:` is upgraded to https before the decision.
+ * - No userinfo, no non-default port.
+ * The caller must re-run this on EVERY redirect hop. This channel returns text only;
+ * it never produces image candidates.
+ */
+export function validateAmazonUrl(raw: string): AmazonUrlValidation {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return { ok: false, error: "Empty URL" };
+  if (trimmed.length > 2048) return { ok: false, error: "URL too long" };
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return { ok: false, error: "Invalid URL" };
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return { ok: false, error: "Only https Amazon URLs are supported" };
+  }
+  if (url.username || url.password) return { ok: false, error: "Credentials in URL are not allowed" };
+  if (url.port && !(url.protocol === "https:" && url.port === "443") && !(url.protocol === "http:" && url.port === "80")) {
+    return { ok: false, error: "Custom ports are not allowed" };
+  }
+  if (url.protocol === "http:") {
+    url = new URL(url.href.replace(/^http:/i, "https:"));
+    url.port = "";
+  }
+
+  const cls = classifyAmazonHost(url.hostname);
+  if (!cls) return { ok: false, error: "Not an allowed Amazon host" };
+  const allowed = cls.kind === "short"
+    ? AMAZON_FETCHABLE_SHORT_HOSTS.has(cls.host)
+    : AMAZON_FETCHABLE_RETAIL_HOSTS.has(cls.host);
+  if (!allowed) return { ok: false, error: "Not an allowed Amazon host" };
+
+  return { ok: true, url, kind: cls.kind, host: cls.host };
 }
 
 export function sourceDomainFromUrl(url: URL): string {

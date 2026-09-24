@@ -17,8 +17,10 @@ export {
   isBlockedMarketplace,
   isDirectImageUrl,
   sourceDomainFromUrl,
+  validateAmazonUrl,
   validateImportUrl,
 } from "./urlSecurity";
+export type { AmazonUrlValidation } from "./urlSecurity";
 
 // HTML extraction utilities (used by tests + external callers)
 export {

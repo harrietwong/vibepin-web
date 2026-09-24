@@ -32,6 +32,7 @@ export const CORE: string[] = [
   "test-pin-metadata",
   "test-product-url-import",
   "test-product-url-import-auth",
+  "test-amazon-url-channel",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",
