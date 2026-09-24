@@ -47,6 +47,22 @@ export const BOARD_NAMES: Record<string, string> = {
 export const MAX_PRIVATE_VIDEO_BYTES = 45 * 1024 * 1024;
 const VIDEO_STORAGE_BUDGET_FRACTION = 0.92;
 
+/** Idempotency keys for the registered video-upload path (prepare/finalize),
+ * namespaced separately from cheerish-video-schedule's ops_batch_* keys so the
+ * two callers never collide on identical checksums. */
+export function winningHunterUploadAttemptKeys(checksum: string, attempt: 0 | 1): { batchIdempotencyKey: string; itemIdempotencyKey: string } {
+  const suffix = checksum.toLowerCase().slice(0, 48);
+  const retry = attempt === 1 ? "_retry1" : "";
+  return {
+    batchIdempotencyKey: `wh_batch${retry}_${suffix}`,
+    itemIdempotencyKey: `wh_item${retry}_${suffix}`,
+  };
+}
+
+export function isWinningHunterUploadStateTerminal(status: string | null | undefined): boolean {
+  return new Set(["failed", "expired", "canceled", "cleaning"]).has(String(status ?? "").toLowerCase());
+}
+
 export function targetWinningHunterVideoBitrateKbps(durationMs: number): number {
   if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error("invalid_video_duration_ms");
   const totalKbps = (MAX_PRIVATE_VIDEO_BYTES * VIDEO_STORAGE_BUDGET_FRACTION * 8) / durationMs;
