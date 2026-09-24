@@ -2708,17 +2708,6 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateRemaining": "대신 {remaining}장 생성",
   "studioBoard.limit.image.generateOneRemaining": "대신 1장 생성",
 
-  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
-  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
-  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Pinterest에 게시",
-  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Pinterest에 게시",
-  "public.pricing.compare.description.pinterestOnly": "저장이 많은 상품, 인기 Pin, 키워드 아이디어를 발견하세요. AI로 콘텐츠를 생성하세요. Pinterest에 게시하세요.",
-  "public.pricing.footnote.accounts.pinterestOnly": "계정이란 연결된 Pinterest 계정/페이지 1개를 의미합니다. Starter는 플랫폼당 1개 계정, Pro는 플랫폼당 2개 계정, Business는 플랫폼당 3개 계정을 포함합니다.",
-  "public.pricing.finalCta.description.pinterestOnly": "상품과 Pin 아이디어를 발견하고, AI로 콘텐츠를 생성하고, Pinterest에 게시하세요.",
-  "public.pricing.faq.item.0.question.pinterestOnly": "Pinterest에 게시할 수 있나요?",
-  "public.pricing.faq.item.0.answer.pinterestOnly": "네. 유료 요금제는 Pinterest 게시를 지원합니다. 무료 사용자는 게시 접근이 제한됩니다.",
-  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter는 플랫폼당 1개 계정(Pinterest), Pro는 2개, Business는 3개, Free는 1개 계정을 포함합니다.",
-  "public.pricing.faq.item.6.answer.pinterestOnly": "Starter, Pro, Business만 Pinterest용 소셜 계정 슬롯을 추가할 수 있습니다. 각 계정은 월간 결제 시 월 $7, 연간 결제 시 월 $5입니다.",
   // ── Amazon link on a card (T5) ──
   "studioBoard.amazon.sectionTitle": "Amazon 상품",
   "studioBoard.amazon.fetching": "Amazon에서 상품 정보를 가져오는 중…",

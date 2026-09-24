@@ -2712,17 +2712,6 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateRemaining": "أنشئ {remaining} بدلاً من ذلك",
   "studioBoard.limit.image.generateOneRemaining": "أنشئ صورة واحدة بدلاً من ذلك",
 
-  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
-  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
-  "public.pricing.plan.starter.bullet.7.pinterestOnly": "انشر على Pinterest",
-  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "انشر على Pinterest",
-  "public.pricing.compare.description.pinterestOnly": "اكتشف المنتجات كثيرة الحفظ، والـ Pins الرائجة، وأفكار الكلمات المفتاحية. أنشئ محتوى بالذكاء الاصطناعي. انشر على Pinterest.",
-  "public.pricing.footnote.accounts.pinterestOnly": "الحساب يعني حساب/صفحة Pinterest واحدة متصلة. تشمل خطة Starter حسابًا واحدًا لكل منصة، وتشمل خطة Pro حسابين لكل منصة، وتشمل خطة Business ثلاثة حسابات لكل منصة.",
-  "public.pricing.finalCta.description.pinterestOnly": "اكتشف المنتجات وأفكار الـ Pin، وأنشئ محتوى بالذكاء الاصطناعي، وانشر على Pinterest.",
-  "public.pricing.faq.item.0.question.pinterestOnly": "هل يمكنني النشر على Pinterest؟",
-  "public.pricing.faq.item.0.answer.pinterestOnly": "نعم. تدعم الخطط المدفوعة النشر على Pinterest. المستخدمون المجانيون لديهم إمكانية نشر محدودة.",
-  "public.pricing.faq.item.5.answer.pinterestOnly": "تشمل خطة Starter حسابًا واحدًا لكل منصة (Pinterest). تشمل خطة Pro حسابين لكل منصة. تشمل خطة Business ثلاثة حسابات لكل منصة. تشمل الخطة المجانية حسابًا واحدًا لكل منصة.",
-  "public.pricing.faq.item.6.answer.pinterestOnly": "يمكن فقط لخطط Starter وPro وBusiness إضافة أماكن حسابات اجتماعية لـ Pinterest. تكلفة كل حساب 7 دولارات شهريًا عند الفوترة الشهرية، أو 5 دولارات شهريًا عند الفوترة السنوية.",
   // ── Amazon link on a card (T5) ──
   "studioBoard.amazon.sectionTitle": "منتج من Amazon",
   "studioBoard.amazon.fetching": "جارٍ الحصول على تفاصيل المنتج من Amazon…",

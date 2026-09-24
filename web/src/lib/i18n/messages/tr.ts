@@ -2789,17 +2789,6 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateRemaining": "Bunun yerine {remaining} oluştur",
   "studioBoard.limit.image.generateOneRemaining": "Bunun yerine 1 oluştur",
 
-  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
-  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
-  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Pinterest'te yayınla",
-  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Pinterest'te yayınla",
-  "public.pricing.compare.description.pinterestOnly": "Çok kaydedilen ürünleri, trend Pinleri ve anahtar kelime fikirlerini keşfedin. Yapay zeka ile içerik oluşturun. Pinterest'te yayınlayın.",
-  "public.pricing.footnote.accounts.pinterestOnly": "Bir hesap, bağlı bir Pinterest hesabı/sayfası anlamına gelir. Starter platform başına 1 hesap, Pro platform başına 2 hesap ve Business platform başına 3 hesap içerir.",
-  "public.pricing.finalCta.description.pinterestOnly": "Ürünleri ve Pin fikirlerini keşfedin, yapay zeka ile içerik oluşturun ve Pinterest'te yayınlayın.",
-  "public.pricing.faq.item.0.question.pinterestOnly": "Pinterest'te yayınlayabilir miyim?",
-  "public.pricing.faq.item.0.answer.pinterestOnly": "Evet. Ücretli planlar Pinterest'te yayınlamayı destekler. Ücretsiz kullanıcıların yayınlama erişimi sınırlıdır.",
-  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter platform başına 1 hesap (Pinterest) içerir. Pro platform başına 2 hesap içerir. Business platform başına 3 hesap içerir. Free platform başına 1 hesap içerir.",
-  "public.pricing.faq.item.6.answer.pinterestOnly": "Yalnızca Starter, Pro ve Business, Pinterest için ek sosyal hesap alanı ekleyebilir. Her hesap aylık faturalandırmada ayda 7 $, yıllık faturalandırmada ayda 5 $'dır.",
   // ── Amazon link on a card (T5) ──
   "studioBoard.amazon.sectionTitle": "Amazon ürünü",
   "studioBoard.amazon.fetching": "Ürün ayrıntıları Amazon'dan alınıyor…",

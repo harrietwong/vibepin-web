@@ -2730,17 +2730,6 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateRemaining": "Buat {remaining} saja",
   "studioBoard.limit.image.generateOneRemaining": "Buat 1 saja",
 
-  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
-  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
-  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publikasikan ke Pinterest",
-  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publikasikan ke Pinterest",
-  "public.pricing.compare.description.pinterestOnly": "Temukan produk dengan banyak simpanan, Pin tren, dan ide kata kunci. Buat konten dengan AI. Publikasikan ke Pinterest.",
-  "public.pricing.footnote.accounts.pinterestOnly": "Satu akun berarti satu akun/halaman Pinterest yang terhubung. Starter mencakup 1 akun per platform, Pro mencakup 2 akun per platform, dan Business mencakup 3 akun per platform.",
-  "public.pricing.finalCta.description.pinterestOnly": "Temukan produk dan ide Pin, buat konten dengan AI, dan publikasikan ke Pinterest.",
-  "public.pricing.faq.item.0.question.pinterestOnly": "Bisakah saya memublikasikan ke Pinterest?",
-  "public.pricing.faq.item.0.answer.pinterestOnly": "Ya. Paket berbayar mendukung publikasi ke Pinterest. Pengguna gratis memiliki akses publikasi terbatas.",
-  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter mencakup 1 akun per platform (Pinterest). Pro mencakup 2 akun per platform. Business mencakup 3 akun per platform. Free mencakup 1 akun per platform.",
-  "public.pricing.faq.item.6.answer.pinterestOnly": "Hanya Starter, Pro, dan Business yang dapat menambah slot akun sosial untuk Pinterest. Setiap akun berbiaya $7 per bulan dengan penagihan bulanan, atau $5 per bulan dengan penagihan tahunan.",
   // ── Amazon link on a card (T5) ──
   "studioBoard.amazon.sectionTitle": "Produk Amazon",
   "studioBoard.amazon.fetching": "Mengambil detail produk dari Amazon…",

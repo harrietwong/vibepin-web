@@ -2732,17 +2732,6 @@ const pt: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.generateRemaining": "Gerar {remaining} em vez disso",
   "studioBoard.limit.image.generateOneRemaining": "Gerar 1 em vez disso",
 
-  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
-  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
-  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Publique no Pinterest",
-  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Publique no Pinterest",
-  "public.pricing.compare.description.pinterestOnly": "Descubra produtos com muitos salvamentos, Pins em alta e ideias de palavras-chave. Gere conteúdo com IA. Publique no Pinterest.",
-  "public.pricing.footnote.accounts.pinterestOnly": "Uma conta significa uma conta/página do Pinterest conectada. O Starter inclui 1 conta por plataforma, o Pro inclui 2 contas por plataforma e o Business inclui 3 contas por plataforma.",
-  "public.pricing.finalCta.description.pinterestOnly": "Descubra produtos e ideias de Pins, gere conteúdo com IA e publique no Pinterest.",
-  "public.pricing.faq.item.0.question.pinterestOnly": "Posso publicar no Pinterest?",
-  "public.pricing.faq.item.0.answer.pinterestOnly": "Sim. Os planos pagos oferecem suporte à publicação no Pinterest. Usuários gratuitos têm acesso limitado à publicação.",
-  "public.pricing.faq.item.5.answer.pinterestOnly": "O Starter inclui 1 conta por plataforma (Pinterest). O Pro inclui 2 contas por plataforma. O Business inclui 3 contas por plataforma. O Free inclui 1 conta por plataforma.",
-  "public.pricing.faq.item.6.answer.pinterestOnly": "Somente Starter, Pro e Business podem adicionar vagas de conta social para o Pinterest. Cada conta custa US$ 7 por mês na cobrança mensal, ou US$ 5 por mês na cobrança anual.",
   // ── Amazon link on a card (T5) ──
   "studioBoard.amazon.sectionTitle": "Produto da Amazon",
   "studioBoard.amazon.fetching": "Buscando detalhes do produto na Amazon…",
