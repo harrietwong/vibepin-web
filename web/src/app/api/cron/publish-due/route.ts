@@ -44,7 +44,10 @@ import {
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { requiresPublishAsset } from "@/lib/server/publishMedia";
 import { dispatchSupabaseV76PinterestVideo } from "@/lib/server/publish/v76PinterestVideoServer";
-import { buildDueVideoReceipt } from "@/lib/server/publish/v76PinterestVideoBindings";
+import {
+  buildDueVideoReceipt,
+  buildReconcileChildVideoReceipt,
+} from "@/lib/server/publish/v76PinterestVideoBindings";
 import {
   NeedsReconnectError,
   NotConnectedError,
@@ -69,6 +72,7 @@ import {
   type PublishEventBase,
 } from "@/lib/server/publishEvents";
 import {
+  destinationResultKey,
   mergeOutcomesIntoRow,
   writeFailure,
   writeOutcomes,
@@ -84,10 +88,54 @@ import {
   publishMediaUrls,
   destinationPublishInput,
   describeThrown,
+  declaredButUnparseableDestinations,
   owedDestinations,
   failedRowsForUnattempted,
   didNotCompleteMessage,
 } from "./publishDueLogic";
+import {
+  attemptKey,
+  backoffElapsed,
+  hasOpenReconciliation,
+  isRetryRound,
+  mergeNextAttemptAt,
+  nextAttemptNumber,
+  publishRetryWorkerEnabled,
+  RECONCILING_MESSAGE,
+  retryPendingOutcome,
+  shouldSkipSettlement,
+  stripRetryMarkers,
+  type AttemptRow,
+} from "./retrySchedule";
+import {
+  loadAttemptLedger, recordAttempt, findTerminalAttemptId, claimTerminalNotice,
+  type AttemptEvidence,
+} from "./attemptLedger";
+import { ensureV82Capability } from "./v82Capability";
+// The v76 dispatcher's real evidence — what Pinterest actually answered — instead
+// of the fixed string this route used to synthesize. See videoEvidence.ts.
+import {
+  adapterEvidenceOf,
+  attemptEvidenceFrom,
+  describeVideoEvidence,
+  readDurableVideoEvidence,
+} from "@/lib/server/publish/videoEvidence";
+// The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
+// is on, the row is a video, and a `confirmed_absent` proof exists for the
+// destination — see `childVideoReceipt` below, which is the single gate.
+import {
+  latestConfirmedAbsentCheck,
+  parentIntentTextId,
+  runReconcilePass,
+  type ReconcilePassResult,
+} from "./reconcilePass";
+import {
+  classifyDurableVideoResult,
+  classifyPinterestApiError,
+  classifyVideoEvidence,
+  computeNextAttemptAt,
+  type RetryClass,
+} from "@/lib/server/publish/retryClassification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -226,6 +274,22 @@ export async function GET(req: Request): Promise<Response> {
 
   const db = createServerClient();
   const io = rowIo(db);
+  // ── v82 automatic retry (design §7): read ONCE per request, never at module scope ──
+  //
+  // Per-request because a rollback must take effect on the very next tick without a
+  // redeploy, and because the retry tests flip this between ticks inside one process.
+  //
+  // Read here, held in a local, and consulted everywhere below — rather than calling
+  // the helper at each site — so one request can never see the flag change halfway
+  // through and, say, write a backoff gate it then refuses to scan on.
+  //
+  // ★ INVARIANT, and the reason the column name appears nowhere outside a branch
+  // guarded by this local: v82 is NOT applied in production. A PostgREST filter that
+  // names `publish_next_attempt_at` on a database without that column returns 42703,
+  // which `isMissingSchemaError` classifies as "schema not ready" and the route
+  // degrades to an empty run — i.e. ALL scheduled publishing silently stops. Off must
+  // therefore mean the column is never mentioned, not merely never matched.
+  const retryEnabled = publishRetryWorkerEnabled();
   // The run's wall clock. Everything time-bounded below measures from here.
   const startedMs = Date.now();
   const nowMs = startedMs;
@@ -237,8 +301,74 @@ export async function GET(req: Request): Promise<Response> {
   // published are published again ten minutes later.
   const deadlineMs = startedMs + RUN_DEADLINE_MS;
 
+  // ── 0) RECONCILE deliveries nobody knows the outcome of (design §5) ──────────
+  //
+  // Runs before the due scan, in the same invocation, on its own sub-budget.
+  // These are the destinations where the request left and the answer never came
+  // back: the Pin may exist, so nothing will re-send them, and without someone
+  // going to ask Pinterest they sit closed forever. Stage 0 asks.
+  //
+  // Guarded by the flag for the same reason every other v82 site is: with the
+  // flag off the v82 tables are never NAMED, because a PostgREST filter against
+  // a table this database does not have returns 42703 and the route degrades to
+  // an empty run — i.e. all scheduled publishing stops.
+  //
+  // Its errors are contained inside `runReconcilePass`; this call cannot throw.
+  // A reconciliation that cannot be settled is a delayed publish, while a stage
+  // 1 that never runs is every due Pin missing its slot, so stage 1 wins every
+  // time budget is contested.
+  // ── v82 capability check — FAIL CLOSED (design §9 task 5, PRD Risk 3) ────────
+  //
+  // Everything after this point that the flag enables assumes six v82 objects
+  // exist: two tables and four RPCs. `attemptLedger` and `reconcilePass` both
+  // swallow their own errors — correctly, so a transient bookkeeping failure never
+  // becomes a delivery failure — but that same tolerance turns a database WITHOUT
+  // the objects into silent nonsense: the five-attempt cap is not enforced, the
+  // terminal notice cannot de-duplicate, and `delivery_unknown` rows are held open
+  // by a §3.4(b) check reading a table that is not there. The route would believe
+  // it is retrying safely while having none of the evidence that makes it safe.
+  //
+  // So the run is REFUSED rather than degraded. 503 on purpose: the VPS crontab
+  // logs a non-200 and that log is the internal alarm PRD Risk 3 asks for, which a
+  // 200-with-a-console-line would not be. The cost of being wrong in this direction
+  // is bounded and loud — one five-minute tick of delayed publishing, with the
+  // missing object names in the log — whereas being wrong the other way is the
+  // evidence-less mode this check exists to prevent.
+  //
+  // ★ Inside `retryEnabled` and nowhere else. With the flag off this costs zero
+  // queries and cannot fail; design §9 lists "a fail-closed check written wrong
+  // blocks ordinary publishing" as this task's own risk, and the flag-off case is
+  // the one where that would hurt most. A test counts the probe queries with the
+  // flag off and expects zero.
+  if (retryEnabled) {
+    const capability = await ensureV82Capability(db);
+    if (!capability.ok) {
+      console.error(
+        "[cron/publish-due] PUBLISH_RETRY_WORKER_ENABLED is on but the v82 schema is "
+        + `incomplete — refusing to run. Missing: ${capability.missing.join(", ")}. `
+        + "Apply backend/db/migrate_v82_publish_retry_reconcile.sql, or unset the flag.",
+      );
+      return json({ error: "v82_capability_missing", code: "v82_capability_missing" }, 503);
+    }
+  }
+
+  let reconciled: ReconcilePassResult | null = null;
+  if (retryEnabled) {
+    reconciled = await runReconcilePass(db, io, { startedMs });
+  }
+  /**
+   * The run summary, with stage 0's counts attached only when stage 0 ran.
+   *
+   * The key is ABSENT with the flag off, so the response body is byte-identical
+   * to the baseline's — which is what makes "flag off equals today's behaviour"
+   * checkable from the outside rather than only by reading the code.
+   */
+  const runBody = (body: {
+    claimed: number; published: number; failed: number; skipped: number; deferred: number;
+  }) => (reconciled ? { ...body, reconciled } : body);
+
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
-  const { data: dueRows, error: scanError } = await db
+  let scanQuery = db
     .from(TABLE)
     // scheduled_at is selected because it is the STABLE half of the metering
     // idempotency key (Phase 5B). Claim time is not usable: it is regenerated on
@@ -247,18 +377,30 @@ export async function GET(req: Request): Promise<Response> {
     .lte("scheduled_at", nowIso)
     .not("scheduled_at", "is", null)
     .is("deleted_at", null)
-    .is("archived_at", null)
+    .is("archived_at", null);
+  if (retryEnabled) {
+    // The backoff gate (design §6.2). NULL means "no backoff constraint" — the value
+    // every pre-v82 row has and keeps, which is why this filter cannot change the
+    // behaviour of any row the feature has not itself touched.
+    //
+    // `pgQuote` for the same reason the claim's `.or()` uses it: an ISO timestamp
+    // contains ':' and '+', both of which are PostgREST filter syntax.
+    scanQuery = scanQuery.or(
+      `publish_next_attempt_at.is.null,publish_next_attempt_at.lte.${pgQuote(nowIso)}`,
+    );
+  }
+  const { data: dueRows, error: scanError } = await scanQuery
     .order("scheduled_at", { ascending: true })
     .limit(DUE_LIMIT);
 
   if (scanError) {
-    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
+    if (isMissingSchemaError(scanError)) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 }));
     console.error("[cron/publish-due] scan error:", scanError.message);
     return json({ error: "scan_failed", code: "database_unavailable" }, 503);
   }
 
   let candidates = (dueRows ?? []) as DueRow[];
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
+  if (candidates.length === 0) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 }));
 
   // Private video is resolved by the owner-scoped v76 materializer after claim.
   // Protected legacy images and mixed/multi-video shapes still defer before claim.
@@ -276,7 +418,7 @@ export async function GET(req: Request): Promise<Response> {
   });
   const deferredMedia = candidates.length - safeCandidates.length;
   candidates = safeCandidates;
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: deferredMedia });
+  if (candidates.length === 0) return json(runBody({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: deferredMedia }));
 
   // ── 2+3) CLAIM then PUBLISH, one row at a time ───────────────────────────────
   //
@@ -308,7 +450,7 @@ export async function GET(req: Request): Promise<Response> {
     // claimed minutes in, and a start-of-run stamp would shorten its 10-minute lock by
     // exactly that much — another worker could steal a row still being published.
     const claimIso = new Date().toISOString();
-    const { data: won, error: claimError } = await db
+    let claimQuery = db
       .from(TABLE)
       .update({ publish_claimed_at: claimIso })
       .eq("vibepin_user_id", candidate.vibepin_user_id)
@@ -321,7 +463,21 @@ export async function GET(req: Request): Promise<Response> {
       .lte("scheduled_at", claimIso)
       .is("deleted_at", null)
       .is("archived_at", null)
-      .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
+      .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`);
+    if (retryEnabled) {
+      // The same gate as the scan, repeated here on purpose (design §6.2): between the
+      // scan and this UPDATE another worker can finish a round and push the backoff
+      // forward. Re-asserting it makes the claim itself the thing that enforces the
+      // gate, rather than a scan whose answer may already be stale.
+      //
+      // Two `.or()` calls on one builder AND together (each becomes its own `or=(…)`
+      // query parameter), which is what is wanted: claimable AND past its backoff.
+      // Asserted in test-publish-retry-schedule.ts rather than assumed.
+      claimQuery = claimQuery.or(
+        `publish_next_attempt_at.is.null,publish_next_attempt_at.lte.${pgQuote(claimIso)}`,
+      );
+    }
+    const { data: won, error: claimError } = await claimQuery
       .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at, publish_claimed_at");
 
     if (claimError) {
@@ -430,14 +586,78 @@ export async function GET(req: Request): Promise<Response> {
         ? (row.payload.destinationResults as unknown[])
         : [];
 
+      // The attempt ledger for this (user, draft, schedule). One read per ROW, not per
+      // destination: the claim is already held, and N round-trips inside it is N
+      // chances to spend the destination budget on bookkeeping instead of publishing.
+      // Empty map when the flag is off, so every `attempts.get(...)` below answers
+      // `undefined` and each destination behaves as a first attempt — which is the
+      // baseline behaviour, reached without naming a v82 object.
+      const attempts = retryEnabled
+        ? await loadAttemptLedger(db, row.vibepin_user_id, String(row.draft_id ?? ""), row.scheduled_at)
+        : new Map<string, AttemptRow>();
+
       if (!owed.length && priorResults.length) {
         // Nothing to publish and a record of what already did: this run is finishing
         // an earlier one's work, not attempting anything. Complete the Content from
         // its own stored rows — no publish input, no provider, no failure. Metering is
         // skipped deliberately: nothing is delivered here, and the charge for this
         // (draft_id, scheduled_at) was already taken by the run that published.
-        await persistOutcomes(io, row, []);
+        //
+        // ── §3.4(b): EXCEPT while a delivery is still being reconciled ────────────
+        // This branch is where the reconciliation chain used to die. A round that ends
+        // in `delivery_unknown` leaves a stored result row, and `pendingDestinations`
+        // counts `delivery_unknown` as CLOSED — so the next tick owes nothing, lands
+        // here, and `persistOutcomes(io, row, [])` clears `scheduled_at`. The due scan
+        // filters `scheduled_at is not null`, so the row becomes invisible. When
+        // reconciliation later concludes "that Pin was never created", there is no row
+        // left to re-publish: the conclusion is correct, actionable, and unreachable.
+        //
+        // So while an attempt row says reconciliation is OPEN (`reconcile_required_at`
+        // set, `reconciled_at` null), this persist runs with `deferred: true` — which
+        // releases the claim and records the results but does NOT clear the schedule.
+        // Both halves are required: the stored `delivery_unknown` row alone would keep
+        // the slot forever, because reconciliation concluding does not remove it.
+        // P27 is the test that fails if either half is dropped.
+        const holdForReconcile = retryEnabled && hasOpenReconciliation(priorResults, attempts);
+        await persistOutcomes(io, row, [], holdForReconcile ? { deferred: true } : {});
         skipped++;
+        continue;
+      }
+
+      // ── A PAYLOAD THAT DECLARED DESTINATIONS AND PARSED TO NONE ──────────────
+      // The third silent-dropout vector, found in production. An entry that spells
+      // `socialConnectionId` as `connectionId` is dropped by `isUsableDestination`,
+      // so the row owes nothing and used to reach `if (!outcomes.length)` below —
+      // whose comment ("every destination had already published on an earlier
+      // attempt") is simply false here. That branch cleared the schedule, released
+      // the claim and wrote no error, which on the data is indistinguishable from a
+      // Content that published perfectly. The merchant's post never existed and
+      // nothing anywhere said so.
+      //
+      // Reported as `bad_request` because the code, not a new string, is what
+      // `mapPublishErrorToCategory` reads: it maps to `content` — "a fixed,
+      // request-shaped problem; retrying the same payload won't help", which is
+      // precisely true of a misspelled field. A new unrecognized code would fall
+      // through that mapping to `transient` and invite the merchant to retry a
+      // draft that can never parse.
+      //
+      // Placed BEFORE the metering consume: a row that cannot reach a provider is
+      // not charged for one, matching the contract the `limit_reached` and
+      // unpublishable-payload branches already follow. `persistFailure` clears the
+      // schedule, and that is right — waiting does not repair a stored field.
+      //
+      // Reached only when the early exit above did not fire, i.e. there are no prior
+      // results, so this cannot mask a row that is merely finishing earlier work.
+      if (!owed.length && declaredButUnparseableDestinations(row.payload)) {
+        const unparseable = "This Pin named publish destinations, but no valid destinations "
+          + "could be parsed from it — its saved destination data is malformed. "
+          + "Re-pick the destinations and schedule it again.";
+        await persistFailure(io, row, { message: unparseable, code: "bad_request" });
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: "bad_request",
+          message: unparseable,
+        });
+        failed++;
         continue;
       }
 
@@ -571,6 +791,150 @@ export async function GET(req: Request): Promise<Response> {
       let firstFailure: { code?: string; message: string } | null = null;
       let trialBlocked = 0;
 
+      // ── v82 retry state for THIS row ─────────────────────────────────────────
+      //
+      // `retryBackoffs` collects the `next_attempt_at` of every destination that ends
+      // this round still owed. The row's gate is the MIN of them (design §4.1): taking
+      // the max would let a destination backing off an hour hold a sibling that is due
+      // in a minute, and the per-destination filter below re-checks each one anyway, so
+      // claiming the row early costs one cheap read while claiming it late is a late
+      // publish.
+      const retryBackoffs: (string | null)[] = [];
+      // Accounts that just answered 429. Every REMAINING destination on the same
+      // connection is deferred without being sent (design §6.3 / PRD Scheduler 5):
+      // continuing to hammer an account that has explicitly asked us to stop is how a
+      // rate limit becomes a suspension. Keyed by connection, so one throttled account
+      // never slows a different one down.
+      const rateLimitedConnections = new Set<string>();
+      const rateLimitRetryAfter = new Map<string, number | undefined>();
+
+      /**
+       * Turn one failed destination into its retry decision, and record the attempt.
+       *
+       * Returns the outcome to store, or `null` meaning "not a retry round — fall
+       * through to the existing failure handling unchanged". `null` is returned for
+       * every case the design routes to the legacy path: the flag being off, a
+       * terminal fifth attempt, and `blocked_user` (a real failure the merchant has to
+       * act on, which P0 deliberately still reports immediately — design §9 decision 3).
+       */
+      // Set by `retryFork` when it actually WROTE a `reconcile_required_at` ledger
+      // entry. Distinct from "the classifier said reconciliation_required": the fork
+      // also returns null when the destination has already reached a final failure, and
+      // holding the schedule for a reconciliation that was never recorded would pin the
+      // row open forever with nothing able to close it.
+      let reconcileFlagged = false;
+      // ── T14: which destinations exhausted their budget in THIS round ──────────
+      //
+      // Collected here rather than derived from the outcomes afterwards, because
+      // "this outcome is a failure" and "this destination just spent its fifth and
+      // last attempt" are different questions and only the second one earns a
+      // terminal notice. A `blocked_user` failure, a payload that cannot be
+      // published, a board that vanished — all produce failed outcomes, none of them
+      // is the end of a five-attempt lifecycle, and none of them has a v82 attempt
+      // row with `final_failure_at` to de-duplicate against. `retryFork` is the one
+      // place that knows the difference, because it is the place that asked the RPC
+      // for a fifth attempt with nowhere to go next.
+      const terminalDestinations: Array<{ provider: string; connectionId: string | null }> = [];
+      const retryFork = async (
+        destination: { provider: string; socialConnectionId?: string | null },
+        retryClass: RetryClass,
+        retryAfterSeconds: number | undefined,
+        evidence: AttemptEvidence | undefined,
+      ): Promise<DestinationOutcome | null> => {
+        reconcileFlagged = false;
+        if (!retryEnabled || !row.scheduled_at) return null;
+        const key = attemptKey(destination.provider, destination.socialConnectionId);
+        const prior = attempts.get(key);
+        const attempt = nextAttemptNumber(prior, retryClass);
+
+        // A destination that has already reached a final failure is not retried again,
+        // whatever this round says. The ledger, not this round's classification, is the
+        // authority on whether the budget is spent.
+        //
+        // ★ AND IT IS STILL A TERMINAL DESTINATION, which is the whole reason the CAS
+        // exists. This branch is the SECOND worker's path: worker A wrote
+        // `final_failure_at` and sent the notice, worker B re-claims the same row —
+        // an overrunning tick, an expired ten-minute claim, a manual invocation —
+        // reaches here, and takes the ordinary failure path. Without recording the
+        // destination as terminal, worker B's notice would be sent unconditionally
+        // and the merchant would be told twice that the same post failed. Recording
+        // it routes B through the CAS, which refuses it because A already stamped
+        // `terminal_notified_at`. (Found by P15b failing, not by reading the code.)
+        if (prior?.final_failure_at) {
+          terminalDestinations.push({
+            provider: destination.provider,
+            connectionId: typeof destination.socialConnectionId === "string"
+              && destination.socialConnectionId.trim()
+              ? destination.socialConnectionId.trim() : null,
+          });
+          return null;
+        }
+
+        if (retryClass === "blocked_user") {
+          // Does not consume the budget (PRD Story 5 AC-2): the SAME attempt number is
+          // written back, the RPC's unique index finds the existing row, and the
+          // sequence does not advance. Recorded — so a repeatedly-blocked destination
+          // is visible in telemetry — but the merchant is still told now, via the
+          // unchanged failure path, because an expired token does not fix itself and
+          // four silent retries would only delay the one action that can help.
+          await recordAttempt(db, {
+            userId: row.vibepin_user_id, draftId: String(row.draft_id ?? ""),
+            scheduledAt: row.scheduled_at, provider: destination.provider,
+            connectionId: destination.socialConnectionId ?? null,
+            attempt, retryClass, nextAttemptAt: null, reconcileRequiredAt: null, evidence,
+          });
+          return null;
+        }
+
+        if (retryClass === "reconciliation_required") {
+          // The provider may have created the Pin and we cannot prove otherwise. This
+          // round schedules NO retry — `next_attempt_at` stays null and reconciliation
+          // is flagged instead, because sending again before that question is answered
+          // is exactly how a merchant gets two identical Pins. The destination is held
+          // by §3.4(a)'s `deferred: true`, not by a timer.
+          await recordAttempt(db, {
+            userId: row.vibepin_user_id, draftId: String(row.draft_id ?? ""),
+            scheduledAt: row.scheduled_at, provider: destination.provider,
+            connectionId: destination.socialConnectionId ?? null,
+            attempt, retryClass, nextAttemptAt: null,
+            reconcileRequiredAt: new Date().toISOString(), evidence,
+          });
+          reconcileFlagged = true;
+          return null; // the caller still writes its `delivery_unknown` row
+        }
+
+        // retryClass === "retryable".
+        const next = computeNextAttemptAt(attempt, retryAfterSeconds);
+        await recordAttempt(db, {
+          userId: row.vibepin_user_id, draftId: String(row.draft_id ?? ""),
+          scheduledAt: row.scheduled_at, provider: destination.provider,
+          connectionId: destination.socialConnectionId ?? null,
+          attempt, retryClass,
+          // null at attempt 5 — `computeNextAttemptAt` returns null past the backoff
+          // table, and that null is what makes the RPC stamp `final_failure_at`. The
+          // caller does not decide the lifecycle is over; it asks for a fifth attempt
+          // with nowhere to go next and the database concludes it.
+          nextAttemptAt: next ? next.toISOString() : null,
+          reconcileRequiredAt: null, evidence,
+        });
+        if (!next) {
+          // Attempt 5 exhausted. The RPC has just stamped `final_failure_at`; this
+          // remembers WHICH destination so the row's single notification can be
+          // claimed through the CAS below instead of simply fired.
+          terminalDestinations.push({
+            provider: destination.provider,
+            connectionId: typeof destination.socialConnectionId === "string"
+              && destination.socialConnectionId.trim()
+              ? destination.socialConnectionId.trim() : null,
+          });
+          return null; // ⇒ the ordinary failure path
+        }
+
+        const nextIso = next.toISOString();
+        retryBackoffs.push(nextIso);
+        return retryPendingOutcome(destination, { retryClass, attempt, nextAttemptAt: nextIso });
+      };
+
       // ── Publish EVERY Pinterest destination, each to its own account+board ────
       // One account failing must not abandon the others or the social fan-out: each
       // gets its own try/catch and its own result row. Before this, a Content with
@@ -583,6 +947,35 @@ export async function GET(req: Request): Promise<Response> {
           // next run attempts it — and only it.
           await record(deferredOutcome(destination));
           continue;
+        }
+        if (retryEnabled) {
+          const key = attemptKey(destination.provider, destination.socialConnectionId);
+          // ── Per-destination backoff filter (design §4.1) ──────────────────────
+          // The row's gate is the MIN across destinations, so a row can legitimately
+          // be claimed while one of its destinations is still backing off. This is
+          // where that destination is held. `deferredOutcome` deliberately — this is
+          // T12 semantics (nothing was sent, no attempt is consumed), not a retry
+          // round, so it must NOT carry the retry marker and must not contribute a
+          // new backoff decision.
+          const prior = attempts.get(key);
+          if (prior && !prior.final_failure_at && !backoffElapsed(prior.next_attempt_at, Date.now())) {
+            retryBackoffs.push(prior.next_attempt_at);
+            await record(deferredOutcome(destination));
+            continue;
+          }
+          // ── 429 spreads across the account, not the platform (design §6.3) ────
+          // An account that just told us to slow down gets no further requests this
+          // round. Its remaining destinations are deferred at the SAME resume time the
+          // 429 gave, so the whole account comes back together rather than trickling.
+          const connKey = typeof destination.socialConnectionId === "string"
+            ? destination.socialConnectionId.trim() : "";
+          if (connKey && rateLimitedConnections.has(connKey)) {
+            const held = await retryFork(destination, "retryable", rateLimitRetryAfter.get(connKey), {
+              providerCode: "rate_limited_sibling",
+            });
+            await record(held ?? deferredOutcome(destination));
+            continue;
+          }
         }
         const perDestination = destinationPublishInput(input, destination, legacyTarget);
         if (!perDestination) {
@@ -611,12 +1004,77 @@ export async function GET(req: Request): Promise<Response> {
               if (!firstFailure) firstFailure = { code: "invalid_confirmation", message: "The scheduled Pinterest destination no longer matches the frozen intent." };
               continue;
             }
+            /**
+             * ── THE VIDEO RE-SEND GATE (design §2.2 G, §5.4) ────────────────
+             * A video whose delivery was confirmed ABSENT cannot simply be
+             * re-dispatched: `dispatchV76PinterestVideo` inspects the v76
+             * ledger, finds the parent destination still at `delivery_unknown`
+             * and early-returns `unknown` before any claim and before any
+             * provider call. It needs a CHILD intent, and only a
+             * `confirmed_absent` check row can open one.
+             *
+             * Every condition below must hold or `child` stays null and the
+             * behaviour is exactly what it was — the parent receipt, the v78
+             * RPC, the early return. In particular NOTHING here can reach a
+             * provider create: a null `child` changes no argument at all.
+             *
+             *   · `retryEnabled`      flag off ⇒ this block is inert
+             *   · a `confirmed_absent` proof exists for this destination
+             *   · the proof carries the parent intent's row id — rows written
+             *     before that fix have null and are correctly unredeemable
+             *   · the proof names the destination it vouches for
+             *   · the parent's TEXT intent_id resolves
+             *
+             * A throw from the child builder (the draft no longer schedules
+             * this destination; the dispatch set came out wrong) is caught by
+             * the enclosing handler and recorded as a failure. It must NOT
+             * fall back to the parent receipt: that would re-send under an
+             * intent the reconciliation never vouched for.
+             */
+            let child: { receipt: typeof videoReceipt; checkId: string } | null = null;
+            if (retryEnabled && row.scheduled_at) {
+              const proof = await latestConfirmedAbsentCheck(db, {
+                userId: row.vibepin_user_id,
+                draftId: row.draft_id,
+                scheduledAt: row.scheduled_at,
+                provider: "pinterest",
+                socialConnectionId: destination.socialConnectionId ?? null,
+              });
+              // The proof must name THIS destination. `latestConfirmedAbsentCheck`
+              // already filters on it; this is the second lock, because the
+              // consequence of a mismatch is not a refused retry but a
+              // DIFFERENT destination's ordinary send being dispatched under
+              // someone else's child intent.
+              const expectedKey = destinationResultKey(
+                "pinterest", destination.socialConnectionId ?? null,
+              );
+              if (proof?.publishIntentId && proof.destinationId === expectedKey) {
+                const parentIntentId = await parentIntentTextId(
+                  db, row.vibepin_user_id, proof.publishIntentId,
+                );
+                if (parentIntentId) {
+                  child = {
+                    receipt: buildReconcileChildVideoReceipt({
+                      draftId: row.draft_id,
+                      updatedAt: row.updated_at,
+                      scheduledAt: row.scheduled_at,
+                      payload: row.payload,
+                      reconcileCheckId: proof.id,
+                      parentIntentId,
+                      destinationId: proof.destinationId,
+                    }),
+                    checkId: proof.id,
+                  };
+                }
+              }
+            }
             const durable = await dispatchSupabaseV76PinterestVideo(db, {
               uid: row.vibepin_user_id,
-              receipt: videoReceipt,
+              receipt: child?.receipt ?? videoReceipt,
               destination: frozenDestination,
               scheduleAt: row.scheduled_at ?? undefined,
               latestStartMs: deadlineMs,
+              ...(child ? { reconcileCheckId: child.checkId } : {}),
             });
             if (durable.outcome === "published") {
               deliveries.push(classifyDelivery({ ok: true }));
@@ -627,23 +1085,153 @@ export async function GET(req: Request): Promise<Response> {
                 externalPostUrl: durable.remoteUrl ?? null,
               });
             } else if (durable.outcome === "delivery_unknown") {
+              // ── THE ONE THING THAT STAYS HARDCODED HERE, AND WHY ────────────
+              // `classifyDelivery({})` ⇒ `delivery_unknown` ⇒ the unit is KEPT
+              // (deliveryOutcome.ts: "no status ⇒ we cannot prove nothing
+              // exists"). Feeding the real status in would be wrong, not more
+              // honest: an unknown delivery can carry a stored 4xx (`inspect`
+              // replays an earlier attempt's evidence), and `classifyDelivery`
+              // maps 4xx to `rejected`, which REFUNDS. A delivery we cannot
+              // disprove must never be refunded — this branch's outcome is
+              // decided by the dispatcher's own tri-state, not by a status code
+              // that survived into the row. The forensics below are display and
+              // bookkeeping only and change no money.
               deliveries.push(classifyDelivery({}));
+              const unknownEvidence = readDurableVideoEvidence(durable.evidence);
+              // §3.4(a): flag the reconciliation BEFORE the result row is written, so
+              // the ledger entry exists by the time the final persist asks whether a
+              // reconciliation is open. The `delivery_unknown` row itself is unchanged
+              // — what changes is that the row now keeps its schedule (see
+              // `holdForReconcile` at the final persist), which is what gives the
+              // reconciliation worker a row to act on when it concludes.
+              if (retryEnabled) {
+                await retryFork(
+                  destination,
+                  "reconciliation_required",
+                  undefined,
+                  // Same two constants as before, now only as FALLBACKS: a real
+                  // stage and a real provider code take precedence when the
+                  // dispatcher observed them, and the ledger keeps its previous
+                  // values for the orchestration-layer cases that observed none.
+                  attemptEvidenceFrom(unknownEvidence, {
+                    stage: "created", providerCode: "delivery_unknown",
+                  }) ?? { stage: "created", providerCode: "delivery_unknown" },
+                );
+              }
+              const unknownMessage = describeVideoEvidence(
+                "Delivery is unknown. Reconcile the original intent before retrying.",
+                unknownEvidence,
+              );
               await record({
                 provider: "pinterest", status: "delivery_unknown",
                 socialConnectionId: destination.socialConnectionId ?? null,
-                error: "Delivery is unknown. Reconcile the original intent before retrying.",
+                error: unknownMessage,
               });
-              if (!firstFailure) firstFailure = { code: "delivery_unknown", message: "Delivery is unknown. Reconcile the original intent before retrying." };
+              if (!firstFailure) firstFailure = { code: "delivery_unknown", message: unknownMessage };
             } else if (durable.outcome === "in_progress" || durable.outcome === "not_due") {
               await record(deferredOutcome(destination));
             } else {
-              deliveries.push(classifyDelivery({ providerStatus: 400 }));
-              await record({
-                provider: "pinterest", status: "failed",
-                socialConnectionId: destination.socialConnectionId ?? null,
-                error: "Pinterest rejected the video publish.",
-              });
-              if (!firstFailure) firstFailure = { code: "pinterest_video_publish_failed", message: "Pinterest rejected the video publish." };
+              /**
+               * ── WHICH CLASSIFIER ANSWERS FOR THIS FAILURE ──────────────────
+               * A `failed` result has two origins and they want opposite
+               * treatment. Until the evidence was preserved above, the route
+               * could not tell them apart and asked the orchestration reader for
+               * both:
+               *
+               *   · THE ADAPTER SAW A PROVIDER ANSWER. `classification` and
+               *     `stage` are present. `classifyDurableVideoResult` reads
+               *     neither — it finds no recognized `reason`, falls through to
+               *     `retryAllowed`, and answers `retryable`. So a definite 400
+               *     ("this Pin violates policy") was retried four more times
+               *     over roughly an hour, each round re-uploading the video, and
+               *     the merchant was told nothing until the fifth failed. That
+               *     is the opposite of the PRD's rule that only indefinite
+               *     failures are retried, and the §4.2 video table already says
+               *     what to do instead: 429 ⇒ retryable, every other 4xx and
+               *     every local validation refusal ⇒ blocked_user, told now.
+               *
+               *   · THE ORCHESTRATION LAYER COULD NOT COMPLETE A DISPATCH. No
+               *     classification, only a `reason`, and the orchestration reader
+               *     is correct. Note how little it is left holding: of its four
+               *     reasons, three (provider_boundary_exception,
+               *     provider_settlement_unavailable,
+               *     process_loss_after_provider_attempt) return
+               *     `delivery_unknown` and never reach this branch at all. Here
+               *     it serves `materialization_incomplete` and the replayed
+               *     `failed` attempt that carries no evidence whatsoever
+               *     (v76PinterestVideoPublish: `started.status === "failed"`).
+               *
+               * `classification` is read ONLY to pick the classifier. It is not
+               * recorded, not displayed, and never travels back toward the v81
+               * settle RPC whose value whitelist is hash-guarded — the taxonomy
+               * separation in retryClassification.ts's header still holds.
+               *
+               * `retryAfterSeconds` is not available: the durable result drops
+               * it. A 429 through this fork gets `retryable` on the base backoff
+               * table, which is the designed degradation, not an oversight.
+               */
+              const failureEvidence = readDurableVideoEvidence(durable.evidence);
+              const adapterEvidence = adapterEvidenceOf(durable.evidence);
+              const videoRetryClass = adapterEvidence
+                ? classifyVideoEvidence(adapterEvidence).retryClass
+                : classifyDurableVideoResult(durable).retryClass;
+              const held = retryEnabled
+                ? await retryFork(
+                  destination,
+                  videoRetryClass,
+                  undefined,
+                  // Was: the orchestration `reason` and nothing else, so a real
+                  // Pinterest rejection recorded an attempt with an EMPTY provider
+                  // code. `attemptEvidenceFrom` prefers the adapter's own code and
+                  // falls back to the reason, which is what the ledger used to get
+                  // for the dispatch-layer cases — those are unchanged.
+                  attemptEvidenceFrom(failureEvidence),
+                )
+                : null;
+              if (held) {
+                // A retry round: no delivery is classified (the refund question is not
+                // answerable yet — design §4.4) and no failure is reported.
+                await record(held);
+              } else {
+                // ── 400 IS NOW THE FALLBACK, AND ONLY A 4xx MAY REPLACE IT ───
+                // This branch is already known to be a REJECTION — the dispatcher
+                // said `failed`, which it says only when delivery is disproved.
+                // The status is therefore reported for the record, not consulted
+                // for the verdict, and `classifyDelivery` is only allowed to see
+                // it when it agrees with the verdict it is being asked about.
+                //
+                // Two ways the naive `?? 400` would have moved money, both real:
+                //   · a replayed `failed` attempt and `materialization_incomplete`
+                //     carry NO status; without the fallback they would become
+                //     `delivery_unknown` ⇒ charged, where today they refund.
+                //   · a media-processing rejection discovered while POLLING carries
+                //     `providerStatus: pollResponse.status`, which is the status of
+                //     the POLL — 200. `classifyDelivery(200)` is `sent`, so a video
+                //     Pinterest definitively refused would have been recorded as
+                //     delivered and charged for.
+                // Clamping to 4xx keeps every one of these at `rejected`, exactly
+                // as the hardcoded 400 did. This change is forensic; it must not
+                // move money.
+                const rejectionStatus = failureEvidence.providerStatus !== undefined
+                  && failureEvidence.providerStatus >= 400
+                  && failureEvidence.providerStatus < 500
+                  ? failureEvidence.providerStatus
+                  : 400;
+                deliveries.push(classifyDelivery({ providerStatus: rejectionStatus }));
+                const failureMessage = describeVideoEvidence(
+                  "Pinterest rejected the video publish.",
+                  failureEvidence,
+                );
+                await record({
+                  provider: "pinterest", status: "failed",
+                  socialConnectionId: destination.socialConnectionId ?? null,
+                  error: failureMessage,
+                });
+                // The CODE is deliberately unchanged: it is a stable identifier that
+                // other surfaces switch on, and the newly-recovered detail belongs in
+                // the message, which nothing matches against.
+                if (!firstFailure) firstFailure = { code: "pinterest_video_publish_failed", message: failureMessage };
+              }
             }
             continue;
           }
@@ -688,6 +1276,89 @@ export async function GET(req: Request): Promise<Response> {
               ? classifyDelivery({ preNetwork: true })
               : classifyDelivery(readProviderSignal(err)),
           );
+          // ── v82 retry fork for the IMAGE path (design §4.2 image table) ──────
+          //
+          // Deliberately placed AFTER `deliveries.push`: the delivery classification is
+          // the refund input, and this round may well turn out to be terminal, in which
+          // case the unchanged three-state rules have to see exactly what they see
+          // today. What the fork changes is whether `settleMetering` is CALLED at all
+          // this round (§4.4) — not what it would conclude if it were.
+          //
+          // A video row is excluded: its errors are dispatch-layer results handled in
+          // the branch above, and running an image classifier over one would read an
+          // HTTP status that no Pinterest image call ever made.
+          // Set by the fork below when the classifier said `reconciliation_required`,
+          // so the branch after it can write the matching `delivery_unknown` row. The
+          // fork returns null for that class (there is no retry to schedule — the
+          // question is "did it already happen", not "when do we try again"), and that
+          // null must not be mistaken for "nothing special happened".
+          let imageNeedsReconcile = false;
+          const retryHold = retryEnabled && !videoReceipt
+            ? await (async () => {
+              const classified = classifyPinterestApiError(err);
+              // Trial access is not a retry class at all (design §4.2, T13): it is
+              // handled by the branch above, which already `continue`d. Reaching here
+              // with one would mean that branch changed; fall through unchanged.
+              if (classified.kind === "trial_access") return null;
+              const { retryClass, retryAfterSeconds } = classified.result;
+              const status = (err as { providerStatus?: unknown })?.providerStatus;
+              // A 429 throttles the whole ACCOUNT for the rest of this round, not just
+              // this destination (§6.3). Registered before the fork so a sibling
+              // destination later in the loop is held at the same resume time.
+              if (status === 429) {
+                const connKey = typeof destination.socialConnectionId === "string"
+                  ? destination.socialConnectionId.trim() : "";
+                if (connKey) {
+                  rateLimitedConnections.add(connKey);
+                  rateLimitRetryAfter.set(connKey, retryAfterSeconds);
+                }
+              }
+              const held = await retryFork(destination, retryClass, retryAfterSeconds, {
+                providerStatus: typeof status === "number" ? status : undefined,
+                providerCode: typeof (err as { code?: unknown })?.code === "string"
+                  ? (err as { code: string }).code : undefined,
+              });
+              // Only when a ledger entry was really written — see `reconcileFlagged`.
+              imageNeedsReconcile = reconcileFlagged;
+              return held;
+            })()
+            : null;
+          if (retryHold) {
+            // Held for retry: a neutral `pending` row, no failure framing, and
+            // critically NO `recordFailedPublishEvent` — that event is the customer-
+            // visible "your publish failed", and firing it on round 1 of 5 is exactly
+            // the false alarm this feature exists to remove (design §4.4 step 3).
+            await record(retryHold);
+            continue;
+          }
+          if (retryEnabled && !videoReceipt && imageNeedsReconcile) {
+            // ── The image twin of the video `delivery_unknown` branch ──────────
+            //
+            // A fetch throw on `POST /pins` cannot be proven un-sent (design §4.2:
+            // "图片创建是单次 POST /pins，无法证明未送达"), so `retryFork` has just
+            // flagged reconciliation on the ledger. Falling through to the ordinary
+            // failure row from here would contradict that in the worst possible way:
+            // the ledger would say "reconciliation open" while the payload said
+            // "failed", and `clearSchedule` would null `scheduled_at` — after which
+            // the due scan can never see the row again and the reconcile worker's
+            // eventual verdict has nothing to act on. That is precisely the §3.4
+            // dead-chain defect, reintroduced for images.
+            //
+            // So the image path records `delivery_unknown` exactly as the video path
+            // does. `holdsReconcile` at the final persist then keeps the schedule, and
+            // `pendingDestinations` counts the row as closed so nothing re-sends it
+            // before reconciliation concludes — the "never blindly retry" guarantee.
+            deliveries.push(classifyDelivery({}));
+            await record({
+              provider: "pinterest", status: "delivery_unknown",
+              socialConnectionId: destination.socialConnectionId ?? null,
+              error: RECONCILING_MESSAGE,
+            });
+            if (!firstFailure) {
+              firstFailure = { code: "delivery_unknown", message: RECONCILING_MESSAGE };
+            }
+            continue;
+          }
           const described = describeThrown(err);
           await record(pinterestOutcomeRow(destination, { ok: false, error: described.message }));
           if (!firstFailure) firstFailure = described;
@@ -809,7 +1480,21 @@ export async function GET(req: Request): Promise<Response> {
       // would have.
       const pending = outcomes.filter(o => o.status === "pending");
       const reported = outcomes.filter(o => o.status !== "pending" && o.status !== "skipped");
-      if (pending.length && !reported.length) {
+      // ── A round that ATTEMPTED and is now backing off is not "nothing happened" ──
+      //
+      // This distinction is the whole reason `retryPendingOutcome` carries a marker.
+      // Both a time-deferral and a retry round produce `status: "pending"`, but they
+      // mean opposite things to the branch below: a time-deferral really did nothing
+      // (so writing anything would only bump `updatedAt` and push a pointless LWW
+      // re-sync), whereas a retry round sent a request, got an answer, consumed an
+      // attempt, and has a backoff gate that MUST be written to the row.
+      //
+      // Without this check, the single-destination Content — the common case — takes
+      // the early exit: `pending=1, reported=0`. The claim is released, nothing is
+      // written, the gate never lands, and the feature silently does nothing at all
+      // while still looking like it works. P13/P24 exist to catch exactly that.
+      const retryRounds = outcomes.filter(isRetryRound);
+      if (pending.length && !reported.length && !retryRounds.length) {
         // The run ran out of time before this row's FIRST destination. Nothing
         // happened, so nothing is written: release the claim and leave the payload and
         // scheduled_at exactly as they were, the same shape as the trial-access
@@ -820,18 +1505,40 @@ export async function GET(req: Request): Promise<Response> {
         continue;
       }
 
-      // firstFailure carries the platform's stable CODE, which the outcome rows do not:
-      // categorizing from the message alone would put a differently-worded
-      // needs_reconnect in "transient" and offer the merchant the wrong fix.
-      await persistOutcomes(io, row, outcomes, {
+      // ── §3.4(a) + §4.1: hold the schedule, and say until when ────────────────
+      //
+      // `deferred` already covers "a destination is still owed"; a retry round and a
+      // reconciliation round are both that, and the second clause is what §3.4(a)
+      // adds. Without it a `delivery_unknown` round produces no pending outcome, so
+      // `deferred` is false, `clearSchedule` becomes true, and `scheduled_at` is
+      // nulled — after which the due scan can never see the row again and the
+      // reconciliation worker's eventual verdict has nothing to act on.
+      const holdsReconcile = retryEnabled
+        && outcomes.some(o => o.status === "delivery_unknown");
+      // The row's gate: the EARLIEST time any still-owed destination may be retried.
+      // MIN, not MAX — see `mergeNextAttemptAt`. Undefined (key absent) when the flag
+      // is off, so the column is never named on a database that may not have it.
+      const rowNextAttemptAt = retryEnabled ? mergeNextAttemptAt(retryBackoffs) : null;
+      await persistOutcomes(io, row, stripRetryMarkers(outcomes), {
         connectionId: adoptedConnectionId,
         failureCode: firstFailure?.code,
-        deferred: pending.length > 0,
+        deferred: pending.length > 0 || holdsReconcile,
+        ...(retryEnabled ? { nextAttemptAt: rowNextAttemptAt } : {}),
       });
-      // Refund decision for the whole row, once, after every destination is known.
-      // Runs after the persist so a ledger hiccup can never delay writing what
-      // actually happened (releaseScheduledPost is fail-open and never throws).
-      await settleMetering();
+      // ── §4.4: a round that is going to be retried settles NOTHING ────────────
+      //
+      // The defect: round 1 fails with a 503, `settleMetering` sees a fresh consume
+      // and a refundable outcome and RELEASES the unit; round 2 therefore consumes
+      // fresh again, fails, releases again — "churn release/re-consume pairs every
+      // five minutes", which the trial-access branch already has its own exemption
+      // for. A retry round is the same situation with a different cause: the schedule
+      // has not ended, the same key will be charged again, and the refund question is
+      // not answerable yet. It is answered ONCE, at the terminal round, by the
+      // unchanged three-state rules.
+      //
+      // P24 asserts the release COUNT is zero across rounds 1..4 rather than checking
+      // the final balance, because a net-zero balance is also what the churn produces.
+      if (!(retryEnabled && shouldSkipSettlement(outcomes))) await settleMetering();
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
@@ -842,11 +1549,69 @@ export async function GET(req: Request): Promise<Response> {
           remotePinUrl: pin?.externalPostUrl ?? undefined,
         });
         published++;
+      } else if (retryEnabled && retryRounds.length && !reported.length) {
+        // Every destination that reported is waiting to be retried. This is NOT a
+        // failed row: `recordFailedPublishEvent` is the customer-visible "your publish
+        // failed", and firing it on round 1 of 5 is precisely the false alarm P0
+        // exists to remove (design §4.4 step 3). The attempt is already recorded in
+        // `scheduled_publish_attempts`, which is internal telemetry — PRD Risk 8's
+        // rule that attempt events must not surface as customer failure events.
+        // Counted as deferred, which is what the row genuinely is: still scheduled,
+        // still owed, coming back on its own.
+        deferred++;
       } else {
-        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
-          code: firstFailure?.code,
-          message: firstFailure?.message ?? "Publish failed",
-        });
+        // ── T14: the final-failure notice is CLAIMED, not simply sent ───────────
+        //
+        // When this round exhausted a destination's five attempts, the notification
+        // right is taken through `scheduled_publish_claim_terminal_notice_v82` — a
+        // compare-and-set that stamps `terminal_notified_at` only while it is still
+        // null. Exactly one caller can win. The race is ordinary, not exotic: this
+        // is an HTTP endpoint on a five-minute crontab whose row claim lasts ten
+        // minutes, so an overrunning tick and the next one can both arrive at the
+        // same fifth attempt, and without the CAS the merchant is told twice that
+        // the same post failed.
+        //
+        // Scope, deliberately narrow: only a v82-terminal round is gated. A
+        // `blocked_user` failure, an unpublishable payload, a thrown connection
+        // error — none of those end a five-attempt lifecycle, none has a
+        // `final_failure_at` row to de-duplicate against, and all of them keep
+        // today's behaviour exactly.
+        //
+        // And the gate only ever SUPPRESSES on a definite `false`. A missing row or
+        // an RPC error resolves to "send": a duplicate failure notice is an
+        // annoyance, a swallowed one leaves a merchant never told their scheduled
+        // post is dead. (`claimTerminalNotice` returns true on error for this
+        // reason; `findTerminalAttemptId` returning null means the same thing here.)
+        let notify = true;
+        if (retryEnabled && terminalDestinations.length && row.scheduled_at) {
+          // One notice per ROW (that is what `recordFailedPublishEvent` is), so the
+          // row's right is claimed if ANY of its terminal destinations is unclaimed.
+          // Claiming all of them, rather than stopping at the first win, is what
+          // makes a second worker find every one of them already stamped.
+          let won = false;
+          let resolvedAny = false;
+          for (const terminal of terminalDestinations) {
+            const attemptRowId = await findTerminalAttemptId(db, {
+              userId: row.vibepin_user_id,
+              draftId: String(row.draft_id ?? ""),
+              scheduledAt: row.scheduled_at,
+              provider: terminal.provider,
+              connectionId: terminal.connectionId,
+            });
+            if (!attemptRowId) continue;
+            resolvedAny = true;
+            if (await claimTerminalNotice(db, row.vibepin_user_id, attemptRowId)) won = true;
+          }
+          // `resolvedAny` false ⇒ no ledger row could be identified at all, so there
+          // was nothing to de-duplicate against and the unchanged behaviour applies.
+          if (resolvedAny) notify = won;
+        }
+        if (notify) {
+          void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+            code: firstFailure?.code,
+            message: firstFailure?.message ?? "Publish failed",
+          });
+        }
         failed++;
       }
     } catch (err) {
@@ -896,7 +1661,7 @@ export async function GET(req: Request): Promise<Response> {
       + `${deferred} due row(s) left for the next run`,
     );
   }
-  return json({ claimed: claimedCount, published, failed, skipped, deferred });
+  return json(runBody({ claimed: claimedCount, published, failed, skipped, deferred }));
 }
 
 /**

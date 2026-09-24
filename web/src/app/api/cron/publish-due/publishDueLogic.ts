@@ -180,6 +180,38 @@ export function owedDestinations(
   return intent.length ? pendingDestinations(intent, prior, options) : [];
 }
 
+/**
+ * Did this payload DECLARE destinations that all failed to parse?
+ *
+ * The third silent-dropout vector, found in production. `isUsableDestination`
+ * requires `socialConnectionId`; an entry that spells it `connectionId` — or names
+ * no provider, or carries a blank id — is dropped by the filter. A draft whose every
+ * entry is dropped resolves to zero destinations, which is byte-identical to a draft
+ * that named none at all. The cron then completed the Content from an empty outcome
+ * set: schedule cleared, claim released, not one error written. On the data that is
+ * indistinguishable from a perfect publish, and the merchant's post simply never
+ * existed.
+ *
+ * The distinction this makes is exactly "the merchant asked for somewhere and we
+ * could not read it" versus "the merchant asked for nowhere". The first is a defect
+ * to report; the second is a legacy draft carrying no intent, which has its own
+ * long-standing handling and must not start failing.
+ *
+ * Deliberately asks `resolveScheduledDestinations` rather than re-testing the entries
+ * here: that function is THE read rule (promote.ts:308 documents that this 口径 has
+ * one source), and a second copy of "usable" in the route is how the two drift into
+ * disagreeing about which drafts are publishable.
+ */
+export function declaredButUnparseableDestinations(payload: Record<string, unknown>): boolean {
+  const declared = Array.isArray(payload.scheduledDestinations)
+    ? payload.scheduledDestinations
+    : [];
+  if (!declared.length) return false;
+  return resolveScheduledDestinations(
+    payload as Parameters<typeof resolveScheduledDestinations>[0],
+  ).length === 0;
+}
+
 export function payloadToPublishInput(
   uid: string,
   payload: Record<string, unknown>,

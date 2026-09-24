@@ -8,6 +8,7 @@
  */
 
 import { isValidCoverFrameTime, videoCoverFrameSeconds } from "@/lib/videoCoverFrame";
+import { parseRetryAfterSeconds } from "@/lib/server/publish/retryAfter";
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -52,8 +53,8 @@ export type PinterestVideoEvidence = {
 
 export type PinterestVideoPublishResult =
   | { outcome: "succeeded"; evidence: PinterestVideoEvidence }
-  | { outcome: "failed"; evidence: PinterestVideoEvidence }
-  | { outcome: "unknown"; evidence: PinterestVideoEvidence };
+  | { outcome: "failed"; evidence: PinterestVideoEvidence; retryAfterSeconds?: number }
+  | { outcome: "unknown"; evidence: PinterestVideoEvidence; retryAfterSeconds?: number };
 
 type RegisteredMedia = {
   mediaId: string;
@@ -87,18 +88,40 @@ function containsSensitiveValue(value: string, sensitiveValues: ReadonlySet<stri
   );
 }
 
-function safeEvidenceId(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+/**
+ * ── WHY THESE THREE ARE EXPORTED (and the rest of the module's helpers are not) ──
+ * Evidence is sanitized ONCE here, at the provider boundary, and that is still the
+ * only place raw provider text is admitted. But an evidence object does not stay at
+ * this boundary: `dispatchV76PinterestVideo` returns it as an untyped
+ * `Record<string, unknown>` — and on the replay paths that record is READ BACK OUT OF
+ * THE DATABASE (`inspect` → `prior.evidence`), which is a different trust boundary
+ * with a different history. A consumer that wants to show one of those fields to a
+ * merchant therefore has to re-validate, and it must do so with the SAME predicates
+ * that decided the value was safe in the first place. Duplicating them in the
+ * consumer is how the two copies drift.
+ *
+ * The `sensitiveValues` default is the empty set — correct for a consumer, which
+ * holds no upload credentials to redact; the adapter itself always passes the real
+ * set from the registration response.
+ */
+export function safeEvidenceId(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const id = safeId(value);
   return id && !containsSensitiveValue(id, sensitiveValues) ? id : undefined;
 }
 
-function safeProviderCode(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+export function safeProviderCode(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const code = typeof value === "number" && Number.isFinite(value) ? String(value) : cleanText(value);
   return code.length > 0 && code.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(code)
     && !containsSensitiveValue(code, sensitiveValues) ? code : undefined;
 }
 
-function safeProviderMessage(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+export function safeProviderMessage(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const message = cleanText(value);
   if (!message || message.length > 240 || /https?:\/\//i.test(message) || /[{}\[\]]/.test(message) || /[\u0000-\u001f]/.test(message) || containsSensitiveValue(message, sensitiveValues)) return undefined;
   return message;
@@ -156,9 +179,17 @@ async function responseResult(
   stage: PinterestVideoEvidence["stage"],
   mediaId?: string,
   sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+  now?: () => number,
 ): Promise<PinterestVideoPublishResult> {
   const classification = response.status >= 400 && response.status < 500 ? "definite_rejection" : "unknown";
   const body = await safeJson(response);
+  // Retry-After is carried on the OUTER result, never inside `evidence(...)`:
+  // the v81 settle RPC key-whitelists evidence and has no slot for it (see
+  // lib/server/publish/retryClassification.ts's module header). `now` is a
+  // thunk and is only invoked by the parser's HTTP-date branch, so callers
+  // whose `now()` is an instrumented/counted test dependency are not charged
+  // an extra call for the (overwhelmingly common) delta-seconds/absent cases.
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("retry-after"), now ?? (() => Date.now()));
   return {
     outcome: classification === "definite_rejection" ? "failed" : "unknown",
     evidence: evidence(stage, classification, {
@@ -168,6 +199,7 @@ async function responseResult(
       ...(safeProviderCode(body?.code, sensitiveValues) ? { providerCode: safeProviderCode(body?.code, sensitiveValues) } : {}),
       ...(safeProviderMessage(body?.message, sensitiveValues) ? { providerMessage: safeProviderMessage(body?.message, sensitiveValues) } : {}),
     }, sensitiveValues),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 
@@ -277,7 +309,7 @@ export async function publishPinterestVideo(
       headers: authenticatedHeaders(token, true),
       body: JSON.stringify({ media_type: "video" }),
     });
-    if (!registerResponse.ok) return await responseResult(registerResponse, "registered", undefined, tokenSensitiveValues);
+    if (!registerResponse.ok) return await responseResult(registerResponse, "registered", undefined, tokenSensitiveValues, deps.now);
     const body = await safeJson(registerResponse);
     const mediaId = safeId(body?.media_id);
     const uploadUrl = cleanText(body?.upload_url);
@@ -308,7 +340,7 @@ export async function publishPinterestVideo(
     for (const [key, value] of registered.uploadParameters) form.append(key, value);
     form.append("file", input.file, cleanText(input.fileName) || "video.mp4");
     const uploadResponse = await deps.fetch(registered.uploadUrl, { method: "POST", body: form });
-    if (uploadResponse.status !== 204) return await responseResult(uploadResponse, "uploaded", registered.mediaId, registered.sensitiveValues);
+    if (uploadResponse.status !== 204) return await responseResult(uploadResponse, "uploaded", registered.mediaId, registered.sensitiveValues, deps.now);
   } catch {
     return { outcome: "unknown", evidence: evidence("uploaded", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
   }
@@ -328,7 +360,7 @@ export async function publishPinterestVideo(
     } catch {
       return { outcome: "unknown", evidence: evidence("polled", "unknown", { mediaId: registered.mediaId }, registered.sensitiveValues) };
     }
-    if (!pollResponse.ok) return await responseResult(pollResponse, "polled", registered.mediaId, registered.sensitiveValues);
+    if (!pollResponse.ok) return await responseResult(pollResponse, "polled", registered.mediaId, registered.sensitiveValues, deps.now);
     let pollBody: Record<string, unknown> | null;
     try {
       // Keep the fetch's controller alive through body consumption: a body timeout
@@ -391,7 +423,7 @@ export async function publishPinterestVideo(
       headers: authenticatedHeaders(token, true),
       body: JSON.stringify(createBody),
     });
-    if (createResponse.status !== 201) return await responseResult(createResponse, "created", registered.mediaId, registered.sensitiveValues);
+    if (createResponse.status !== 201) return await responseResult(createResponse, "created", registered.mediaId, registered.sensitiveValues, deps.now);
     const body = await safeJson(createResponse);
     const pinId = safeId(body?.id);
     if (!pinId) return {

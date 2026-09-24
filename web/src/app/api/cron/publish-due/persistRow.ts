@@ -166,6 +166,134 @@ export async function mergeOutcomesIntoRow(
   });
 }
 
+/**
+ * The stored `destinationResults` key for one destination.
+ *
+ * Duplicated from `outcomeRows`' construction — including the `"legacy"`
+ * fallback — because the reconciliation worker has to find a row that writer
+ * produced, and the two must not drift. If this ever disagrees, a
+ * `confirmed_absent` verdict silently fails to re-open the destination.
+ */
+export function destinationResultKey(
+  provider: string,
+  socialConnectionId: string | null | undefined,
+): string {
+  const id = typeof socialConnectionId === "string" && socialConnectionId.trim()
+    ? socialConnectionId.trim()
+    : null;
+  return `${provider}:${id ?? "legacy"}`;
+}
+
+/**
+ * Reconciliation concluded the Pin was never created: REMOVE the stored
+ * `delivery_unknown` row so the destination is owed again (design §5.3).
+ *
+ * ── WHY REMOVAL, AND NOT "WRITE A PENDING ROW" ──────────────────────────────
+ * The obvious implementation — persist a `pending` outcome for the destination
+ * — cannot work, and fails SILENTLY, which is worse. `outcomeRows`
+ * (publishDueLogic.ts:293-302) filters `pending` out entirely, and
+ * `mergeDestinationResults` keeps a prior row unless a FRESH row carries the
+ * same `destinationId`. A pending outcome produces no fresh row, so the stored
+ * `delivery_unknown` row survives untouched — and `pendingDestinations` counts
+ * `delivery_unknown` as CLOSED (publishRules.ts:196-197), so the destination
+ * stays permanently un-owed. The verdict would be correct, recorded, and have
+ * no effect whatsoever.
+ *
+ * So the row is deleted. After that the destination has no stored result, which
+ * is exactly the state it was in before the attempt — owed, and re-published by
+ * the next tick's ordinary path.
+ *
+ * ── WHAT IS DELIBERATELY NOT TOUCHED ────────────────────────────────────────
+ * · `scheduled_at` — the row must stay due. Clearing it is the §3.4 dead-chain
+ *   defect in a new place.
+ * · `publish_claimed_at` — this runs BEFORE the claim loop, on an UNCLAIMED
+ *   row. It is the one write in this route made outside the claim discipline,
+ *   and it is safe because it is a CAS on `updated_at`: a worker that claims
+ *   and publishes the row concurrently advances `updated_at`, and this write
+ *   then misses and re-merges. Releasing or taking a claim here would instead
+ *   let this pass fight the publisher for the row.
+ * · `previousResults` — the history of genuinely-published posts is not this
+ *   function's business.
+ *
+ * Returns `skipped` when the row has no matching result: the verdict has
+ * already been applied (a replay), and re-applying must not, for example,
+ * re-arm the gate.
+ */
+export async function removeDestinationResult(
+  io: RowIo,
+  row: DueRowRef,
+  destinationId: string,
+  options: { nextAttemptAt?: string | null } = {},
+): Promise<WriteResult & { skipped?: boolean }> {
+  const result = await casReadMergeWrite<DueRowRef, RowSnapshot, Record<string, unknown>>(
+    io,
+    row,
+    snapshot => ({
+      scheduled_at: snapshot.scheduled_at ?? null,
+      updated_at: snapshot.updated_at ?? null,
+    }),
+    (snapshot, nowIso) => {
+      const rows = Array.isArray(snapshot.payload.destinationResults)
+        ? (snapshot.payload.destinationResults as Array<Record<string, unknown>>)
+        : [];
+      const keep = rows.filter(r => r?.destinationId !== destinationId);
+      // Nothing matched: already applied, or the merchant edited it away.
+      if (keep.length === rows.length) return null;
+      const payload: Record<string, unknown> = {
+        ...snapshot.payload,
+        destinationResults: keep,
+        // Stamped at WRITE time so the client's LWW merge takes this row rather
+        // than pushing back a copy that still carries the delivery_unknown result.
+        updatedAt: nowIso,
+      };
+      return {
+        payload,
+        updated_at: nowIso,
+        // Key presence, not value — see FinalWriteOptions. The caller omits it
+        // entirely when the retry flag is off, so the v82 column is never named
+        // on a database that may not have it.
+        ...("nextAttemptAt" in options
+          ? { publish_next_attempt_at: options.nextAttemptAt ?? null }
+          : {}),
+      };
+    },
+    "reconcileAbsent",
+    ref => `draft_id=${ref.draft_id} user=${ref.vibepin_user_id}`,
+  );
+  if (result.gone) return { error: null, gone: true };
+  if (result.skipped) return { error: null, skipped: true };
+  return { error: result.error };
+}
+
+/**
+ * Reconciliation found the Pin after all: replace the stored
+ * `delivery_unknown` row with a `published` one carrying the real permalink.
+ *
+ * Unlike the absent path this CAN go through the ordinary merge —
+ * `outcomeRows` maps a `published` outcome to a fresh row with the same
+ * `destinationId`, which supersedes the stored one. `mergeOutcomesIntoRow` is
+ * therefore reused rather than reimplemented, so the result row this writes is
+ * byte-identical in shape to the one a successful publish writes.
+ *
+ * The schedule is left alone here too. Once the ledger's reconciliation is
+ * closed, the next tick owes nothing, takes the existing no-work exit, and
+ * finishes the row through the unchanged path.
+ */
+export async function recordReconciledPublish(
+  io: RowIo,
+  row: DueRowRef,
+  destination: { provider: string; socialConnectionId: string | null },
+  remote: { id: string; url: string | null },
+): Promise<WriteResult> {
+  return mergeOutcomesIntoRow(io, row, [{
+    provider: destination.provider,
+    status: "published",
+    socialConnectionId: destination.socialConnectionId,
+    externalPostId: remote.id,
+    ...(remote.url ? { externalPostUrl: remote.url } : {}),
+  } as DestinationOutcomeLike]);
+}
+
 export interface FinalWriteOptions {
   /** Adopt-once: the connection an untargeted draft actually published through. */
   connectionId?: string | null;
@@ -173,6 +301,23 @@ export interface FinalWriteOptions {
   failureCode?: string;
   /** A destination was deferred — the Content is still scheduled for it. */
   deferred?: boolean;
+  /**
+   * The v82 retry gate: the earliest instant any still-owed destination may be
+   * attempted again (design §4.1 — the MIN across destinations, not the max).
+   *
+   * ★ The KEY'S PRESENCE, not its value, is what decides whether the column is
+   * written. `null` is a meaningful value here — it is how a row whose last waiting
+   * destination just resolved gets its gate CLEARED, so it becomes immediately due
+   * again rather than staying pinned behind a stale timer. "Do not touch the column
+   * at all" therefore has to be expressed as the key being ABSENT.
+   *
+   * That distinction is load-bearing and not stylistic: `publish_next_attempt_at`
+   * does not exist on a database without v82 applied, and naming it in an UPDATE
+   * there fails the write. The caller omits the key entirely whenever the retry flag
+   * is off, which is what keeps the feature-off path runnable on today's production
+   * schema.
+   */
+  nextAttemptAt?: string | null;
 }
 
 /** The row's final persist: results, posted/failure framing, schedule, claim. */
@@ -196,6 +341,10 @@ export async function writeOutcomes(
       // or a destination is still owed: this run must not undo a schedule it did not
       // read, nor drop a Content whose platforms have not all gone out.
       ...(clearSchedule ? { scheduled_at: null } : {}),
+      // Key present only when the caller passed one — see FinalWriteOptions. `in`
+      // rather than a truthiness test, because `null` is a real value here (clear the
+      // gate) and must be distinguishable from "do not name this column at all".
+      ...("nextAttemptAt" in options ? { publish_next_attempt_at: options.nextAttemptAt ?? null } : {}),
       publish_claimed_at: null, // release the claim either way
     };
   });
