@@ -17,7 +17,7 @@
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { AMAZON_PRODUCT_NAME_REQUIRED, generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
 import { isBusyKey, runWithBusyGuard, subscribeBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
@@ -76,6 +76,8 @@ export type PinAICopyPanelProps = {
   category?: string;
   keyword?: string;
   destinationUrl?: string;
+  /** The host owns an unsaved, fresher Website URL (Plan drawer): Amazon context reads it. */
+  destinationUrlIsCurrent?: boolean;
   setupSnapshot?: SetupSnapshot;
   promptSnapshot?: string;
   opportunity?: string;
@@ -93,6 +95,8 @@ export type PinAICopyPanelProps = {
   /** Reports the request lifetime to a host that must prevent remounting this panel. */
   onBusyChange?: (busy: boolean) => void;
   onApplyCopy: (result: PinAICopyResult) => void;
+  /** Optional: the raw generate error (e.g. a 422 carrying validationReport) for host-side hints. */
+  onGenerateError?: (error: unknown) => void;
   /**
    * Sibling action rendered in the SAME row as Generate copy (e.g. Create Pins'
    * "Regenerate image"). Passing it here rather than stacking a second block keeps
@@ -174,6 +178,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
           category: props.category,
           keyword: props.keyword,
           destinationUrl: props.destinationUrl,
+          ...(props.destinationUrlIsCurrent ? { destinationUrlIsCurrent: true } : {}),
           setupSnapshot: props.setupSnapshot,
           promptSnapshot: props.promptSnapshot,
           opportunity: props.opportunity,
@@ -205,7 +210,10 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
         setGeneratedThisSession(true);
         toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
       } catch (err) {
-        const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
+        props.onGenerateError?.(err);
+        const msg = (err as { code?: string })?.code === AMAZON_PRODUCT_NAME_REQUIRED
+          ? tr("studioBoard.amazon.productNameRequired")
+          : (err as Error)?.message || tr("pinForm.genericGenerateError");
         setErrorMsg(msg);
         setStage("error");
         // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user

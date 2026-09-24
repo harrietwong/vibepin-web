@@ -67,6 +67,7 @@ import {
 } from "@/lib/studio/publishTarget";
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
+import { isAiCopyUnedited } from "@/lib/studio/pinConfirmList";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { isPublishableContentMedia, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
 import { PublishDestinations, type SelectedAccount } from "@/components/social/PublishDestinations";
@@ -1769,6 +1770,9 @@ export function PinDetailsModal({
               title={title} description={description} altText={altText}
               boardId={boardId || draft.boardId} boardName={draft.boardName}
               category={draft.category} keyword={draft.keyword} destinationUrl={destinationUrl}
+              // The drawer edits the URL locally until Save: an Amazon link typed here
+              // gets the Amazon context + #ad disclosure (T4) without saving first.
+              destinationUrlIsCurrent
               imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
               boards={boards}
               analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
@@ -2152,6 +2156,7 @@ export function PinDetailsModal({
           onCancel={() => setPublishConfirmation(null)}
           onConfirm={receipt => { setPublishConfirmation(null); void handlePublish(receipt); }}
           ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
+          aiUnedited={!!draft && isAiCopyUnedited({ ...draft, title, description })}
         />
 
         {/* "Use product link as destination" replace-confirm (PRD §10.2) — replaces

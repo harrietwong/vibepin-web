@@ -216,7 +216,8 @@ test("Schedule assigns Smart Schedule date/time/plannedAt; missing URL never blo
   // Weekly Plan schedule uses autoSchedulePins (canonical Smart Schedule).
   assert.match(planSource, /autoSchedulePins/);
   // Schedule has no readiness/URL gate — it simply calls onScheduleSelected.
-  assert.match(batchSource, /function scheduleSelected\(\)[\s\S]{0,160}onScheduleSelected/);
+  // (T4 / ruling 4: via the per-Pin confirmation list, still with no readiness gate.)
+  assert.match(batchSource, /function submitScheduleSelected\(\)[\s\S]{0,260}onScheduleSelected\(ids\)/);
 });
 
 test("getPinReadiness needs_date from addedToPlanAt", () => {

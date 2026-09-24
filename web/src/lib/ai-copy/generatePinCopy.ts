@@ -5,7 +5,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import { coverMedia } from "@/lib/contentDraftModel";
 import { waitForPinDraftMediaSync } from "@/lib/pinDraftSync";
 import { track, trackLatency } from "@/lib/analytics";
-import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
+import { AI_COPY_V2_PROMPT_VERSION, COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 import { readPinterestRegionFromStorage } from "@/lib/i18n/config";
 import type {
   GeneratePinterestPinCopyInput,
@@ -16,6 +16,14 @@ import type {
   ProductContext,
 } from "./types";
 import { generatePinterestPinCopyV2, isAICopyV2ClientEnabled } from "./generatePinCopyV2";
+import type { AffiliateDisclosureKind } from "./affiliateDisclosure";
+import {
+  amazonSourceForUrl,
+  buildAmazonCopyContext,
+  canGenerateAmazonCopy,
+  isAmazonAffiliateDraft,
+  type AmazonCopyContext,
+} from "@/lib/studio/amazonCardSource";
 
 /**
  * Error thrown by generatePinterestPinCopy, carrying a machine-readable `code` so the
@@ -37,6 +45,9 @@ export class PinCopyError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
+
+/** Amazon card without a product name: generation is refused client-side (no request). */
+export const AMAZON_PRODUCT_NAME_REQUIRED = "amazon_product_name_required";
 
 /** True when `err` is the rate-limit stop (429), so the UI can soften the toast. */
 export function isRateLimitError(err: unknown): err is PinCopyError | { code: string; status?: number; retryAfterSeconds?: number | null } {
@@ -145,6 +156,30 @@ function resolvePrimaryShopifyProduct(storeDraft?: pinDraftStore.PinDraft | null
 
 /** Exported for direct unit testing (test-shopify-ai-grounding.ts, WP6 §10) — same
  *  function generatePinterestPinCopy() calls internally, not a parallel copy. */
+/**
+ * Amazon affiliate card context (T3, design §3.2), or null for every other card.
+ * The card counts as Amazon only while its CURRENT Website URL is an Amazon link and
+ * it carries an amazonSource (a stale source behind a changed URL is ignored).
+ */
+export function resolveAmazonCopyContext(
+  input: Pick<GeneratePinterestPinCopyInput, "destinationUrl" | "destinationUrlIsCurrent">,
+  storeDraft?: pinDraftStore.PinDraft | null,
+): (AmazonCopyContext & { affiliateDisclosure: AffiliateDisclosureKind; canGenerate: boolean }) | null {
+  // Studio card: the stored draft is fresh (the card flushes pending edits before
+  // generating); the prop copy of the URL can lag one debounce behind. Plan drawer /
+  // Batch Edit: the caller's own unsaved URL is the current one.
+  const destinationUrl = input.destinationUrlIsCurrent
+    ? input.destinationUrl
+    : storeDraft?.destinationUrl ?? input.destinationUrl;
+  // T4: an Amazon URL is an Amazon card on EVERY entry point (Plan drawer, Batch Edit),
+  // even when it never passed through the Studio card that records amazonSource. The
+  // context is derived from the URL (same pure function the card uses), carrying any
+  // stored manual facts; without a product name the §2.3 gate applies as on the card.
+  const source = amazonSourceForUrl(destinationUrl, storeDraft?.amazonSource) ?? undefined;
+  if (!source || !isAmazonAffiliateDraft({ destinationUrl, amazonSource: source })) return null;
+  return { ...buildAmazonCopyContext(source), affiliateDisclosure: "ad_hashtag", canGenerate: canGenerateAmazonCopy(source) };
+}
+
 export function inferProductContext(input: GeneratePinterestPinCopyInput, storeDraft?: pinDraftStore.PinDraft | null): ProductContext {
   const product = input.setupSnapshot?.selectedProducts?.find(p => p.title?.trim() || p.productUrl?.trim());
   const productWithLooseMeta = product as typeof product & { category?: string; attributes?: string[] } | undefined;
@@ -155,6 +190,13 @@ export function inferProductContext(input: GeneratePinterestPinCopyInput, storeD
     attributes: productWithLooseMeta?.attributes,
     source: product?.source,
   };
+
+  // Amazon card: user-declared facts only; price/availability are never passed and
+  // fetched page text travels separately as pageContext (resolveAmazonCopyContext).
+  const amazon = resolveAmazonCopyContext(input, storeDraft);
+  if (amazon) {
+    return { ...amazon.product, category: base.category, productUrl: base.productUrl };
+  }
 
   const shopify = resolvePrimaryShopifyProduct(storeDraft);
   if (!shopify) return base; // non-Shopify (or no linked product): unchanged.
@@ -195,6 +237,12 @@ export function resolveDirectionContext(
 export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyInput): Promise<GeneratePinterestPinCopyResult> {
   const started = performance.now();
   const storeDraft = findStoreDraft(input.draftId, input.imageUrl);
+  // Amazon generation gate (design §2.3): no product name (manual or fetched) → stop
+  // before ANY request, so nothing is reserved or released.
+  const amazonContext = resolveAmazonCopyContext(input, storeDraft);
+  if (amazonContext && !amazonContext.canGenerate) {
+    throw new PinCopyError(AMAZON_PRODUCT_NAME_REQUIRED, "Add the product name for this Amazon link before generating copy.");
+  }
   const selectedCover = storeDraft ? coverMedia(storeDraft) : null;
   if (storeDraft && selectedCover?.kind === "video" && selectedCover.coverFrameTimeMs !== undefined) {
     input.onStage?.("analyzing");
@@ -237,6 +285,8 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       country,
       length: input.length,
       product: productContext,
+      ...(amazonContext?.page ? { page: amazonContext.page } : {}),
+      ...(amazonContext ? { affiliateDisclosure: amazonContext.affiliateDisclosure } : {}),
       image: isVideoCover ? null : cachedAnalysis,
       imageUrl: isVideoCover ? undefined : input.imageUrl,
       ...(isVideoCover ? { mediaEvidenceMode: "video_cover" as const } : {}),
@@ -276,7 +326,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
         generatedAt: new Date().toISOString(),
         provider: "ai-copy-v2",
         model: "server-selected",
-        promptVersion: "ai_copy_v2_grounded_v3_independent_claims",
+        promptVersion: AI_COPY_V2_PROMPT_VERSION,
         strategy: mode,
         contextSourcesUsed,
         keywordTermsUsed: selectedKeywords,
@@ -290,7 +340,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     };
     track("ai_copy_success", {
       draftId: input.draftId, mode, cacheHit, pathUsed: "v2_grounded", keywords: v2.result.usedKeywordIds.length,
-      versions: { promptVersion: "ai_copy_v2_grounded_v3_independent_claims" },
+      versions: { promptVersion: AI_COPY_V2_PROMPT_VERSION },
     });
     return {
       metadataDraft: enhancedDraft,

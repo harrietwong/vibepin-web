@@ -37,6 +37,11 @@ export interface ValidateCopyInput {
   factCard: FactCardV1;
   keywords?: string[];
   claimDetection: ClaimDetectionResult;
+  /**
+   * Description cap. Defaults to the platform limit (800). Affiliate copy passes 500,
+   * Studio's schedule cap, because the appended disclosure must fit inside it (design §3.4).
+   */
+  descriptionMax?: number;
 }
 
 const STOPWORDS = new Set<string>([
@@ -316,6 +321,7 @@ function isClaimSupported(
 
 export function validateCopy(input: ValidateCopyInput): ValidationReport {
   const { title, description, altText, factCard, keywords, claimDetection } = input;
+  const descriptionMax = input.descriptionMax ?? 800;
   const issues: ValidationIssue[] = [];
   const detectedClaims: DetectedClaim[] = claimDetection?.status === "completed"
     ? claimDetection.claims
@@ -347,11 +353,11 @@ export function validateCopy(input: ValidateCopyInput): ValidationReport {
       message: `Title length (${title.length}) exceeds maximum of 100 characters`,
     });
   }
-  if (description.length > 800) {
+  if (description.length > descriptionMax) {
     issues.push({
       code: "DESCRIPTION_TOO_LONG",
       field: "description",
-      message: `Description length (${description.length}) exceeds maximum of 800 characters`,
+      message: `Description length (${description.length}) exceeds maximum of ${descriptionMax} characters`,
     });
   }
 

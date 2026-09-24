@@ -236,8 +236,12 @@ async function main() {
   assert.match(batch, /if \(isRateLimitError\(err\)\) \{\s*rateLimited = true;\s*break;\s*\}/, "Batch keeps the 429 stop path independently");
   assert.match(batch, /if \(textLimitReached\) \{\s*toast\.message\(tr\("studioBoard\.limit\.text\.allUsed"\)\)/, "Batch shows the plan text-limit message for 402 instead of a retry prompt");
   assert.match(batch, /else if \(rateLimited\) \{\s*toast\.message\(tr\("history\.error\.rateLimited\.label"\), \{ description: tr\("studio\.error\.serviceBusy\.body"\) \}\)/, "Batch keeps the retry-oriented 429 message");
-  assert.match(batch, /pinsWithExistingCopy/, "Batch detects generated copy that would overwrite existing user copy");
-  assert.match(batch, /pinForm\.replaceExistingTitle/, "Batch reuses the explicit overwrite confirmation before generation");
+  // T4 (design §4.2, fixes D8): flag-on Batch runs the shared bulk orchestration, which
+  // KEEPS text the user wrote; replacing it is a separate, second-confirmed choice.
+  assert.match(batch, /withOwnText/, "Batch detects Pins whose text the user wrote");
+  assert.match(batch, /studioBoard\.bulkCopy\.replaceConfirmTitle/, "replacing the user's text needs its own explicit confirmation");
+  assert.match(batch, /runSharedGenerateCopy\(targets, false\)/, "the default run keeps the user's text");
+  assert.match(batch, /runBulkGenerateCopy\(/, "flag-on Batch uses the shared bulk orchestration");
   assert.match(batch, /if \(!isAICopyV2ClientEnabled\(\)\) \{\s+void runGenerateCopyBatch\(\)/, "flag-off Batch preserves the legacy immediate generation path");
 
   console.log("AI Copy v2 UI/client tests passed");

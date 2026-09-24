@@ -5,6 +5,7 @@
 
 import type { PageFetcher, ProductUrlImportResult } from "./types";
 import { importUrl, defaultPageFetcher } from "./urlImportService";
+import type { AmazonImportOptions } from "./amazonImport";
 import { validateImportUrl } from "./urlSecurity";
 import { candidateId } from "./extractFromHtml";
 
@@ -19,16 +20,18 @@ export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export async function extractProductImagesFromUrl(
   rawUrl: string,
   fetchPage: PageFetcher = defaultPageFetcher,
+  opts: AmazonImportOptions = {},
 ): Promise<ProductUrlImportResult> {
-  return importUrl(rawUrl, fetchPage);
+  return importUrl(rawUrl, fetchPage, opts);
 }
 
 export async function importProductUrls(
   urls: string[],
   fetchPage: PageFetcher = defaultPageFetcher,
+  opts: AmazonImportOptions = {},
 ): Promise<ProductUrlImportResult[]> {
   const unique = [...new Set(urls.map(u => u.trim()).filter(Boolean))];
-  return Promise.all(unique.map(url => extractProductImagesFromUrl(url, fetchPage)));
+  return Promise.all(unique.map(url => extractProductImagesFromUrl(url, fetchPage, opts)));
 }
 
 /** @internal test helper */

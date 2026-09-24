@@ -6,6 +6,8 @@
  * scrape Amazon, never call PA-API, and never preserve another user's tag.
  */
 
+import { classifyAmazonHost } from "./amazonHosts";
+
 export type AmazonMarketplace =
   | "US" | "UK" | "CA" | "DE" | "FR" | "IT" | "ES" | "AU" | "JP";
 
@@ -36,11 +38,33 @@ export function normalizeMarketplace(raw: string | null | undefined): AmazonMark
   return (AMAZON_MARKETPLACES as string[]).includes(v) ? (v as AmazonMarketplace) : "US";
 }
 
-/** True when a URL points at any Amazon marketplace host. */
+/**
+ * Parse a user/DB string as a URL. Scheme-less input ("amazon.com/dp/…") is read as
+ * https so existing product-library rows keep working. Returns null on garbage.
+ */
+function parseLooseUrl(raw: string): URL | null {
+  const s = raw.trim();
+  if (!s || /\s/.test(s)) return null;
+  const withScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(s) ? s : `https://${s.replace(/^\/\//, "")}`;
+  try {
+    const url = new URL(withScheme);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a URL's HOST is a known Amazon retail or short-link host.
+ *
+ * Exact host whitelist on the parsed hostname (see amazonHosts.ts) — the previous
+ * substring regex accepted `amazon.com.evil.io` and `evil.io/?r=amzn.to`. Still a UI /
+ * filtering helper; the fetch path uses urlSecurity.validateAmazonUrl.
+ */
 export function isAmazonUrl(url: string | null | undefined): boolean {
-  const u = (url ?? "").trim().toLowerCase();
-  if (!u) return false;
-  return /(^|\/\/|\.)amazon\.[a-z.]+/.test(u) || /amzn\.(to|eu)\b/.test(u);
+  const parsed = parseLooseUrl(url ?? "");
+  if (!parsed) return false;
+  return classifyAmazonHost(parsed.hostname) !== null;
 }
 
 /**
@@ -70,28 +94,63 @@ export function looksLikeAmazon(hints: {
 }
 
 /**
+ * A product ASIN as it appears in a URL: `B0`/`BT` prefix + 8 more UPPERCASE
+ * alphanumerics.
+ */
+export const STRICT_URL_ASIN_RE = /^(?:B0|BT)[A-Z0-9]{8}$/;
+
+/** Book ASINs are the ISBN-10: nine digits + a digit or `X` check character. */
+export const ISBN10_ASIN_RE = /^\d{9}[\dX]$/;
+
+function isUrlAsinToken(token: string): boolean {
+  return STRICT_URL_ASIN_RE.test(token) || ISBN10_ASIN_RE.test(token);
+}
+
+/**
+ * Path shapes that actually carry an ASIN. Anchored on a known keyword segment; the
+ * old catch-all `/XXXXXXXXXX/` rule turned `/electronic/` into "ELECTRONIC".
+ */
+const ASIN_PATH_PATTERNS: readonly RegExp[] = [
+  /\/dp\/([A-Za-z0-9]{10})(?=[/?#;]|$)/,
+  /\/gp\/product\/([A-Za-z0-9]{10})(?=[/?#;]|$)/,
+  /\/gp\/aw\/d\/([A-Za-z0-9]{10})(?=[/?#;]|$)/,
+  /\/exec\/obidos\/ASIN\/([A-Za-z0-9]{10})(?=[/?#;]|$)/,
+  /\/o\/ASIN\/([A-Za-z0-9]{10})(?=[/?#;]|$)/,
+];
+
+/**
+ * Strict ASIN extraction from a parsed URL: only the known path shapes above or an
+ * `asin=` query parameter, and only tokens that are a B0/BT product ASIN or an
+ * ISBN-10 book ASIN (`/dp/0316769487`, `/gp/product/030640615X`). Words such as
+ * `ELECTRONIC` never qualify, in any position.
+ */
+export function extractAsinFromUrl(url: URL): string | null {
+  const path = url.pathname;
+  for (const re of ASIN_PATH_PATTERNS) {
+    const token = path.match(re)?.[1];
+    if (token && isUrlAsinToken(token)) return token;
+  }
+  for (const [key, value] of url.searchParams) {
+    if (key.toLowerCase() === "asin" && isUrlAsinToken(value.trim())) return value.trim();
+  }
+  return null;
+}
+
+/**
  * Extract an ASIN from an Amazon product URL or a bare ASIN string.
- * Supports the common forms: /dp/ASIN, /gp/product/ASIN, /product/ASIN, /ASIN/.
+ *
+ * - Bare input (a stored `asin` field): any valid 10-char ASIN, case-insensitive,
+ *   uppercased — unchanged contract for product-library rows.
+ * - URL input: strict (extractAsinFromUrl) — /dp/, /gp/product/, /gp/aw/d/,
+ *   /exec/obidos/ASIN/, /o/ASIN/, or ?asin=, with a B0/BT uppercase token.
  * Returns null when no valid ASIN can be found. Never invents an ASIN.
  */
 export function extractAsin(input: string | null | undefined): string | null {
   const raw = (input ?? "").trim();
   if (!raw) return null;
   if (isValidAsin(raw)) return raw.toUpperCase();
-
-  const patterns = [
-    /\/dp\/([A-Z0-9]{10})(?:[/?]|$)/i,
-    /\/gp\/product\/([A-Z0-9]{10})(?:[/?]|$)/i,
-    /\/gp\/aw\/d\/([A-Z0-9]{10})(?:[/?]|$)/i,
-    /\/product\/([A-Z0-9]{10})(?:[/?]|$)/i,
-    /\/([A-Z0-9]{10})(?:[/?]|$)/i,
-    /[?&]asin=([A-Z0-9]{10})\b/i,
-  ];
-  for (const re of patterns) {
-    const m = raw.match(re);
-    if (m?.[1] && isValidAsin(m[1])) return m[1].toUpperCase();
-  }
-  return null;
+  const url = parseLooseUrl(raw);
+  return url ? extractAsinFromUrl(url) : null;
 }
 
 /** Canonical (tag-free) product URL for an ASIN on a marketplace. */

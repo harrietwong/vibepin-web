@@ -19,7 +19,17 @@ export type AmazonAffiliateSettings = {
   enabled: boolean;
   /** ISO — stamped on every save (account sync LWW key). */
   updatedAt?: string;
+  /**
+   * One-time Amazon risk notice (design §5, ruling 8): the notice version the user
+   * acknowledged, and when. A UX preference that rides this synced singleton — NOT a
+   * legal consent record. Bumping AMAZON_RISK_NOTICE_VERSION shows the notice again.
+   */
+  riskNoticeAckVersion?: number;
+  riskNoticeAckAt?: string;
 };
+
+/** Bump when the risk notice text changes materially — everyone sees it once more. */
+export const AMAZON_RISK_NOTICE_VERSION = 1;
 
 const STORE_KEY = "vp:amazon_affiliate_settings:v1";
 export const AMAZON_AFFILIATE_SETTINGS_EVENT = "vp:amazon_affiliate_settings_updated";
@@ -45,6 +55,8 @@ export function getAmazonAffiliateSettings(): AmazonAffiliateSettings {
       trackingId: typeof p.trackingId === "string" ? p.trackingId.trim() : "",
       enabled: typeof p.enabled === "boolean" ? p.enabled : true,
       updatedAt: typeof p.updatedAt === "string" ? p.updatedAt : undefined,
+      ...(typeof p.riskNoticeAckVersion === "number" ? { riskNoticeAckVersion: p.riskNoticeAckVersion } : {}),
+      ...(typeof p.riskNoticeAckAt === "string" ? { riskNoticeAckAt: p.riskNoticeAckAt } : {}),
     };
   } catch {
     return defaultAmazonAffiliateSettings();
@@ -54,6 +66,11 @@ export function getAmazonAffiliateSettings(): AmazonAffiliateSettings {
 export function saveAmazonAffiliateSettings(settings: AmazonAffiliateSettings): void {
   if (!ok()) return;
   const trackingId = settings.trackingId.trim();
+  // The Settings form only edits marketplace + tag; carry the stored risk-notice
+  // acknowledgement through so saving the tag never re-shows the notice.
+  const stored = getAmazonAffiliateSettings();
+  const ackVersion = settings.riskNoticeAckVersion ?? stored.riskNoticeAckVersion;
+  const ackAt = settings.riskNoticeAckAt ?? stored.riskNoticeAckAt;
   const clean: AmazonAffiliateSettings = {
     marketplace: normalizeMarketplace(settings.marketplace),
     trackingId,
@@ -61,6 +78,8 @@ export function saveAmazonAffiliateSettings(settings: AmazonAffiliateSettings): 
     // consistent so any old code paths reading `enabled` stay correct.
     enabled: trackingId.length > 0,
     updatedAt: new Date().toISOString(),
+    ...(ackVersion !== undefined ? { riskNoticeAckVersion: ackVersion } : {}),
+    ...(ackAt !== undefined ? { riskNoticeAckAt: ackAt } : {}),
   };
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(clean));
@@ -83,6 +102,30 @@ export const amazonAffiliateSettingsSyncAdapter = makeSingletonAdapter<AmazonAff
   docId: "settings",
   emit,
 });
+
+/** True when the current risk notice version has been acknowledged on this account. */
+export function hasAcknowledgedAmazonRiskNotice(settings: AmazonAffiliateSettings | null | undefined = getAmazonAffiliateSettings()): boolean {
+  return (settings?.riskNoticeAckVersion ?? 0) >= AMAZON_RISK_NOTICE_VERSION;
+}
+
+/**
+ * Record the acknowledgement (merge-write, bumps updatedAt so the account sync LWW
+ * carries it to the server; an older device's stale doc can never un-acknowledge it).
+ */
+export function acknowledgeAmazonRiskNotice(now: string = new Date().toISOString()): void {
+  if (!ok()) return;
+  const current = getAmazonAffiliateSettings();
+  const next: AmazonAffiliateSettings = {
+    ...current,
+    riskNoticeAckVersion: AMAZON_RISK_NOTICE_VERSION,
+    riskNoticeAckAt: now,
+    updatedAt: now,
+  };
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(next));
+    emit();
+  } catch { /* quota exceeded — the notice simply shows again next time */ }
+}
 
 /**
  * Settings are usable for link generation as soon as a tracking ID is present.

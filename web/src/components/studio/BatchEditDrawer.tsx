@@ -28,11 +28,35 @@ import type { ScheduledDestination } from "@/lib/pinDraftStore";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { publishContent } from "@/lib/studio/publishContent";
 import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
-import { buildPublishConfirmation, confirmPublishSnapshot, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { PinConfirmList } from "@/components/studio/PinConfirmList";
+import {
+  canSubmitConfirmList,
+  confirmItemFromSnapshot,
+  destinationLabels,
+  isAiCopyUnedited,
+  remainingIds,
+  selectConfirmedTargets,
+  toggleExcluded,
+  type ConfirmListItem,
+} from "@/lib/studio/pinConfirmList";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError, resolveAmazonCopyContext } from "@/lib/ai-copy/generatePinCopy";
+import { runWithBusyGuard, isBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
+import {
+  isFieldProtected,
+  mergeGeneratedCopy,
+  preflightBulkCopy,
+  runBulkGenerateCopy,
+  COPY_FIELDS,
+  type BulkCopyCard,
+  type BulkCopyItem,
+  type CopyTouchedFlags,
+} from "@/lib/studio/bulkGenerateCopy";
+import { BulkCopyBusyError, classifyBulkCopyError, copyTouchedOf } from "@/lib/studio/bulkCopyDrafts";
 import type { PinterestClientError } from "@/lib/pinterestClient";
-import { isAICopyV2ClientEnabled, shouldConfirmAICopyV2Overwrite } from "@/lib/ai-copy/generatePinCopyV2";
+import { isAICopyV2ClientEnabled } from "@/lib/ai-copy/generatePinCopyV2";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput } from "@/lib/pinReadiness";
 import { combineLocalPlannedAt } from "@/lib/weeklyPlanHandoff";
@@ -101,6 +125,12 @@ export type RowEdit = {
   scheduledDestinations?: ScheduledDestination[];
   targetConnectionId?: string;
   targetAccountLabel?: string;
+  /**
+   * Copy fields the user typed in THIS drawer (T4). The host folds them into the
+   * draft's metadataTouched; bulk Generate copy never overwrites them. AI-written
+   * values never set this.
+   */
+  copyTouched?: CopyTouchedFlags;
 };
 
 export type BatchApplyOpts = { rowEdits: Record<string, RowEdit> };
@@ -439,6 +469,22 @@ function Modal({ title, subtitle, width = 440, onClose, children, footer }: {
 }
 
 type ConfirmState = { title: string; body: React.ReactNode; confirmLabel: string; danger?: boolean; onConfirm: () => void };
+
+/** Per-row bulk Generate copy status (T4: progress and result visible per Pin). */
+function BulkCopyRowStatus({ item }: { item: BulkCopyItem }) {
+  const { t: tr } = useLocale();
+  const detail = item.status === "failed"
+    ? item.reason
+    : item.reason && item.status !== "succeeded"
+      ? tr(`studioBoard.bulkCopy.reason.${item.reason}` as MessageKey)
+      : "";
+  return (
+    <span data-testid="batch-edit-gen-status" data-status={item.status}
+      style={{ display: "block", marginTop: 2, fontSize: 10, color: item.status === "failed" ? UI.error : UI.textMuted }}>
+      {tr(`studioBoard.bulkCopy.status.${item.status}` as MessageKey)}{detail ? ` · ${detail}` : ""}
+    </span>
+  );
+}
 
 function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => void }) {
   const { t: tr } = useLocale();
@@ -880,6 +926,13 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   const [publishPhase,    setPublishPhase]    = useState<PublishPhase>(null);
   const [publishBlocked,  setPublishBlocked]  = useState<{ pinId: string; title: string; missing: string[] }[]>([]);
   const [publishConfirmations, setPublishConfirmations] = useState<Record<string, PublishConfirmationSnapshot>>({});
+  // Ruling 4 confirmation lists: Pins removed by the user, and whether the list was
+  // scrolled through. Publish and Schedule each have their own.
+  const [publishExcluded, setPublishExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [publishReachedEnd, setPublishReachedEnd] = useState(false);
+  const [scheduleConfirmOpen, setScheduleConfirmOpen] = useState(false);
+  const [scheduleExcluded, setScheduleExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [scheduleReachedEnd, setScheduleReachedEnd] = useState(false);
   const [publishProgress, setPublishProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [publishResults,  setPublishResults]  = useState<PublishResultRow[]>([]);
   // AI Copy batch generation — per-pin, sequential, with progress + summary.
@@ -1067,6 +1120,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       const pin = pins.find(p => p.pinId === pinId);
       if (!pin) return prev;
       const nextEdit = { ...prev[pinId], ...patch };
+      // Every copy-field patchRow call is the user typing (AI results are written via
+      // the bulk runner's own apply, never through here).
+      if ("title" in patch || "description" in patch || "altText" in patch) {
+        nextEdit.copyTouched = {
+          ...nextEdit.copyTouched,
+          ...("title" in patch ? { titleTouched: true } : {}),
+          ...("description" in patch ? { descriptionTouched: true } : {}),
+          ...("altText" in patch ? { altTextTouched: true } : {}),
+        };
+      }
       if ("plannedDate" in patch || "plannedTime" in patch) {
         const date = nextEdit.plannedDate ?? pin.plannedDate ?? "";
         const time = nextEdit.plannedTime ?? pin.plannedTime ?? "";
@@ -1158,6 +1221,104 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genProgress, pins, checkedRows, rowEdits, boards, tr]);
 
+  // ── Shared bulk Generate copy (AI Copy v2 on; T4 / design §4) ─────────────
+  // One orchestration with the Create Pins bulk bar (lib/studio/bulkGenerateCopy):
+  // independent per-Pin tasks, 2 in flight, text the user wrote is kept unless they
+  // explicitly chose to replace it (fixes D8: this drawer used to overwrite every
+  // field of every successful Pin). Amazon links get the Amazon context + #ad via the
+  // row's CURRENT Website URL.
+  const rowEditsRef = useRef(rowEdits);
+  useEffect(() => { rowEditsRef.current = rowEdits; }, [rowEdits]);
+  const genCancelRef = useRef(false);
+  const [genItems, setGenItems] = useState<Record<string, BulkCopyItem>>({});
+
+  const bulkCardFor = useCallback((pin: BatchPinRow, edits: Record<string, RowEdit>): BulkCopyCard => {
+    const draft = pinDraftStore.getDraft(pin.pinId);
+    const amazon = resolveAmazonCopyContext({ destinationUrl: getVal(pin, edits, "destinationUrl"), destinationUrlIsCurrent: true }, draft);
+    return {
+      id: pin.pinId,
+      title: getVal(pin, edits, "title"),
+      description: getVal(pin, edits, "description"),
+      altText: getVal(pin, edits, "altText"),
+      touched: copyTouchedOf(draft?.metadataTouched, edits[pin.pinId]?.copyTouched),
+      amazon: amazon ? { canGenerate: amazon.canGenerate } : null,
+      busy: isBusyKey(pin.pinId),
+    };
+  }, []);
+
+  const runSharedGenerateCopy = useCallback(async (targets: BatchPinRow[], replaceTouched: boolean) => {
+    if (genProgress || !targets.length) return;
+    const language = readResolvedContentLanguage();
+    const byId = new Map(targets.map(pin => [pin.pinId, pin]));
+    const pre = preflightBulkCopy(targets.map(pin => bulkCardFor(pin, rowEditsRef.current)), { replaceTouched });
+    const initial: Record<string, BulkCopyItem> = {};
+    for (const c of pre.needsProductName) initial[c.id] = { id: c.id, status: "skipped", reason: "needs_product_name" };
+    for (const c of pre.generating) initial[c.id] = { id: c.id, status: "skipped", reason: "generating" };
+    for (const c of pre.alreadyCopyComplete) initial[c.id] = { id: c.id, status: "skipped", reason: "already_copy_complete" };
+    setGenItems(initial);
+    genCancelRef.current = false;
+    const total = pre.ready.length;
+    setGenProgress({ current: 0, total, failed: 0 });
+    const summary = await runBulkGenerateCopy({
+      cards: pre.ready,
+      generate: async card => {
+        const pin = byId.get(card.id)!;
+        const edits = rowEditsRef.current;
+        const out = await runWithBusyGuard({ current: false }, undefined, undefined, () => generatePinterestPinCopy({
+          draftId: pin.pinId,
+          imageUrl: pin.imageUrl,
+          title: getVal(pin, edits, "title"),
+          description: getVal(pin, edits, "description"),
+          boardId: pin.boardId,
+          boardName: pin.boardName,
+          category: pin.category,
+          destinationUrl: getVal(pin, edits, "destinationUrl"),
+          destinationUrlIsCurrent: true,
+          boards,
+          language,
+        }), pin.pinId);
+        if (!out) throw new BulkCopyBusyError();
+        return { ...out.fields, metadataDraft: out.metadataDraft };
+      },
+      // Merge against the FRESH row state: the user may have typed while the request ran.
+      apply: (id, generated) => {
+        const pin = byId.get(id)!;
+        const current = rowEditsRef.current;
+        const merged = mergeGeneratedCopy(bulkCardFor(pin, current), generated, { replaceTouched });
+        if (merged.written.length) {
+          const next = { ...current, [id]: { ...current[id], ...merged.patch } };
+          rowEditsRef.current = next;
+          setRowEdits(next);
+          persist(next);
+          // The generation record (selectedTitle / copyGenerationMeta) lets the
+          // confirmation list flag AI copy nobody edited (ruling 4 badge).
+          if (pinDraftStore.getDraft(id)) pinDraftStore.updateDraft(id, { metadataDraft: generated.metadataDraft });
+        }
+        return merged;
+      },
+      classifyError: classifyBulkCopyError,
+      isCancelled: () => genCancelRef.current,
+      onUpdate: items => {
+        setGenItems(prev => ({ ...prev, ...Object.fromEntries(items.map(item => [item.id, item])) }));
+        const done = items.filter(item => item.status !== "queued" && item.status !== "running").length;
+        setGenProgress({ current: done, total, failed: items.filter(item => item.status === "failed").length });
+      },
+    });
+    setGenProgress(null);
+    const skipped = summary.skipped + pre.needsProductName.length + pre.generating.length + pre.alreadyCopyComplete.length;
+    const line = tr("studioBoard.bulkCopy.summary")
+      .replace("{succeeded}", String(summary.succeeded)).replace("{failed}", String(summary.failed))
+      .replace("{skipped}", String(skipped)).replace("{notStarted}", String(summary.notStarted));
+    const kept = COPY_FIELDS.some(field => summary.keptByField[field] > 0)
+      ? tr("studioBoard.bulkCopy.keptFields").replace("{title}", String(summary.keptByField.title))
+          .replace("{description}", String(summary.keptByField.description)).replace("{altText}", String(summary.keptByField.altText))
+      : undefined;
+    if (summary.stoppedBy === "text_limit") toast.message(tr("studioBoard.bulkCopy.stoppedTextLimit"), { description: line });
+    else if (summary.stoppedBy === "rate_limited") toast.message(tr("studioBoard.bulkCopy.stoppedRateLimited"), { description: line });
+    else if (summary.failed) toast.error(line, kept ? { description: kept } : undefined);
+    else toast.success(line, kept ? { description: kept } : undefined);
+  }, [genProgress, bulkCardFor, boards, persist, tr]);
+
   const handleGenerateCopyBatch = useCallback(() => {
     if (genProgress) return;
     // Preserve the legacy flag-off behavior exactly. The explicit overwrite gate
@@ -1168,23 +1329,39 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     }
     const targets = pins.filter(pin => checkedRows.has(pin.pinId));
     if (!targets.length) return;
-    const pinsWithExistingCopy = targets.filter(pin => shouldConfirmAICopyV2Overwrite([
-      getVal(pin, rowEdits, "title"),
-      getVal(pin, rowEdits, "description"),
-      getVal(pin, rowEdits, "altText"),
-    ]));
-    if (pinsWithExistingCopy.length) {
+    // Text the user wrote is KEPT by default. Replacing it is a separate, explicit,
+    // second-confirmed choice (design §4.2).
+    const withOwnText = targets.filter(pin => {
+      const card = bulkCardFor(pin, rowEdits);
+      return COPY_FIELDS.some(field => isFieldProtected(card, field));
+    });
+    if (withOwnText.length) {
+      const askReplace = () => {
+        setConfirm({
+          title: tr("studioBoard.bulkCopy.replaceConfirmTitle"),
+          body: <>{tr("studioBoard.bulkCopy.replaceConfirmBody")}</>,
+          confirmLabel: tr("studioBoard.bulkCopy.replaceConfirm"),
+          danger: true,
+          onConfirm: () => { void runSharedGenerateCopy(targets, true); },
+        });
+      };
       setConfirm({
-        title: tr("pinForm.replaceExistingTitle"),
-        body: <>{tr("pinForm.replaceExistingBody")}</>,
-        confirmLabel: tr("pinForm.replaceWithAiCopy"),
-        danger: true,
-        onConfirm: () => { void runGenerateCopyBatch(); },
+        title: tr("studioBoard.bulkCopy.title").replace("{n}", String(targets.length)),
+        body: <>
+          {tr("studioBoard.bulkCopy.editedKeptNotice").replace("{n}", String(withOwnText.length))}
+          <br />
+          <button type="button" data-testid="batch-edit-bulk-copy-replace" onClick={askReplace}
+            style={{ marginTop: 8, padding: 0, border: 0, background: "none", color: UI.textSec, textDecoration: "underline", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+            {tr("studioBoard.bulkCopy.replaceToggle")}
+          </button>
+        </>,
+        confirmLabel: tr("studioBoard.bulkCopy.start").replace("{n}", String(targets.length)),
+        onConfirm: () => { void runSharedGenerateCopy(targets, false); },
       });
       return;
     }
-    void runGenerateCopyBatch();
-  }, [genProgress, pins, checkedRows, rowEdits, runGenerateCopyBatch, tr]);
+    void runSharedGenerateCopy(targets, false);
+  }, [genProgress, pins, checkedRows, rowEdits, runGenerateCopyBatch, runSharedGenerateCopy, bulkCardFor, tr]);
 
   // Keep the closed render on the exact same hook path as the open render.
   // Returning before handleGenerateCopyBatch used to add one hook only when the
@@ -1418,9 +1595,36 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   }
 
   // ── Schedule (no readiness gate; parent assigns the next Smart Schedule slot) ──
+  // Ruling 4: still no publish-readiness gate, but the user confirms the exact list
+  // (thumbnail, title, link, destinations) and can remove Pins before it is submitted.
   function scheduleSelected() {
     if (!checkedCount || !onScheduleSelected) return;
-    onScheduleSelected([...checkedRows]);
+    setScheduleExcluded(new Set());
+    setScheduleReachedEnd(false);
+    setScheduleConfirmOpen(true);
+  }
+  function submitScheduleSelected() {
+    if (!onScheduleSelected) return;
+    const ids = selectConfirmedTargets([...checkedRows], scheduleExcluded, id => id);
+    setScheduleConfirmOpen(false);
+    if (ids.length) onScheduleSelected(ids);
+  }
+  function scheduleConfirmItem(pinId: string): ConfirmListItem | null {
+    const pin = pins.find(p => p.pinId === pinId);
+    if (!pin) return null;
+    const draft = pinDraftStore.getDraft(pinId);
+    const title = getVal(pin, rowEdits, "title");
+    const description = getVal(pin, rowEdits, "description");
+    const scheduledDestinations = rowEdits[pinId]?.scheduledDestinations ?? draft?.scheduledDestinations ?? [];
+    const media = rowMedia(pin);
+    return {
+      id: pinId,
+      thumbnailUrl: (media && "posterUrl" in media ? media.posterUrl : undefined) || media?.url || pin.imageUrl || null,
+      title: title || tr("studioModals.untitledPin"),
+      destinationUrl: getVal(pin, rowEdits, "destinationUrl"),
+      targets: destinationLabels(explicitPublishDestinations({ scheduledDestinations }), platformName),
+      aiUnedited: !!draft && isAiCopyUnedited({ ...draft, title, description }),
+    };
   }
 
   // ── Publish now ──────────────────────────────────────────────────────────
@@ -1457,6 +1661,8 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     }
     const blocked = [...readinessBlocked, ...destinationBlocked].filter((item, index, all) => all.findIndex(other => other.pinId === item.pinId) === index);
     setPublishConfirmations(confirmations);
+    setPublishExcluded(new Set());
+    setPublishReachedEnd(false);
     setPublishBlocked(blocked);
     // The blocked screen explicitly lists every skipped Content. The user may then
     // confirm only the exact publishable snapshots; zero publishable stays disabled.
@@ -1790,6 +1996,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                     onChange={e => patchRow(p.pinId, { title: e.target.value }, { debounce: true })}
                                     onBlur={e => { onInlineBlur(e); patchRow(p.pinId, { title: e.target.value }); }}
                                     onFocus={onInlineFocus} style={inlineInput} />
+                                  {genItems[p.pinId] && <BulkCopyRowStatus item={genItems[p.pinId]} />}
                                 </td>
                               );
                             case "desc":
@@ -1933,6 +2140,35 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
 
       {confirm && <ConfirmModal state={confirm} onClose={() => setConfirm(null)} />}
 
+      {/* Schedule confirmation list (ruling 4) */}
+      {scheduleConfirmOpen && (() => {
+        const ids = [...checkedRows];
+        const items = ids.map(scheduleConfirmItem).filter((item): item is ConfirmListItem => !!item);
+        const left = remainingIds(ids, scheduleExcluded).length;
+        const canGo = canSubmitConfirmList(ids, scheduleExcluded, scheduleReachedEnd);
+        return (
+          <Modal title={tr("publishConfirm.list.scheduleTitle").replace("{n}", String(ids.length))} width={520}
+            onClose={() => setScheduleConfirmOpen(false)}
+            footer={<>
+              <button type="button" onClick={() => setScheduleConfirmOpen(false)} style={btnBase}>{tr("common.cancel")}</button>
+              <button type="button" data-testid="batch-edit-schedule-confirm" disabled={!canGo} onClick={submitScheduleSelected}
+                style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", opacity: canGo ? 1 : 0.55, cursor: canGo ? "pointer" : "not-allowed" }}>
+                {tr("publishConfirm.list.scheduleConfirm").replace("{n}", String(left))}
+              </button>
+            </>}>
+            <div data-testid="batch-edit-schedule-confirm-list">
+              <p style={{ margin: "0 0 8px", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.hint")}</p>
+              <PinConfirmList items={items} excluded={scheduleExcluded}
+                onToggleExclude={id => setScheduleExcluded(prev => toggleExcluded(prev, id))}
+                onReachedEnd={() => setScheduleReachedEnd(true)} maxHeight={320}
+                ui={{ text: UI.text, textSec: UI.textSec, border: UI.border }} />
+              {!scheduleReachedEnd && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.scrollToConfirm")}</p>}
+              {left === 0 && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.error }}>{tr("publishConfirm.list.noneLeft")}</p>}
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* Publish flow */}
       {publishPhase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 330, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}
@@ -1942,18 +2178,34 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
               <div data-testid="batch-edit-publish-confirm">
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.confirmTitle")}</h3>
                 <p style={{ margin: "0 0 18px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{tr("studioModals.publish.confirmBody")}</p>
-                <div data-testid="batch-edit-confirm-destinations" style={{ display: "grid", gap: 8, maxHeight: 300, overflowY: "auto", overflowX: "hidden", marginBottom: 16 }}>
-                  {Object.values(publishConfirmations).map(snapshot => <div key={snapshot.intentId} style={{ padding: 9, border: `1px solid ${UI.border}`, borderRadius: 8, minWidth: 0 }}>
-                    <strong style={{ display: "block", color: UI.text, fontSize: 11.5, overflowWrap: "anywhere" }}>{snapshot.title}</strong>
-                    {snapshot.publishableDestinations.map(destination => <div key={destination.id} style={{ marginTop: 4, color: UI.textSec, fontSize: 10.5, overflowWrap: "anywhere" }}>
-                      {platformName(destination.provider)} · {destination.accountLabel || destination.socialConnectionId}{destination.provider === "pinterest" ? ` · ${destination.boardName || destination.boardId}` : ""}
-                    </div>)}
-                  </div>)}
+                {/* Ruling 4: every Pin listed (thumbnail, title, link, destinations),
+                    removable; confirm only after scrolling through. */}
+                <div data-testid="batch-edit-confirm-destinations" style={{ marginBottom: 12 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.hint")}</p>
+                  <PinConfirmList
+                    items={Object.values(publishConfirmations).map(snapshot => confirmItemFromSnapshot(snapshot, pinDraftStore.getDraft(snapshot.draftId), platformName, tr("studioModals.untitledPin")))}
+                    excluded={publishExcluded}
+                    onToggleExclude={id => setPublishExcluded(prev => toggleExcluded(prev, id))}
+                    onReachedEnd={() => setPublishReachedEnd(true)}
+                    maxHeight={300}
+                    ui={{ text: UI.text, textSec: UI.textSec, border: UI.border }} />
+                  {!publishReachedEnd && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.scrollToConfirm")}</p>}
+                  {publishReadyCount > 0 && remainingIds(Object.keys(publishConfirmations), publishExcluded).length === 0 && (
+                    <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.error }}>{tr("publishConfirm.list.noneLeft")}</p>
+                  )}
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                   <button type="button" data-testid="batch-edit-publish-cancel" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
-                  <button type="button" data-testid="batch-edit-publish-confirm-go" onClick={() => void runPublish(checkedPins)}
-                    style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("pinDetails.publishNow")}</button>
+                  {(() => {
+                    const canGo = canSubmitConfirmList(Object.keys(publishConfirmations), publishExcluded, publishReachedEnd);
+                    return (
+                      <button type="button" data-testid="batch-edit-publish-confirm-go" disabled={!canGo}
+                        onClick={() => void runPublish(selectConfirmedTargets(checkedPins.filter(p => !!publishConfirmations[p.pinId]), publishExcluded, p => p.pinId))}
+                        style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", opacity: canGo ? 1 : 0.55, cursor: canGo ? "pointer" : "not-allowed" }}>
+                        {tr("publishConfirm.list.publishConfirm").replace("{n}", String(remainingIds(Object.keys(publishConfirmations), publishExcluded).length))}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -1975,7 +2227,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
                   <button type="button" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   {publishReadyCount > 0 && (
-                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => void runPublish(checkedPins.filter(p => !!publishConfirmations[p.pinId]))}
+                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => { setPublishReachedEnd(false); setPublishPhase("confirm"); }}
                       style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("studioModals.publish.publishReadyPins")}</button>
                   )}
                 </div>

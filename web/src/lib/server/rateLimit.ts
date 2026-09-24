@@ -80,7 +80,7 @@ import { createServerClient } from "@/lib/supabase";
 const TABLE = "ai_rate_limit_windows";
 
 /** Logical route keys. Limits are per-route: exhausting one must not disable another. */
-export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation" | "fetch_og" | "ai_copy_v2_analyze" | "ai_copy_v2_generate";
+export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation" | "fetch_og" | "url_import" | "ai_copy_v2_analyze" | "ai_copy_v2_generate";
 
 export type RateLimitRule = {
   /** Maximum admitted requests per window. */
@@ -190,6 +190,15 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
    * 60/5min leaves ample room for the picker while bounding that abuse surface.
    */
   fetch_og: { limit: 60, windowSeconds: 300 },
+
+  /**
+   * POST /api/import/product-urls — authenticated product-page import. Same abuse
+   * surface as fetch_og (outbound requests on the caller's behalf), but each request
+   * may carry up to 20 URLs, so 60 requests/5min still bounds one account to
+   * ≤1200 outbound page fetches per window. A human pasting a list and retrying a
+   * few rows never approaches this.
+   */
+  url_import: { limit: 60, windowSeconds: 300 },
 
   /**
     * POST /api/ai-copy/v2/analyze   session initialization, FactCardV1 creation,

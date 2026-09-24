@@ -17,8 +17,17 @@ export {
   isBlockedMarketplace,
   isDirectImageUrl,
   sourceDomainFromUrl,
+  validateAmazonUrl,
   validateImportUrl,
 } from "./urlSecurity";
+export type { AmazonUrlValidation } from "./urlSecurity";
+export { expandAmazonShortLink, AMAZON_SHORT_LINK_MAX_HOPS } from "./amazonShortLink";
+export { importAmazonUrl } from "./amazonImport";
+export type { AmazonImportOptions } from "./amazonImport";
+export { fetchAmazonPage, AMAZON_MAX_RESPONSE_BYTES } from "./amazonFetcher";
+export { amazonAdapter, detectAmazonBotCheck } from "./adapters/amazon";
+export type { AmazonFetchFailReason, AmazonImportMeta } from "./types";
+export type { AmazonShortLinkExpansion, ShortLinkFetch } from "./amazonShortLink";
 
 // HTML extraction utilities (used by tests + external callers)
 export {

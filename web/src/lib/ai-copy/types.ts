@@ -68,6 +68,12 @@ export type ProductContext = {
   /** Display-formatted, e.g. "USD 19.99" — currency already folded in. */
   price?: string;
   availability?: string;
+  // ── User-declared structured facts (Amazon manual entry, design §3.2) ─────
+  // Mapped server-side exactly like the Shopify commercial fields
+  // (product_material / product_quantity, product_catalog + asserted).
+  material?: string;
+  /** Size / quantity, e.g. "40 oz". */
+  quantity?: string;
 };
 
 export type BoardContext = {
@@ -121,6 +127,12 @@ export type GeneratePinterestPinCopyInput = {
   category?: string;
   keyword?: string;
   destinationUrl?: string;
+  /**
+   * The caller owns an unsaved, fresher Website URL (Plan drawer, Batch Edit rows):
+   * the Amazon decision reads `destinationUrl` instead of the stored draft's URL.
+   * Studio cards leave it unset (their prop can lag one debounce behind the store).
+   */
+  destinationUrlIsCurrent?: boolean;
   setupSnapshot?: SetupSnapshot;
   promptSnapshot?: string;
   opportunity?: string;

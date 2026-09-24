@@ -7,15 +7,14 @@ import { PINTEREST_BLOCKED_RESULT, pinterestAdapter } from "./adapters/pinterest
 import { shopifyAdapter } from "./adapters/shopify";
 import { woocommerceAdapter } from "./adapters/woocommerce";
 import { genericProductAdapter } from "./adapters/genericProduct";
+import { DEFAULT_HEADERS } from "./fetchHeaders";
+import { classifyAmazonHost } from "@/lib/affiliate/amazonHosts";
+import { importAmazonUrl, type AmazonImportOptions } from "./amazonImport";
 
 export const FETCH_TIMEOUT_MS  = 10_000;
 export const MAX_REDIRECTS     = 3;
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
-const DEFAULT_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (compatible; VibePin/1.0; +https://vibepin.app)",
-  Accept:       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-};
 
 export async function defaultPageFetcher(rawUrl: string): Promise<{ html: string; finalUrl: string }> {
   let current = rawUrl;
@@ -70,6 +69,8 @@ export async function defaultPageFetcher(rawUrl: string): Promise<{ html: string
 
 function detectUrlProvider(url: URL): Provider {
   if (isDirectImageUrl(url)) return "direct_image";
+  // Defensive: Amazon links are routed to importAmazonUrl before this runs.
+  if (classifyAmazonHost(url.hostname)) return "amazon";
 
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   const path = url.pathname;
@@ -99,7 +100,14 @@ function isWooCommerceHtml(html: string): boolean {
 export async function importUrl(
   rawUrl: string,
   fetchPage: PageFetcher = defaultPageFetcher,
+  opts: AmazonImportOptions = {},
 ): Promise<ProductUrlImportResult> {
+  // ── Amazon channel first ─────────────────────────────────────────────────
+  // The generic channel blocks every Amazon host, so Amazon links must branch off
+  // BEFORE validateImportUrl. Text only, whitelist-validated on every hop.
+  const amazonResult = await importAmazonUrl(rawUrl, opts);
+  if (amazonResult) return amazonResult;
+
   const validated = validateImportUrl(rawUrl);
   if (!validated.ok) {
     return {
@@ -116,6 +124,11 @@ export async function importUrl(
   const provider     = detectUrlProvider(url);
   const assetType: AssetType = provider === "pinterest" ? "reference" : "product";
   const originalUrl  = rawUrl.trim();
+
+  // Invariant: an Amazon host never reaches the generic, image-extracting fetch.
+  if (provider === "amazon") {
+    return { sourceUrl, sourceDomain, provider, assetType, status: "failed", error: "This marketplace is not supported for URL import" };
+  }
 
   // ── Direct image: no page fetch needed ──────────────────────────────────
   if (provider === "direct_image") {

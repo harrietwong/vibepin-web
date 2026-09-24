@@ -10,7 +10,7 @@ import { resolveOwnedMediaEvidence, type VideoCoverDeps } from "@/lib/ai-copy/v2
 import type { KeywordContextInput } from "@/lib/ai-copy/keywordContext";
 
 type Context = Record<string, unknown>;
-interface AnalyzeBody {
+export interface AnalyzeBody {
   draftId: string; idempotencyKey: string; locale?: string; country?: string;
   productContext?: Context; pageContext?: Context; imageObserved?: Context; boardContext?: Context;
   userKeywords?: string[];
@@ -40,7 +40,8 @@ function commercialPolarity(category: CreateFactInput["category"], value: string
   return "unknown";
 }
 
-function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
+/** Exported for the Amazon fact-card mapping tests (real mapping, not a copy). */
+export function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
   const facts: CreateFactInput[] = [];
   let index = 0;
   const add = (
@@ -81,6 +82,7 @@ function buildFacts(body: AnalyzeBody): ReturnType<typeof createFact>[] {
 
 function keywordContext(body: AnalyzeBody, locale: string, country: string): KeywordContextInput {
   const product = body.productContext ?? {}, image = body.imageObserved ?? {}, board = body.boardContext ?? {};
+  const page = body.pageContext ?? {};
   return {
     imageSummary: text(image.summary) ?? "",
     visibleObjects: texts(image.objects),
@@ -89,7 +91,9 @@ function keywordContext(body: AnalyzeBody, locale: string, country: string): Key
     category: text(product.productType, 200),
     language: locale,
     region: country,
-    productTitle: text(product.title),
+    // Keyword RETRIEVAL term only: a fetched page title (Amazon) is used when there is
+    // no catalog title. It creates no fact and relaxes no claim rule (design §3.2).
+    productTitle: text(product.title) ?? text(page.title),
     productType: text(product.productType, 200),
     productTags: texts(product.tags),
     directionTerms: texts(body.userKeywords),

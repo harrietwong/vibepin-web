@@ -1,3 +1,5 @@
+import type { AmazonImportMeta } from "@/lib/productUrlImport/types";
+
 export const DEFAULT_MAX_URLS = 10;
 export const HARD_MAX_URLS = 20;
 
@@ -55,7 +57,7 @@ export function reasonLabel(reason: string): string {
 }
 
 export type ImportStatus = "success" | "partial" | "blocked" | "unsupported" | "error" | "failed";
-export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "unknown";
+export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "amazon" | "unknown";
 export type AssetType    = "product" | "reference";
 
 export type ProductUrlImportApiResponse = {
@@ -82,13 +84,33 @@ export type ProductUrlImportApiResponse = {
     message?:         string;
     fallbackActions?: string[];
     debugCode?:       string;
+    /** Amazon links only (text-only channel): link status, fetch outcome, page text. */
+    amazon?:          AmazonImportMeta;
   }>;
 };
+
+/**
+ * The import route requires a signed-in user. Same-origin requests already carry the
+ * Supabase SSR cookies, but we also send the Bearer token so auth does not depend on
+ * cookie refresh timing (matches the other authed JSON routes). Loaded lazily so this
+ * module stays importable from node tests without a browser Supabase client.
+ */
+async function importAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const { freshSessionIdentity } = await import("@/lib/supabaseBrowser");
+    const identity = await freshSessionIdentity();
+    if (identity?.accessToken) headers.Authorization = `Bearer ${identity.accessToken}`;
+  } catch {
+    /* fall back to cookie auth */
+  }
+  return headers;
+}
 
 export async function fetchProductUrlImport(urls: string[]): Promise<ProductUrlImportApiResponse> {
   const resp = await fetch("/api/import/product-urls", {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await importAuthHeaders(),
     body:    JSON.stringify({ urls }),
   });
 

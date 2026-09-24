@@ -3,8 +3,14 @@ import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE, languageInstruct
 import { containsTokenPhrase, validateCopy } from "./validateCopy";
 import { summarizeFacts } from "./factCard";
 import type { ClaimDetectionResult, CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
+import {
+  AFFILIATE_DESCRIPTION_MAX,
+  affiliateDescriptionBudget,
+  appendAffiliateDisclosure,
+  type AffiliateDisclosureKind,
+} from "@/lib/ai-copy/affiliateDisclosure";
 
-export const AI_COPY_V2_PROMPT_VERSION = "ai_copy_v2_grounded_v3_independent_claims";
+export { AI_COPY_V2_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 export function getAI_COPY_V2ModelVersion(): string {
   const cfg = providerConfig();
   return `${cfg.provider}:${cfg.textModel}`;
@@ -26,6 +32,12 @@ export interface GenerateCopyRequest {
   angleRequest?: string;
   lengthPreference?: "short" | "standard" | "seo-rich";
   costContext?: ChatCostContext;
+  /**
+   * Affiliate (Amazon) copy: the server appends this disclosure marker to the
+   * description BEFORE validation, and the description cap becomes 500 including it
+   * (design §3.4). Absent → behaviour is byte-identical to before.
+   */
+  affiliateDisclosure?: AffiliateDisclosureKind;
 }
 
 export interface CopyGenerationProvider {
@@ -131,9 +143,15 @@ function selectedPhrases(evidence: KeywordEvidence): string[] {
   return evidence.selectedKeywordIds.slice(0, 5).map(id => accepted.get(id)).filter((v): v is string => Boolean(v));
 }
 
+export const AFFILIATE_PROMPT_LINE = "This Pin links to a product on Amazon. Prefer 'Find it on Amazon' style phrasing; never use 'Buy now', 'Add to cart', price, deal, discount, stock or rating claims. Do not add any disclosure hashtag yourself.";
+
 export function buildPromptForSession(req: GenerateCopyRequest): string {
   const length = req.lengthPreference ?? "standard";
-  const guide = length === "short" ? "title 40-60, description 150-250" : length === "seo-rich" ? "title 70-95, description 400-700" : "title 50-80, description 250-450";
+  // Affiliate copy: the model's own description budget excludes the disclosure the
+  // server appends afterwards, so the final text fits Studio's 500 cap (design §3.4).
+  const descriptionBudget = req.affiliateDisclosure ? affiliateDescriptionBudget(req.affiliateDisclosure) : null;
+  const seoRichDescription = descriptionBudget === null ? "400-700" : `350-${descriptionBudget}`;
+  const guide = length === "short" ? "title 40-60, description 150-250" : length === "seo-rich" ? `title 70-95, description ${seoRichDescription}` : "title 50-80, description 250-450";
   const facts = req.factCard.facts.filter(f => f.claimPolicy !== "blocked").map(f => `- ${f.key}: ${f.value} (${f.claimPolicy})`);
   const keywords = selectedPhrases(req.keywordEvidence);
   return [
@@ -141,7 +159,8 @@ export function buildPromptForSession(req: GenerateCopyRequest): string {
     req.factCard.mediaEvidence?.mode === "video_cover"
       ? "Visual grounding is one frozen video cover frame only. Describe only the supplied static taxonomy facts; never add motion, actions, sequence, time, audio, speech, music, performance, efficacy, brand, material, price, stock, inventory, quantity, or numeric commercial claims from that frame."
       : "",
-    `Length preference: ${length}; ${guide}; hard limits title 100, description 800.`,
+    req.affiliateDisclosure ? AFFILIATE_PROMPT_LINE : "",
+    `Length preference: ${length}; ${guide}; hard limits title 100, description ${descriptionBudget ?? 800}.`,
     `Grounding facts:\n${facts.length ? facts.join("\n") : "No product claims are authorized."}`,
     req.angleRequest?.trim() ? `Requested angle: ${req.angleRequest.trim()}` : "",
     keywords.length && req.keywordEvidence.degradedMode === "none" ? `Optional demand-backed keywords (use naturally, never force):\n${keywords.map(k => `- ${k}`).join("\n")}` : "No reliable keyword demand data. Use grounded semantics only.",
@@ -163,17 +182,58 @@ function validate(output: ProviderCopyOutput, req: GenerateCopyRequest, claimDet
     title: output.title, description: output.description, altText: output.altText,
     factCard: req.factCard, keywords: selectedPhrases(req.keywordEvidence),
     claimDetection,
+    ...(req.affiliateDisclosure ? { descriptionMax: AFFILIATE_DESCRIPTION_MAX } : {}),
   });
+}
+
+/**
+ * Server-side disclosure (design §3.4): appended to the provider's raw output BEFORE
+ * claim detection and validation, so what is validated is exactly what ships. Never
+ * truncates — an over-length result is DESCRIPTION_TOO_LONG, which is repairable.
+ */
+function withDisclosure(raw: ProviderCopyOutput, req: GenerateCopyRequest): ProviderCopyOutput {
+  if (!req.affiliateDisclosure) return raw;
+  return { ...raw, description: appendAffiliateDisclosure(raw.description, req.affiliateDisclosure) };
+}
+
+/**
+ * T3 deviation 3 (fixed in T4): the repair model only ever sees the RAW text, so the
+ * length it is held to must be the RAW budget (500 − marker − space), not the shipped
+ * cap. Otherwise a 499-char draft is "too long" against a 500 cap the model believes it
+ * already meets, the repair comes back at ~499 again, and the card gets a 422.
+ * Affiliate requests only; the flag-off repair input is untouched.
+ */
+function reportForRepair(report: ValidationReport, raw: ProviderCopyOutput, req: GenerateCopyRequest): ValidationReport {
+  if (!req.affiliateDisclosure) return report;
+  const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
+  return {
+    ...report,
+    issues: report.issues.map(issue => issue.code === "DESCRIPTION_TOO_LONG"
+      ? { ...issue, message: `Description length (${raw.description.length}) exceeds maximum of ${budget} characters` }
+      : issue),
+  };
+}
+
+/** Repair prompt for affiliate copy: states the raw budget explicitly (see reportForRepair). */
+function promptForRepair(prompt: string, req: GenerateCopyRequest): string {
+  if (!req.affiliateDisclosure) return prompt;
+  const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
+  return `${prompt}\nThe description you return must be at most ${budget} characters; the server appends the disclosure afterwards.`;
 }
 
 export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promise<CopyResultV2> {
   const provider = getCopyProvider();
   const prompt = buildPromptForSession(req);
-  let output = await provider.generate(prompt, undefined, req.costContext);
+  // `raw` is the model's own text; `output` is what ships (raw + disclosure). Repair
+  // always sees the RAW text: showing it our #ad while the prompt says "do not add a
+  // disclosure yourself" would be contradictory.
+  let raw = await provider.generate(prompt, undefined, req.costContext);
+  let output = withDisclosure(raw, req);
   let report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
   if (!report.valid) {
     if (!isRepairableWithoutInventingFacts(report) || !provider.repair) throw new ValidationErrorV2(report);
-    output = await provider.repair(output, report, prompt, req.costContext);
+    raw = await provider.repair(raw, reportForRepair(report, raw, req), promptForRepair(prompt, req), req.costContext);
+    output = withDisclosure(raw, req);
     report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
     if (!report.valid) throw new ValidationErrorV2(report);
   }

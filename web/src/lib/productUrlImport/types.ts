@@ -17,6 +17,7 @@ export type Provider =
   | "etsy"
   | "pinterest"
   | "generic"
+  | "amazon"
   | "unknown";
 
 export type AssetType = "product" | "reference";
@@ -49,6 +50,43 @@ export type ProductUrlImportResult = {
   message?:         string;
   fallbackActions?: string[];
   debugCode?:       string;
+  /** Present only for Amazon links (text-only channel; never has image candidates). */
+  amazon?:          AmazonImportMeta;
+};
+
+/**
+ * Why an Amazon fetch did not yield product text. The card branches on these to show
+ * manual entry. None of them consumes quota (the import route is not metered) and
+ * none of them touches the user's fields.
+ */
+export type AmazonFetchFailReason =
+  | "bot_check"                // HTTP 200 but a captcha / "Continue shopping" page
+  | "http_error"               // non-2xx from Amazon (e.g. 404, 503)
+  | "timeout"
+  | "network_error"
+  | "off_allowlist"            // a redirect left the Amazon whitelist; not followed
+  | "too_many_redirects"
+  | "no_product_fields"        // page fetched but neither a title nor bullets found
+  | "short_link_unexpanded"    // amzn.to / a.co could not be expanded to a retail URL
+  | "unsupported_marketplace"  // recognised Amazon site we do not fetch (e.g. amazon.nl)
+  | "not_product_page";        // retail link without an ASIN (search / store page); not fetched
+
+export type AmazonImportMeta = {
+  /** ok = retail link with ASIN; no_asin = search/store page; short_unexpanded = short link not expanded. */
+  linkStatus:    "ok" | "no_asin" | "short_unexpanded";
+  host:          string;
+  marketplace:   string | null;
+  asin:          string | null;
+  /** The original short link, when the pasted URL was amzn.to / a.co. */
+  expandedFrom?: string;
+  fetch: {
+    status:      "ok" | "blocked" | "failed";
+    reason?:     AmazonFetchFailReason;
+    /** Upstream HTTP status for http_error. */
+    httpStatus?: number;
+  };
+  /** Text only. Price, availability, rating and images are never extracted. */
+  extracted?: { title?: string; bullets?: string[]; brand?: string };
 };
 
 export type ProductUrlImportResponse = {

@@ -4,10 +4,11 @@ import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/li
 import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
 import { orchestrateCopyGeneration, ValidationErrorV2 } from "@/lib/ai-copy/v2/orchestrator";
 import { CopyError, PROVIDER_MESSAGE } from "@/lib/ai-copy/visionServer";
+import { isAffiliateDisclosureKind, type AffiliateDisclosureKind } from "@/lib/ai-copy/affiliateDisclosure";
 import { aiTextLimitResponseBody, releaseTextGeneration, reserveTextGeneration, settleTextGeneration, usageEnforceFor } from "@/lib/server/usage/meterTextGeneration";
 
 export const runtime = "nodejs";
-interface Body { sessionId: string; idempotencyKey: string; lengthPreference?: "short" | "standard" | "seo-rich"; angleId?: string; angleRequest?: string; }
+interface Body { sessionId: string; idempotencyKey: string; lengthPreference?: "short" | "standard" | "seo-rich"; angleId?: string; angleRequest?: string; affiliateDisclosure?: AffiliateDisclosureKind; }
 const validText = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
 
 export async function POST(req: Request) {
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
   let body: Body;
   try { body = await req.json() as Body; } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
   const lengths = new Set([undefined, "short", "standard", "seo-rich"]);
-  if (!body || !validText(body.sessionId, 100) || !validText(body.idempotencyKey, 200) || !lengths.has(body.lengthPreference) || (body.angleId != null && !validText(body.angleId, 100)) || (body.angleRequest != null && !validText(body.angleRequest, 1000))) {
+  if (!body || !validText(body.sessionId, 100) || !validText(body.idempotencyKey, 200) || !lengths.has(body.lengthPreference) || (body.angleId != null && !validText(body.angleId, 100)) || (body.angleRequest != null && !validText(body.angleRequest, 1000)) || (body.affiliateDisclosure != null && !isAffiliateDisclosureKind(body.affiliateDisclosure))) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
   }
   const store = getSessionStore();
@@ -52,6 +53,8 @@ export async function POST(req: Request) {
       generationId: claim.row.id, sessionId: session.id, draftId: session.draft_id,
       factCard: session.fact_card, keywordEvidence: session.keyword_evidence,
       angleId: body.angleId?.trim(), angleRequest: body.angleRequest?.trim(), lengthPreference: body.lengthPreference,
+      // Whitelisted above; the server (never the model or the client) appends it.
+      ...(body.affiliateDisclosure ? { affiliateDisclosure: body.affiliateDisclosure } : {}),
       costContext: { userId, operationType: "ai_copy_v2_generation", referenceId: claim.row.id },
     });
     const completed = await store.completeGeneration({ generationId: claim.row.id, sessionId: session.id, userId, claimToken: claim.row.claim_token, output: result, validationReport: result.validationReport });

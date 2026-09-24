@@ -28,6 +28,7 @@ import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
 // Type-only: erased at build time, so this cannot create a runtime import cycle
 // (recommendationRequest itself imports nothing at runtime).
 import type { AnalysisErrorCode } from "./studio/recommendationRequest";
+import type { AmazonCardSource } from "./studio/amazonCardSource";
 import {
   contentMedia,
   mediaId,
@@ -161,6 +162,13 @@ export interface PinDraft {
   sourceProductImageUrl?: string;
   /** How destinationUrl was set: "creator_affiliate_product" | "manual" | "" (auto/product). */
   destinationUrlSource?: string;
+  /**
+   * Amazon link context for a Pin whose Website URL is an Amazon link (T3, design §1.7):
+   * link parse, fetch status, fetched page text and the user's manual product facts.
+   * Never the destination itself — destinationUrl stays exactly what the user entered.
+   * Rides the pin_drafts payload (whole draft serialized) — no migration.
+   */
+  amazonSource?:       AmazonCardSource;
   // ── Create Pins board (studioBoardV2) ──────────────────────────────────────
   /** AI‑Pin → source‑upload relationship of record (the reliable link). */
   parentDraftId?:      string;
