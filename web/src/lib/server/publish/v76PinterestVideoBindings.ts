@@ -7,6 +7,7 @@ import {
   type ConfirmedPublishReceipt,
 } from "@/lib/studio/publishConfirmation";
 import type { DurableVideoPublishResult } from "./v76PinterestVideoPublish";
+import { describeVideoEvidence, readDurableVideoEvidence } from "./videoEvidence";
 
 export type DueVideoReceiptInput = {
   draftId: string;
@@ -231,7 +232,16 @@ export function videoPublishHttpResult(result: DurableVideoPublishResult): {
     status: 422,
     body: {
       ok: false,
-      error: "Pinterest rejected the video publish.",
+      // The IMMEDIATE publish path's half of 故障 B. `remoteEvidence` below has
+      // always carried the real fields, but nothing renders it: every surface
+      // shows `error`, so a merchant and a support engineer both saw the same
+      // fixed sentence for a policy rejection, a bad cover frame and a
+      // transcode failure alike. Same helper as the cron route, so the two
+      // paths cannot describe the same provider answer differently.
+      error: describeVideoEvidence(
+        "Pinterest rejected the video publish.",
+        readDurableVideoEvidence(result.evidence),
+      ),
       code: "pinterest_video_publish_failed",
       retryAllowed: result.retryAllowed,
       remoteEvidence: result.evidence ?? {},

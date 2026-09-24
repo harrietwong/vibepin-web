@@ -21,6 +21,7 @@
 
 import type { createServerClient } from "@/lib/supabase";
 import type { RetryClass } from "@/lib/server/publish/retryClassification";
+import type { AttemptEvidence } from "@/lib/server/publish/videoEvidence";
 import { latestAttemptByDestination, type AttemptRow } from "./retrySchedule";
 
 const ATTEMPTS_TABLE = "scheduled_publish_attempts";
@@ -72,14 +73,17 @@ export async function loadAttemptLedger(
   }
 }
 
-/** The evidence the RPC stores alongside an attempt — diagnostic only, never settle evidence. */
-export type AttemptEvidence = {
-  stage?: string;
-  providerStatus?: number;
-  providerCode?: string;
-  requestId?: string;
-  mediaId?: string;
-};
+/**
+ * The evidence the RPC stores alongside an attempt — diagnostic only, never settle
+ * evidence.
+ *
+ * DECLARED in `lib/server/publish/videoEvidence.ts`, which is the module that builds
+ * these objects, and re-exported here because this is where they are WRITTEN and
+ * where every existing importer expects to find the name. It lives in lib rather than
+ * in this route directory so that a lib module can construct one without importing
+ * from `app/` — an inversion this codebase has nowhere else.
+ */
+export type { AttemptEvidence } from "@/lib/server/publish/videoEvidence";
 
 /**
  * Record one attempt (design §2.2 D). The table's ONLY write path.

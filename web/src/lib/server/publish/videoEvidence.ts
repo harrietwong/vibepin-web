@@ -35,8 +35,29 @@ import {
   safeEvidenceId,
   safeProviderCode,
   safeProviderMessage,
+  type PinterestVideoEvidence,
 } from "@/lib/server/pinterest/videoPinAdapter";
-import type { AttemptEvidence } from "./attemptLedger";
+
+/**
+ * The evidence the v82 attempt RPC stores alongside an attempt — diagnostic only,
+ * never settle evidence. Re-exported by `attemptLedger.ts`, which is where it is
+ * written; declared here, which is where it is built.
+ *
+ * FIVE KEYS, deliberately. `providerMessage` is absent so that there is exactly one
+ * evidence shape in the codebase and no future reader has to work out which of two
+ * near-identical objects is safe to hand to which RPC; the message is a display
+ * concern and lives only in the merchant-visible string. `classification` is absent
+ * for a sharper reason: it is the adapter's own enum, whitelisted by value in the
+ * hash-guarded v81 settle RPC, and it has no business travelling on the scheduling
+ * plane (see retryClassification.ts's header).
+ */
+export type AttemptEvidence = {
+  stage?: string;
+  providerStatus?: number;
+  providerCode?: string;
+  requestId?: string;
+  mediaId?: string;
+};
 
 /** Longest merchant-visible failure string this module will produce. */
 const MAX_ERROR_LENGTH = 400;

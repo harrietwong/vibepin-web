@@ -117,7 +117,7 @@ import {
   attemptEvidenceFrom,
   describeVideoEvidence,
   readDurableVideoEvidence,
-} from "./videoEvidence";
+} from "@/lib/server/publish/videoEvidence";
 // The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
 // is on, the row is a video, and a `confirmed_absent` proof exists for the
 // destination — see `childVideoReceipt` below, which is the single gate.

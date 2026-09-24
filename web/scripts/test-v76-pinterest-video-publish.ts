@@ -269,6 +269,53 @@ await test("HTTP binding exposes unknown as anti-retry reconciliation, not ordin
   });
 });
 
+await test("the immediate path's rejection tells the merchant what Pinterest actually said", async () => {
+  // 故障 B's other half. `remoteEvidence` has always carried the real fields, but
+  // every surface renders `error` — so a policy rejection, a bad cover frame and a
+  // transcode failure all read as one fixed sentence. Same helper as the cron route,
+  // so the two paths cannot describe the same provider answer differently.
+  const mapped = videoPublishHttpResult({
+    outcome: "failed",
+    retryAllowed: true,
+    evidence: {
+      stage: "created", classification: "definite_rejection",
+      mediaId: "media-v1", requestId: "abc123def456ghi789",
+      providerStatus: 400, providerCode: "SPAM",
+      providerMessage: "Video rejected by policy review",
+    },
+  });
+  assert.equal(mapped.status, 422);
+  const error = String(mapped.body.error);
+  assert.match(error, /HTTP 400/, `the real status must reach the merchant, saw: ${error}`);
+  assert.match(error, /code SPAM/, `the real provider code must reach it, saw: ${error}`);
+  assert.match(error, /request abc123def456/, `the request id must reach it, saw: ${error}`);
+  assert.match(error, /Video rejected by policy review/, `the provider's message must reach it, saw: ${error}`);
+  assert.ok(
+    !/^Pinterest rejected the video publish\.$/.test(error),
+    "the fixed string alone is the defect this closes",
+  );
+  // The CODE is a stable identifier other surfaces switch on; only the message grows.
+  assert.equal(mapped.body.code, "pinterest_video_publish_failed");
+  assert.deepEqual(
+    mapped.body.remoteEvidence,
+    {
+      stage: "created", classification: "definite_rejection",
+      mediaId: "media-v1", requestId: "abc123def456ghi789",
+      providerStatus: 400, providerCode: "SPAM",
+      providerMessage: "Video rejected by policy review",
+    },
+    "the structured evidence is passed through verbatim, exactly as before",
+  );
+
+  // A dispatch-layer failure has no provider answer, and none may be invented.
+  const orchestration = videoPublishHttpResult({
+    outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" },
+  });
+  const orchestrationError = String(orchestration.body.error);
+  assert.ok(!/HTTP \d/.test(orchestrationError), `no invented status, saw: ${orchestrationError}`);
+  assert.match(orchestrationError, /reason materialization_incomplete/);
+});
+
 await test("orders confirm, materialization, ready claim, durable attempt, provider, and success settlement", async () => {
   const { calls, deps } = harness();
   const result = await dispatchV76PinterestVideo(input(), deps);
