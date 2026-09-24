@@ -14,7 +14,10 @@
  * in BatchEditDrawer, which the bar opens.
  */
 
+import { useState } from "react";
 import { X, AlertTriangle, Check, Loader2, Trash2 } from "lucide-react";
+import { PinConfirmList } from "@/components/studio/PinConfirmList";
+import { canSubmitConfirmList, remainingIds, type ConfirmListItem } from "@/lib/studio/pinConfirmList";
 import { BUI } from "@/components/studio/boardUI";
 import type {
   BulkPublishPartition,
@@ -110,10 +113,22 @@ export type BulkPublishSheetProps = {
   summary: BulkPublishSummary | null;
   onConfirm: () => void;
   onClose: () => void;
+  /**
+   * Per-Pin confirmation list rows for the ready set (ruling 4): thumbnail, title,
+   * link, destinations, AI-unedited badge. The host submits only
+   * `selectConfirmedTargets(ready, excluded)`.
+   */
+  confirmItems?: ConfirmListItem[];
+  excluded?: ReadonlySet<string>;
+  onToggleExclude?: (id: string) => void;
 };
 
-export function BulkPublishSheet({ tr, partition, confirmations, progress, summary, onConfirm, onClose }: BulkPublishSheetProps) {
-  const readyCount = partition.ready.length;
+export function BulkPublishSheet({ tr, partition, confirmations, progress, summary, onConfirm, onClose, confirmItems, excluded, onToggleExclude }: BulkPublishSheetProps) {
+  const [reachedEnd, setReachedEnd] = useState(false);
+  const removed = excluded ?? new Set<string>();
+  const readyIds = partition.ready.map(item => item.id);
+  const readyCount = remainingIds(readyIds, removed).length;
+  const canSubmit = canSubmitConfirmList(readyIds, removed, reachedEnd || !confirmItems);
   const running = !!progress && !summary;
   const total = readyCount + partition.blocked.length + partition.alreadyPublished.length + partition.generating.length;
 
@@ -156,7 +171,21 @@ export function BulkPublishSheet({ tr, partition, confirmations, progress, summa
               </p>
             )}
 
-            {partition.ready.length > 0 && (
+            {partition.ready.length > 0 && confirmItems && (
+              <div data-testid="bulk-publish-exact-destinations">
+                <h3 style={sectionHeading}>{fill(tr("publishConfirm.list.heading"), { n: partition.ready.length })}</h3>
+                <p style={{ margin: "2px 0 8px", fontSize: 11.5, color: BUI.textSec }}>{tr("publishConfirm.list.hint")}</p>
+                <PinConfirmList items={confirmItems} excluded={removed} onToggleExclude={onToggleExclude}
+                  onReachedEnd={() => setReachedEnd(true)} ui={{ text: BUI.text, textSec: BUI.textSec, border: BUI.border }} />
+                {readyIds.length > 0 && readyCount === 0 && (
+                  <p data-testid="bulk-publish-none-left" style={{ margin: "8px 0 0", fontSize: 11.5, color: "#b45309" }}>{tr("publishConfirm.list.noneLeft")}</p>
+                )}
+                {!reachedEnd && readyCount > 0 && (
+                  <p data-testid="bulk-publish-scroll-hint" style={{ margin: "8px 0 0", fontSize: 11.5, color: BUI.textSec }}>{tr("publishConfirm.list.scrollToConfirm")}</p>
+                )}
+              </div>
+            )}
+            {partition.ready.length > 0 && !confirmItems && (
               <div data-testid="bulk-publish-exact-destinations">
                 <h3 style={sectionHeading}>{tr("publishConfirm.destinations")}</h3>
                 {partition.ready.map(item => {
@@ -229,12 +258,12 @@ export function BulkPublishSheet({ tr, partition, confirmations, progress, summa
                 {tr("studioBoard.bulk.cancel")}
               </button>
               <button type="button" data-testid="bulk-publish-confirm" onClick={onConfirm}
-                disabled={running || readyCount === 0}
-                style={{ ...primaryBtn, opacity: running || readyCount === 0 ? 0.55 : 1, cursor: running || readyCount === 0 ? "not-allowed" : "pointer" }}>
+                disabled={running || !canSubmit}
+                style={{ ...primaryBtn, opacity: running || !canSubmit ? 0.55 : 1, cursor: running || !canSubmit ? "not-allowed" : "pointer" }}>
                 {running && progress
                   ? <><Loader2 style={{ width: 13, height: 13 }} className="animate-spin" />
                       {fill(tr("studioBoard.bulkPublish.publishing"), { current: progress.current, total: progress.total })}</>
-                  : tr("studioBoard.bulkPublish.confirm")}
+                  : confirmItems ? fill(tr("publishConfirm.list.publishConfirm"), { n: readyCount }) : tr("studioBoard.bulkPublish.confirm")}
               </button>
             </>
           )}

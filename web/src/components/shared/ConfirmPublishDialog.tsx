@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { platformName } from "@/lib/social/platforms";
 import { confirmPublishSnapshot, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { PinConfirmList } from "@/components/studio/PinConfirmList";
+import { confirmItemFromSnapshot } from "@/lib/studio/pinConfirmList";
 
 type UI = { card: string; border: string; text: string; textSec: string };
 const DEFAULT_UI: UI = { card: "var(--app-surface, #0b1220)", border: "var(--app-border, rgba(148,163,184,.25))", text: "var(--app-text, #E2E8F0)", textSec: "var(--app-text-sec, #94A3B8)" };
@@ -16,9 +18,11 @@ export interface ConfirmPublishDialogProps {
   onCancel: () => void;
   busy?: boolean;
   ui?: Partial<UI>;
+  /** The Pin still carries AI copy nobody edited: hint badge on the row (never blocks). */
+  aiUnedited?: boolean;
 }
 
-export function ConfirmPublishDialog({ open, snapshot, onConfirm, onCancel, busy = false, ui }: ConfirmPublishDialogProps) {
+export function ConfirmPublishDialog({ open, snapshot, onConfirm, onCancel, busy = false, ui, aiUnedited = false }: ConfirmPublishDialogProps) {
   const { t } = useLocale();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -56,9 +60,13 @@ export function ConfirmPublishDialog({ open, snapshot, onConfirm, onCancel, busy
           style={{ border: 0, padding: 4, background: "transparent", color: c.textSec, cursor: "pointer", flex: "0 0 auto" }}><X size={18} /></button>
       </div>
       <div id="confirm-publish-summary" style={{ marginTop: 14, display: "grid", gap: 12, minWidth: 0 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-          {snapshot.media[0]?.url ? <img src={snapshot.media[0].url} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 9, flex: "0 0 auto" }} /> : null}
-          <div style={{ minWidth: 0 }}><div style={{ color: c.text, fontWeight: 800, overflowWrap: "anywhere" }}>{snapshot.title}</div><div style={{ marginTop: 4, color: c.textSec, fontSize: 12 }}>{t("publishConfirm.mediaCount").replace("{n}", String(snapshot.media.length))}</div></div>
+        {/* Same per-Pin confirmation row the bulk sheets use (ruling 4) — a list of
+            one: thumbnail, title, destination link, AI-unedited hint. Destinations are
+            listed (with blockers) below. */}
+        <div style={{ minWidth: 0 }}>
+          <PinConfirmList items={[{ ...confirmItemFromSnapshot(snapshot, null, platformName), targets: [], aiUnedited }]}
+            ui={{ text: c.text, textSec: c.textSec, border: c.border }} />
+          <div style={{ marginTop: 4, color: c.textSec, fontSize: 12 }}>{t("publishConfirm.mediaCount").replace("{n}", String(snapshot.media.length))}</div>
         </div>
         {snapshot.description && <div data-testid="confirm-publish-caption" style={{ color: c.textSec, fontSize: 12, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}><strong style={{ color: c.text }}>{t("publishConfirm.caption")}</strong> {snapshot.description}</div>}
         <div data-testid="confirm-publish-mode" style={{ color: c.textSec, fontSize: 12 }}><strong style={{ color: c.text }}>{t("publishConfirm.modeLabel")}</strong> {mode}</div>

@@ -265,6 +265,9 @@ export const STUDIO: string[] = [
   // Bulk "Generate copy" orchestration (Amazon T4, design §4): independent
   // success/failure, touched fields never overwritten, concurrency ≤ 2, 402 / 429.
   "test-bulk-generate-copy",
+  // Per-Pin confirmation list before schedule / publish (Fable ruling 4, T4):
+  // removed Pins are never submitted; the single-Pin dialog uses the same list.
+  "test-pin-confirm-list",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",

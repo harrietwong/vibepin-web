@@ -28,7 +28,18 @@ import type { ScheduledDestination } from "@/lib/pinDraftStore";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { publishContent } from "@/lib/studio/publishContent";
 import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
-import { buildPublishConfirmation, confirmPublishSnapshot, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { buildPublishConfirmation, confirmPublishSnapshot, explicitPublishDestinations, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { PinConfirmList } from "@/components/studio/PinConfirmList";
+import {
+  canSubmitConfirmList,
+  confirmItemFromSnapshot,
+  destinationLabels,
+  isAiCopyUnedited,
+  remainingIds,
+  selectConfirmedTargets,
+  toggleExcluded,
+  type ConfirmListItem,
+} from "@/lib/studio/pinConfirmList";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError, resolveAmazonCopyContext } from "@/lib/ai-copy/generatePinCopy";
 import { runWithBusyGuard, isBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
@@ -915,6 +926,13 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   const [publishPhase,    setPublishPhase]    = useState<PublishPhase>(null);
   const [publishBlocked,  setPublishBlocked]  = useState<{ pinId: string; title: string; missing: string[] }[]>([]);
   const [publishConfirmations, setPublishConfirmations] = useState<Record<string, PublishConfirmationSnapshot>>({});
+  // Ruling 4 confirmation lists: Pins removed by the user, and whether the list was
+  // scrolled through. Publish and Schedule each have their own.
+  const [publishExcluded, setPublishExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [publishReachedEnd, setPublishReachedEnd] = useState(false);
+  const [scheduleConfirmOpen, setScheduleConfirmOpen] = useState(false);
+  const [scheduleExcluded, setScheduleExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [scheduleReachedEnd, setScheduleReachedEnd] = useState(false);
   const [publishProgress, setPublishProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [publishResults,  setPublishResults]  = useState<PublishResultRow[]>([]);
   // AI Copy batch generation — per-pin, sequential, with progress + summary.
@@ -1260,7 +1278,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           language,
         }), pin.pinId);
         if (!out) throw new BulkCopyBusyError();
-        return out.fields;
+        return { ...out.fields, metadataDraft: out.metadataDraft };
       },
       // Merge against the FRESH row state: the user may have typed while the request ran.
       apply: (id, generated) => {
@@ -1272,6 +1290,9 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           rowEditsRef.current = next;
           setRowEdits(next);
           persist(next);
+          // The generation record (selectedTitle / copyGenerationMeta) lets the
+          // confirmation list flag AI copy nobody edited (ruling 4 badge).
+          if (pinDraftStore.getDraft(id)) pinDraftStore.updateDraft(id, { metadataDraft: generated.metadataDraft });
         }
         return merged;
       },
@@ -1574,9 +1595,36 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   }
 
   // ── Schedule (no readiness gate; parent assigns the next Smart Schedule slot) ──
+  // Ruling 4: still no publish-readiness gate, but the user confirms the exact list
+  // (thumbnail, title, link, destinations) and can remove Pins before it is submitted.
   function scheduleSelected() {
     if (!checkedCount || !onScheduleSelected) return;
-    onScheduleSelected([...checkedRows]);
+    setScheduleExcluded(new Set());
+    setScheduleReachedEnd(false);
+    setScheduleConfirmOpen(true);
+  }
+  function submitScheduleSelected() {
+    if (!onScheduleSelected) return;
+    const ids = selectConfirmedTargets([...checkedRows], scheduleExcluded, id => id);
+    setScheduleConfirmOpen(false);
+    if (ids.length) onScheduleSelected(ids);
+  }
+  function scheduleConfirmItem(pinId: string): ConfirmListItem | null {
+    const pin = pins.find(p => p.pinId === pinId);
+    if (!pin) return null;
+    const draft = pinDraftStore.getDraft(pinId);
+    const title = getVal(pin, rowEdits, "title");
+    const description = getVal(pin, rowEdits, "description");
+    const scheduledDestinations = rowEdits[pinId]?.scheduledDestinations ?? draft?.scheduledDestinations ?? [];
+    const media = rowMedia(pin);
+    return {
+      id: pinId,
+      thumbnailUrl: (media && "posterUrl" in media ? media.posterUrl : undefined) || media?.url || pin.imageUrl || null,
+      title: title || tr("studioModals.untitledPin"),
+      destinationUrl: getVal(pin, rowEdits, "destinationUrl"),
+      targets: destinationLabels(explicitPublishDestinations({ scheduledDestinations }), platformName),
+      aiUnedited: !!draft && isAiCopyUnedited({ ...draft, title, description }),
+    };
   }
 
   // ── Publish now ──────────────────────────────────────────────────────────
@@ -1613,6 +1661,8 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     }
     const blocked = [...readinessBlocked, ...destinationBlocked].filter((item, index, all) => all.findIndex(other => other.pinId === item.pinId) === index);
     setPublishConfirmations(confirmations);
+    setPublishExcluded(new Set());
+    setPublishReachedEnd(false);
     setPublishBlocked(blocked);
     // The blocked screen explicitly lists every skipped Content. The user may then
     // confirm only the exact publishable snapshots; zero publishable stays disabled.
@@ -2090,6 +2140,35 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
 
       {confirm && <ConfirmModal state={confirm} onClose={() => setConfirm(null)} />}
 
+      {/* Schedule confirmation list (ruling 4) */}
+      {scheduleConfirmOpen && (() => {
+        const ids = [...checkedRows];
+        const items = ids.map(scheduleConfirmItem).filter((item): item is ConfirmListItem => !!item);
+        const left = remainingIds(ids, scheduleExcluded).length;
+        const canGo = canSubmitConfirmList(ids, scheduleExcluded, scheduleReachedEnd);
+        return (
+          <Modal title={tr("publishConfirm.list.scheduleTitle").replace("{n}", String(ids.length))} width={520}
+            onClose={() => setScheduleConfirmOpen(false)}
+            footer={<>
+              <button type="button" onClick={() => setScheduleConfirmOpen(false)} style={btnBase}>{tr("common.cancel")}</button>
+              <button type="button" data-testid="batch-edit-schedule-confirm" disabled={!canGo} onClick={submitScheduleSelected}
+                style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", opacity: canGo ? 1 : 0.55, cursor: canGo ? "pointer" : "not-allowed" }}>
+                {tr("publishConfirm.list.scheduleConfirm").replace("{n}", String(left))}
+              </button>
+            </>}>
+            <div data-testid="batch-edit-schedule-confirm-list">
+              <p style={{ margin: "0 0 8px", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.hint")}</p>
+              <PinConfirmList items={items} excluded={scheduleExcluded}
+                onToggleExclude={id => setScheduleExcluded(prev => toggleExcluded(prev, id))}
+                onReachedEnd={() => setScheduleReachedEnd(true)} maxHeight={320}
+                ui={{ text: UI.text, textSec: UI.textSec, border: UI.border }} />
+              {!scheduleReachedEnd && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.scrollToConfirm")}</p>}
+              {left === 0 && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.error }}>{tr("publishConfirm.list.noneLeft")}</p>}
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* Publish flow */}
       {publishPhase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 330, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}
@@ -2099,18 +2178,34 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
               <div data-testid="batch-edit-publish-confirm">
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.confirmTitle")}</h3>
                 <p style={{ margin: "0 0 18px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{tr("studioModals.publish.confirmBody")}</p>
-                <div data-testid="batch-edit-confirm-destinations" style={{ display: "grid", gap: 8, maxHeight: 300, overflowY: "auto", overflowX: "hidden", marginBottom: 16 }}>
-                  {Object.values(publishConfirmations).map(snapshot => <div key={snapshot.intentId} style={{ padding: 9, border: `1px solid ${UI.border}`, borderRadius: 8, minWidth: 0 }}>
-                    <strong style={{ display: "block", color: UI.text, fontSize: 11.5, overflowWrap: "anywhere" }}>{snapshot.title}</strong>
-                    {snapshot.publishableDestinations.map(destination => <div key={destination.id} style={{ marginTop: 4, color: UI.textSec, fontSize: 10.5, overflowWrap: "anywhere" }}>
-                      {platformName(destination.provider)} · {destination.accountLabel || destination.socialConnectionId}{destination.provider === "pinterest" ? ` · ${destination.boardName || destination.boardId}` : ""}
-                    </div>)}
-                  </div>)}
+                {/* Ruling 4: every Pin listed (thumbnail, title, link, destinations),
+                    removable; confirm only after scrolling through. */}
+                <div data-testid="batch-edit-confirm-destinations" style={{ marginBottom: 12 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.hint")}</p>
+                  <PinConfirmList
+                    items={Object.values(publishConfirmations).map(snapshot => confirmItemFromSnapshot(snapshot, pinDraftStore.getDraft(snapshot.draftId), platformName, tr("studioModals.untitledPin")))}
+                    excluded={publishExcluded}
+                    onToggleExclude={id => setPublishExcluded(prev => toggleExcluded(prev, id))}
+                    onReachedEnd={() => setPublishReachedEnd(true)}
+                    maxHeight={300}
+                    ui={{ text: UI.text, textSec: UI.textSec, border: UI.border }} />
+                  {!publishReachedEnd && <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.textSec }}>{tr("publishConfirm.list.scrollToConfirm")}</p>}
+                  {publishReadyCount > 0 && remainingIds(Object.keys(publishConfirmations), publishExcluded).length === 0 && (
+                    <p style={{ margin: "8px 0 0", fontSize: 11, color: UI.error }}>{tr("publishConfirm.list.noneLeft")}</p>
+                  )}
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                   <button type="button" data-testid="batch-edit-publish-cancel" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
-                  <button type="button" data-testid="batch-edit-publish-confirm-go" onClick={() => void runPublish(checkedPins)}
-                    style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("pinDetails.publishNow")}</button>
+                  {(() => {
+                    const canGo = canSubmitConfirmList(Object.keys(publishConfirmations), publishExcluded, publishReachedEnd);
+                    return (
+                      <button type="button" data-testid="batch-edit-publish-confirm-go" disabled={!canGo}
+                        onClick={() => void runPublish(selectConfirmedTargets(checkedPins.filter(p => !!publishConfirmations[p.pinId]), publishExcluded, p => p.pinId))}
+                        style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", opacity: canGo ? 1 : 0.55, cursor: canGo ? "pointer" : "not-allowed" }}>
+                        {tr("publishConfirm.list.publishConfirm").replace("{n}", String(remainingIds(Object.keys(publishConfirmations), publishExcluded).length))}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -2132,7 +2227,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
                   <button type="button" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   {publishReadyCount > 0 && (
-                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => void runPublish(checkedPins.filter(p => !!publishConfirmations[p.pinId]))}
+                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => { setPublishReachedEnd(false); setPublishPhase("confirm"); }}
                       style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("studioModals.publish.publishReadyPins")}</button>
                   )}
                 </div>

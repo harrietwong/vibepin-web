@@ -493,4 +493,17 @@ export const studioBoardMessages = {
   "studioBoard.bulkCopy.summary": "{succeeded} updated · {failed} failed · {skipped} skipped · {notStarted} not started",
   "studioBoard.bulkCopy.stoppedTextLimit": "Stopped: your AI copy limit is used up. The rest were not started.",
   "studioBoard.bulkCopy.stoppedRateLimited": "Stopped: too many requests. Try the rest again in a moment.",
+  // ── Per-Pin confirmation list before schedule / publish (T4, ruling 4) ──
+  "publishConfirm.list.heading": "Review each Pin ({n})",
+  "publishConfirm.list.hint": "Remove any Pin you don't want to include, then scroll to the end to confirm.",
+  "publishConfirm.list.noLink": "No destination link",
+  "publishConfirm.list.aiUnedited": "AI copy not edited",
+  "publishConfirm.list.aiUneditedHint": "This Pin still has AI-written copy you haven't edited. Check it before it goes out. This doesn't block it.",
+  "publishConfirm.list.remove": "Remove",
+  "publishConfirm.list.undo": "Add back",
+  "publishConfirm.list.scrollToConfirm": "Scroll to the end of the list to confirm.",
+  "publishConfirm.list.noneLeft": "Every Pin was removed. Add one back or cancel.",
+  "publishConfirm.list.scheduleTitle": "Schedule {n} selected",
+  "publishConfirm.list.scheduleConfirm": "Schedule {n}",
+  "publishConfirm.list.publishConfirm": "Publish {n}",
 } as const;

@@ -190,10 +190,15 @@ test("Batch Edit shows a quiet 'N selected' pill", () => {
   assert.match(batchSource, /tr\("studioModals\.selectedCount"\)\.replace\("\{n\}", String\(checkedCount\)\)/);
 });
 test("Batch Edit Schedule has no publish-readiness gate", () => {
-  assert.match(batchSource, /function scheduleSelected\(\)[\s\S]*?onScheduleSelected\(\[\.\.\.checkedRows\]\)/);
-  const fn = batchSource.slice(batchSource.indexOf("function scheduleSelected()"));
-  const body = fn.slice(0, fn.indexOf("}"));
-  assert.doesNotMatch(body, /isPinReady|pubReadinessInput/);
+  // T4 / ruling 4: Schedule first opens the per-Pin confirmation list; the submit
+  // sends the checked rows minus the ones the user removed. Still no readiness gate.
+  assert.match(batchSource, /function scheduleSelected\(\)[\s\S]*?setScheduleConfirmOpen\(true\)/);
+  assert.match(batchSource, /function submitScheduleSelected\(\)[\s\S]*?selectConfirmedTargets\(\[\.\.\.checkedRows\], scheduleExcluded, id => id\)[\s\S]*?onScheduleSelected\(ids\)/);
+  for (const name of ["function scheduleSelected()", "function submitScheduleSelected()"]) {
+    const fn = batchSource.slice(batchSource.indexOf(name));
+    const body = fn.slice(0, fn.indexOf("\n  }"));
+    assert.doesNotMatch(body, /isPinReady|pubReadinessInput/);
+  }
 });
 
 console.log(`\nCreate Pins / Batch Edit UI: ${passed} passed, 0 failed`);

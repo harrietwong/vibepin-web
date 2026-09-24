@@ -113,6 +113,8 @@ import {
   type BulkPublishOutcomeRow, type BulkPublishSummary,
 } from "@/lib/studio/bulkActions";
 import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
+import { confirmItemFromSnapshot, isAiCopyUnedited, selectConfirmedTargets, toggleExcluded } from "@/lib/studio/pinConfirmList";
+import { platformName } from "@/lib/social/platforms";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 import { AmazonRiskNoticeBanner } from "@/components/studio/AmazonRiskNoticeBanner";
 import { isAmazonLink } from "@/lib/studio/amazonCardSource";
@@ -1505,6 +1507,9 @@ export function StudioBoard() {
   const [bulkPublishProgress, setBulkPublishProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkPublishSummary, setBulkPublishSummary] = useState<BulkPublishSummary | null>(null);
   const [bulkConfirmations, setBulkConfirmations] = useState<Record<string, PublishConfirmationSnapshot>>({});
+  // Ruling 4: Pins the merchant removed from the confirmation list. Reset every time
+  // the sheet opens; runBulkPublish submits only the ready set minus these.
+  const [bulkExcluded, setBulkExcluded] = useState<ReadonlySet<string>>(new Set());
 
   const selectedDrafts = useMemo(
     () => allItems.filter(item => selectedIds.has(item.draft.id)).map(item => item.draft),
@@ -1555,6 +1560,7 @@ export function StudioBoard() {
       if (draft) frozen[target.id] = buildPublishConfirmation(draft, { onlyPending: true });
     }
     setBulkConfirmations(frozen);
+    setBulkExcluded(new Set());
     setBulkPublishSummary(null);
     setBulkPublishProgress(null);
     setBulkPublishOpen(true);
@@ -1564,7 +1570,8 @@ export function StudioBoard() {
     // Exactly the `ready` set the sheet showed — never a freshly recomputed one. A
     // partition computed a second time could differ (a sibling tab published one), and
     // the merchant would have confirmed a different action than the one performed.
-    const targets = bulkPublishPartition.ready;
+    // ...minus every Pin the merchant removed from the confirmation list (ruling 4).
+    const targets = selectConfirmedTargets(bulkPublishPartition.ready, bulkExcluded, target => target.id);
     if (!targets.length) return;
     setBulkPublishProgress({ current: 0, total: targets.length });
     const rows: BulkPublishOutcomeRow[] = [];
@@ -1618,7 +1625,12 @@ export function StudioBoard() {
     }
     setBulkPublishSummary(summarizeBulkPublish(rows));
     setBulkPublishProgress(null);
-  }, [bulkConfirmations, bulkPublishPartition, tr]);
+  }, [bulkConfirmations, bulkExcluded, bulkPublishPartition, tr]);
+
+  const bulkConfirmItems = useMemo(() => bulkPublishPartition.ready.flatMap(target => {
+    const snapshot = bulkConfirmations[target.id];
+    return snapshot ? [confirmItemFromSnapshot(snapshot, pinDraftStore.getDraft(target.id), platformName, target.title)] : [];
+  }), [bulkConfirmations, bulkPublishPartition]);
 
   const closeBulkPublish = useCallback(() => {
     // Only a completed run clears the selection: a cancelled sheet leaves the merchant
@@ -2200,6 +2212,7 @@ export function StudioBoard() {
         busy={publishConfirmation ? isPublishing(publishConfirmation.draftId) : false}
         onCancel={() => setPublishConfirmation(null)}
         onConfirm={receipt => { void handlePublish(receipt); }}
+        aiUnedited={(() => { const d = publishConfirmation ? pinDraftStore.getDraft(publishConfirmation.draftId) : null; return !!d && isAiCopyUnedited(d); })()}
       />
       {bulkPublishOpen && (
         <BulkPublishSheet
@@ -2210,6 +2223,9 @@ export function StudioBoard() {
           summary={bulkPublishSummary}
           onConfirm={() => { void runBulkPublish(); }}
           onClose={closeBulkPublish}
+          confirmItems={bulkConfirmItems}
+          excluded={bulkExcluded}
+          onToggleExclude={id => setBulkExcluded(previous => toggleExcluded(previous, id))}
         />
       )}
       {deleteImpact && (
