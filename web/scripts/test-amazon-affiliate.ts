@@ -89,6 +89,27 @@ test("isAmazonUrl: detects marketplace + short links", () => {
   assert.equal(isAmazonUrl("https://etsy.com/listing/123"), false);
 });
 
+test("extractAsin: no wildcard 10-char path segment (regression /electronic/)", () => {
+  assert.equal(extractAsin("https://www.amazon.com/electronic/"), null);
+  assert.equal(extractAsin("https://www.amazon.com/stationery?x=1"), null);
+  assert.equal(extractAsin("https://www.amazon.com/Some-Name/dp/B08N5WRWNW"), "B08N5WRWNW");
+  assert.equal(extractAsin("https://www.amazon.com/gp/aw/d/B08N5WRWNW"), "B08N5WRWNW");
+  assert.equal(extractAsin("https://www.amazon.com/product/B08N5WRWNW"), null, "bare /product/ is not an Amazon ASIN path");
+  assert.equal(extractAsin("https://www.amazon.com/dp/ELECTRONIC"), null, "URL ASIN needs B0/BT prefix");
+  assert.equal(extractAsin("amazon.com/dp/B08N5WRWNW"), "B08N5WRWNW", "scheme-less rows still parse");
+});
+
+test("isAmazonUrl: exact host whitelist (no substring bypass)", () => {
+  assert.equal(isAmazonUrl("https://amazon.com.evil.io/x"), false);
+  assert.equal(isAmazonUrl("https://evil.io/?r=amzn.to"), false);
+  assert.equal(isAmazonUrl("https://amazon.com@evil.io/dp/B08N5WRWNW"), false);
+  assert.equal(isAmazonUrl("https://notamazon.com/dp/B08N5WRWNW"), false);
+  assert.equal(isAmazonUrl("https://a.co/d/abc123"), true);
+  assert.equal(isAmazonUrl("https://www.amazon.co.jp/dp/B08N5WRWNW"), true);
+  assert.equal(isAmazonUrl("amazon.co.uk/dp/B08N5WRWNW"), true);
+  assert.equal(isAmazonUrl("https://sellercentral.amazon.com/x"), false);
+});
+
 // ── 2/4. getOrCreateCreatorProductLink ─────────────────────────────────────────
 test("getOrCreate: non-Amazon product returns null (unsupported)", () => {
   const repo = createInMemoryRepo();
