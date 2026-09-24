@@ -1,9 +1,11 @@
 import type { AICopyV2Evidence, CachedImageAnalysis, PinCopyLength, ProductContext } from "./types";
+import type { AffiliateDisclosureKind } from "./affiliateDisclosure";
 import type {
   CopyResultV2,
   FactCardV1,
   KeywordEvidence,
   KeywordProvenance,
+  ValidationReport,
 } from "./v2/types";
 
 export type AICopyV2AnalyzePayload = {
@@ -12,6 +14,8 @@ export type AICopyV2AnalyzePayload = {
   locale: string;
   country: string;
   productContext?: Record<string, unknown>;
+  /** Fetched page text (Amazon) — mapped server-side to page_metadata, never catalog facts. */
+  pageContext?: Record<string, unknown>;
   imageObserved?: Record<string, unknown>;
   boardContext?: Record<string, unknown>;
   userKeywords?: string[];
@@ -24,6 +28,7 @@ export type BuildAnalyzePayloadInput = {
   country?: string;
   idempotencyKey: string;
   product?: ProductContext;
+  page?: { title?: string; description?: string };
   image?: CachedImageAnalysis | null;
   board?: { name?: string; description?: string };
   userKeywords?: string[];
@@ -64,6 +69,12 @@ export function buildAICopyV2AnalyzePayload(input: BuildAnalyzePayloadInput): AI
       availability: product.availability,
       tags: product.tags,
       attributes: product.attributes,
+      material: product.material,
+      quantity: product.quantity,
+    } } : {}),
+    ...(input.page?.title || input.page?.description ? { pageContext: {
+      title: input.page.title,
+      description: input.page.description,
     } } : {}),
     ...(image ? { imageObserved: {
       summary: image.imageSummary,
@@ -87,7 +98,7 @@ type AnalyzeResponse = {
   message?: string;
 };
 
-type GenerateResponse = { ok?: boolean; result?: CopyResultV2; message?: string };
+type GenerateResponse = { ok?: boolean; result?: CopyResultV2; message?: string; validationReport?: ValidationReport };
 
 export type GeneratePinterestPinCopyV2Input = Omit<BuildAnalyzePayloadInput, "idempotencyKey"> & {
   imageUrl?: string;
@@ -99,6 +110,8 @@ export type GeneratePinterestPinCopyV2Input = Omit<BuildAnalyzePayloadInput, "id
   onStage?: (stage: "analyzing" | "generating" | "checking") => void;
   /** Hint only; the v2 route reloads the authenticated owner's draft before work. */
   mediaEvidenceMode?: "video_cover";
+  /** Affiliate (Amazon) card: the server appends this disclosure before validation. */
+  affiliateDisclosure?: AffiliateDisclosureKind;
 };
 
 export type GeneratePinterestPinCopyV2Result = {
@@ -123,13 +136,15 @@ export class AICopyV2ClientError extends Error {
     readonly status: number,
     message: string,
     readonly retryAfterSeconds: number | null,
+    /** 422 validation_failed carries the report so the card can point at the claim. */
+    readonly validationReport?: ValidationReport,
   ) {
     super(message);
     this.name = "AICopyV2ClientError";
   }
 }
 
-function responseError(response: Response, body: { error?: string; code?: string; message?: string; userMessage?: string }): AICopyV2ClientError {
+function responseError(response: Response, body: { error?: string; code?: string; message?: string; userMessage?: string; validationReport?: ValidationReport }): AICopyV2ClientError {
   const retryAfterHeader = response.headers.get("retry-after");
   const retryAfter = retryAfterHeader === null ? null : Number(retryAfterHeader);
   return new AICopyV2ClientError(
@@ -137,6 +152,7 @@ function responseError(response: Response, body: { error?: string; code?: string
     response.status,
     body.userMessage || body.message || SAFE_ERROR,
     retryAfter !== null && Number.isFinite(retryAfter) ? retryAfter : null,
+    body.validationReport,
   );
 }
 
@@ -193,6 +209,7 @@ export async function generatePinterestPinCopyV2(input: GeneratePinterestPinCopy
       lengthPreference: input.length ?? "standard",
       angleId: input.angleId,
       angleRequest: input.angleRequest,
+      ...(input.affiliateDisclosure ? { affiliateDisclosure: input.affiliateDisclosure } : {}),
     }),
   });
   input.onStage?.("checking");
