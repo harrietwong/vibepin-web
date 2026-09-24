@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, authoritativeDestination, buildCanaryScheduledAt, buildCompatibilityNormalizeCommand, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { ALLOWED_BOARDS, SAFE_PRIVATE_STORAGE_BYTES, SOCIAL_CONNECTION_PROJECTION, assertRegisteredVideoMedia, authoritativeDestination, buildCanaryScheduledAt, buildCompatibilityNormalizeCommand, buildDraftId, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, needsVideoNormalization, normalizeManifestMedia, parsePrivateStorageLocator, parseStorageMediaObjectPath, patchSourceCsvRow, readPortraitSource, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, targetVideoBitrateKbps, uploadAttemptKeys, validateManifest, validatePreviewBinding, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 
 const row = (n: number): CheerishScheduleRow => ({
   sourceCsv: n < 41 ? "D:/data/2026-09-17/video-product-map.csv" : "D:/data/2026-09-18/video-product-map.csv",
@@ -55,6 +55,66 @@ assert.match(scheduleSource, /\.is\("deleted_at",null\)/, "replacement CAS exclu
 assert.match(scheduleSource, /const draftId = row\.draftId/, "replacement uses the authoritative manifest draft id");
 assert.match(scheduleSource, /portrait_transform_draft_missing/, "missing authoritative drafts fail closed");
 assert.doesNotMatch(scheduleSource, /\.insert\(\{vibepin_user_id:ctx\.uid/, "rollout never creates duplicate drafts");
+// --- Unified media registration entry point (fault A) ---------------------
+// The portrait transform mints a NEW storage object. Publish-time validation
+// (v76PinterestVideoRuntime) looks up media_asset_provenance BY object_path, so a
+// transform product that reaches storage by any route other than the upload RPC
+// has no row and is rejected at its scheduled hour. These assertions pin the two
+// halves of the fix: the transform product must flow through the same
+// prepare -> signed upload -> finalize leg as a pass-through source, and staging
+// must refuse any media that is not registered.
+assert.match(scheduleSource, /async function uploadVideo\(uid: string, row: CheerishScheduleRow\)[^\n]*\{\s*\n?\s*const source = uploadSource\(row\)/, "uploadVideo derives its source through uploadSource, which is where the portrait transform happens");
+assert.match(scheduleSource, /return await uploadVideoAttempt\(uid, row, source, facts, checksum, attempt\)/, "the (possibly transformed) source is uploaded through the prepare/finalize attempt leg");
+assert.match(scheduleSource, /handleVideoUploadPrepare\(/, "the upload leg goes through the prepare handler that allocates the registered object path");
+assert.match(scheduleSource, /handleVideoUploadFinalize\(/, "the upload leg goes through the finalize handler that writes the provenance row");
+assert.match(scheduleSource, /const finalized = await fin\.json\(\)[^\n]*proxyUrl/, "the staged media url comes from the finalize response, not a locally minted path");
+assert.match(scheduleSource, /return \{ proxyUrl: finalized\.proxyUrl, \.\.\.facts \}/, "finalize's proxyUrl plus the ffprobe facts are what the caller stages");
+assert.match(scheduleSource, /const facts = probe\(source\)/, "dims/duration are ffprobe'd from the post-transform file and declared by the uploader");
+assert.doesNotMatch(scheduleSource, /db\.storage\.from\([^)]*\)\.upload\(/, "staging never writes storage objects outside the upload RPC");
+assert.doesNotMatch(scheduleSource, /from\("media_asset_provenance"\)/, "staging never writes or reads the registration table directly; it goes through the store");
+assert.match(scheduleSource, /await assertUploadRegistered\(db, ctx\.uid, upload, row\.mappingId\)/, "scheduleRow refuses to stage before confirming the media is registered");
+assert.match(scheduleSource, /createMediaProvenanceStore\(db\)\.findExact\(uid, VIDEO_UPLOAD_BUCKET, objectPath\)/, "the guard looks the row up by the exact bucket+object path publish time will use");
+
+assert.equal(parseStorageMediaObjectPath("/api/storage-media?path=owner-1%2Fvideos%2Fbatch%2F0-item.mp4"), "owner-1/videos/batch/0-item.mp4");
+assert.equal(parseStorageMediaObjectPath("/api/storage-media?path=owner-1%2Fwinninghunter%2Fcheerish-portrait-v1-a-b.mp4"), "owner-1/winninghunter/cheerish-portrait-v1-a-b.mp4", "the locator parses regardless of prefix; registration is what gates staging");
+assert.equal(parseStorageMediaObjectPath("https://cdn.example/video.mp4"), null, "absolute media urls are not private-bucket locators");
+assert.equal(parseStorageMediaObjectPath("/api/storage-media?path="), null, "an empty path is not a locator");
+assert.equal(parseStorageMediaObjectPath("/api/storage-media?path=owner-1%2F..%2Fescape.mp4"), null, "traversal is refused rather than normalized");
+
+const registeredPath = "owner-1/videos/batch-1/0-item.mp4";
+const registeredMedia = { width: 1080, height: 1920, durationMs: 15_071 };
+const registeredRow = {
+  owner_user_id: "owner-1", bucket_id: "generated-private", object_path: registeredPath, media_kind: "video",
+  width: 1080, height: 1920, duration_ms: 15_071,
+  content_type_source: "storage_head_verified", byte_size_source: "storage_head_verified",
+  dimensions_source: "browser_declared", duration_source: "browser_declared", lifecycle_state: "draft",
+};
+const guardInput = { ownerUserId: "owner-1", bucketId: "generated-private", objectPath: registeredPath, media: registeredMedia };
+assert.doesNotThrow(() => assertRegisteredVideoMedia({ ...guardInput, provenance: registeredRow }), "a row written by the finalize RPC passes the staging guard");
+// This is the exact production failure: the transform product reached storage, the
+// draft was staged, and no registration row existed for its object path.
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: null }), /media_provenance_missing/, "unregistered media fails closed at staging instead of at its scheduled hour");
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, owner_user_id: "owner-2" } }), /media_provenance_owner_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, bucket_id: "public" } }), /media_provenance_bucket_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, object_path: "owner-1/videos/other.mp4" } }), /media_provenance_path_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, media_kind: "image" } }), /media_provenance_kind_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, content_type_source: "client_declared" } }), /media_provenance_storage_labels_invalid/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, byte_size_source: "client_declared" } }), /media_provenance_storage_labels_invalid/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, dimensions_source: "server_probed" } }), /media_provenance_declaration_labels_invalid/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, duration_source: "server_probed" } }), /media_provenance_declaration_labels_invalid/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, lifecycle_state: "cleaning" } }), /media_provenance_lifecycle_invalid/);
+// Payload/registration disagreement is rejected on every axis, because publish
+// time compares all three and a mismatch there is an unrecoverable late failure.
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, width: 1079 } }), /media_provenance_facts_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, height: 1921 } }), /media_provenance_facts_mismatch/);
+assert.throws(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, duration_ms: 15_072 } }), /media_provenance_facts_mismatch/);
+// v76 enforces a 4s..300s publishable window; staging a draft outside it schedules a certain failure.
+assert.throws(() => assertRegisteredVideoMedia({ ownerUserId: "owner-1", bucketId: "generated-private", objectPath: registeredPath, media: { ...registeredMedia, durationMs: 3_999 }, provenance: { ...registeredRow, duration_ms: 3_999 } }), /media_provenance_duration_out_of_range/);
+assert.throws(() => assertRegisteredVideoMedia({ ownerUserId: "owner-1", bucketId: "generated-private", objectPath: registeredPath, media: { ...registeredMedia, durationMs: 300_001 }, provenance: { ...registeredRow, duration_ms: 300_001 } }), /media_provenance_duration_out_of_range/);
+for (const lifecycle of ["draft", "publish_pending", "published", "retained"]) {
+  assert.doesNotThrow(() => assertRegisteredVideoMedia({ ...guardInput, provenance: { ...registeredRow, lifecycle_state: lifecycle } }), `${lifecycle} is publishable`);
+}
+
 const cheerish = { provider: "pinterest", connection_status: "connected", provider_account_username: "@cheerishh", needs_reconnect: false, disconnected_at: null };
 assert.equal(selectExpectedPinterestConnection([cheerish], "cheerishh"), cheerish);
 const namedCheerish = { ...cheerish, provider_account_username: "unrelated", provider_account_name: "@cheerishh" };

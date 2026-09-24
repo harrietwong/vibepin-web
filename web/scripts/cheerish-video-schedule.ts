@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { validateManifest, validatePreviewBinding, buildCanaryScheduledAt, buildCompatibilityNormalizeCommand, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PORTRAIT_TRANSFORM_VERSION, PREVIEW_REF, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
+import { assertRegisteredVideoMedia, parseStorageMediaObjectPath, validateManifest, validatePreviewBinding, buildCanaryScheduledAt, buildCompatibilityNormalizeCommand, buildPortraitTransformCommand, buildPortraitTransformIdempotencyKey, buildPortraitTransformOutputPath, canReplaceManifestMedia, chunkRows, dedupeManifest, isTerminalUploadState, mediaId, needsVideoNormalization, patchSourceCsvRow, PORTRAIT_TRANSFORM_VERSION, PREVIEW_REF, readRequiredFlag, replaceVideoMediaPayload, resolveRequiredBoards, runConcurrentWithSequentialRetry, SAFE_PRIVATE_STORAGE_BYTES, scheduleFieldsInTimeZone, selectExpectedPinterestConnection, selectRowsForCommand, shouldUseRetry1, SOCIAL_CONNECTION_PROJECTION, uploadAttemptKeys, type CheerishScheduleRow } from "./lib/cheerish-video-schedule";
 import { handleVideoUploadPrepare, handleVideoUploadFinalize, VIDEO_UPLOAD_BUCKET } from "../src/lib/server/media/videoUploadHandler";
 import { createVideoUploadStore } from "../src/lib/server/media/videoUploadStore";
 import { createSupabaseVideoStorage } from "../src/lib/server/media/supabaseVideoStorage";
@@ -186,7 +186,32 @@ function patchScheduledSource(row: CheerishScheduleRow, ctx: { label: string }, 
   writeFileSync(temporary, patched, "utf8");
   renameSync(temporary, row.sourceCsv);
 }
+/**
+ * Single registration checkpoint for staged video media.
+ *
+ * Every staged draft must point at an object that already carries a
+ * `media_asset_provenance` row written by the upload RPC — the same row
+ * `v76PinterestVideoRuntime` looks up at publish time. Registration is never
+ * synthesised here: the only way to obtain a row is the prepare -> signed upload
+ * -> finalize leg in `uploadVideoAttempt`, which is what `uploadVideo` runs for
+ * both pass-through and portrait-transformed sources. Anything else (for example
+ * a raw storage POST that mints its own object path) fails closed here instead of
+ * silently producing a draft that is guaranteed to be rejected at its scheduled
+ * hour.
+ */
+async function assertUploadRegistered(db: SupabaseClient, uid: string, upload: { proxyUrl: string; width: number; height: number; durationMs: number }, mappingId: string): Promise<void> {
+  const objectPath = parseStorageMediaObjectPath(upload.proxyUrl);
+  if (!objectPath) throw new Error(`media_locator_unrecognized:${mappingId}:${upload.proxyUrl}`);
+  const provenance = await createMediaProvenanceStore(db).findExact(uid, VIDEO_UPLOAD_BUCKET, objectPath);
+  try {
+    assertRegisteredVideoMedia({ ownerUserId: uid, bucketId: VIDEO_UPLOAD_BUCKET, objectPath, media: { width: upload.width, height: upload.height, durationMs: upload.durationMs }, provenance });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}:${mappingId}`);
+  }
+}
+
 async function scheduleRow(db: SupabaseClient, ctx:{uid:string;connectionId:string;label:string}, boards:Record<string,string>, row:CheerishScheduleRow, upload:{proxyUrl:string;width:number;height:number;durationMs:number}, override?:string) {
+  await assertUploadRegistered(db, ctx.uid, upload, row.mappingId);
   const now = new Date().toISOString(); const scheduledAt = override ?? row.scheduledAt; const draftId = row.draftId; const mId = mediaId(row); const boardId = boards[row.board];
   const sourceLocalFileName = row.localFilePath ? basename(row.localFilePath) : undefined;
   const payload:any = { id:draftId,contentId:draftId,imageUrl:"",media:[{id:mId,kind:"video",url:upload.proxyUrl,source:"upload",width:upload.width,height:upload.height,durationMs:upload.durationMs,altText:row.title}],coverMediaId:mId,keyword:row.productHandle.replaceAll("-"," "),category:row.board,title:row.title,description:row.description,altText:row.title,destinationUrl:row.destinationUrl,boardId,boardName:row.board,weeklyPlanItemId:"",generationSessionId:"cheerish-2026-09",status:"ready",planningStatus:"ready",createdAt:now,updatedAt:now,source:"uploaded_image",idempotencyKey:row.mappingId,addedToPlanAt:now,targetConnectionId:ctx.connectionId,targetAccountLabel:ctx.label,scheduledDestinations:[{provider:"pinterest",socialConnectionId:ctx.connectionId,accountLabel:ctx.label,boardId,boardName:row.board,capturedAt:now}],sourceVideoSha256:row.sha256,sourceLocalFileName,sourcePrivateStorageLocator:row.privateStorageLocator,sourceMappingId:row.mappingId,...scheduleFieldsInTimeZone(scheduledAt) };
