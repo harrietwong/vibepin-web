@@ -210,6 +210,9 @@ export const CORE: string[] = [
   "test-video-upload-private",
   "test-cheerish-video-schedule",
   "test-reconcile-cheerish-drafts",
+  // WinningHunter queue ops (fix/winninghunter-queue-ops-0923): pure planning/reconcile units.
+  "test-winninghunter-queue-ops",
+  "test-reconcile-winninghunter-pinterest",
   // Shopify
   "test-connection-limit",
   "test-settle-generation-job",
@@ -276,6 +279,8 @@ export const STUDIO: string[] = [
   // Per-Pin confirmation list before schedule / publish (Fable ruling 4, T4):
   // removed Pins are never submitted; the single-Pin dialog uses the same list.
   "test-pin-confirm-list",
+  // Studio bulk bar "Generate copy" button + start panel wiring (Amazon T4b).
+  "test-studio-bulk-copy-ui",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
