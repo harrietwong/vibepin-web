@@ -14,3 +14,9 @@
  * (studio/hiddenPromptBuilder.ts) and the judge's JUDGE_VERSION (judgeVerdict.ts).
  */
 export const COPY_PROMPT_VERSION = "cp_v1";
+
+/**
+ * AI Copy v2 grounded prompt version (server orchestrator + client analytics stamp).
+ * v4: affiliate (Amazon) prompt line + disclosure-aware description budget.
+ */
+export const AI_COPY_V2_PROMPT_VERSION = "ai_copy_v2_grounded_v4_affiliate_disclosure";

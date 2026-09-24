@@ -5,7 +5,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import { coverMedia } from "@/lib/contentDraftModel";
 import { waitForPinDraftMediaSync } from "@/lib/pinDraftSync";
 import { track, trackLatency } from "@/lib/analytics";
-import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
+import { AI_COPY_V2_PROMPT_VERSION, COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 import { readPinterestRegionFromStorage } from "@/lib/i18n/config";
 import type {
   GeneratePinterestPinCopyInput,
@@ -276,7 +276,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
         generatedAt: new Date().toISOString(),
         provider: "ai-copy-v2",
         model: "server-selected",
-        promptVersion: "ai_copy_v2_grounded_v3_independent_claims",
+        promptVersion: AI_COPY_V2_PROMPT_VERSION,
         strategy: mode,
         contextSourcesUsed,
         keywordTermsUsed: selectedKeywords,
@@ -290,7 +290,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     };
     track("ai_copy_success", {
       draftId: input.draftId, mode, cacheHit, pathUsed: "v2_grounded", keywords: v2.result.usedKeywordIds.length,
-      versions: { promptVersion: "ai_copy_v2_grounded_v3_independent_claims" },
+      versions: { promptVersion: AI_COPY_V2_PROMPT_VERSION },
     });
     return {
       metadataDraft: enhancedDraft,

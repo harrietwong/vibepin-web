@@ -793,6 +793,29 @@ async function main() {
     assert(new RegExp(`grant\\s+execute\\s+on\\s+function\\s+${rpcSignature.replace(/[()]/g, "\\$&")}\\s+to\\s+service_role`, "i").test(sql), "RPC executes only through service role");
   });
 
+  await test("affiliateDisclosure is whitelisted on the generate route", async () => {
+    const store = reset(); const session = await seed(store);
+    let providerCalls = 0;
+    setProvider({ async generate() { providerCalls++; return validOutput(); } });
+    eq((await generate(generateReq(session.id, "bad-disclosure", { affiliateDisclosure: "sponsored" }))).status, 400, "unknown disclosure rejected");
+    eq((await generate(generateReq(session.id, "bad-disclosure-type", { affiliateDisclosure: 1 }))).status, 400, "non-string disclosure rejected");
+    eq(providerCalls, 0, "no provider work on a rejected body");
+  });
+
+  await test("affiliate generate appends #ad server-side before validation; plain generate is unchanged", async () => {
+    const store = reset(); const session = await seed(store);
+    let prompt = "";
+    setProvider({ async generate(p: string) { prompt = p; return validOutput(); } });
+    const response = await generate(generateReq(session.id, "affiliate", { affiliateDisclosure: "ad_hashtag" }));
+    eq(response.status, 200, "status");
+    const json = await response.json();
+    eq(json.result.description, "Create a calm reading corner with warm neutral details. #ad", "disclosure appended at the end");
+    assert(json.result.validationReport.valid, "validated copy includes the marker");
+    assert(prompt.includes("Do not add any disclosure hashtag yourself"), "affiliate prompt line");
+    const plain = await (await generate(generateReq(session.id, "plain"))).json();
+    eq(plain.result.description, "Create a calm reading corner with warm neutral details.", "no flag → no marker");
+  });
+
   sessionModule.__setSessionStoreForTests(null); __setTrendKeywordLoaderForTests(null); __setCopyProviderForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`); if (failed) process.exit(1);
 }
