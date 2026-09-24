@@ -139,7 +139,21 @@ async function cleanupIntent(intentId: string): Promise<{ status: number; body: 
   const scheduledOverride = process.argv.includes("--scheduled-at")
     ? process.argv[process.argv.indexOf("--scheduled-at") + 1]
     : "";
-  const effectiveScheduledAt = String(row.scheduled_at ?? "") || scheduledOverride;
+  // The Management API returns raw Postgres timestamp text ("2026-09-25
+  // 01:00:00+00"), but the cron reads this column through PostgREST, which
+  // serialises ISO-8601 ("2026-09-25T01:00:00+00:00"). buildDueVideoReceipt
+  // passes the value straight into confirmedAt, and the v76 guard requires the
+  // ISO form — so reading it the Management-API way and feeding it to the
+  // builder fabricates a malformed receipt the cron would never produce, and
+  // the probe then "fails" on its own artefact. Normalise to ISO so this
+  // measures the draft rather than the transport.
+  const rawScheduledAt = String(row.scheduled_at ?? "") || scheduledOverride;
+  // Postgres also renders a whole-hour offset as "+00"; JS Date needs "+00:00".
+  const isoish = rawScheduledAt.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
+  const parsedScheduledAt = rawScheduledAt ? new Date(isoish) : null;
+  const effectiveScheduledAt = parsedScheduledAt && Number.isFinite(parsedScheduledAt.getTime())
+    ? parsedScheduledAt.toISOString()
+    : "";
   check("draft has a scheduled_at to build a receipt from",
     !!effectiveScheduledAt,
     `scheduled_at=${row.scheduled_at ?? "null"}${scheduledOverride ? ` override=${scheduledOverride}` : ""}`);
