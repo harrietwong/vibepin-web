@@ -2713,6 +2713,18 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "{requested}枚をリクエストしましたが、現在のプランの残りは{remaining}枚です。残りの枚数で生成するか、プランをアップグレードしてください。",
   "studioBoard.limit.image.generateRemaining": "代わりに{remaining}枚生成",
   "studioBoard.limit.image.generateOneRemaining": "代わりに1枚生成",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Pinterestに投稿",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Pinterestに投稿",
+  "public.pricing.compare.description.pinterestOnly": "保存数の多い商品、トレンドのPin、キーワードのアイデアを発見。AIでコンテンツを生成。Pinterestに投稿。",
+  "public.pricing.footnote.accounts.pinterestOnly": "アカウントとは、接続された1つのPinterestアカウント/ページを指します。Starterは各プラットフォーム1アカウント、Proは2アカウント、Businessは3アカウントを含みます。",
+  "public.pricing.finalCta.description.pinterestOnly": "商品とPinのアイデアを発見し、AIでコンテンツを生成し、Pinterestに投稿しましょう。",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Pinterestに投稿できますか？",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "はい。有料プランではPinterestへの投稿がサポートされています。無料ユーザーは投稿機能が制限されます。",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starterは各プラットフォーム（Pinterest）1アカウント、Proは2アカウント、Businessは3アカウント、Freeは1アカウントを含みます。",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Starter、Pro、Businessのみ、Pinterest用のソーシャルアカウント枠を追加できます。各アカウントは月払いで月額7ドル、年払いで月額5ドルです。",
 };
 
 export default ja;

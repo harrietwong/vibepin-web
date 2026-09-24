@@ -2707,6 +2707,18 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "आपने {requested} छवियाँ माँगी थीं, लेकिन आपकी वर्तमान योजना में केवल {remaining} शेष हैं। इसके बजाय शेष छवियाँ बनाएँ, या अधिक के लिए अपनी योजना अपग्रेड करें।",
   "studioBoard.limit.image.generateRemaining": "इसके बजाय {remaining} बनाएँ",
   "studioBoard.limit.image.generateOneRemaining": "इसके बजाय 1 बनाएँ",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Pinterest पर पब्लिश करें",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Pinterest पर पब्लिश करें",
+  "public.pricing.compare.description.pinterestOnly": "ज़्यादा सेव किए गए प्रोडक्ट, ट्रेंडिंग Pin और कीवर्ड आइडिया खोजें। AI से कंटेंट जनरेट करें। Pinterest पर पब्लिश करें।",
+  "public.pricing.footnote.accounts.pinterestOnly": "एक अकाउंट का मतलब है एक कनेक्टेड Pinterest अकाउंट/पेज। Starter में हर प्लेटफ़ॉर्म पर 1 अकाउंट, Pro में 2 अकाउंट, और Business में 3 अकाउंट शामिल हैं।",
+  "public.pricing.finalCta.description.pinterestOnly": "प्रोडक्ट और Pin आइडिया खोजें, AI से कंटेंट जनरेट करें, और Pinterest पर पब्लिश करें।",
+  "public.pricing.faq.item.0.question.pinterestOnly": "क्या मैं Pinterest पर पब्लिश कर सकता हूँ?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "हाँ। पेड प्लान Pinterest पर पब्लिश करने का समर्थन करते हैं। फ्री यूज़र्स को सीमित पब्लिशिंग एक्सेस मिलता है।",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter में हर प्लेटफ़ॉर्म (Pinterest) पर 1 अकाउंट शामिल है। Pro में 2 अकाउंट, Business में 3 अकाउंट, और Free में 1 अकाउंट शामिल है।",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "केवल Starter, Pro और Business ही Pinterest के लिए अतिरिक्त सोशल अकाउंट स्लॉट जोड़ सकते हैं। हर अकाउंट की कीमत मासिक बिलिंग पर $7 प्रति माह, या वार्षिक बिलिंग पर $5 प्रति माह है।",
 };
 
 export default hi;

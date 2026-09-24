@@ -5,6 +5,7 @@ import { Check, Link } from "lucide-react";
 import NextLink from "next/link";
 import { apiFetch } from "@/lib/utils";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
+import { isHiddenSocialProvider } from "@/lib/social/visibleProviders";
 
 interface Settings {
   auto_publish: boolean;
@@ -79,9 +80,9 @@ export default function SettingsPage() {
             </div>
 
             {/* Instagram — legacy connection (unchanged). */}
-            {[
+            {(isHiddenSocialProvider("instagram") ? [] : [
               { label: "Instagram", connected: settings.instagram_connected, href: `${API}/api/auth/instagram` },
-            ].map(p => (
+            ]).map(p => (
               <div key={p.label} className={`rounded-xl border p-4 flex items-center justify-between ${p.connected ? "border-[#00B08A]/30 bg-[#E6F7F4]/50" : "border-neutral-200"}`}>
                 <div>
                   <p className="text-sm font-semibold text-neutral-800">{p.label}</p>
@@ -123,9 +124,9 @@ export default function SettingsPage() {
                 onChange={e => setSettings(p => ({ ...p, default_platforms: e.target.value }))}
                 className="rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-[#00B08A] focus:outline-none bg-white"
               >
-                <option value="both">Pinterest + Instagram</option>
+                {!isHiddenSocialProvider("instagram") && <option value="both">Pinterest + Instagram</option>}
                 <option value="pinterest">Pinterest only</option>
-                <option value="instagram">Instagram only</option>
+                {!isHiddenSocialProvider("instagram") && <option value="instagram">Instagram only</option>}
               </select>
             </div>
           </div>

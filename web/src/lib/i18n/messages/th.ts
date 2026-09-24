@@ -2710,6 +2710,18 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "คุณขอ {requested} ภาพ แต่แพ็กเกจปัจจุบันของคุณเหลืออยู่เพียง {remaining} ภาพ สร้างเท่าที่เหลือแทน หรืออัปเกรดแพ็กเกจเพื่อรับเพิ่ม",
   "studioBoard.limit.image.generateRemaining": "สร้าง {remaining} ภาพแทน",
   "studioBoard.limit.image.generateOneRemaining": "สร้าง 1 ภาพแทน",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "เผยแพร่ไปยัง Pinterest",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "เผยแพร่ไปยัง Pinterest",
+  "public.pricing.compare.description.pinterestOnly": "ค้นพบสินค้าที่มีการบันทึกสูง Pin ยอดนิยม และไอเดียคำหลัก สร้างเนื้อหาด้วย AI เผยแพร่ไปยัง Pinterest",
+  "public.pricing.footnote.accounts.pinterestOnly": "บัญชีหมายถึงบัญชี/เพจ Pinterest ที่เชื่อมต่อหนึ่งบัญชี Starter รวม 1 บัญชีต่อแพลตฟอร์ม Pro รวม 2 บัญชีต่อแพลตฟอร์ม และ Business รวม 3 บัญชีต่อแพลตฟอร์ม",
+  "public.pricing.finalCta.description.pinterestOnly": "ค้นพบสินค้าและไอเดีย Pin สร้างเนื้อหาด้วย AI และเผยแพร่ไปยัง Pinterest",
+  "public.pricing.faq.item.0.question.pinterestOnly": "ฉันสามารถเผยแพร่ไปยัง Pinterest ได้หรือไม่",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "ได้ แพ็กเกจแบบชำระเงินรองรับการเผยแพร่ไปยัง Pinterest ผู้ใช้ฟรีมีสิทธิ์เผยแพร่จำกัด",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter รวม 1 บัญชีต่อแพลตฟอร์ม (Pinterest) Pro รวม 2 บัญชีต่อแพลตฟอร์ม Business รวม 3 บัญชีต่อแพลตฟอร์ม Free รวม 1 บัญชีต่อแพลตฟอร์ม",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "มีเพียง Starter, Pro และ Business เท่านั้นที่สามารถเพิ่มที่นั่งบัญชีโซเชียลสำหรับ Pinterest ได้ แต่ละบัญชีมีค่าใช้จ่าย $7 ต่อเดือนสำหรับการเรียกเก็บเงินรายเดือน หรือ $5 ต่อเดือนสำหรับการเรียกเก็บเงินรายปี",
 };
 
 export default th;

@@ -12,7 +12,8 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Check, Link as LinkIcon, Loader2 } from "lucide-react";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
-import { PLATFORMS, SOCIAL_PROVIDERS, VISIBLE_SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
+import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
+import { customerVisibleSocialProviders } from "@/lib/social/visibleProviders";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections, SOCIAL_CONNECTIONS_CHANGED_EVENT } from "@/lib/social/connectionsCache";
@@ -484,6 +485,11 @@ export function PublishDestinations({
   const effectiveSummaries = summaries;
   const pinterestSummary = summaries.find(s => s.provider === "pinterest");
   const effectivePinterestConnected = !!pinterestSummary?.connected;
+  // Product decision: hide Instagram/Facebook rows behind NEXT_PUBLIC_HIDE_IG_FB.
+  // A provider already present in `selected` (e.g. a Pin scheduled to Instagram
+  // before the flag flipped) stays visible — hiding a ticked destination here
+  // would silently drop it from the draft on save.
+  const visibleProviders = customerVisibleSocialProviders(selected);
 
   return (
     <div
@@ -503,7 +509,7 @@ export function PublishDestinations({
       </div>
 
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {VISIBLE_SOCIAL_PROVIDERS.map(provider => {
+        {visibleProviders.map(provider => {
           const summary = effectiveSummaries.find(s => s.provider === provider);
           if (!summary) return null;
           const multi = summary.accounts.filter(a => connectionState(a) === "connected");
@@ -577,7 +583,7 @@ export function PublishDestinations({
             </Fragment>
           );
         }).map((node, i) => {
-          const provider = VISIBLE_SOCIAL_PROVIDERS[i];
+          const provider = visibleProviders[i];
           const summary = effectiveSummaries.find(s2 => s2.provider === provider);
           const isSelected = selected.includes(provider);
           const details = node && summary?.connected && isSelected ? renderDetails?.(provider, isSelected) : null;

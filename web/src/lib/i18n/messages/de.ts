@@ -2731,6 +2731,18 @@ const de: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "Sie haben {requested} Bilder angefordert, aber in Ihrem aktuellen Tarif sind nur noch {remaining} übrig. Generieren Sie stattdessen die verbleibenden Bilder oder führen Sie ein Upgrade durch.",
   "studioBoard.limit.image.generateRemaining": "Stattdessen {remaining} generieren",
   "studioBoard.limit.image.generateOneRemaining": "Stattdessen 1 generieren",
+
+  // NEXT_PUBLIC_HIDE_IG_FB variants — same sentence with Instagram/Facebook
+  // dropped. See lib/i18n/messages/publicPricing.ts for the English source.
+  "public.pricing.plan.starter.bullet.7.pinterestOnly": "Auf Pinterest veröffentlichen",
+  "public.pricing.plan.starter.previewBullet.4.pinterestOnly": "Auf Pinterest veröffentlichen",
+  "public.pricing.compare.description.pinterestOnly": "Entdecke stark gespeicherte Produkte, angesagte Pins und Keyword-Ideen. Erstelle Inhalte mit KI. Veröffentliche auf Pinterest.",
+  "public.pricing.footnote.accounts.pinterestOnly": "Ein Konto ist ein verbundenes Pinterest-Konto/-Profil. Starter enthält 1 Konto pro Plattform, Pro 2 Konten pro Plattform und Business 3 Konten pro Plattform.",
+  "public.pricing.finalCta.description.pinterestOnly": "Entdecke Produkte und Pin-Ideen, erstelle Inhalte mit KI und veröffentliche auf Pinterest.",
+  "public.pricing.faq.item.0.question.pinterestOnly": "Kann ich auf Pinterest veröffentlichen?",
+  "public.pricing.faq.item.0.answer.pinterestOnly": "Ja. Kostenpflichtige Pläne unterstützen die Veröffentlichung auf Pinterest. Kostenlose Nutzer haben eingeschränkten Zugriff auf die Veröffentlichung.",
+  "public.pricing.faq.item.5.answer.pinterestOnly": "Starter enthält 1 Konto pro Plattform (Pinterest). Pro enthält 2 Konten pro Plattform. Business enthält 3 Konten pro Plattform. Free enthält 1 Konto pro Plattform.",
+  "public.pricing.faq.item.6.answer.pinterestOnly": "Nur Starter, Pro und Business können zusätzliche Social-Account-Plätze für Pinterest hinzufügen. Jedes Konto kostet 7 $ pro Monat bei monatlicher Abrechnung oder 5 $ pro Monat bei jährlicher Abrechnung.",
 };
 
 export default de;

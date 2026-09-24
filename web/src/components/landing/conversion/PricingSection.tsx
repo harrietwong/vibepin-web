@@ -3,6 +3,7 @@ import { ArrowRight, Check } from "lucide-react";
 import { PRICING_TIERS, type PricingTier } from "@/lib/pricingPlans";
 import { CONTAINER, GradientText, SECTION, SectionLabel, VibeBtn } from "./shared";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { igFbHidden } from "@/lib/social/visibleProviders";
 
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
@@ -39,7 +40,7 @@ export function PricingSection() {
             {t("public.landing.pricing.title")} <GradientText>{t("public.landing.pricing.titleAccent")}</GradientText>
           </h2>
           <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
-            {t("public.landing.pricing.description")}
+            {t((igFbHidden() ? "public.landing.pricing.description.pinterestOnly" : "public.landing.pricing.description") as never)}
           </p>
         </div>
 
@@ -88,8 +89,11 @@ export function PricingSection() {
                 {t(`public.pricing.plan.${plan.id}.description` as never)}
               </p>
               <ul className="flex-1 space-y-2.5 mb-6">
-                {plan.previewBullets.map((_, index) => {
-                  const bullet = t(`public.pricing.plan.${plan.id}.previewBullet.${index}` as never);
+                {plan.previewBullets.map((source, index) => {
+                  const key = igFbHidden() && /Instagram|Facebook/.test(source)
+                    ? `public.pricing.plan.${plan.id}.previewBullet.${index}.pinterestOnly`
+                    : `public.pricing.plan.${plan.id}.previewBullet.${index}`;
+                  const bullet = t(key as never);
                   return <li key={bullet} className="flex items-start gap-2.5 text-[12px]">
                     <Check
                       className="mt-0.5 h-3.5 w-3.5 shrink-0"

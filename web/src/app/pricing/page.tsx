@@ -3,12 +3,20 @@ import { hasPublicSessionCookie } from "@/lib/auth/publicSessionHint";
 import { cookies } from "next/headers";
 import PricingPageClient from "./pricing-client";
 import { PublicShell } from "@/components/public/PublicShell";
+import { igFbHidden } from "@/lib/social/visibleProviders";
 
-export const metadata = {
-  title: "Pricing — VibePin",
-  description:
-    "Simple pricing for AI content creation and multi-platform publishing across Pinterest, Instagram, and Facebook. Start free, upgrade when you create more.",
-};
+// Product decision: hide Instagram/Facebook behind NEXT_PUBLIC_HIDE_IG_FB.
+// Two static English variants (this metadata isn't i18n-routed today — it's
+// a fixed SEO description regardless of locale), picked by the same flag as
+// every other pricing surface.
+export function generateMetadata() {
+  return {
+    title: "Pricing — VibePin",
+    description: igFbHidden()
+      ? "Simple pricing for AI content creation and Pinterest publishing. Start free, upgrade when you create more."
+      : "Simple pricing for AI content creation and multi-platform publishing across Pinterest, Instagram, and Facebook. Start free, upgrade when you create more.",
+  };
+}
 
 // Force per-request rendering. `billingEnabled` is read from CREEM_MODE at
 // request time; reading process.env alone does NOT opt a route out of static
