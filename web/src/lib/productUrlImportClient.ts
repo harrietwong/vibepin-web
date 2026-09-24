@@ -85,10 +85,28 @@ export type ProductUrlImportApiResponse = {
   }>;
 };
 
+/**
+ * The import route requires a signed-in user. Same-origin requests already carry the
+ * Supabase SSR cookies, but we also send the Bearer token so auth does not depend on
+ * cookie refresh timing (matches the other authed JSON routes). Loaded lazily so this
+ * module stays importable from node tests without a browser Supabase client.
+ */
+async function importAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const { freshSessionIdentity } = await import("@/lib/supabaseBrowser");
+    const identity = await freshSessionIdentity();
+    if (identity?.accessToken) headers.Authorization = `Bearer ${identity.accessToken}`;
+  } catch {
+    /* fall back to cookie auth */
+  }
+  return headers;
+}
+
 export async function fetchProductUrlImport(urls: string[]): Promise<ProductUrlImportApiResponse> {
   const resp = await fetch("/api/import/product-urls", {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await importAuthHeaders(),
     body:    JSON.stringify({ urls }),
   });
 

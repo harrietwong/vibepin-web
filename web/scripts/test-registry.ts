@@ -31,6 +31,7 @@ export const CORE: string[] = [
   "test-freshness",
   "test-pin-metadata",
   "test-product-url-import",
+  "test-product-url-import-auth",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",

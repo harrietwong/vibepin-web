@@ -1,3 +1,6 @@
+import { isIP } from "node:net";
+import { isPublicIpAddress } from "@/app/api/fetch-og/safeOutboundUrl";
+
 const BLOCKED_HOST_SUFFIXES = [
   "amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.ca", "amazon.com.au",
   "temu.com", "shein.com", "aliexpress.com", "aliexpress.us",
@@ -11,12 +14,20 @@ export function isBlockedMarketplace(hostname: string): boolean {
   return BLOCKED_HOST_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`));
 }
 
+/**
+ * True for localhost names and for ANY IP literal that is not a public unicast address.
+ *
+ * IP literals are classified by the same `isPublicIpAddress` the fetch-og guard uses,
+ * NOT by string prefixes: the WHATWG URL parser rewrites `[::ffff:127.0.0.1]` to
+ * `[::ffff:7f00:1]`, so a prefix check on the literal silently let IPv4-mapped loopback
+ * through. The shared classifier decodes mapped IPv4, and rejects `::`, link-local
+ * `fe80::/10`, ULA, NAT64 `64:ff9b::/96`, 100.64/10, 198.18/15, etc.
+ */
 export function isPrivateOrLocalHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
+  const h = hostname.toLowerCase().replace(/\.$/, "");
   if (h === "localhost" || h.endsWith(".localhost") || h === "0.0.0.0") return true;
-  if (h.includes(":")) {
-    if (h === "[::1]" || h.startsWith("[fc") || h.startsWith("[fd")) return true;
-  }
+  const bare = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (isIP(bare) !== 0) return !isPublicIpAddress(bare);
   if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) return PRIVATE_IPV4.test(h);
   return false;
 }
