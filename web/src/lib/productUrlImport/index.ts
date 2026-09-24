@@ -21,6 +21,8 @@ export {
   validateImportUrl,
 } from "./urlSecurity";
 export type { AmazonUrlValidation } from "./urlSecurity";
+export { expandAmazonShortLink, AMAZON_SHORT_LINK_MAX_HOPS } from "./amazonShortLink";
+export type { AmazonShortLinkExpansion, ShortLinkFetch } from "./amazonShortLink";
 
 // HTML extraction utilities (used by tests + external callers)
 export {
