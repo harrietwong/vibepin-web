@@ -234,8 +234,36 @@ async function buildPlans(): Promise<Plan[]> {
     const width = Number(media.width), height = Number(media.height), durationMs = Number(media.durationMs);
     if (![width, height, durationMs].every((v) => Number.isSafeInteger(v) && v > 0)) { plans.push({ draftId, decision: "skip", reason: "payload_media_facts_incomplete", objectPath }); continue; }
     if (durationMs < MIN_PUBLISHABLE_MS || durationMs > MAX_PUBLISHABLE_MS) { plans.push({ draftId, decision: "skip", reason: `duration_out_of_publishable_range:${durationMs}`, objectPath }); continue; }
+    // A row may already exist because an earlier run registered the media and
+    // then lost the connection before restoring the schedule. Skipping such a
+    // draft would strand exactly the row that most needs finishing, so instead
+    // verify the existing row is the shape publish time requires and, if so,
+    // resume at the schedule step. A row that does NOT match is left alone: this
+    // script repairs its own half-finished work, it does not overwrite someone
+    // else's registration.
     const existing = await readProvenance(objectPath);
-    if (existing) { plans.push({ draftId, decision: "skip", reason: "provenance_row_already_present", objectPath, provenanceExists: true }); continue; }
+    if (existing) {
+      const usable = existing.media_kind === "video"
+        && existing.content_type_source === "storage_head_verified"
+        && existing.byte_size_source === "storage_head_verified"
+        && existing.dimensions_source === "browser_declared"
+        && existing.duration_source === "browser_declared"
+        && Number(existing.width) === width && Number(existing.height) === height && Number(existing.duration_ms) === durationMs
+        && ["draft", "publish_pending", "published", "retained"].includes(String(existing.lifecycle_state));
+      if (!usable) { plans.push({ draftId, decision: "skip", reason: "provenance_row_present_but_unusable", objectPath, provenanceExists: true }); continue; }
+      const slot = nextFreeHour(cursor, occupied);
+      occupied.add(slot.getTime());
+      cursor = slot;
+      const newScheduledAt = slot.toISOString();
+      plans.push({
+        draftId, decision: "restore", reason: "provenance_already_registered_resume_schedule", objectPath,
+        contentType: String(existing.content_type ?? ""), byteSize: Number(existing.byte_size), width, height, durationMs,
+        previousScheduledTime: previous, newScheduledAt,
+        newLocal: `${scheduleFieldsInTimeZone(newScheduledAt, SCHEDULE_TIME_ZONE).plannedAt} ${SCHEDULE_TIME_ZONE}`,
+        expectedUpdatedAt: draft.updated_at, provenanceExists: true,
+      });
+      continue;
+    }
     let head: { contentType: string; byteSize: number };
     try { head = await headObject(objectPath); }
     catch (error) { plans.push({ draftId, decision: "skip", reason: `storage_head_failed:${error instanceof Error ? error.message : String(error)}`, objectPath }); continue; }
@@ -266,7 +294,12 @@ function renderTable(plans: Plan[]): string {
 
 async function applyPlan(plan: Plan): Promise<{ draftId: string; ok: boolean; detail: string }> {
   // Step 1: registration. Must land before the schedule, or the next tick
-  // reproduces the original failure.
+  // reproduces the original failure. Skipped when a prior run already wrote a
+  // verified row — this step is the resumable half.
+  if (plan.provenanceExists) {
+    const already = await readProvenance(plan.objectPath!);
+    if (!already) return { draftId: plan.draftId, ok: false, detail: "expected_existing_provenance_row_vanished" };
+  } else {
   const registration = {
     owner_user_id: OWNER_USER_ID, bucket_id: BUCKET, object_path: plan.objectPath,
     media_kind: "video", source_type: "upload", lifecycle_state: "draft", intent_id: null,
@@ -289,6 +322,7 @@ async function applyPlan(plan: Plan): Promise<{ draftId: string; ok: boolean; de
   });
   const confirmed = await readProvenance(plan.objectPath!);
   if (!confirmed) return { draftId: plan.draftId, ok: false, detail: "provenance_row_not_visible_after_write" };
+  }
 
   // Step 2: schedule, compare-and-swap on updated_at so a draft another session
   // has modified since the pre-flight read is left alone rather than clobbered.
