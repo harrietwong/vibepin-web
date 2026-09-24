@@ -13,6 +13,9 @@
  *    Brand "Stanley" + Size "40 oz" declared → passes; not declared → 422 codes
  *  - generatePinterestPinCopy: failed fetch + no name → refused with 0 requests and
  *    fields unchanged; ready card → generate body carries affiliateDisclosure
+ *  - affiliate disclosure gate: v2 disabled + an Amazon card ready to generate is
+ *    refused with 0 requests (v1 has no affiliateDisclosure plumbing, so it would
+ *    silently ship undisclosed affiliate copy); non-Amazon cards are unaffected
  *
  * Run: npx tsx scripts/test-amazon-copy-mapping.ts
  */
@@ -321,6 +324,48 @@ async function main() {
       await gen.generatePinterestPinCopy({ draftId: d.id, imageUrl: "https://x/c.png", language: "en", imageAnalysis });
     } finally { globalThis.fetch = originalFetch; }
     assert.equal("affiliateDisclosure" in generateBody, false);
+  });
+
+  console.log("\n[affiliate disclosure gate: v2 off + Amazon card]");
+  await test("v2 disabled + Amazon card ready to generate → refused before any request (no undisclosed #ad copy)", async () => {
+    mem.clear(); store.__resetMemoryCacheForTests();
+    delete process.env.NEXT_PUBLIC_AI_COPY_V2;
+    const d = store.createBoardDraft({ imageUrl: "https://x/d.png", source: "uploaded_image", title: "My title" });
+    // manual.productName set → canGenerateAmazonCopy() is true, so if this test still
+    // threw AMAZON_PRODUCT_NAME_REQUIRED it would prove nothing about the v2 gate.
+    store.updateDraft(d.id, { destinationUrl: URL_OK, amazonSource: { ...fresh(), manual: { productName: "Tumbler" } } });
+    const before = JSON.stringify(store.getDraft(d.id));
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response("{}"); }) as typeof fetch;
+    try {
+      await assert.rejects(
+        gen.generatePinterestPinCopy({ draftId: d.id, imageUrl: "https://x/d.png", language: "en", destinationUrl: URL_OK, imageAnalysis }),
+        (e: unknown) => (e as { code?: string }).code === gen.AMAZON_COPY_REQUIRES_V2,
+      );
+    } finally { globalThis.fetch = originalFetch; }
+    assert.equal(calls, 0, "no analyze / generate / vision request");
+    assert.equal(JSON.stringify(store.getDraft(d.id)), before, "draft unchanged field-for-field");
+  });
+  await test("v2 disabled + non-Amazon card → unaffected, still generates via v1", async () => {
+    mem.clear(); store.__resetMemoryCacheForTests();
+    delete process.env.NEXT_PUBLIC_AI_COPY_V2;
+    const d = store.createBoardDraft({ imageUrl: "https://x/e.png", source: "uploaded_image" });
+    store.updateDraft(d.id, { destinationUrl: "https://myshop.example/lamp" });
+    let calls = 0;
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls++;
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ ok: true, output: { title: "T", description: "D", altText: "A" } }), { status: 200 });
+    }) as typeof fetch;
+    let res: Awaited<ReturnType<typeof gen.generatePinterestPinCopy>>;
+    try {
+      res = await gen.generatePinterestPinCopy({ draftId: d.id, imageUrl: "https://x/e.png", language: "en", imageAnalysis });
+    } finally { globalThis.fetch = originalFetch; }
+    assert.equal(calls, 1, "the v1 request still happens for a non-Amazon card");
+    assert.ok(requestedUrl.endsWith("/api/ai-copy"));
+    assert.equal(res.fields.title, "T");
+    assert.equal(res.fields.description, "D");
   });
   if (originalFlag == null) delete process.env.NEXT_PUBLIC_AI_COPY_V2; else process.env.NEXT_PUBLIC_AI_COPY_V2 = originalFlag;
 

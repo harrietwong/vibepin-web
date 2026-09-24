@@ -49,6 +49,11 @@ export class PinCopyError extends Error {
 /** Amazon card without a product name: generation is refused client-side (no request). */
 export const AMAZON_PRODUCT_NAME_REQUIRED = "amazon_product_name_required";
 
+/** Amazon affiliate card while AI Copy v2 is disabled: v1 never attaches the required
+ *  #ad affiliate disclosure, so generation is refused client-side (no request) rather
+ *  than silently producing undisclosed affiliate copy. */
+export const AMAZON_COPY_REQUIRES_V2 = "amazon_copy_requires_v2";
+
 /** True when `err` is the rate-limit stop (429), so the UI can soften the toast. */
 export function isRateLimitError(err: unknown): err is PinCopyError | { code: string; status?: number; retryAfterSeconds?: number | null } {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "rate_limited";
@@ -242,6 +247,16 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   const amazonContext = resolveAmazonCopyContext(input, storeDraft);
   if (amazonContext && !amazonContext.canGenerate) {
     throw new PinCopyError(AMAZON_PRODUCT_NAME_REQUIRED, "Add the product name for this Amazon link before generating copy.");
+  }
+  // Affiliate disclosure gate: v1 (the isAICopyV2ClientEnabled() === false branch below)
+  // has no affiliateDisclosure plumbing, so it would silently write Amazon copy with no
+  // #ad — an FTC/Pinterest affiliate-disclosure compliance defect, not a quality one.
+  // Refuse before any request rather than ship undisclosed affiliate copy.
+  if (amazonContext && !isAICopyV2ClientEnabled()) {
+    throw new PinCopyError(
+      AMAZON_COPY_REQUIRES_V2,
+      "Amazon affiliate copy requires the new AI copy generator. Enable it before generating.",
+    );
   }
   const selectedCover = storeDraft ? coverMedia(storeDraft) : null;
   if (storeDraft && selectedCover?.kind === "video" && selectedCover.coverFrameTimeMs !== undefined) {

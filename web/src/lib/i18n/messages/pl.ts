@@ -2703,6 +2703,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Nie można pobrać informacji z tej witryny Amazon. Wpisz je poniżej.",
   "studioBoard.amazon.productName": "Nazwa produktu",
   "studioBoard.amazon.productNameRequired": "Dodaj nazwę produktu, aby wygenerować treść dla tego linku Amazon.",
+  "studioBoard.amazon.copyRequiresV2": "Tekst afiliacyjny Amazon wymaga nowego generatora tekstu AI. Włącz go przed wygenerowaniem.",
   "studioBoard.amazon.sellingPoints": "Atuty produktu (opcjonalnie, jeden na wiersz)",
   "studioBoard.amazon.brand": "Marka (opcjonalnie)",
   "studioBoard.amazon.material": "Materiał (opcjonalnie)",

@@ -3158,6 +3158,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "无法从此 Amazon 站点获取详情。请在下方填写。",
   "studioBoard.amazon.productName": "商品名称",
   "studioBoard.amazon.productNameRequired": "请填写商品名称，才能为此 Amazon 链接生成文案。",
+  "studioBoard.amazon.copyRequiresV2": "Amazon 联盟文案需要新版 AI 文案生成功能，请先开启后再生成。",
   "studioBoard.amazon.sellingPoints": "卖点（可选，每行一条）",
   "studioBoard.amazon.brand": "品牌（可选）",
   "studioBoard.amazon.material": "材质（可选）",

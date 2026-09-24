@@ -2723,6 +2723,7 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "이 Amazon 사이트에서는 정보를 가져올 수 없습니다. 아래에 입력하세요.",
   "studioBoard.amazon.productName": "상품명",
   "studioBoard.amazon.productNameRequired": "이 Amazon 링크의 문구를 생성하려면 상품명을 추가하세요.",
+  "studioBoard.amazon.copyRequiresV2": "Amazon 제휴 문구를 생성하려면 새로운 AI 문구 생성기가 필요합니다. 생성 전에 활성화하세요.",
   "studioBoard.amazon.sellingPoints": "판매 포인트 (선택 사항, 줄당 하나씩)",
   "studioBoard.amazon.brand": "브랜드 (선택 사항)",
   "studioBoard.amazon.material": "소재 (선택 사항)",

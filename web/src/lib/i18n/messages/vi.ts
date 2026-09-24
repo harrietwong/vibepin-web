@@ -2799,6 +2799,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Không thể lấy thông tin từ trang Amazon này. Hãy nhập bên dưới.",
   "studioBoard.amazon.productName": "Tên sản phẩm",
   "studioBoard.amazon.productNameRequired": "Thêm tên sản phẩm để tạo nội dung cho liên kết Amazon này.",
+  "studioBoard.amazon.copyRequiresV2": "Nội dung liên kết tiếp thị Amazon yêu cầu trình tạo nội dung AI mới. Hãy bật tính năng này trước khi tạo.",
   "studioBoard.amazon.sellingPoints": "Điểm bán hàng (không bắt buộc, mỗi dòng một điểm)",
   "studioBoard.amazon.brand": "Thương hiệu (không bắt buộc)",
   "studioBoard.amazon.material": "Chất liệu (không bắt buộc)",

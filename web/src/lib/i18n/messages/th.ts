@@ -2726,6 +2726,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "ไม่สามารถดึงรายละเอียดจากเว็บไซต์ Amazon นี้ได้ กรุณากรอกด้านล่าง",
   "studioBoard.amazon.productName": "ชื่อสินค้า",
   "studioBoard.amazon.productNameRequired": "เพิ่มชื่อสินค้าเพื่อสร้างข้อความสำหรับลิงก์ Amazon นี้",
+  "studioBoard.amazon.copyRequiresV2": "ข้อความพันธมิตร Amazon ต้องใช้ตัวสร้างข้อความ AI แบบใหม่ กรุณาเปิดใช้งานก่อนสร้างข้อความ",
   "studioBoard.amazon.sellingPoints": "จุดขาย (ไม่บังคับ ใส่บรรทัดละ 1 รายการ)",
   "studioBoard.amazon.brand": "แบรนด์ (ไม่บังคับ)",
   "studioBoard.amazon.material": "วัสดุ (ไม่บังคับ)",

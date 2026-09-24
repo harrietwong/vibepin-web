@@ -17,7 +17,7 @@
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { AMAZON_PRODUCT_NAME_REQUIRED, generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { AMAZON_COPY_REQUIRES_V2, AMAZON_PRODUCT_NAME_REQUIRED, generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
 import { isBusyKey, runWithBusyGuard, subscribeBusyKey } from "@/lib/ai-copy/runWithBusyGuard";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { AICopyV2Evidence, CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
@@ -211,8 +211,11 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
         toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
       } catch (err) {
         props.onGenerateError?.(err);
-        const msg = (err as { code?: string })?.code === AMAZON_PRODUCT_NAME_REQUIRED
+        const errCode = (err as { code?: string })?.code;
+        const msg = errCode === AMAZON_PRODUCT_NAME_REQUIRED
           ? tr("studioBoard.amazon.productNameRequired")
+          : errCode === AMAZON_COPY_REQUIRES_V2
+          ? tr("studioBoard.amazon.copyRequiresV2")
           : (err as Error)?.message || tr("pinForm.genericGenerateError");
         setErrorMsg(msg);
         setStage("error");

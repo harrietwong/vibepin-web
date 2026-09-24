@@ -2745,6 +2745,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Detail tidak dapat diambil dari situs Amazon ini. Masukkan di bawah ini.",
   "studioBoard.amazon.productName": "Nama produk",
   "studioBoard.amazon.productNameRequired": "Tambahkan nama produk untuk membuat teks bagi tautan Amazon ini.",
+  "studioBoard.amazon.copyRequiresV2": "Teks afiliasi Amazon memerlukan generator teks AI baru. Aktifkan sebelum membuat teks.",
   "studioBoard.amazon.sellingPoints": "Poin penjualan (opsional, satu per baris)",
   "studioBoard.amazon.brand": "Merek (opsional)",
   "studioBoard.amazon.material": "Bahan (opsional)",

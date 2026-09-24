@@ -2777,6 +2777,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Невозможно получить сведения с этого сайта Amazon. Введите их ниже.",
   "studioBoard.amazon.productName": "Название товара",
   "studioBoard.amazon.productNameRequired": "Добавьте название товара, чтобы создать текст для этой ссылки Amazon.",
+  "studioBoard.amazon.copyRequiresV2": "Для партнёрского текста Amazon требуется новый ИИ-генератор текста. Включите его перед созданием.",
   "studioBoard.amazon.sellingPoints": "Преимущества товара (необязательно, по одному на строку)",
   "studioBoard.amazon.brand": "Бренд (необязательно)",
   "studioBoard.amazon.material": "Материал (необязательно)",

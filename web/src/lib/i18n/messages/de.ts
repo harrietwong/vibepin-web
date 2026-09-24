@@ -2747,6 +2747,7 @@ const de: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Von dieser Amazon-Website können keine Details abgerufen werden. Geben Sie sie unten ein.",
   "studioBoard.amazon.productName": "Produktname",
   "studioBoard.amazon.productNameRequired": "Fügen Sie den Produktnamen hinzu, um Text für diesen Amazon-Link zu generieren.",
+  "studioBoard.amazon.copyRequiresV2": "Amazon-Affiliate-Texte erfordern den neuen KI-Textgenerator. Aktivieren Sie ihn vor dem Generieren.",
   "studioBoard.amazon.sellingPoints": "Verkaufsargumente (optional, eines pro Zeile)",
   "studioBoard.amazon.brand": "Marke (optional)",
   "studioBoard.amazon.material": "Material (optional)",

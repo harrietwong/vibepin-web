@@ -2747,6 +2747,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Gegevens kunnen niet worden opgehaald bij deze Amazon-site. Vul ze hieronder in.",
   "studioBoard.amazon.productName": "Productnaam",
   "studioBoard.amazon.productNameRequired": "Voeg de productnaam toe om tekst voor deze Amazon-link te genereren.",
+  "studioBoard.amazon.copyRequiresV2": "Amazon-affiliatetekst vereist de nieuwe AI-tekstgenerator. Schakel deze in voordat u genereert.",
   "studioBoard.amazon.sellingPoints": "Verkoopargumenten (optioneel, één per regel)",
   "studioBoard.amazon.brand": "Merk (optioneel)",
   "studioBoard.amazon.material": "Materiaal (optioneel)",

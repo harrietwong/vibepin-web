@@ -2727,6 +2727,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "لا يمكن جلب التفاصيل من موقع Amazon هذا. أدخلها أدناه.",
   "studioBoard.amazon.productName": "اسم المنتج",
   "studioBoard.amazon.productNameRequired": "أضف اسم المنتج لإنشاء نص لهذا الرابط من Amazon.",
+  "studioBoard.amazon.copyRequiresV2": "يتطلب نص تسويق الأفلييت الخاص بـ Amazon تفعيل مولّد النصوص الجديد بالذكاء الاصطناعي أولاً.",
   "studioBoard.amazon.sellingPoints": "نقاط البيع (اختياري، نقطة في كل سطر)",
   "studioBoard.amazon.brand": "العلامة التجارية (اختياري)",
   "studioBoard.amazon.material": "الخامة (اختياري)",

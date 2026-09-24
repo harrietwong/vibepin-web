@@ -2747,6 +2747,7 @@ const pt: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Não é possível buscar detalhes deste site da Amazon. Insira-os abaixo.",
   "studioBoard.amazon.productName": "Nome do produto",
   "studioBoard.amazon.productNameRequired": "Adicione o nome do produto para gerar texto para este link da Amazon.",
+  "studioBoard.amazon.copyRequiresV2": "O texto de afiliados da Amazon requer o novo gerador de texto com IA. Ative-o antes de gerar.",
   "studioBoard.amazon.sellingPoints": "Pontos de venda (opcional, um por linha)",
   "studioBoard.amazon.brand": "Marca (opcional)",
   "studioBoard.amazon.material": "Material (opcional)",

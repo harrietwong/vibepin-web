@@ -2804,6 +2804,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Bu Amazon sitesinden ayrıntılar alınamıyor. Aşağıya girin.",
   "studioBoard.amazon.productName": "Ürün adı",
   "studioBoard.amazon.productNameRequired": "Bu Amazon bağlantısı için metin oluşturmak üzere ürün adını ekleyin.",
+  "studioBoard.amazon.copyRequiresV2": "Amazon iş ortaklığı metni yeni AI metin oluşturucusunu gerektirir. Oluşturmadan önce etkinleştirin.",
   "studioBoard.amazon.sellingPoints": "Satış noktaları (isteğe bağlı, satır başına bir tane)",
   "studioBoard.amazon.brand": "Marka (isteğe bağlı)",
   "studioBoard.amazon.material": "Malzeme (isteğe bağlı)",

@@ -428,6 +428,7 @@ export const studioBoardMessages = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "Details can't be fetched from this Amazon site. Enter them below.",
   "studioBoard.amazon.productName": "Product name",
   "studioBoard.amazon.productNameRequired": "Add the product name to generate copy for this Amazon link.",
+  "studioBoard.amazon.copyRequiresV2": "Amazon affiliate copy requires the new AI copy generator. Enable it before generating.",
   "studioBoard.amazon.sellingPoints": "Selling points (optional, one per line)",
   "studioBoard.amazon.brand": "Brand (optional)",
   "studioBoard.amazon.material": "Material (optional)",

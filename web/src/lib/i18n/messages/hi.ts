@@ -2723,6 +2723,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "इस Amazon साइट से विवरण प्राप्त नहीं किए जा सकते। कृपया नीचे दर्ज करें।",
   "studioBoard.amazon.productName": "उत्पाद का नाम",
   "studioBoard.amazon.productNameRequired": "इस Amazon लिंक के लिए टेक्स्ट जनरेट करने हेतु उत्पाद का नाम जोड़ें।",
+  "studioBoard.amazon.copyRequiresV2": "Amazon एफिलिएट टेक्स्ट के लिए नया AI टेक्स्ट जनरेटर आवश्यक है। जनरेट करने से पहले इसे सक्षम करें।",
   "studioBoard.amazon.sellingPoints": "बिक्री बिंदु (वैकल्पिक, प्रति पंक्ति एक)",
   "studioBoard.amazon.brand": "ब्रांड (वैकल्पिक)",
   "studioBoard.amazon.material": "सामग्री (वैकल्पिक)",

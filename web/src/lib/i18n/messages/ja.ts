@@ -2729,6 +2729,7 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "このAmazonサイトからは情報を取得できません。以下に入力してください。",
   "studioBoard.amazon.productName": "商品名",
   "studioBoard.amazon.productNameRequired": "このAmazonリンクの文章を生成するには、商品名を入力してください。",
+  "studioBoard.amazon.copyRequiresV2": "Amazonアフィリエイトの文章には新しいAI文章生成機能が必要です。生成する前に有効にしてください。",
   "studioBoard.amazon.sellingPoints": "セールスポイント（任意、1行に1つ）",
   "studioBoard.amazon.brand": "ブランド（任意）",
   "studioBoard.amazon.material": "素材（任意）",

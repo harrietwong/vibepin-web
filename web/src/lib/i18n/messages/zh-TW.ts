@@ -3161,6 +3161,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.manualReason.unsupported_marketplace": "無法從此 Amazon 網站取得詳情。請在下方填寫。",
   "studioBoard.amazon.productName": "商品名稱",
   "studioBoard.amazon.productNameRequired": "請填寫商品名稱，才能為此 Amazon 連結產生文案。",
+  "studioBoard.amazon.copyRequiresV2": "Amazon 聯盟文案需要新版 AI 文案產生功能，請先開啟後再產生。",
   "studioBoard.amazon.sellingPoints": "賣點（可選，每行一項）",
   "studioBoard.amazon.brand": "品牌（可選）",
   "studioBoard.amazon.material": "材質（可選）",
