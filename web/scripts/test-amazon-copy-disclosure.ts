@@ -42,21 +42,21 @@ function req(extra: Partial<GenerateCopyRequest> = {}): GenerateCopyRequest {
   return { generationId: "g", sessionId: "s", draftId: "d", factCard: factCard(), keywordEvidence: evidence, ...extra };
 }
 
-type Calls = { generatePrompts: string[]; repairInputs: ProviderCopyOutput[]; repairReports: ValidationReport[] };
+type Calls = { generatePrompts: string[]; repairInputs: ProviderCopyOutput[]; repairReports: ValidationReport[]; repairPrompts: string[] };
 function provider(outputs: { generate: ProviderCopyOutput; repair?: ProviderCopyOutput[] }, calls: Calls): CopyGenerationProvider {
   const repairs = [...(outputs.repair ?? [])];
   return {
     async generate(prompt: string) { calls.generatePrompts.push(prompt); return { ...outputs.generate }; },
     async detectClaims() { return { claims: [] }; },
-    async repair(original: ProviderCopyOutput, report: ValidationReport) {
-      calls.repairInputs.push({ ...original }); calls.repairReports.push(report);
+    async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string) {
+      calls.repairInputs.push({ ...original }); calls.repairReports.push(report); calls.repairPrompts.push(prompt);
       const next = repairs.shift();
       if (!next) throw new Error("unexpected repair");
       return { ...next };
     },
   };
 }
-const newCalls = (): Calls => ({ generatePrompts: [], repairInputs: [], repairReports: [] });
+const newCalls = (): Calls => ({ generatePrompts: [], repairInputs: [], repairReports: [], repairPrompts: [] });
 const out = (description: string): ProviderCopyOutput => ({ title: "Calm Reading Corner", description, altText: "A calm reading corner" });
 
 async function main() {
@@ -137,7 +137,10 @@ async function main() {
     const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
     assert.equal(calls.repairInputs.length, 1, "one repair");
     assert.ok(calls.repairReports[0].issues.some(i => i.code === "DESCRIPTION_TOO_LONG"), "repair reason is length");
-    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("maximum of 500")), "cap reported as 500");
+    // T4 (deviation 3): the repair model sees the RAW text, so it is held to the RAW
+    // budget (496), and its prompt states that number explicitly.
+    assert.ok(calls.repairReports[0].issues.some(i => i.code === "DESCRIPTION_TOO_LONG" && i.message.includes("(499) exceeds maximum of 496")), JSON.stringify(calls.repairReports[0].issues));
+    assert.ok(calls.repairPrompts[0].includes("must be at most 496 characters"), "repair prompt carries the raw budget");
     assert.equal(disc.hasAffiliateDisclosure(calls.repairInputs[0].description), false, "repair never sees our #ad");
     assert.equal(calls.repairInputs[0].description.length, 499, "repair got the untruncated raw text");
     assert.equal(r.description, `${shorter} #ad`);
@@ -152,6 +155,55 @@ async function main() {
       assert.ok((error as InstanceType<typeof ValidationErrorV2>).validationReport.issues.some(i => i.code === "DESCRIPTION_TOO_LONG"));
       return true;
     });
+  });
+
+  console.log("\n[T4: deviation 3 — repair held to the raw budget; 499/500 boundaries]");
+  await test("497-char body → 501 shipped → too long; repair report states 497 vs 496 (not 500)", async () => {
+    const calls = newCalls();
+    __setCopyProviderForTests(provider({ generate: out(filler(497)), repair: [out(filler(496))] }, calls));
+    const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
+    assert.equal(calls.repairInputs.length, 1);
+    const issue = calls.repairReports[0].issues.find(i => i.code === "DESCRIPTION_TOO_LONG");
+    assert.ok(issue && issue.message.includes("(497) exceeds maximum of 496"), issue?.message);
+    assert.equal(r.description.length, 500, "496 raw + ' #ad' = 500 exactly");
+  });
+  await test("final description of 499 chars (495 raw + ' #ad') is valid, no repair", async () => {
+    const calls = newCalls();
+    __setCopyProviderForTests(provider({ generate: out(filler(495)) }, calls));
+    const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
+    assert.equal(r.description.length, 499);
+    assert.equal(calls.repairInputs.length, 0);
+  });
+  await test("model already disclosed: 500 chars incl. its own #ad is valid (no double append)", async () => {
+    const calls = newCalls();
+    const text = `${filler(496)} #ad`;
+    __setCopyProviderForTests(provider({ generate: out(text) }, calls));
+    const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
+    assert.equal(r.description, text);
+    assert.equal(r.description.length, 500);
+    assert.equal(calls.repairInputs.length, 0);
+  });
+  await test("model already disclosed: 501 chars → too long → repair → ships ≤ 500 with #ad", async () => {
+    const calls = newCalls();
+    __setCopyProviderForTests(provider({ generate: out(`${filler(497)} #ad`), repair: [out(filler(400))] }, calls));
+    const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
+    assert.equal(calls.repairInputs.length, 1);
+    assert.ok(r.description.length <= 500 && r.description.endsWith(" #ad"));
+  });
+  await test("any repair that honours the stated budget ships ≤ 500 (sweep 480..496)", async () => {
+    for (let n = 480; n <= 496; n++) {
+      const calls = newCalls();
+      __setCopyProviderForTests(provider({ generate: out(filler(499)), repair: [out(filler(n))] }, calls));
+      const r = await orchestrateCopyGeneration(req({ affiliateDisclosure: "ad_hashtag" }));
+      assert.ok(r.description.length <= 500, `raw ${n} → ${r.description.length}`);
+    }
+  });
+  await test("flag off: repair report and prompt pass through unchanged", async () => {
+    const calls = newCalls();
+    __setCopyProviderForTests(provider({ generate: out(filler(801)), repair: [out(filler(300))] }, calls));
+    await orchestrateCopyGeneration(req());
+    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(801) exceeds maximum of 800")));
+    assert.equal(calls.repairPrompts[0], calls.generatePrompts[0], "flag-off repair prompt is the generate prompt, byte-identical");
   });
 
   console.log("\n[orchestrator: flag off regression]");

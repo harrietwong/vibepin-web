@@ -196,6 +196,31 @@ function withDisclosure(raw: ProviderCopyOutput, req: GenerateCopyRequest): Prov
   return { ...raw, description: appendAffiliateDisclosure(raw.description, req.affiliateDisclosure) };
 }
 
+/**
+ * T3 deviation 3 (fixed in T4): the repair model only ever sees the RAW text, so the
+ * length it is held to must be the RAW budget (500 − marker − space), not the shipped
+ * cap. Otherwise a 499-char draft is "too long" against a 500 cap the model believes it
+ * already meets, the repair comes back at ~499 again, and the card gets a 422.
+ * Affiliate requests only; the flag-off repair input is untouched.
+ */
+function reportForRepair(report: ValidationReport, raw: ProviderCopyOutput, req: GenerateCopyRequest): ValidationReport {
+  if (!req.affiliateDisclosure) return report;
+  const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
+  return {
+    ...report,
+    issues: report.issues.map(issue => issue.code === "DESCRIPTION_TOO_LONG"
+      ? { ...issue, message: `Description length (${raw.description.length}) exceeds maximum of ${budget} characters` }
+      : issue),
+  };
+}
+
+/** Repair prompt for affiliate copy: states the raw budget explicitly (see reportForRepair). */
+function promptForRepair(prompt: string, req: GenerateCopyRequest): string {
+  if (!req.affiliateDisclosure) return prompt;
+  const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
+  return `${prompt}\nThe description you return must be at most ${budget} characters; the server appends the disclosure afterwards.`;
+}
+
 export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promise<CopyResultV2> {
   const provider = getCopyProvider();
   const prompt = buildPromptForSession(req);
@@ -207,7 +232,7 @@ export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promi
   let report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
   if (!report.valid) {
     if (!isRepairableWithoutInventingFacts(report) || !provider.repair) throw new ValidationErrorV2(report);
-    raw = await provider.repair(raw, report, prompt, req.costContext);
+    raw = await provider.repair(raw, reportForRepair(report, raw, req), promptForRepair(prompt, req), req.costContext);
     output = withDisclosure(raw, req);
     report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
     if (!report.valid) throw new ValidationErrorV2(report);
