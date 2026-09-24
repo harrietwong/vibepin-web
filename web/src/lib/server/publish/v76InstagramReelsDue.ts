@@ -30,8 +30,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PublishDestination } from "@/lib/contentDraftModel";
 import type { ConfirmedPublishReceipt } from "@/lib/studio/publishConfirmation";
-import { findConnection } from "@/lib/social/server/socialConnectionStore";
-import { getSocialProviderById } from "@/lib/social/providers";
 import type { PublishResult, SocialConnection } from "@/lib/social/types";
 import { safeProviderMessage } from "@/lib/server/pinterest/videoPinAdapter";
 import { dispatchSupabaseV76InstagramReel } from "./v76InstagramReelsServer";
@@ -53,6 +51,20 @@ export type DueReelDispatchResult = {
   observed: DueReelProviderObservation | null;
 };
 
+/** The two lookups the provider callback needs. Injectable for tests only. */
+export type DueReelSocialDeps = {
+  findConnection(uid: string, connectionId: string): Promise<SocialConnection | null>;
+  getSocialProviderById: typeof import("@/lib/social/providers").getSocialProviderById;
+};
+
+async function loadSocialDeps(): Promise<DueReelSocialDeps> {
+  const [store, providers] = await Promise.all([
+    import("@/lib/social/server/socialConnectionStore"),
+    import("@/lib/social/providers"),
+  ]);
+  return { findConnection: store.findConnection, getSocialProviderById: providers.getSocialProviderById };
+}
+
 export async function dispatchDueInstagramReel(
   db: SupabaseClient,
   input: {
@@ -62,6 +74,7 @@ export async function dispatchDueInstagramReel(
     scheduleAt?: string;
     latestStartMs?: number;
   },
+  socialDeps?: DueReelSocialDeps,
 ): Promise<DueReelDispatchResult> {
   let observed: DueReelProviderObservation | null = null;
   const connectionId = input.destination.socialConnectionId?.trim() ?? "";
@@ -87,9 +100,16 @@ export async function dispatchDueInstagramReel(
         };
         return res;
       };
+      // Loaded here, not at module scope: the cron route imports this module for
+      // every run, and the connection store / provider registry (and the Supabase
+      // client they construct) are only needed once a durable attempt has started.
+      // Same lazy pattern as the Instagram provider's own service import. A load
+      // failure is decided before any Instagram call, hence preNetwork.
       let connection: SocialConnection | null;
+      let deps: DueReelSocialDeps;
       try {
-        connection = await findConnection(current.uid, connectionId);
+        deps = socialDeps ?? await loadSocialDeps();
+        connection = await deps.findConnection(current.uid, connectionId);
       } catch {
         return remember({ ok: false, status: "failed", error: "Could not prepare the Instagram connection.", preNetwork: true });
       }
@@ -99,7 +119,7 @@ export async function dispatchDueInstagramReel(
       // Do not catch this provider-boundary call: it may have reached Meta. The
       // durable dispatcher records a thrown delivery as unknown and forbids a blind
       // retry.
-      return remember(await getSocialProviderById(connection.authProvider).publishPost({
+      return remember(await deps.getSocialProviderById(connection.authProvider).publishPost({
         provider: "instagram",
         connection,
         // The FROZEN copy the schedule authorized, not the live draft: the same

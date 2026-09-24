@@ -507,6 +507,7 @@ function nextTick(): void { draft.publish_claimed_at = null; }
   // ── Part 2: the real due binding ─────────────────────────────────────────────
   console.log("\n--- dispatchDueInstagramReel (real module, fake durable dispatcher) ---");
   const { dispatchDueInstagramReel } = await import("../src/lib/server/publish/v76InstagramReelsDue");
+  const socialDeps = { findConnection: fakeConnectionStore.findConnection, getSocialProviderById: fakeProviders.getSocialProviderById } as never;
   const dueInput = {
     uid: OWNER,
     receipt: FAKE_RECEIPT as never,
@@ -517,7 +518,7 @@ function nextTick(): void { draft.publish_claimed_at = null; }
 
   await test("D1: the provider gets ONE signed video URL, no images, and the frozen copy", false, async () => {
     providerAnswer = () => ({ ok: true, status: "published", externalPostId: "ig-99", providerStatus: 200 });
-    const out = await dispatchDueInstagramReel({} as never, dueInput);
+    const out = await dispatchDueInstagramReel({} as never, dueInput, socialDeps);
     assert.equal(providerPosts.length, 1);
     assert.deepEqual(providerPosts[0].imageUrls, [], "never the image branch");
     assert.deepEqual(providerPosts[0].videoUrls, [SIGNED_URL]);
@@ -529,17 +530,17 @@ function nextTick(): void { draft.publish_claimed_at = null; }
 
   await test("D2: Instagram's error text is carried back; a URL-bearing one is dropped", false, async () => {
     providerAnswer = () => ({ ok: false, status: "failed", error: "Media ID is not available", providerStatus: 400 });
-    const plain = await dispatchDueInstagramReel({} as never, dueInput);
+    const plain = await dispatchDueInstagramReel({} as never, dueInput, socialDeps);
     assert.equal(plain.observed?.message, "Media ID is not available");
     assert.equal(plain.observed?.providerStatus, 400);
     providerAnswer = () => ({ ok: false, status: "failed", error: `Could not download ${SIGNED_URL}`, providerStatus: 400 });
-    const leaky = await dispatchDueInstagramReel({} as never, dueInput);
+    const leaky = await dispatchDueInstagramReel({} as never, dueInput, socialDeps);
     assert.equal(leaky.observed?.message, undefined, "a signed URL must never reach a merchant-visible row");
   });
 
   await test("D3: a pre-network provider refusal is marked preNetwork and carries no status", false, async () => {
     providerAnswer = () => ({ ok: false, status: "failed", error: "Connect an Instagram account first.", preNetwork: true, providerStatus: 400 });
-    const out = await dispatchDueInstagramReel({} as never, dueInput);
+    const out = await dispatchDueInstagramReel({} as never, dueInput, socialDeps);
     assert.equal(out.observed?.preNetwork, true);
     assert.equal(out.observed?.providerStatus, undefined);
   });

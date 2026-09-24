@@ -1547,10 +1547,11 @@ export async function GET(req: Request): Promise<Response> {
         // The job id must outlive the try: when the fan-out throws, the attempt still
         // has to be finalized with the failure rows below. A job row left in
         // `publishing` forever reads as a publish that is still in flight.
-        let jobId: string | null = null;
-        // Outcomes the Reels loop already recorded, so a later fan-out throw does not
-        // write a second (failed) row over a Reel that really went out.
+        // Outcomes the Reels loop records from here on are known to the catch below,
+        // so a later fan-out throw does not write a second (failed) row over a Reel
+        // that really went out.
         const outcomesBeforeExtras = outcomes.length;
+        let jobId: string | null = null;
         try {
           jobId = await createPublishJob(
             db,
