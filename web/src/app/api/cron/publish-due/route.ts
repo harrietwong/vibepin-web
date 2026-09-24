@@ -1444,6 +1444,31 @@ export async function GET(req: Request): Promise<Response> {
        */
       const publishReelDestination = async (destination: (typeof extras)[number]): Promise<void> => {
         const socialConnectionId = destination.socialConnectionId ?? null;
+        // ── Pinterest + Instagram on ONE video intent: refused, like publish-now ──
+        //
+        // `/api/publish/social` refuses this shape (`instagram_reels_private_fanout_
+        // unsupported`), and the cron keeps the same contract until a real-database
+        // canary has shown that two providers can share one v76 intent: whether a
+        // settled Pinterest destination moves the intent to `settled` before the
+        // Reel can lease, and whether the shared asset/copy lets the two interfere,
+        // are both unverified. Pinterest is dispatched as usual by its own loop;
+        // only the Instagram side is refused.
+        //
+        // Decided from the FROZEN receipt, not from what is still owed: a re-claim
+        // after Pinterest already published owes only Instagram, but it is still
+        // the same shared intent. `preNetwork` ⇒ `not_sent`: this side is never
+        // charged. The code maps to `content` (pinLifecycle.ts), so it is not
+        // presented as retryable, and nothing here schedules a retry.
+        if (videoReceipt?.destinations.some(item => item.provider === "pinterest")) {
+          const message = "A scheduled video cannot go to Pinterest and Instagram from one draft yet. "
+            + "Create a separate draft for the Instagram Reel and schedule it on its own.";
+          deliveries.push(classifyDelivery({ preNetwork: true }));
+          await record({
+            provider: "instagram", status: "failed", socialConnectionId, error: message, preNetwork: true,
+          });
+          if (!firstFailure) firstFailure = { code: "instagram_reels_private_fanout_unsupported", message };
+          return;
+        }
         if (!videoReceipt || !hasTimeForDestination(Date.now(), deadlineMs)) {
           await record(deferredOutcome(destination));
           return;

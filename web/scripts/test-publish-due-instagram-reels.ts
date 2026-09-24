@@ -473,35 +473,89 @@ function nextTick(): void { draft.publish_claimed_at = null; }
     });
   }
 
-  // ── Pinterest + Instagram video: two independent durable dispatches ──────────
-  await test("R8: Pinterest+IG video — Pinterest fails, the Reel still publishes", true, async () => {
-    draft = baseVideoDraft([PIN_DEST, IG_DEST]);
+  // ── Pinterest + Instagram on one video draft: Instagram refused (publish-now parity) ──
+  // Until a real-database canary proves two providers can share one v76 intent, the
+  // cron refuses the Instagram side exactly like /api/publish/social does. Pinterest
+  // goes out as usual; the Instagram row is an explicit, uncharged, terminal failure.
+  for (const flag of [false, true]) {
+    await test(`R8 (retry flag ${flag ? "ON" : "OFF"}): Pinterest+IG video — Pinterest publishes, IG refused explicitly, no Reel dispatch`, flag, async () => {
+      draft = baseVideoDraft([PIN_DEST, IG_DEST]);
+      const body = await run();
+      assert.equal(pinterestVideoCalls, 1, "Pinterest is dispatched as usual");
+      assert.equal(reelDispatchCalls, 0, "the mixed draft never reaches the Reels dispatcher");
+      assert.equal(igFanOutHandoffs(), 0, "and never falls back to the image fan-out");
+      assert.equal(igImageBranchCalls(), 0);
+      assert.equal(rowFor("pinterest")?.status, "published");
+      const ig = rowFor("instagram");
+      assert.equal(ig?.status, "failed", "the Instagram side is an explicit failure, not silence");
+      assert.match(String(ig?.errorMessage), /separate draft for the Instagram Reel/);
+      assert.equal(releaseCalls.length, 0, "Pinterest delivered: the one unit stands, the IG side adds no charge");
+      assert.equal(consumeCalls.length, 1);
+      assert.equal(ledger.length, 0, "no retry is scheduled for the refused side");
+      assert.equal(body.published, 1);
+      nextTick(); draft.scheduled_at = draft.scheduled_at ?? DUE_AT; await run();
+      assert.equal(pinterestVideoCalls + reelDispatchCalls, 1, "nothing is re-sent on the next tick");
+    });
+  }
+
+  await test("R9: Pinterest+IG video, both refused — Pinterest rejection is content-class, IG adds no charge, refunded", false, async () => {
+    // Pinterest REJECTS too, so nothing is delivered and the row-level failure is
+    // written. The Pinterest loop always runs first, so its code would win the
+    // banner; the Instagram code is therefore asserted on the category mapping (R11)
+    // and here on the refund and the Instagram row.
+    draft = baseVideoDraft([IG_DEST, PIN_DEST]);
     pinterestVideoBehaviour = async () => ({
       outcome: "failed", retryAllowed: true,
       evidence: { stage: "created", classification: "definite_rejection", providerStatus: 400, providerMessage: "Invalid video" },
     });
     await run();
-    assert.equal(pinterestVideoCalls, 1);
-    assert.equal(reelDispatchCalls, 1);
-    assert.equal(igFanOutHandoffs(), 0, "no image fan-out for the video row");
-    assert.equal(rowFor("pinterest")?.status, "failed");
-    assert.equal(rowFor("instagram")?.status, "published");
-    assert.equal(releaseCalls.length, 0, "one destination delivered ⇒ the unit is charged");
-    const pinDest = reelDispatchInputs[0].receipt as { dispatchDestinationIds: string[] };
-    assert.equal(pinDest.dispatchDestinationIds.length, 2, "one receipt, both destinations frozen");
+    assert.equal(reelDispatchCalls, 0);
+    assert.equal(rowFor("instagram")?.status, "failed");
+    assert.deepEqual(releaseCalls.map(r => r.reason), ["rejected"],
+      "nothing delivered: refunded, and the IG side contributes not_sent, never a charge");
+    assert.equal(draft.payload.publishErrorCode, "pinterest_video_publish_failed");
+    assert.equal(draft.payload.errorCategory, "content", "a definite video rejection is not shown as retryable");
   });
 
-  await test("R9: Pinterest+IG video — Pinterest publishes, the Reel is unknown; neither re-sent", false, async () => {
-    draft = baseVideoDraft([PIN_DEST, IG_DEST]);
+  await test("R10: an IG-only video is unaffected by the mixed refusal", false, async () => {
+    await run();
+    assert.equal(reelDispatchCalls, 1);
+    assert.equal(rowFor("instagram")?.status, "published");
+  });
+
+  await test("R11: video failure codes map to the content category (not retryable)", false, async () => {
+    const { mapPublishErrorToCategory } = await import("../src/lib/studio/pinLifecycle");
+    for (const code of ["pinterest_video_publish_failed", "instagram_reel_publish_failed", "instagram_reels_private_fanout_unsupported"]) {
+      assert.equal(mapPublishErrorToCategory(code, "anything"), "content", code);
+    }
+    assert.equal(mapPublishErrorToCategory("delivery_unknown", "x"), "transient", "unknown is untouched");
+  });
+
+  await test("R12: an IG-only Reel failure records instagram_reel_publish_failed as content", false, async () => {
     reelBehaviour = async () => ({
-      result: { outcome: "delivery_unknown", retryAllowed: false, evidence: {} }, observed: null,
+      result: { outcome: "failed", retryAllowed: true, evidence: {} },
+      observed: { providerStatus: 400, message: "Unsupported codec", preNetwork: false },
     });
     await run();
-    assert.equal(rowFor("pinterest")?.status, "published");
-    assert.equal(rowFor("instagram")?.status, "delivery_unknown");
-    nextTick(); draft.scheduled_at = draft.scheduled_at ?? DUE_AT; await run();
-    assert.equal(pinterestVideoCalls, 1, "the published Pinterest destination is not re-sent");
-    assert.equal(reelDispatchCalls, 1, "the unknown Reel is not re-sent");
+    assert.equal(draft.payload.publishErrorCode, "instagram_reel_publish_failed");
+    assert.equal(draft.payload.errorCategory, "content");
+  });
+
+  await test("R13: re-claim after Pinterest already published — IG is still refused (decided from the frozen receipt)", false, async () => {
+    // A crash after Pinterest's result was stored: the re-claim owes ONLY Instagram,
+    // but it is the same shared intent, so the Reel must still not be dispatched.
+    // Here the refusal is the round's only failure and becomes the recorded code.
+    draft = baseVideoDraft([PIN_DEST, IG_DEST]);
+    draft.payload.destinationResults = [{
+      destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", socialConnectionId: PIN_CONN,
+      status: "published", remoteId: "pin-v1", submittedAt: DUE_AT, publishedAt: DUE_AT,
+    }];
+    await run();
+    assert.equal(pinterestVideoCalls, 0, "the published Pinterest destination is not owed");
+    assert.equal(reelDispatchCalls, 0, "and the Reel is still not dispatched");
+    assert.equal(rowFor("instagram")?.status, "failed");
+    assert.equal(draft.payload.publishErrorCode, "instagram_reels_private_fanout_unsupported");
+    assert.equal(draft.payload.errorCategory, "content");
   });
 
   // ── Part 2: the real due binding ─────────────────────────────────────────────

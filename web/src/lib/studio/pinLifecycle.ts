@@ -152,7 +152,14 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
     // Pin can publish, so retrying the same payload is guaranteed to fail again.
     c === "carousel_too_few" ||
     c === "carousel_too_many" ||
-    c === "carousel_aspect_mismatch"
+    c === "carousel_aspect_mismatch" ||
+    // Video: the platform definitively refused THIS video (the durable dispatcher
+    // turns every indefinite answer into `delivery_unknown`, which never carries
+    // these codes), or the draft's shape is one the video path refuses outright.
+    // Re-sending the same content cannot change either answer.
+    c === "pinterest_video_publish_failed" ||
+    c === "instagram_reel_publish_failed" ||
+    c === "instagram_reels_private_fanout_unsupported"
   ) return "content";
 
   // transient — explicitly safe to retry (do NOT let the message heuristics below
