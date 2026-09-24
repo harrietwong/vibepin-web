@@ -95,7 +95,15 @@ test("account actions live in a full-width wrapping group on mobile", () => {
 });
 
 test("customer-visible providers remain the canonical visible list", () => {
-  assert.match(social, /VISIBLE_SOCIAL_PROVIDERS\.map\(provider =>/);
+  // Rendering goes through customerVisibleSocialProviders(...) (hide-IG/FB flag,
+  // feat/hide-igfb-mvp-0923); that helper must itself be derived from the
+  // canonical VISIBLE_SOCIAL_PROVIDERS list, not a second platform list.
+  assert.match(social, /import \{ customerVisibleSocialProviders \} from "@\/lib\/social\/visibleProviders"/);
+  assert.match(social, /customerVisibleSocialProviders\([\s\S]*?\)\.map\(provider =>/);
+  const visibleProviders = read("src/lib/social/visibleProviders.ts");
+  assert.match(visibleProviders, /import \{ VISIBLE_SOCIAL_PROVIDERS\b[^}]*\} from "\.\/platforms"/);
+  assert.match(visibleProviders, /return VISIBLE_SOCIAL_PROVIDERS;/);
+  assert.match(visibleProviders, /return VISIBLE_SOCIAL_PROVIDERS\.filter\(/);
   const renderedPanel = social.slice(social.lastIndexOf("return ("));
   assert.doesNotMatch(renderedPanel, /SOCIAL_PROVIDERS\.map\(provider =>/);
 });

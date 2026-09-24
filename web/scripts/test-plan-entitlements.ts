@@ -301,9 +301,28 @@ async function main() {
       /import \{ PlatformIcon \} from "@\/components\/social\/PlatformIcon"/.test(source),
       "pricing must reuse the canonical PlatformIcon component",
     );
+    // Visibility now goes through customerVisibleSocialProviders() (hide-IG/FB flag,
+    // feat/hide-igfb-mvp-0923). Same contract as before: pricing renders the
+    // canonical provider list, and that helper is itself derived from
+    // VISIBLE_SOCIAL_PROVIDERS rather than a second hand-kept platform list.
     assert(
-      /import \{ PLATFORMS, VISIBLE_SOCIAL_PROVIDERS \} from "@\/lib\/social\/platforms"/.test(source),
-      "pricing must reuse canonical provider metadata and visibility",
+      /import \{ PLATFORMS \} from "@\/lib\/social\/platforms"/.test(source),
+      "pricing must reuse canonical provider metadata",
+    );
+    assert(
+      /import \{[^}]*\bcustomerVisibleSocialProviders\b[^}]*\} from "@\/lib\/social\/visibleProviders"/.test(source) &&
+        /customerVisibleSocialProviders\(\)/.test(source),
+      "pricing must take its provider visibility from customerVisibleSocialProviders()",
+    );
+    const visibleProvidersSource = await readFile(
+      new URL("../src/lib/social/visibleProviders.ts", import.meta.url),
+      "utf8",
+    );
+    assert(
+      /import \{ VISIBLE_SOCIAL_PROVIDERS\b[^}]*\} from "\.\/platforms"/.test(visibleProvidersSource) &&
+        /return VISIBLE_SOCIAL_PROVIDERS;/.test(visibleProvidersSource) &&
+        /return VISIBLE_SOCIAL_PROVIDERS\.filter\(/.test(visibleProvidersSource),
+      "customerVisibleSocialProviders must be derived from the canonical VISIBLE_SOCIAL_PROVIDERS list",
     );
     assertEq(
       (source.match(/<PricingPlatformIcons \/>/g) ?? []).length,
