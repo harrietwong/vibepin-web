@@ -11,10 +11,11 @@
  */
 
 import { validateAmazonUrl } from "./urlSecurity";
+import { DEFAULT_HEADERS } from "./fetchHeaders";
 
 export const AMAZON_SHORT_LINK_MAX_HOPS = 3;
 export const AMAZON_SHORT_LINK_TIMEOUT_MS = 5000;
-const EXPAND_HEADERS = { "User-Agent": "Mozilla/5.0 (compatible; VibePin/1.0)" };
+const EXPAND_HEADERS = DEFAULT_HEADERS;
 
 export type ShortLinkFetch = (url: string, init: RequestInit) => Promise<Response>;
 
