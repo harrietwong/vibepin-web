@@ -930,6 +930,71 @@ function serverError(PinterestApiError: new (m: string, s: number, c: string) =>
     console.log(`        B7 evidence: orchestration fallback intact for both evidence-less shapes`);
   });
 
+  // ── THE THIRD SILENT-DROPOUT VECTOR: A PAYLOAD THAT PARSES TO NOTHING ──────
+  //
+  // Found in production. `isUsableDestination` requires `socialConnectionId`; a
+  // draft whose stored entry spells it `connectionId` is dropped by the filter, so
+  // `resolveScheduledDestinations` returns [] and the row owes nothing. The run then
+  // completed the Content from an EMPTY outcome set: schedule cleared, claim
+  // released, not one error recorded. On the data, that is indistinguishable from a
+  // Content that published perfectly — the merchant's post simply never existed and
+  // nothing anywhere said so.
+  //
+  // The branch sits before any `retryEnabled` logic, so it is flag-independent; one
+  // case covers both flag states.
+  await test("B8: a payload whose destinations all fail to parse FAILS LOUDLY, never silently", async () => {
+    // One entry, misspelled exactly as production had it. `targetConnectionId` is
+    // removed so no legacy fallback can mask the vector, and imageUrl/boardId stay
+    // so the row does NOT divert into the existing "Missing image or board" branch —
+    // that one is already loud, and hitting it would prove nothing about this defect.
+    draft.payload = {
+      ...draft.payload,
+      scheduledDestinations: [
+        { provider: "pinterest", connectionId: CONN, boardId: "b1", capturedAt: DUE_AT },
+      ],
+    };
+    delete (draft.payload as Record<string, unknown>).targetConnectionId;
+
+    const body = await run();
+
+    assert.equal(
+      body.failed, 1,
+      `a row that can never publish must be counted as FAILED, saw ${JSON.stringify(body)}`,
+    );
+    assert.equal(publishPinCalls, 0, "nothing is sent — there is no destination to send to");
+    assert.equal(videoDispatchCalls, 0, "and no video dispatch either");
+
+    // The explicit artifact. `persistFailure` writes the payload-level publish error
+    // (there is no destinationId to key a result row on — that is the whole problem),
+    // so that is what must carry the reason.
+    const payload = draft.payload as Record<string, unknown>;
+    const stored = String(payload.publishError ?? "");
+    assert.match(
+      stored, /no valid destinations/i,
+      `the stored error must SAY the destinations did not parse, saw: ${JSON.stringify(stored)}`,
+    );
+    assert.equal(
+      payload.errorCategory, "content",
+      `a payload that will never parse is a user-fixable CONTENT problem, not a transient one `
+      + `the merchant should retry — saw ${JSON.stringify(payload.errorCategory)}`,
+    );
+    assert.equal(failedEvents.length, 1, "and the failure is reported exactly once");
+    assert.match(
+      String(failedEvents[0]?.message ?? ""), /no valid destinations/i,
+      "the reported event carries the same reason",
+    );
+
+    // Placement proof: the refusal happens BEFORE the metering consume, so a row
+    // that never reaches a provider is never charged for one.
+    assert.equal(
+      consumeCalls.length, 0,
+      `a row with nowhere to publish must not be charged, saw ${JSON.stringify(consumeCalls)}`,
+    );
+    assert.equal(ledger.length, 0, "no attempt row — nothing was attempted");
+    assert.equal(draft.scheduled_at, null, "the slot is cleared: waiting cannot fix a misspelled field");
+    console.log(`        B8 evidence: failed=${body.failed} publishError="${stored}" category=${payload.errorCategory} consumes=${consumeCalls.length}`);
+  });
+
   // ── Supporting invariant ───────────────────────────────────────────────────
   await test("flag ON names the gate column in both the scan and the claim", async () => {
     publishPinBehaviour = async () => ({

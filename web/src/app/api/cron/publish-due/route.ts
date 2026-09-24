@@ -88,6 +88,7 @@ import {
   publishMediaUrls,
   destinationPublishInput,
   describeThrown,
+  declaredButUnparseableDestinations,
   owedDestinations,
   failedRowsForUnattempted,
   didNotCompleteMessage,
@@ -620,6 +621,43 @@ export async function GET(req: Request): Promise<Response> {
         const holdForReconcile = retryEnabled && hasOpenReconciliation(priorResults, attempts);
         await persistOutcomes(io, row, [], holdForReconcile ? { deferred: true } : {});
         skipped++;
+        continue;
+      }
+
+      // ── A PAYLOAD THAT DECLARED DESTINATIONS AND PARSED TO NONE ──────────────
+      // The third silent-dropout vector, found in production. An entry that spells
+      // `socialConnectionId` as `connectionId` is dropped by `isUsableDestination`,
+      // so the row owes nothing and used to reach `if (!outcomes.length)` below —
+      // whose comment ("every destination had already published on an earlier
+      // attempt") is simply false here. That branch cleared the schedule, released
+      // the claim and wrote no error, which on the data is indistinguishable from a
+      // Content that published perfectly. The merchant's post never existed and
+      // nothing anywhere said so.
+      //
+      // Reported as `bad_request` because the code, not a new string, is what
+      // `mapPublishErrorToCategory` reads: it maps to `content` — "a fixed,
+      // request-shaped problem; retrying the same payload won't help", which is
+      // precisely true of a misspelled field. A new unrecognized code would fall
+      // through that mapping to `transient` and invite the merchant to retry a
+      // draft that can never parse.
+      //
+      // Placed BEFORE the metering consume: a row that cannot reach a provider is
+      // not charged for one, matching the contract the `limit_reached` and
+      // unpublishable-payload branches already follow. `persistFailure` clears the
+      // schedule, and that is right — waiting does not repair a stored field.
+      //
+      // Reached only when the early exit above did not fire, i.e. there are no prior
+      // results, so this cannot mask a row that is merely finishing earlier work.
+      if (!owed.length && declaredButUnparseableDestinations(row.payload)) {
+        const unparseable = "This Pin named publish destinations, but no valid destinations "
+          + "could be parsed from it — its saved destination data is malformed. "
+          + "Re-pick the destinations and schedule it again.";
+        await persistFailure(io, row, { message: unparseable, code: "bad_request" });
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: "bad_request",
+          message: unparseable,
+        });
+        failed++;
         continue;
       }
 
