@@ -80,7 +80,7 @@ export type DurableVideoEvidence = {
   reason?: string;
 };
 
-function safeStage(value: unknown): string | undefined {
+function safeStage(value: unknown): PinterestVideoEvidence["stage"] | undefined {
   // The adapter's five stage names and nothing else. An unrecognized stage is a
   // sign the row was not written by code we know; it is dropped rather than shown.
   return value === "validated" || value === "registered" || value === "uploaded"
@@ -120,6 +120,53 @@ export function readDurableVideoEvidence(raw: unknown): DurableVideoEvidence {
     ...(mediaId ? { mediaId } : {}),
     ...(providerMessage ? { providerMessage } : {}),
     ...(reason ? { reason } : {}),
+  };
+}
+
+/**
+ * The same record read as ADAPTER evidence — or null when it is not adapter-shaped.
+ *
+ * ── WHY THE CALLER NEEDS THIS DISTINCTION ──────────────────────────────────────
+ * A `failed` dispatch result has two very different origins, and until now the
+ * scheduling plane could not tell them apart:
+ *
+ *   · the ADAPTER observed a provider answer — a 400 with a code, a 401, a local
+ *     validation refusal. `classification` and `stage` are both present, and
+ *     `classifyVideoEvidence` can apply the design's §4.2 video table to it.
+ *   · the ORCHESTRATION layer could not complete a dispatch. There is no
+ *     classification, only a `reason`, and `classifyDurableVideoResult` is the
+ *     right reader.
+ *
+ * `classification` is REQUIRED here (and `stage` with it) because it is the field
+ * that makes the §4.2 table applicable; without it the caller must not pretend to
+ * classify. Only the two values the adapter ever pairs with `outcome: "failed"` are
+ * accepted — a record claiming `succeeded` or `unknown` on a failed result is not
+ * something this codebase produces and is treated as unrecognized rather than
+ * trusted.
+ *
+ * This is a read of a `Record<string, unknown>` that may have come back out of the
+ * database (see the trust-boundary note at the top), so every field is validated,
+ * and `classification` never leaves this layer: it is not in `AttemptEvidence`, not
+ * in the display string, and never written back toward the hash-guarded v81 RPC.
+ */
+export function adapterEvidenceOf(raw: unknown): PinterestVideoEvidence | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const stage = safeStage(value.stage);
+  const classification = value.classification === "definite_rejection"
+    || value.classification === "definite_validation"
+    ? value.classification
+    : undefined;
+  if (!stage || !classification) return null;
+  const evidence = readDurableVideoEvidence(raw);
+  return {
+    stage,
+    classification,
+    ...(evidence.providerStatus !== undefined ? { providerStatus: evidence.providerStatus } : {}),
+    ...(evidence.providerCode ? { providerCode: evidence.providerCode } : {}),
+    ...(evidence.requestId ? { requestId: evidence.requestId } : {}),
+    ...(evidence.mediaId ? { mediaId: evidence.mediaId } : {}),
+    ...(evidence.providerMessage ? { providerMessage: evidence.providerMessage } : {}),
   };
 }
 

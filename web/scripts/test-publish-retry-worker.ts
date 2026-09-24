@@ -744,9 +744,10 @@ function serverError(PinterestApiError: new (m: string, s: number, c: string) =>
       "AttemptEvidence is five keys on purpose (attemptLedger.ts) — the message is display-only",
     );
 
-    // A `retryable` round holds the row rather than failing it: unchanged behaviour.
-    assert.equal(failedEvents.length, 0, "a retryable round still tells the merchant nothing");
-    assert.equal(draft.scheduled_at, DUE_AT, "and still keeps the schedule");
+    // What this round DOES with the rejection — blocked_user, told now, budget
+    // untouched — is B5's subject, not this case's. B2 is about the evidence
+    // reaching the ledger at all, and it must keep proving that whatever the
+    // scheduling verdict happens to be.
     console.log(`        B2 evidence: ledger[0].evidence=${JSON.stringify(evidence)}`);
   });
 
@@ -819,6 +820,114 @@ function serverError(PinterestApiError: new (m: string, s: number, c: string) =>
       `the 400 fallback must still classify this as refundable, saw ${JSON.stringify(releaseCalls)}`,
     );
     console.log(`        B4 evidence: error="${error}" release=${releaseCalls[0]?.reason}`);
+  });
+
+  // ── A DEFINITE REJECTION MUST NOT BURN THE RETRY BUDGET ────────────────────
+  //
+  // Once the evidence above was preserved, a second defect became visible in it.
+  // The video failure fork asked `classifyDurableVideoResult`, which reads only the
+  // orchestration `reason`: a real adapter 4xx has none, so it fell through to
+  // `retryAllowed` and answered `retryable`. A Pin Pinterest had definitively
+  // refused was therefore re-uploaded four more times across roughly an hour, and
+  // the merchant heard nothing until the fifth round — the opposite of the PRD's
+  // "only retry what is indefinite".
+
+  await test("B5 (flag ON): a definite 400 is blocked_user — told now, budget untouched", async () => {
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => REJECTED_400;
+
+    await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran");
+    assert.equal(ledger.length, 1, "one attempt row");
+    assert.equal(
+      ledger[0].retry_class, "blocked_user",
+      `a definite_rejection must not be scheduled for retry, saw ${ledger[0].retry_class}`,
+    );
+    assert.equal(ledger[0].next_attempt_at, null, "blocked_user schedules no next round");
+    assert.equal(ledger[0].final_failure_at, null, "and spends none of the five attempts");
+    assert.equal(
+      failedEvents.length, 1,
+      "the merchant is told NOW — a policy rejection does not fix itself by waiting",
+    );
+    assert.equal(failedEvents[0]?.code, "pinterest_video_publish_failed", "with the unchanged code");
+    assert.equal(ledger[0].evidence.providerCode, "SPAM", "and the real evidence is still recorded");
+    assert.equal(
+      releaseCalls[0]?.reason, "rejected",
+      `a rejection still refunds, saw ${JSON.stringify(releaseCalls)}`,
+    );
+
+    // ── The "no five-round loop" half (P17's shape, for the video path) ──────
+    // The merchant re-schedules; the definite rejection recurs. The attempt number
+    // must stay at 1, because blocked_user writes the SAME number back.
+    for (let round = 2; round <= 4; round++) {
+      draft.scheduled_at = DUE_AT;
+      draft.publish_claimed_at = null;
+      draft.publish_next_attempt_at = null;
+      await run();
+    }
+    assert.equal(ledger.length, 1, `still ONE ledger row after four rounds, saw ${ledger.length}`);
+    assert.equal(ledger[0].attempt, 1, `still attempt 1 — the budget is never consumed, saw ${ledger[0].attempt}`);
+    assert.equal(
+      videoDispatchCalls, 4,
+      "each round the merchant re-scheduled did send once; what must not happen is the route "
+      + "retrying on its OWN initiative behind a backoff",
+    );
+    console.log(`        B5 evidence: retry_class=${ledger[0].retry_class} attempt=${ledger[0].attempt} rows=${ledger.length} failedEvents=${failedEvents.length}`);
+  });
+
+  await test("B6 (flag ON): a 429 is still retryable — the correction is scoped to definite failures", async () => {
+    // §4.3 defect 1: 429 is a `definite_rejection` at the adapter layer (every 4xx
+    // is), and it is the textbook retryable case. `classifyVideoEvidence` already
+    // corrects for it; this asserts the fork did not throw that away by routing all
+    // adapter evidence to blocked_user.
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => ({
+      outcome: "failed",
+      retryAllowed: true,
+      evidence: {
+        stage: "registered", classification: "definite_rejection",
+        mediaId: "media-v1", providerStatus: 429, providerCode: "rate_limited",
+        providerMessage: "Slow down",
+      },
+    });
+
+    await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran");
+    assert.equal(
+      ledger[0].retry_class, "retryable",
+      `429 must stay retryable, saw ${ledger[0].retry_class}`,
+    );
+    assert.ok(ledger[0].next_attempt_at, "and a next round is scheduled");
+    assert.equal(failedEvents.length, 0, "a retryable round tells the merchant nothing");
+    assert.equal(draft.scheduled_at, DUE_AT, "and keeps the schedule");
+    assert.equal(ledger[0].evidence.providerStatus, 429, "the real status is recorded");
+    console.log(`        B6 evidence: retry_class=${ledger[0].retry_class} next_attempt_at set=${!!ledger[0].next_attempt_at}`);
+  });
+
+  await test("B7: an orchestration-layer failure still uses the orchestration classifier", async () => {
+    // The fallback must keep working for the only two shapes that reach it:
+    // `materialization_incomplete` (no classification) and a replayed `failed`
+    // attempt with no evidence at all.
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => ({
+      outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" },
+    });
+    await run();
+    assert.equal(
+      ledger[0].retry_class, "retryable",
+      `materialization never reached Pinterest and is plainly retryable, saw ${ledger[0].retry_class}`,
+    );
+
+    // A replayed `failed` attempt: no evidence whatsoever.
+    ledger = []; draft = baseDraft(); makeVideoDraft();
+    draft.publish_claimed_at = null;
+    videoDispatchBehaviour = async () => ({ outcome: "failed", replayed: true, retryAllowed: true });
+    await run();
+    assert.equal(
+      ledger[0].retry_class, "retryable",
+      `an evidence-less replay keeps its previous classification, saw ${ledger[0].retry_class}`,
+    );
+    console.log(`        B7 evidence: orchestration fallback intact for both evidence-less shapes`);
   });
 
   // ── Supporting invariant ───────────────────────────────────────────────────

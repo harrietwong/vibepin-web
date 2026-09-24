@@ -114,6 +114,7 @@ import { ensureV82Capability } from "./v82Capability";
 // The v76 dispatcher's real evidence — what Pinterest actually answered — instead
 // of the fixed string this route used to synthesize. See videoEvidence.ts.
 import {
+  adapterEvidenceOf,
   attemptEvidenceFrom,
   describeVideoEvidence,
   readDurableVideoEvidence,
@@ -130,6 +131,7 @@ import {
 import {
   classifyDurableVideoResult,
   classifyPinterestApiError,
+  classifyVideoEvidence,
   computeNextAttemptAt,
   type RetryClass,
 } from "@/lib/server/publish/retryClassification";
@@ -1091,16 +1093,54 @@ export async function GET(req: Request): Promise<Response> {
             } else if (durable.outcome === "in_progress" || durable.outcome === "not_due") {
               await record(deferredOutcome(destination));
             } else {
-              // A dispatch-layer failure. `classifyDurableVideoResult` reads the
-              // orchestration reason (materialization_incomplete ⇒ retryable, the three
-              // provider-boundary reasons ⇒ reconciliation_required) rather than the
-              // adapter's `classification` enum, which is hash-guarded by v81 and must
-              // not grow a fifth value for this feature.
+              /**
+               * ── WHICH CLASSIFIER ANSWERS FOR THIS FAILURE ──────────────────
+               * A `failed` result has two origins and they want opposite
+               * treatment. Until the evidence was preserved above, the route
+               * could not tell them apart and asked the orchestration reader for
+               * both:
+               *
+               *   · THE ADAPTER SAW A PROVIDER ANSWER. `classification` and
+               *     `stage` are present. `classifyDurableVideoResult` reads
+               *     neither — it finds no recognized `reason`, falls through to
+               *     `retryAllowed`, and answers `retryable`. So a definite 400
+               *     ("this Pin violates policy") was retried four more times
+               *     over roughly an hour, each round re-uploading the video, and
+               *     the merchant was told nothing until the fifth failed. That
+               *     is the opposite of the PRD's rule that only indefinite
+               *     failures are retried, and the §4.2 video table already says
+               *     what to do instead: 429 ⇒ retryable, every other 4xx and
+               *     every local validation refusal ⇒ blocked_user, told now.
+               *
+               *   · THE ORCHESTRATION LAYER COULD NOT COMPLETE A DISPATCH. No
+               *     classification, only a `reason`, and the orchestration reader
+               *     is correct. Note how little it is left holding: of its four
+               *     reasons, three (provider_boundary_exception,
+               *     provider_settlement_unavailable,
+               *     process_loss_after_provider_attempt) return
+               *     `delivery_unknown` and never reach this branch at all. Here
+               *     it serves `materialization_incomplete` and the replayed
+               *     `failed` attempt that carries no evidence whatsoever
+               *     (v76PinterestVideoPublish: `started.status === "failed"`).
+               *
+               * `classification` is read ONLY to pick the classifier. It is not
+               * recorded, not displayed, and never travels back toward the v81
+               * settle RPC whose value whitelist is hash-guarded — the taxonomy
+               * separation in retryClassification.ts's header still holds.
+               *
+               * `retryAfterSeconds` is not available: the durable result drops
+               * it. A 429 through this fork gets `retryable` on the base backoff
+               * table, which is the designed degradation, not an oversight.
+               */
               const failureEvidence = readDurableVideoEvidence(durable.evidence);
+              const adapterEvidence = adapterEvidenceOf(durable.evidence);
+              const videoRetryClass = adapterEvidence
+                ? classifyVideoEvidence(adapterEvidence).retryClass
+                : classifyDurableVideoResult(durable).retryClass;
               const held = retryEnabled
                 ? await retryFork(
                   destination,
-                  classifyDurableVideoResult(durable).retryClass,
+                  videoRetryClass,
                   undefined,
                   // Was: the orchestration `reason` and nothing else, so a real
                   // Pinterest rejection recorded an attempt with an EMPTY provider
