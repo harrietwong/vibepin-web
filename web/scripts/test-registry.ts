@@ -34,6 +34,7 @@ export const CORE: string[] = [
   "test-product-url-import-auth",
   "test-amazon-url-channel",
   "test-amazon-link",
+  "test-amazon-adapter",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",
