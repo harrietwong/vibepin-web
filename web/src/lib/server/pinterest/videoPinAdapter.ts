@@ -88,18 +88,40 @@ function containsSensitiveValue(value: string, sensitiveValues: ReadonlySet<stri
   );
 }
 
-function safeEvidenceId(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+/**
+ * ── WHY THESE THREE ARE EXPORTED (and the rest of the module's helpers are not) ──
+ * Evidence is sanitized ONCE here, at the provider boundary, and that is still the
+ * only place raw provider text is admitted. But an evidence object does not stay at
+ * this boundary: `dispatchV76PinterestVideo` returns it as an untyped
+ * `Record<string, unknown>` — and on the replay paths that record is READ BACK OUT OF
+ * THE DATABASE (`inspect` → `prior.evidence`), which is a different trust boundary
+ * with a different history. A consumer that wants to show one of those fields to a
+ * merchant therefore has to re-validate, and it must do so with the SAME predicates
+ * that decided the value was safe in the first place. Duplicating them in the
+ * consumer is how the two copies drift.
+ *
+ * The `sensitiveValues` default is the empty set — correct for a consumer, which
+ * holds no upload credentials to redact; the adapter itself always passes the real
+ * set from the registration response.
+ */
+export function safeEvidenceId(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const id = safeId(value);
   return id && !containsSensitiveValue(id, sensitiveValues) ? id : undefined;
 }
 
-function safeProviderCode(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+export function safeProviderCode(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const code = typeof value === "number" && Number.isFinite(value) ? String(value) : cleanText(value);
   return code.length > 0 && code.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(code)
     && !containsSensitiveValue(code, sensitiveValues) ? code : undefined;
 }
 
-function safeProviderMessage(value: unknown, sensitiveValues: ReadonlySet<string>): string | undefined {
+export function safeProviderMessage(
+  value: unknown, sensitiveValues: ReadonlySet<string> = NO_SENSITIVE_VALUES,
+): string | undefined {
   const message = cleanText(value);
   if (!message || message.length > 240 || /https?:\/\//i.test(message) || /[{}\[\]]/.test(message) || /[\u0000-\u001f]/.test(message) || containsSensitiveValue(message, sensitiveValues)) return undefined;
   return message;

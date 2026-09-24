@@ -111,6 +111,13 @@ import {
   type AttemptEvidence,
 } from "./attemptLedger";
 import { ensureV82Capability } from "./v82Capability";
+// The v76 dispatcher's real evidence — what Pinterest actually answered — instead
+// of the fixed string this route used to synthesize. See videoEvidence.ts.
+import {
+  attemptEvidenceFrom,
+  describeVideoEvidence,
+  readDurableVideoEvidence,
+} from "./videoEvidence";
 // The entry point for the VIDEO re-send path. Reached ONLY when the retry flag
 // is on, the row is a video, and a `confirmed_absent` proof exists for the
 // destination — see `childVideoReceipt` below, which is the single gate.
@@ -1038,7 +1045,19 @@ export async function GET(req: Request): Promise<Response> {
                 externalPostUrl: durable.remoteUrl ?? null,
               });
             } else if (durable.outcome === "delivery_unknown") {
+              // ── THE ONE THING THAT STAYS HARDCODED HERE, AND WHY ────────────
+              // `classifyDelivery({})` ⇒ `delivery_unknown` ⇒ the unit is KEPT
+              // (deliveryOutcome.ts: "no status ⇒ we cannot prove nothing
+              // exists"). Feeding the real status in would be wrong, not more
+              // honest: an unknown delivery can carry a stored 4xx (`inspect`
+              // replays an earlier attempt's evidence), and `classifyDelivery`
+              // maps 4xx to `rejected`, which REFUNDS. A delivery we cannot
+              // disprove must never be refunded — this branch's outcome is
+              // decided by the dispatcher's own tri-state, not by a status code
+              // that survived into the row. The forensics below are display and
+              // bookkeeping only and change no money.
               deliveries.push(classifyDelivery({}));
+              const unknownEvidence = readDurableVideoEvidence(durable.evidence);
               // §3.4(a): flag the reconciliation BEFORE the result row is written, so
               // the ledger entry exists by the time the final persist asks whether a
               // reconciliation is open. The `delivery_unknown` row itself is unchanged
@@ -1046,16 +1065,29 @@ export async function GET(req: Request): Promise<Response> {
               // `holdForReconcile` at the final persist), which is what gives the
               // reconciliation worker a row to act on when it concludes.
               if (retryEnabled) {
-                await retryFork(destination, "reconciliation_required", undefined, {
-                  stage: "created", providerCode: "delivery_unknown",
-                });
+                await retryFork(
+                  destination,
+                  "reconciliation_required",
+                  undefined,
+                  // Same two constants as before, now only as FALLBACKS: a real
+                  // stage and a real provider code take precedence when the
+                  // dispatcher observed them, and the ledger keeps its previous
+                  // values for the orchestration-layer cases that observed none.
+                  attemptEvidenceFrom(unknownEvidence, {
+                    stage: "created", providerCode: "delivery_unknown",
+                  }) ?? { stage: "created", providerCode: "delivery_unknown" },
+                );
               }
+              const unknownMessage = describeVideoEvidence(
+                "Delivery is unknown. Reconcile the original intent before retrying.",
+                unknownEvidence,
+              );
               await record({
                 provider: "pinterest", status: "delivery_unknown",
                 socialConnectionId: destination.socialConnectionId ?? null,
-                error: "Delivery is unknown. Reconcile the original intent before retrying.",
+                error: unknownMessage,
               });
-              if (!firstFailure) firstFailure = { code: "delivery_unknown", message: "Delivery is unknown. Reconcile the original intent before retrying." };
+              if (!firstFailure) firstFailure = { code: "delivery_unknown", message: unknownMessage };
             } else if (durable.outcome === "in_progress" || durable.outcome === "not_due") {
               await record(deferredOutcome(destination));
             } else {
@@ -1064,12 +1096,18 @@ export async function GET(req: Request): Promise<Response> {
               // provider-boundary reasons ⇒ reconciliation_required) rather than the
               // adapter's `classification` enum, which is hash-guarded by v81 and must
               // not grow a fifth value for this feature.
+              const failureEvidence = readDurableVideoEvidence(durable.evidence);
               const held = retryEnabled
                 ? await retryFork(
                   destination,
                   classifyDurableVideoResult(durable).retryClass,
                   undefined,
-                  { providerCode: typeof durable.evidence?.reason === "string" ? durable.evidence.reason : undefined },
+                  // Was: the orchestration `reason` and nothing else, so a real
+                  // Pinterest rejection recorded an attempt with an EMPTY provider
+                  // code. `attemptEvidenceFrom` prefers the adapter's own code and
+                  // falls back to the reason, which is what the ledger used to get
+                  // for the dispatch-layer cases — those are unchanged.
+                  attemptEvidenceFrom(failureEvidence),
                 )
                 : null;
               if (held) {
@@ -1077,13 +1115,44 @@ export async function GET(req: Request): Promise<Response> {
                 // answerable yet — design §4.4) and no failure is reported.
                 await record(held);
               } else {
-                deliveries.push(classifyDelivery({ providerStatus: 400 }));
+                // ── 400 IS NOW THE FALLBACK, AND ONLY A 4xx MAY REPLACE IT ───
+                // This branch is already known to be a REJECTION — the dispatcher
+                // said `failed`, which it says only when delivery is disproved.
+                // The status is therefore reported for the record, not consulted
+                // for the verdict, and `classifyDelivery` is only allowed to see
+                // it when it agrees with the verdict it is being asked about.
+                //
+                // Two ways the naive `?? 400` would have moved money, both real:
+                //   · a replayed `failed` attempt and `materialization_incomplete`
+                //     carry NO status; without the fallback they would become
+                //     `delivery_unknown` ⇒ charged, where today they refund.
+                //   · a media-processing rejection discovered while POLLING carries
+                //     `providerStatus: pollResponse.status`, which is the status of
+                //     the POLL — 200. `classifyDelivery(200)` is `sent`, so a video
+                //     Pinterest definitively refused would have been recorded as
+                //     delivered and charged for.
+                // Clamping to 4xx keeps every one of these at `rejected`, exactly
+                // as the hardcoded 400 did. This change is forensic; it must not
+                // move money.
+                const rejectionStatus = failureEvidence.providerStatus !== undefined
+                  && failureEvidence.providerStatus >= 400
+                  && failureEvidence.providerStatus < 500
+                  ? failureEvidence.providerStatus
+                  : 400;
+                deliveries.push(classifyDelivery({ providerStatus: rejectionStatus }));
+                const failureMessage = describeVideoEvidence(
+                  "Pinterest rejected the video publish.",
+                  failureEvidence,
+                );
                 await record({
                   provider: "pinterest", status: "failed",
                   socialConnectionId: destination.socialConnectionId ?? null,
-                  error: "Pinterest rejected the video publish.",
+                  error: failureMessage,
                 });
-                if (!firstFailure) firstFailure = { code: "pinterest_video_publish_failed", message: "Pinterest rejected the video publish." };
+                // The CODE is deliberately unchanged: it is a stable identifier that
+                // other surfaces switch on, and the newly-recovered detail belongs in
+                // the message, which nothing matches against.
+                if (!firstFailure) firstFailure = { code: "pinterest_video_publish_failed", message: failureMessage };
               }
             }
             continue;

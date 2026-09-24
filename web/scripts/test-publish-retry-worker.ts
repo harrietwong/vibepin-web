@@ -67,6 +67,17 @@ type AttemptRecord = {
   reconcile_required_at: string | null;
   reconciled_at: string | null;
   final_failure_at: string | null;
+  /**
+   * What the route handed `scheduled_publish_attempt_record_v82` as `p_evidence`.
+   *
+   * NOT read back by the route — `loadAttemptLedger` does not select it — and so it
+   * is deliberately absent from `AttemptRow`. It is kept here because it is the only
+   * place the forensic half of the fix is observable: the migration stores these
+   * fields as `last_provider_code` / `last_provider_status` / `last_request_id`, and
+   * a route that records `{}` for a real Pinterest 400 is exactly the defect
+   * (故障 B) the ledger was built to close.
+   */
+  evidence: Record<string, unknown>;
 };
 
 /** The one `pin_drafts` row, with the columns the route filters and writes. */
@@ -117,6 +128,36 @@ function baseDraft(): DraftRow {
     publish_claimed_at: null, publish_next_attempt_at: null,
     deleted_at: null, archived_at: null,
   };
+}
+
+/**
+ * Turn the draft into a SINGLE-VIDEO one, which is the only shape that reaches the
+ * v76 durable dispatcher.
+ *
+ * Two conditions, both load-bearing, and either one missing makes the video cases
+ * pass vacuously against the image path instead: `isSingleVideoPayload` needs
+ * `media` to be exactly one `kind: "video"` item (route.ts), and the pre-claim
+ * kill-switch filter drops every video row unless `VIDEO_PIN_UPLOAD_ENABLED` is
+ * `"true"` (route.ts, the `safeCandidates` filter). `videoDispatchCalls` is asserted
+ * in each case for exactly this reason — it is the proof that the branch under test
+ * is the branch that ran.
+ */
+function makeVideoDraft(): void {
+  draft.payload = {
+    ...draft.payload,
+    contentId: "content-video-1",
+    title: "Autumn table",
+    description: "A short clip",
+    altText: "Table",
+    destinationUrl: "https://shop.example.com/autumn",
+    imageUrl: "https://cdn.test/poster.jpg",
+    media: [{
+      id: "media-v1", kind: "video", url: "https://cdn.test/clip.mp4",
+      width: 1080, height: 1920, durationMs: 8000,
+      posterUrl: "https://cdn.test/poster.jpg", source: "upload",
+    }],
+  };
+  process.env.VIDEO_PIN_UPLOAD_ENABLED = "true";
 }
 
 /** Rewind every stored timer into the past — "time passed" without mocking a clock. */
@@ -199,6 +240,9 @@ function fakeSupabaseClient() {
         if (attempt < 1 || attempt > 5) {
           return { data: null, error: { message: "v82_attempt_cap_exceeded", code: "23514" } };
         }
+        const evidence = args.p_evidence && typeof args.p_evidence === "object"
+          ? args.p_evidence as Record<string, unknown>
+          : {};
         const existing = ledger.find(r =>
           r.provider === provider && r.social_connection_id === conn && r.attempt === attempt);
         // Terminal: attempt 5 with nowhere to go next ends the lifecycle (§2.2 D).
@@ -208,12 +252,14 @@ function fakeSupabaseClient() {
           existing.retry_class = retryClass;
           existing.next_attempt_at = next;
           existing.reconcile_required_at = existing.reconcile_required_at ?? reconcile;
+          existing.evidence = evidence;
           if (isFinal && !existing.final_failure_at) existing.final_failure_at = new Date().toISOString();
         } else {
           ledger.push({
             provider, social_connection_id: conn, attempt, retry_class: retryClass,
             next_attempt_at: next, reconcile_required_at: reconcile, reconciled_at: null,
             final_failure_at: isFinal ? new Date().toISOString() : null,
+            evidence,
           });
         }
         return { data: {}, error: null };
@@ -297,9 +343,13 @@ async function test(name: string, fn: () => Promise<void>) {
   });
   videoDispatchBehaviour = async () => ({ outcome: "published", remoteId: "v1", retryAllowed: false });
   process.env.PUBLISH_RETRY_WORKER_ENABLED = "true";
+  delete process.env.VIDEO_PIN_UPLOAD_ENABLED;
   try { await fn(); console.log(`  PASS  ${name}`); passed++; }
   catch (e) { console.log(`  FAIL  ${name}\n        ${(e as Error).stack ?? (e as Error).message}`); failed++; }
-  finally { delete process.env.PUBLISH_RETRY_WORKER_ENABLED; }
+  finally {
+    delete process.env.PUBLISH_RETRY_WORKER_ENABLED;
+    delete process.env.VIDEO_PIN_UPLOAD_ENABLED;
+  }
 }
 
 /** The stored result row for the single Pinterest destination, if any. */
@@ -603,6 +653,172 @@ function serverError(PinterestApiError: new (m: string, s: number, c: string) =>
       + `More means something re-sent an unknown delivery; fewer means the row was lost.`,
     );
     console.log(`        P27 evidence: createPin=${publishPinCalls} scheduled_at held across ticks 1-2, tick3 published=${tick3.published}`);
+  });
+
+  // ── 故障 B: THE VIDEO DISPATCH'S REAL EVIDENCE MUST SURVIVE THE ROUTE ───────
+  //
+  // On 2026-09-21 fourteen scheduled videos were rejected by Pinterest with a real
+  // HTTP 400, and not one of them could be diagnosed: the route discarded
+  // `durable.evidence` — provider status, provider code, request id, stage, the
+  // provider's own message — and wrote the fixed string "Pinterest rejected the
+  // video publish." with a HARDCODED `classifyDelivery({ providerStatus: 400 })`.
+  // The response body reached no store at all. See
+  // docs/coordination/0923-Pinterest视频发布故障-定位与修复方案-v1.0.md 故障 B.
+  //
+  // These four cases are the regression fence. Each asserts `videoDispatchCalls`
+  // first: without `media: [{kind:"video"}]` AND `VIDEO_PIN_UPLOAD_ENABLED=true`
+  // the row never reaches the dispatcher and every other assertion below would be
+  // measuring the image path.
+
+  /** A real Pinterest rejection, shaped exactly as the adapter's `evidence()` emits it. */
+  const REJECTED_400 = {
+    outcome: "failed",
+    retryAllowed: true,
+    evidence: {
+      stage: "created",
+      classification: "definite_rejection",
+      mediaId: "media-v1",
+      requestId: "abc123def456ghi789",
+      providerStatus: 400,
+      providerCode: "SPAM",
+      providerMessage: "Video rejected by policy review",
+    },
+  };
+
+  await test("B1 (flag OFF): the merchant's error carries the real status, code and request id", async () => {
+    // Flag off is the deployed state this fix has to work in: it is a forensic
+    // change, not a retry-behaviour change, so the else branch — reached directly
+    // when `retryFork` is inert — must carry the evidence too.
+    delete process.env.PUBLISH_RETRY_WORKER_ENABLED;
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => REJECTED_400;
+
+    const body = await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran — otherwise this case proves nothing");
+    assert.equal(body.failed, 1, "a rejection is still reported as a failure");
+
+    const error = String(resultRow()?.errorMessage ?? resultRow()?.error ?? "");
+    assert.match(error, /HTTP 400/, `the real status must reach the merchant-visible error, saw: ${error}`);
+    assert.match(error, /code SPAM/, `the real provider code must reach it, saw: ${error}`);
+    assert.match(error, /request abc123def456/, `the request id must reach it so a log can be found, saw: ${error}`);
+    assert.match(error, /Video rejected by policy review/, `the provider's own message must reach it, saw: ${error}`);
+    assert.ok(
+      !/^Pinterest rejected the video publish\.$/.test(error),
+      "the fixed string alone is the defect — it is what made 故障 B undiagnosable",
+    );
+    assert.equal(
+      failedEvents[0]?.code, "pinterest_video_publish_failed",
+      "the failure CODE is a stable identifier and must NOT change — only the message grows",
+    );
+
+    // ── Flag-off behaviour is otherwise untouched ────────────────────────────
+    assert.equal(ledger.length, 0, "flag off writes no attempt row at all");
+    assert.equal(draft.scheduled_at, null, "flag off still ends the schedule on a failure");
+    assert.equal(
+      releaseCalls.length, 1,
+      "a 4xx rejection is REFUNDABLE and still refunds — a forensic change must not move money",
+    );
+    assert.equal(releaseCalls[0].reason, "rejected", `the refund reason is unchanged, saw ${releaseCalls[0]?.reason}`);
+    console.log(`        B1 evidence: error="${error}" release=${releaseCalls[0]?.reason}`);
+  });
+
+  await test("B2 (flag ON): the attempt ledger records the real provider code, not a constant", async () => {
+    // The ledger is where a support engineer goes for `last_provider_code` /
+    // `last_provider_status` / `last_request_id`. Before this fix the failed branch
+    // passed only the orchestration `reason`, which a real provider rejection does
+    // not have — so the row's evidence was `{}` and the 400s were invisible there too.
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => REJECTED_400;
+
+    await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran");
+    assert.equal(ledger.length, 1, "one attempt row for the one destination");
+    const evidence = ledger[0].evidence;
+    assert.equal(evidence.providerCode, "SPAM", `last_provider_code must be the REAL code, saw ${JSON.stringify(evidence)}`);
+    assert.equal(evidence.providerStatus, 400, `last_provider_status must be the REAL status, saw ${JSON.stringify(evidence)}`);
+    assert.equal(evidence.requestId, "abc123def456ghi789", "the request id is stored in full — truncation is a display concern only");
+    assert.equal(evidence.stage, "created", "the stage the adapter really reached");
+    assert.equal(evidence.mediaId, "media-v1", "the media id that was rejected");
+    assert.ok(
+      !("providerMessage" in evidence),
+      "AttemptEvidence is five keys on purpose (attemptLedger.ts) — the message is display-only",
+    );
+
+    // A `retryable` round holds the row rather than failing it: unchanged behaviour.
+    assert.equal(failedEvents.length, 0, "a retryable round still tells the merchant nothing");
+    assert.equal(draft.scheduled_at, DUE_AT, "and still keeps the schedule");
+    console.log(`        B2 evidence: ledger[0].evidence=${JSON.stringify(evidence)}`);
+  });
+
+  await test("B3: delivery_unknown carries its evidence AND still keeps the charge", async () => {
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => ({
+      outcome: "delivery_unknown",
+      retryAllowed: false,
+      reconcileRequired: true,
+      evidence: {
+        stage: "polled", classification: "unknown",
+        mediaId: "media-v1", requestId: "req-unknown-1", providerStatus: 503,
+        providerCode: "upstream_unavailable",
+        providerMessage: "Upstream timed out",
+      },
+    });
+
+    await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran");
+    const error = String(resultRow()?.errorMessage ?? resultRow()?.error ?? "");
+    assert.match(error, /HTTP 503/, `the unknown round's real status must be visible too, saw: ${error}`);
+    assert.match(error, /code upstream_unavailable/, `and its code, saw: ${error}`);
+    assert.match(error, /Reconcile the original intent/, "the actionable lead sentence is preserved");
+
+    const row = ledger[0];
+    assert.equal(row.retry_class, "reconciliation_required", "an unknown delivery still demands reconciliation first");
+    assert.equal(row.evidence.providerStatus, 503, "the real status reaches the ledger");
+    assert.equal(
+      row.evidence.stage, "polled",
+      "the REAL stage — this used to be the constant \"created\" whatever actually happened",
+    );
+    assert.equal(
+      row.evidence.providerCode, "upstream_unavailable",
+      "the real code — this used to be the constant \"delivery_unknown\"",
+    );
+
+    // ── The money invariant, and why it is asserted HERE ─────────────────────
+    // `classifyDelivery` maps 4xx to `rejected`, which REFUNDS. An unknown
+    // delivery must never refund (deliveryOutcome.ts: we cannot prove nothing
+    // exists), so this branch deliberately keeps `classifyDelivery({})` and never
+    // feeds it a status — however real that status is.
+    assert.equal(
+      releaseCalls.length, 0,
+      `an unknown delivery must KEEP the charge, saw releases: ${JSON.stringify(releaseCalls)}`,
+    );
+    assert.equal(draft.scheduled_at, DUE_AT, "§3.4(a): the schedule is held for the reconciliation");
+    console.log(`        B3 evidence: error="${error}" releases=${releaseCalls.length} ledgerEvidence=${JSON.stringify(row.evidence)}`);
+  });
+
+  await test("B4: a dispatch-layer failure invents no HTTP status and refunds exactly as before", async () => {
+    // `materialization_incomplete` never reached Pinterest. It has no status, no
+    // code, no request id — and the fix must not manufacture any. It is also the
+    // case that pins the `?? 400` fallback: dropping it would reclassify this from
+    // `rejected` (refund) to `delivery_unknown` (charge).
+    delete process.env.PUBLISH_RETRY_WORKER_ENABLED;
+    makeVideoDraft();
+    videoDispatchBehaviour = async () => ({
+      outcome: "failed", retryAllowed: true, evidence: { reason: "materialization_incomplete" },
+    });
+
+    const body = await run();
+    assert.equal(videoDispatchCalls, 1, "the video dispatcher must be what ran");
+    assert.equal(body.failed, 1);
+    const error = String(resultRow()?.errorMessage ?? resultRow()?.error ?? "");
+    assert.ok(!/HTTP \d/.test(error), `no status may be invented for a failure that never asked Pinterest, saw: ${error}`);
+    assert.match(error, /Pinterest rejected the video publish/, "the lead sentence is unchanged");
+    assert.match(error, /reason materialization_incomplete/, `the orchestration reason IS reportable, saw: ${error}`);
+    assert.equal(
+      releaseCalls[0]?.reason, "rejected",
+      `the 400 fallback must still classify this as refundable, saw ${JSON.stringify(releaseCalls)}`,
+    );
+    console.log(`        B4 evidence: error="${error}" release=${releaseCalls[0]?.reason}`);
   });
 
   // ── Supporting invariant ───────────────────────────────────────────────────
