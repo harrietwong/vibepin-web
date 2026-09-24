@@ -114,6 +114,8 @@ import {
 } from "@/lib/studio/bulkActions";
 import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
+import { AmazonRiskNoticeBanner } from "@/components/studio/AmazonRiskNoticeBanner";
+import { isAmazonLink } from "@/lib/studio/amazonCardSource";
 
 const IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 const VIDEO_AND_IMAGE_ACCEPT = `${IMAGE_ACCEPT},video/mp4,video/x-m4v,video/quicktime,.mp4,.m4v,.mov`;
@@ -2061,6 +2063,8 @@ export function StudioBoard() {
         ) : (
           <div data-testid="studio-board-grid" data-plan-docked={planDocked ? "true" : "false"}
             style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${STUDIO_UI.cardMinWidth}px, 1fr))`, gap: STUDIO_UI.cardGap, alignItems: "start" }}>
+            {/* One-time, non-blocking Amazon notice (T3, design §5); spans the grid. */}
+            <AmazonRiskNoticeBanner hasAmazonCard={items.some(({ draft }) => isAmazonLink(draft.destinationUrl))} />
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}

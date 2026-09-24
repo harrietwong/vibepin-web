@@ -101,6 +101,11 @@ export function amazonSourceForUrl(
   if (parsed.kind === "short") {
     return { ...base, linkStatus: "short_unexpanded", host: parsed.host };
   }
+  // Same product on the same site (e.g. the user accepted the clean-link chip, or the
+  // expanded form of their short link): keep what was already fetched — no refetch.
+  if (prev && parsed.asin && prev.asin === parsed.asin && prev.host === parsed.host) {
+    return { ...prev, pastedUrl: pasted, linkStatus: "ok", marketplace: parsed.marketplace, resolvedAt: now };
+  }
   return {
     ...base,
     linkStatus: parsed.asin ? "ok" : "no_asin",
@@ -219,6 +224,29 @@ export function buildAmazonCopyContext(src: AmazonCardSource): AmazonCopyContext
     product,
     ...(pageTitle || pageDescription ? { page: { title: pageTitle, description: pageDescription } } : {}),
   };
+}
+
+export type AmazonClaimHint = { field: "brand" | "material" | "size"; value: string };
+
+const CLAIM_FIELD: Record<string, AmazonClaimHint["field"]> = {
+  UNSUPPORTED_BRAND_CLAIM: "brand",
+  UNSUPPORTED_MATERIAL_CLAIM: "material",
+  UNSUPPORTED_NUMERIC_CLAIM: "size",
+};
+
+/**
+ * 422 UX (design §3.2): which Brand / Material / Size box to point at, and the value
+ * the copy mentioned. Reads the validator's issue code + its quoted message value.
+ */
+export function amazonClaimHints(report: { issues?: Array<{ code: string; message?: string }> } | null | undefined): AmazonClaimHint[] {
+  const out: AmazonClaimHint[] = [];
+  for (const issue of report?.issues ?? []) {
+    const field = CLAIM_FIELD[issue.code];
+    if (!field) continue;
+    const value = /"([^"]+)"/.exec(issue.message ?? "")?.[1]?.trim() ?? "";
+    if (!out.some(h => h.field === field && h.value === value)) out.push({ field, value });
+  }
+  return out;
 }
 
 /** The draft is an Amazon affiliate card: it has Amazon context AND its current URL is Amazon. */

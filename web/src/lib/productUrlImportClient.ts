@@ -1,3 +1,5 @@
+import type { AmazonImportMeta } from "@/lib/productUrlImport/types";
+
 export const DEFAULT_MAX_URLS = 10;
 export const HARD_MAX_URLS = 20;
 
@@ -55,7 +57,7 @@ export function reasonLabel(reason: string): string {
 }
 
 export type ImportStatus = "success" | "partial" | "blocked" | "unsupported" | "error" | "failed";
-export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "unknown";
+export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "amazon" | "unknown";
 export type AssetType    = "product" | "reference";
 
 export type ProductUrlImportApiResponse = {
@@ -82,6 +84,8 @@ export type ProductUrlImportApiResponse = {
     message?:         string;
     fallbackActions?: string[];
     debugCode?:       string;
+    /** Amazon links only (text-only channel): link status, fetch outcome, page text. */
+    amazon?:          AmazonImportMeta;
   }>;
 };
 

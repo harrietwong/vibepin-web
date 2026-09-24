@@ -50,6 +50,20 @@ import { track } from "@/lib/analytics";
 import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
 import { explicitPublishDestinations } from "@/lib/studio/publishConfirmation";
 import { canEnterCardEdit, mediaAspectResetKey, resolveMediaAspectRatio, shouldShowStudioMetadataField, studioCardPresentation } from "@/lib/studio/studioCardPresentation";
+import { AmazonCardSection } from "@/components/studio/AmazonCardSection";
+import {
+  amazonClaimHints,
+  amazonSourceForUrl,
+  canGenerateAmazonCopy,
+  isAmazonAffiliateDraft,
+  isAmazonLink,
+  type AmazonCardManual,
+  type AmazonCardSource,
+  type AmazonClaimHint,
+} from "@/lib/studio/amazonCardSource";
+import { runAmazonCardImport } from "@/lib/studio/amazonCardImport";
+import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
+import { appendAffiliateDisclosure, hasAffiliateDisclosure } from "@/lib/ai-copy/affiliateDisclosure";
 
 const PERSIST_DEBOUNCE = 400;
 
@@ -421,6 +435,60 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     }, PERSIST_DEBOUNCE);
   }, [persistNow]);
 
+
+  // ── Amazon link (T3) ──────────────────────────────────────────────────────
+  // Only `amazonSource` is ever persisted from here; title / description / Website
+  // URL stay the user's. Pending field edits are flushed first so the store write
+  // (and the re-seed it triggers) can never drop a keystroke.
+  const [amazonFetching, setAmazonFetching] = useState(false);
+  const [amazonLastFetchAt, setAmazonLastFetchAt] = useState<number | null>(null);
+  const [amazonHints, setAmazonHints] = useState<AmazonClaimHint[]>([]);
+  const persistAmazonSource = useCallback((next: AmazonCardSource) => {
+    props.onPersist(draft.id, { amazonSource: next });
+  }, [props, draft.id]);
+  const startAmazonFetch = useCallback(() => {
+    setAmazonFetching(true);
+    setAmazonLastFetchAt(Date.now());
+    void runAmazonCardImport({
+      getSource: () => getDraft(draft.id)?.amazonSource,
+      persist: persistAmazonSource,
+      importFn: fetchProductUrlImport,
+    }).finally(() => setAmazonFetching(false));
+  }, [draft.id, persistAmazonSource]);
+  /** Recognise an Amazon link in the saved URL; fetch once per newly pasted product. */
+  const syncAmazonLink = useCallback((url: string, autoFetch: boolean) => {
+    const current = getDraft(draft.id) ?? draft;
+    const next = amazonSourceForUrl(url, current.amazonSource);
+    if (!next) return;
+    if (next !== current.amazonSource) persistAmazonSource(next);
+    if (autoFetch && next.fetch.status === "not_attempted" && next.linkStatus !== "no_asin") startAmazonFetch();
+  }, [draft, persistAmazonSource, startAmazonFetch]);
+  const handleUrlBlur = useCallback(() => {
+    flush();
+    syncAmazonLink(pendingRef.current.websiteUrl, true);
+  }, [flush, syncAmazonLink]);
+  // A saved Amazon URL without context (older draft, other entry point) gets its
+  // context on mount — no automatic fetch; the section offers the button.
+  useEffect(() => {
+    if (draft.amazonSource || !isAmazonLink(draft.destinationUrl)) return;
+    const seeded = amazonSourceForUrl(draft.destinationUrl, undefined);
+    if (seeded) persistAmazonSource(seeded);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.id]);
+  const onAmazonManualChange = useCallback((patch: Partial<AmazonCardManual>) => {
+    const current = (getDraft(draft.id) ?? draft).amazonSource;
+    if (!current) return;
+    flush();
+    setAmazonHints([]);
+    persistAmazonSource({ ...current, manual: { ...current.manual, ...patch } });
+  }, [draft, flush, persistAmazonSource]);
+  /** Clean-link chip (ruling 6): the Website URL changes only on this explicit click. */
+  const acceptAmazonLink = useCallback((url: string) => {
+    handleChange({ websiteUrl: url });
+    flush();
+    syncAmazonLink(url, true);
+  }, [handleChange, flush, syncAmazonLink]);
+
   // Actions flush pending edits first. An unresolvable destination blocks both:
   // scheduling or publishing with a half-recorded intent is how a three-platform
   // choice silently executed as Pinterest-only.
@@ -687,6 +755,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // (the on-screen values the panel itself was seeded with), not the possibly-stale
   // `draft`, so this agrees with what the panel used for its own fill-state check.
   const applyCopy = useCallback((r: PinAICopyResult) => {
+    setAmazonHints([]);
     const prevTitle = fields.title;
     const prevDescription = fields.description;
     const prevAltText = fields.altText;
@@ -760,6 +829,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       ? tr("studioBoard.card.needsAttention")
       : status.label;
   const publishing = props.publishing;
+  // Amazon card without a product name: generation is gated (design §2.3). The
+  // section explains why and hosts the field that unlocks it.
+  const amazonNeedsName = isAmazonAffiliateDraft(draft) && !canGenerateAmazonCopy(draft.amazonSource);
+  const amazonSectionSource = draft.amazonSource && draft.amazonSource.pastedUrl === fields.websiteUrl.trim() && isAmazonLink(fields.websiteUrl)
+    ? draft.amazonSource : null;
+  const amazonDisclosureMissing = !!amazonSectionSource && !!fields.description.trim() && !hasAffiliateDisclosure(fields.description);
   const aiCopyPanel = (
     <PinAICopyPanel
       ref={aiRef}
@@ -773,10 +848,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boards={boards}
       analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
       hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-      disabled={publishing || !cardFieldsEditable}
+      disabled={publishing || !cardFieldsEditable || amazonNeedsName}
       onBeforeGenerate={flush}
       onBusyChange={(busy) => props.onAiCopyBusyChange(draft.id, busy)}
       onApplyCopy={applyCopy}
+      onGenerateError={(error) => setAmazonHints(amazonClaimHints((error as { validationReport?: Parameters<typeof amazonClaimHints>[0] })?.validationReport))}
     />
   );
   const posted = lifecycle === "posted";
@@ -1144,12 +1220,38 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder={tr("studioBoard.card.fields.descriptionPlaceholder")}
               style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 60 }} />
           </label>
+          {/* Ruling 3: removing the disclosure is warned about, never blocked. */}
+          {amazonDisclosureMissing && (
+            <div data-testid="card-amazon-disclosure-missing" role="status" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, fontSize: 10.5, lineHeight: 1.4, color: BUI.warning }}>
+              <span style={{ display: "inline-flex", gap: 5, alignItems: "flex-start" }}>
+                <AlertTriangle style={{ width: 11, height: 11, flexShrink: 0, marginTop: 1 }} /> {tr("studioBoard.amazon.disclosureMissing")}
+              </span>
+              <button type="button" data-testid="card-amazon-add-disclosure" disabled={!cardFieldsEditable || publishing || generating}
+                onClick={() => handleChange({ description: appendAffiliateDisclosure(fields.description) })}
+                style={{ flexShrink: 0, border: "none", background: "none", padding: 0, color: BUI.purple, fontSize: 10.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                {tr("studioBoard.amazon.addDisclosure")}
+              </button>
+            </div>
+          )}
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.websiteUrl")}
             <input data-testid="board-card-url" value={fields.websiteUrl} disabled={!cardFieldsEditable || publishing || generating}
-              onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
+              onChange={event => handleChange({ websiteUrl: event.target.value })} onBlur={handleUrlBlur} placeholder="https://"
               style={{ ...fieldStyle, fontSize: 11.5 }} />
           </label>
+          {amazonSectionSource && (
+            <AmazonCardSection
+              draftId={draft.id}
+              source={amazonSectionSource}
+              disabled={!cardFieldsEditable || publishing || generating}
+              fetching={amazonFetching}
+              lastFetchAt={amazonLastFetchAt}
+              claimHints={amazonHints}
+              onFetch={startAmazonFetch}
+              onManualChange={onAmazonManualChange}
+              onUseLink={acceptAmazonLink}
+            />
+          )}
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.board")}
           <select data-testid="board-card-board" value={fields.boardId} disabled={!cardFieldsEditable || publishing || generating}

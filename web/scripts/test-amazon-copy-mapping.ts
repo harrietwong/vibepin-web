@@ -84,6 +84,24 @@ async function main() {
     assert.equal(next.extracted, undefined); assert.equal(next.fetch.status, "not_attempted");
     assert.equal(next.pastedUrl, URL_OTHER);
   });
+  await test("accepting the clean link for the same product keeps fetched data (no refetch)", () => {
+    const fetched = src.applyAmazonImportResult({ ...fresh(), manual: { productName: "Mine" } }, importOk({ title: "Stanley Quencher" }), NOW);
+    const clean = "https://www.amazon.com/dp/B0BSHF7WHW?tag=harriet-20";
+    const next = src.amazonSourceForUrl(clean, fetched, NOW)!;
+    assert.equal(next.pastedUrl, clean);
+    assert.equal(next.fetch.status, "ok"); assert.equal(next.extracted?.title, "Stanley Quencher");
+    assert.equal(next.manual.productName, "Mine");
+  });
+  await test("amazonClaimHints maps 422 claim codes to the Brand / Material / Size boxes", () => {
+    const hints = src.amazonClaimHints({ issues: [
+      { code: "UNSUPPORTED_BRAND_CLAIM", message: 'Unsupported brand claim: "Stanley"' },
+      { code: "UNSUPPORTED_NUMERIC_CLAIM", message: 'Unsupported numeric_commercial claim: "40 oz"' },
+      { code: "UNSUPPORTED_MATERIAL_CLAIM", message: 'Unsupported material claim: "leather"' },
+      { code: "TITLE_TOO_LONG", message: "x" },
+    ] });
+    assert.deepEqual(hints, [{ field: "brand", value: "Stanley" }, { field: "size", value: "40 oz" }, { field: "material", value: "leather" }]);
+    assert.deepEqual(src.amazonClaimHints(undefined), []);
+  });
   await test("successful fetch fills page text and prefills an EMPTY Brand box only", () => {
     const s = src.applyAmazonImportResult(fresh(), importOk({ title: "Stanley Quencher 40 oz", bullets: ["Keeps cold 11h"], brand: "Stanley" }), NOW);
     assert.deepEqual(s.extracted, { title: "Stanley Quencher 40 oz", bullets: ["Keeps cold 11h"], brand: "Stanley" });
@@ -129,6 +147,36 @@ async function main() {
     assert.equal(src.canGenerateAmazonCopy({ ...fresh(), manual: { productName: "  Tumbler " } }), true);
     const cleared = { ...src.applyAmazonImportResult(fresh(), importOk({ title: "T" }), NOW), manual: { productName: "" } };
     assert.equal(src.canGenerateAmazonCopy(cleared), false, "user cleared the prefilled name on purpose");
+  });
+
+  console.log("\n[card import runner]");
+  const { runAmazonCardImport } = await import("../src/lib/studio/amazonCardImport");
+  await test("runner: blocked result → manual mode persisted; only amazonSource written; in-flight manual edits kept", async () => {
+    let stored: Source = fresh();
+    const persisted: Source[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>(r => { release = r; });
+    const run = runAmazonCardImport({
+      getSource: () => stored,
+      persist: next => { persisted.push(next); stored = next; },
+      importFn: async urls => { assert.deepEqual(urls, [URL_OK]); await gate; return { results: [importFail("bot_check", "blocked")] }; },
+    });
+    stored = { ...stored, manual: { ...stored.manual, productName: "Typed while fetching" } };
+    release();
+    await run;
+    assert.equal(persisted.length, 1);
+    assert.equal(src.amazonCardMode(stored).mode, "manual");
+    assert.equal(stored.manual.productName, "Typed while fetching", "edit made during the request survives");
+  });
+  await test("runner: request throws (401/429/offline) → manual mode, nothing else", async () => {
+    let stored: Source = fresh();
+    await runAmazonCardImport({ getSource: () => stored, persist: next => { stored = next; }, importFn: async () => { throw new Error("Import failed (429)"); } });
+    assert.equal(stored.fetch.status, "failed"); assert.equal(stored.fetch.reason, "request_failed");
+  });
+  await test("runner: success → fetched mode with page text", async () => {
+    let stored: Source = fresh();
+    await runAmazonCardImport({ getSource: () => stored, persist: next => { stored = next; }, importFn: async () => ({ results: [importOk({ title: "Stanley Quencher", bullets: ["Cold 11h"] })] }) });
+    assert.equal(src.amazonCardMode(stored).mode, "fetched"); assert.equal(src.canGenerateAmazonCopy(stored), true);
   });
 
   console.log("\n[fact-card mapping]");
