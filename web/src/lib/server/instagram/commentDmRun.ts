@@ -166,7 +166,7 @@ export async function claimCommentEvent(
   db: SupabaseClient,
   row: {
     connection_id: string;
-    rule_id: string;
+    rule_id: string | null;
     comment_id: string;
     media_id: string | null;
     commenter_id: string | null;
