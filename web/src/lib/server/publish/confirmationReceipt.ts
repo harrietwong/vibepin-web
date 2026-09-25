@@ -27,7 +27,14 @@ export type ConfirmationValidation =
   | { ok: false; code: "confirmation_required" | "invalid_confirmation"; error: string };
 
 export type StoredConfirmationValidation =
-  | { ok: true; priorIntentId: string | null }
+  | {
+      ok: true;
+      priorIntentId: string | null;
+      /** The STORED draft's copy profile — present only when set. Read from the
+       *  owner's own row (never the request body) so the Reel path can decide not
+       *  to send a title (reelCopy.ts). Not part of the fingerprint on purpose. */
+      copyProfile?: "instagram_caption";
+    }
   | { ok: false; code: "invalid_confirmation" | "publish_intent_unavailable"; error: string };
 
 /**
@@ -329,5 +336,9 @@ export async function validateStoredImmediatePublishReceipt(
       || stablePublishString(current.blockers) !== stablePublishString(receipt.blockers)) {
     return { ok: false, code: "invalid_confirmation", error: "The Content or publishing destinations changed after confirmation." };
   }
-  return { ok: true, priorIntentId: receipt.priorIntentId };
+  return {
+    ok: true,
+    priorIntentId: receipt.priorIntentId,
+    ...(row.payload.copyProfile === "instagram_caption" ? { copyProfile: "instagram_caption" as const } : {}),
+  };
 }

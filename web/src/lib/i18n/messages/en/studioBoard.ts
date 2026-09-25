@@ -237,6 +237,17 @@ export const studioBoardMessages = {
   "studioBoard.card.fields.websiteUrl": "Website URL",
   "studioBoard.card.fields.board": "Board",
   "studioBoard.card.fields.boardPlaceholder": "Choose a board",
+  // ── Instagram caption (mixed Pinterest+Instagram single-video split, T3) ──
+  // Shown only when a single video is going to BOTH Pinterest and Instagram — the
+  // video is split into two posts on Schedule, and this text becomes the
+  // Instagram-only child's caption (its description field).
+  "studioBoard.card.instagramCaption.label": "Instagram caption",
+  "studioBoard.card.instagramCaption.help": "Instagram will post this video separately, using this caption instead of the description above. Links aren't allowed — try a comment-keyword call to action instead.",
+  "studioBoard.card.instagramCaption.placeholder": "Comment SHOP and I'll DM you the link",
+  "studioBoard.card.instagramCaption.errorRequired": "Add an Instagram caption before scheduling.",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram captions can't contain links. Remove the link and try again.",
+  "studioBoard.card.instagramCaption.splitNotice": "Split into 2 posts: one for Pinterest, one for Instagram.",
+  "studioBoard.card.instagramCaption.splitAction": "Split & schedule",
   "studioBoard.actions.viewDetails": "View details",
   "studioBoard.card.publishTo": "Destinations",
   "studioBoard.card.editDestinations": "Edit destinations",

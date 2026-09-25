@@ -35,6 +35,8 @@ import {
   requiredScheduleDestinations,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
+import { mixedVideoScheduleIssue } from "@/lib/studio/splitMixedVideoDraft";
+import { scheduledPostUnits } from "@/lib/publish/splitPairIdentity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -294,6 +296,9 @@ export async function PUT(req: Request) {
   // one scheduled_post metered event). Only tracked when the scheduled_at column
   // exists; skipped entirely otherwise.
   const newlyScheduledDraftIds: string[] = [];
+  // …and the scheduled_at each of them derives, so a split pair due at the same
+  // instant can be pre-checked as the ONE unit the cron will charge for it.
+  const newlyScheduledAt = new Map<string, string>();
   // Drafts in this request that ask to be scheduled to a destination we cannot
   // honour at due time. Collected, then REFUSED below — never quietly stripped.
   const unschedulable: Array<{ draftId: string; providers: string[] }> = [];
@@ -312,7 +317,10 @@ export async function PUT(req: Request) {
     if (scheduledAtAvailable) {
       const incomingScheduledAt = buildScheduledAt(p);
       const wasScheduled = existingScheduled.get(d.draftId) ?? false;
-      if (incomingScheduledAt && !wasScheduled) newlyScheduledDraftIds.push(d.draftId);
+      if (incomingScheduledAt && !wasScheduled) {
+        newlyScheduledDraftIds.push(d.draftId);
+        newlyScheduledAt.set(d.draftId, incomingScheduledAt);
+      }
       // A future-dated Pin may only name destinations whose intent we can actually
       // persist and replay. That is now every platform with a publish path: intent
       // rides the draft as scheduledDestinations[] and the due worker reads it back.
@@ -328,6 +336,24 @@ export async function PUT(req: Request) {
       // publish. Collected here (cheap, pure) and resolved in one batch below —
       // the actual lookup is a database read and must not run per draft.
       if (incomingScheduledAt) {
+        // ── Mixed single-video gate (design 0924 §2 (b′), Fable ruling 4) ──────
+        // The server never splits — a server-made child would only reach the
+        // browser on its next pull, and the stale local parent's next PUT would
+        // write the Instagram destination straight back. It REFUSES instead: the
+        // caller (UI save path / operator script) runs `splitMixedVideoDraft` and
+        // sends the pair. Same predicate the splitter uses, so "must split" and
+        // "was split" cannot disagree. Only a SCHEDULED draft is refused; an
+        // unscheduled one is still being edited and saves normally.
+        const splitGate = mixedVideoScheduleIssue(d.draftId, p);
+        if (splitGate) {
+          rejected.set(d.draftId, {
+            draftId: d.draftId,
+            status: "rejected",
+            code: splitGate.code,
+            userMessageKey: splitGate.userMessageKey,
+            retryable: false,
+          });
+        }
         const destinations = requiredScheduleDestinations(p);
         if (!destinations.length) {
           rejected.set(d.draftId, {
@@ -421,7 +447,8 @@ export async function PUT(req: Request) {
   if (quotaCandidateIds.length > 0) {
     try {
       const plan = await resolvePlan(userId);
-      const allowance = await checkAllowance(userId, "scheduled_post", quotaCandidateIds.length, plan);
+      const units = scheduledPostUnits(quotaCandidateIds, newlyScheduledAt);
+      const allowance = await checkAllowance(userId, "scheduled_post", units, plan);
       if (!allowance.allowed) {
         for (const draftId of quotaCandidateIds) {
           rejected.set(draftId, {

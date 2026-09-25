@@ -2782,6 +2782,20 @@ const pl: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Zaplanuj {n} zaznaczonych",
   "publishConfirm.list.scheduleConfirm": "Zaplanuj {n}",
   "publishConfirm.list.publishConfirm": "Opublikuj {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Film publikowany jednocześnie na Pinterest i Instagramie musi zostać zaplanowany jako dwa osobne posty. Zaplanuj go ponownie, aby go podzielić.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Dodaj opis na Instagramie przed zaplanowaniem tego Reelsa.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Opisy na Instagramie nie mogą zawierać linków. Usuń link i zaplanuj ponownie.",
+  "studioBoard.card.instagramCaption.label": "Opis na Instagramie",
+  "studioBoard.card.instagramCaption.help": "Instagram opublikuje ten film osobno, używając tego tekstu zamiast powyższego opisu. Linki są niedozwolone — spróbuj wezwania do działania w formie słowa kluczowego w komentarzu.",
+  "studioBoard.card.instagramCaption.placeholder": "Skomentuj SHOP, a wyślę Ci link w wiadomości prywatnej",
+  "studioBoard.card.instagramCaption.errorRequired": "Dodaj opis na Instagramie przed zaplanowaniem.",
+  "studioBoard.card.instagramCaption.errorLink": "Opisy na Instagramie nie mogą zawierać linków. Usuń go i spróbuj ponownie.",
+  "studioBoard.card.instagramCaption.splitNotice": "Podzielono na 2 posty: jeden dla Pinterest, jeden dla Instagrama.",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Podziel i zaplanuj",
+
 };
 
 export default pl;

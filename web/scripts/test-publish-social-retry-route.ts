@@ -34,6 +34,10 @@ let outcomeCalls = 0;
 let invokeDurableProvider = false;
 let privateConnectionAvailable = false;
 let meterResult: { kind: string; fresh?: boolean } = { kind: "insufficient" };
+/** The STORED draft row's copyProfile the stored-receipt validator reports (T2 block 3). */
+let storedCopyProfile: "instagram_caption" | undefined;
+/** The last post the provider was handed. */
+let lastProviderPost: Record<string, unknown> | null = null;
 const events: string[] = [];
 let durableOutcome: Record<string, unknown> = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
 
@@ -106,7 +110,7 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
         if (!same(requestedIds, dispatch)) return { ok: false, code: "invalid_confirmation", error: "unconfirmed" };
         return { ok: true, receipt: raw, destinations: ds };
       },
-      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId }),
+      validateStoredImmediatePublishReceipt: async () => ({ ok: true, priorIntentId, ...(storedCopyProfile ? { copyProfile: storedCopyProfile } : {}) }),
     };
   }
   if (request === "@/lib/server/publish/publishIntentLedger" || request.endsWith("/server/publish/publishIntentLedger")) {
@@ -210,7 +214,10 @@ const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unkn
   if (request === "@/lib/social/providers" || request.endsWith("/social/providers")) {
     return {
       getSocialProviderById: () => ({
-        publishPost: async () => { providerCalls++; events.push("provider"); return { ok: true, status: "published" }; },
+        publishPost: async (args: { post?: Record<string, unknown> }) => {
+          providerCalls++; events.push("provider"); lastProviderPost = args?.post ?? null;
+          return { ok: true, status: "published" };
+        },
       }),
     };
   }
@@ -265,6 +272,8 @@ async function test(name: string, fn: () => Promise<void>) {
   invokeDurableProvider = false;
   privateConnectionAvailable = false;
   meterResult = { kind: "insufficient" };
+  storedCopyProfile = undefined;
+  lastProviderPost = null;
   events.length = 0;
   durableOutcome = { outcome: "published", retryAllowed: false, remoteId: "ig-media-route", remoteUrl: "https://instagram.example.test/reel/route", evidence: { provider: "instagram" } };
   try {
@@ -352,6 +361,46 @@ await test("a private Instagram Reel uses the durable v76/v79 branch and never c
   assert.equal(providerCalls, 1);
   const body = await response.json() as Record<string, unknown>;
   assert.equal(JSON.stringify(body).includes("private"), false, "signed URL fragments must not enter the response");
+});
+
+function reelRequest(): Request {
+  const reel = request(false, [INSTAGRAM_ID]);
+  reel.json = async () => ({
+    postId: DRAFT_ID,
+    post: { imageUrls: [], videoUrls: [`/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`], title: "Cozy corner", caption: "Cozy corner\n\nComment RUG!" },
+    destinations: [{ provider: "instagram", socialConnectionId: "ig-connection" }],
+    confirmation: {
+      intentId: `publish:${CONTENT_ID}:reel-route-test`, fingerprint: "f".repeat(64), draftId: DRAFT_ID, contentId: CONTENT_ID,
+      confirmedAt: "2026-09-01T12:00:02.000Z", onlyPending: false, mode: { kind: "now" },
+      media: [{ id: "reel-1", kind: "video", url: `/api/storage-media?path=${encodeURIComponent(`${OWNER}/uploads/reel.mp4`)}`, source: "upload", width: 1080, height: 1920, durationMs: 8_000 }],
+      blockers: [], priorIntentId: null, dispatchDestinationIds: [INSTAGRAM_ID],
+      publishableDestinations: [destinations[1]], destinations: [destinations[1]],
+    },
+  });
+  return reel;
+}
+
+await test("publish now: a split-off IG child (stored copyProfile) sends NO title — caption is the description", async () => {
+  priorIntentId = null;
+  meterResult = { kind: "consumed", fresh: true };
+  invokeDurableProvider = true;
+  privateConnectionAvailable = true;
+  storedCopyProfile = "instagram_caption";
+  const response = await POST(reelRequest());
+  assert.equal(response.status, 201);
+  assert.equal(providerCalls, 1);
+  assert.equal(lastProviderPost?.title, undefined, "the caption must not open with the title / \"Untitled content\"");
+  assert.equal(lastProviderPost?.caption, "Cozy corner\n\nComment RUG!");
+});
+
+await test("publish now: an ordinary Reel (no copyProfile) still sends its title", async () => {
+  priorIntentId = null;
+  meterResult = { kind: "consumed", fresh: true };
+  invokeDurableProvider = true;
+  privateConnectionAvailable = true;
+  const response = await POST(reelRequest());
+  assert.equal(response.status, 201);
+  assert.equal(lastProviderPost?.title, "Cozy corner");
 });
 
 await test("a materialization failure releases a fresh consume without reaching the generic claim", async () => {

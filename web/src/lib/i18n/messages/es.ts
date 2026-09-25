@@ -3063,6 +3063,20 @@ const es: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Programar {n} seleccionados",
   "publishConfirm.list.scheduleConfirm": "Programar {n}",
   "publishConfirm.list.publishConfirm": "Publicar {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Un video que va tanto a Pinterest como a Instagram debe programarse como dos publicaciones separadas. Prográmalo de nuevo para dividirlo.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Añade un pie de foto de Instagram antes de programar este Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Los pies de foto de Instagram no pueden contener enlaces. Elimina el enlace y programa de nuevo.",
+  "studioBoard.card.instagramCaption.label": "Pie de foto de Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram publicará este video por separado, usando este texto en lugar de la descripción de arriba. No se permiten enlaces: prueba con una llamada a la acción por palabra clave en comentarios.",
+  "studioBoard.card.instagramCaption.placeholder": "Comenta SHOP y te envío el enlace por DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Añade un pie de foto de Instagram antes de programar.",
+  "studioBoard.card.instagramCaption.errorLink": "Los pies de foto de Instagram no pueden contener enlaces. Elimínalo e inténtalo de nuevo.",
+  "studioBoard.card.instagramCaption.splitNotice": "Dividido en 2 publicaciones: una para Pinterest y otra para Instagram.",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Dividir y programar",
+
 };
 
 export default es;

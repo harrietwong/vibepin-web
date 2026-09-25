@@ -2806,6 +2806,20 @@ const ar: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "جدولة {n} المحددة",
   "publishConfirm.list.scheduleConfirm": "جدولة {n}",
   "publishConfirm.list.publishConfirm": "نشر {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "يجب جدولة الفيديو الموجه إلى Pinterest وInstagram معًا كمنشورين منفصلين. أعد جدولته لتقسيمه.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "أضف تعليق Instagram قبل جدولة هذا الـ Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "لا يمكن أن تحتوي تعليقات Instagram على روابط. أزل الرابط وأعد الجدولة.",
+  "studioBoard.card.instagramCaption.label": "تعليق Instagram",
+  "studioBoard.card.instagramCaption.help": "سينشر Instagram هذا الفيديو بشكل منفصل، باستخدام هذا النص بدلاً من الوصف أعلاه. الروابط غير مسموح بها — جرّب بدلاً من ذلك دعوة لاتخاذ إجراء عبر كلمة مفتاحية في التعليقات.",
+  "studioBoard.card.instagramCaption.placeholder": "اكتب تعليق SHOP وسأرسل لك الرابط في رسالة خاصة",
+  "studioBoard.card.instagramCaption.errorRequired": "أضف تعليق Instagram قبل الجدولة.",
+  "studioBoard.card.instagramCaption.errorLink": "لا يمكن أن تحتوي تعليقات Instagram على روابط. أزله وحاول مرة أخرى.",
+  "studioBoard.card.instagramCaption.splitNotice": "تم التقسيم إلى منشورين: واحد لـ Pinterest وواحد لـ Instagram.",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "تقسيم وجدولة",
+
 };
 
 export default ar;

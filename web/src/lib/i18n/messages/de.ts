@@ -2826,6 +2826,20 @@ const de: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "{n} ausgewählte planen",
   "publishConfirm.list.scheduleConfirm": "{n} planen",
   "publishConfirm.list.publishConfirm": "{n} veröffentlichen",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Ein Video, das sowohl an Pinterest als auch an Instagram geht, muss als zwei separate Beiträge geplant werden. Planen Sie es erneut, um es aufzuteilen.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Fügen Sie eine Instagram-Bildunterschrift hinzu, bevor Sie diesen Reel planen.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram-Bildunterschriften dürfen keine Links enthalten. Entfernen Sie den Link und planen Sie erneut.",
+  "studioBoard.card.instagramCaption.label": "Instagram-Bildunterschrift",
+  "studioBoard.card.instagramCaption.help": "Instagram veröffentlicht dieses Video separat und verwendet diesen Text anstelle der obigen Beschreibung. Links sind nicht erlaubt – versuchen Sie stattdessen einen Call-to-Action per Kommentar-Stichwort.",
+  "studioBoard.card.instagramCaption.placeholder": "Kommentiere SHOP und ich schicke dir den Link per DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Fügen Sie vor dem Planen eine Instagram-Bildunterschrift hinzu.",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram-Bildunterschriften dürfen keine Links enthalten. Entfernen Sie ihn und versuchen Sie es erneut.",
+  "studioBoard.card.instagramCaption.splitNotice": "In 2 Beiträge aufgeteilt: einen für Pinterest, einen für Instagram.",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Aufteilen & planen",
+
 };
 
 export default de;

@@ -1403,6 +1403,7 @@ export function PinDetailsModal({
     addedToPlanAt: activeDraft.addedToPlanAt,
     scheduledDate: plannedDate,
     postedAt: activeDraft.postedAt,
+    scheduledDestinations: activeDraft.scheduledDestinations,
   });
   canonicalDraft.detailsStatus = readiness.detailsStatus;
 

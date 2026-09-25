@@ -529,6 +529,9 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.syncIssue.destinationUnavailable": "所选发布账号当前不可用。请重新连接或选择其他账号。",
   "studioBoard.card.syncIssue.quotaExceeded": "当前套餐已达到排期上限，此草稿尚未排期。",
   "studioBoard.card.syncIssue.payloadTooLarge": "此草稿内容过大，无法同步。请减少媒体或内容后重试。",
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "同时发往 Pinterest 和 Instagram 的视频需要拆成两条分别排期。请重新排期以完成拆分。",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "排期这条 Reel 前请先填写 Instagram 文案。",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram 文案不能包含链接。请删除链接后重新排期。",
   "studioBoard.card.syncIssue.review": "检查草稿",
   // ── connectPage ──
   "connectPage.openingPinterest": "正在打开 Pinterest…",
@@ -3238,6 +3241,19 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleConfirm": "排程 {n} 个",
   "publishConfirm.list.publishConfirm": "发布 {n} 个",
   ...publicPricingZhCN,
+  // ── Mixed Pinterest+Instagram single-video split (T3, 0924 design doc) ──
+  // syncIssue.mixedVideoRequiresSplit/instagramCaptionRequired/instagramCaptionContainsLink
+  // already exist earlier in this file (T2) — not duplicated here.
+  "studioBoard.card.instagramCaption.label": "Instagram 文案",
+  "studioBoard.card.instagramCaption.help": "Instagram 会把这条视频单独发一条，使用这段文案代替上面的描述。不能放链接——可以试试评论关键词引导，比如「评论 SHOP，我私信给你链接」。",
+  "studioBoard.card.instagramCaption.placeholder": "评论 SHOP，我私信给你链接",
+  "studioBoard.card.instagramCaption.errorRequired": "排期前请先填写 Instagram 文案。",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram 文案不能包含链接，请删除后重试。",
+  "studioBoard.card.instagramCaption.splitNotice": "已拆分为 2 条：一条发 Pinterest，一条发 Instagram。",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "拆分并排期",
+
 };
 
 export default zhCN;

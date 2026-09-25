@@ -22,6 +22,10 @@ import {
 // Type-only edge in the other direction (pinLifecycle imports `type PinDraft` from
 // here), so this value import creates no runtime cycle.
 import { isActionablePublishFailure } from "./studio/pinLifecycle";
+// Same shape: splitMixedVideoDraft.ts imports PinDraft/etc as `import type` only
+// (design doc 0924-混合视频草稿自动拆分-技术设计-v0.1.md T1/T3), so this value import
+// creates no runtime cycle either.
+import { splitMixedVideoDraft, type SplitMixedVideoDraftResult } from "./studio/splitMixedVideoDraft";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
@@ -172,6 +176,17 @@ export interface PinDraft {
   // ── Create Pins board (studioBoardV2) ──────────────────────────────────────
   /** AI‑Pin → source‑upload relationship of record (the reliable link). */
   parentDraftId?:      string;
+  // ── Mixed Pinterest+Instagram video split (design 0924, T2) ──────────────────
+  // Set only on the Instagram child `splitMixedVideoDraft` produces (id
+  // `${parent}__ig`). Ride the pin_drafts payload — no migration.
+  /** "instagram_caption": `description` IS the complete Instagram caption; the
+   *  Reel publish paths send NO separate title (Fable ruling 2 — `title` holds the
+   *  caption's first line only so status/confirmation checks pass). */
+  copyProfile?:        "instagram_caption";
+  /** The draft this child was split off from. Display/navigation only — metering
+   *  never reads it (pairing is derived from the id, Fable ruling 1). Distinct from
+   *  `parentDraftId`, which means "AI image's source upload". */
+  splitFromDraftId?:   string;
   /** Snapshot of the parent's image at generation time — display only, NOT the link. */
   sourceImageUrl?:     string;
   // ── Reference → result association (create-pin PRD Section G2) ─────────────
@@ -1241,6 +1256,50 @@ export function splitContentMedia(id: string, mediaIds?: readonly string[]): Pin
   writeMedia(id, draft, remaining);
 
   return created;
+}
+
+/**
+ * Store-level entry point for the mixed Pinterest+Instagram single-video split
+ * (design doc 0924-混合视频草稿自动拆分-技术设计-v0.1.md T3). Called by the Studio
+ * card's Schedule/Custom-schedule paths AFTER the schedule slot has already been
+ * written (so the child inherits the assigned plannedDate/plannedTime/plannedAt —
+ * see `splitMixedVideoDraft`'s field inheritance), never before.
+ *
+ * Idempotent the same way `splitMixedVideoDraft` is pure-idempotent (design §2):
+ *   - not a mixed single video (already split, image draft, single-platform, or
+ *     unknown id) → no-op, returns `{ split: false, parent: draft }`.
+ *   - the child id (`${id}__ig`) already exists → NEVER overwritten (a merchant may
+ *     have edited it), only the parent write (dropping its Instagram destination)
+ *     is applied.
+ *   - one `persist()` + one `emit()` regardless of whether one or two rows changed,
+ *     matching `bulkUpdateDrafts`'s single-event contract so pinDraftSync's diff
+ *     (which reads the store fresh at flush time, not at emit time) enqueues both
+ *     rows in the same debounce cycle.
+ */
+export function splitMixedVideoDraftInStore(
+  id: string,
+  opts: { instagramCaption: string; now?: Date },
+): SplitMixedVideoDraftResult {
+  const data = load();
+  const draft = data.drafts[id];
+  if (!draft) return { split: false, parent: draft as unknown as PinDraft };
+
+  const result = splitMixedVideoDraft(draft, opts);
+  if (!result.split) return result;
+
+  data.drafts[result.parent.id] = result.parent;
+  // The child is a NEW Content the merchant has not seen yet: only create it when
+  // it does not already exist. A pre-existing child (this draft was split before,
+  // or a merchant already edited the `__ig` row) is never overwritten — same
+  // never-clobber rule design §2 gives the server/operator-script insert paths.
+  if (!data.drafts[result.child.id]) {
+    data.drafts[result.child.id] = result.child;
+  }
+  persist(data);
+  emit();
+  syncPinMetadataStore(data.drafts[result.parent.id]);
+  if (data.drafts[result.child.id] === result.child) syncPinMetadataStore(result.child);
+  return result;
 }
 
 /** Mark a Generating placeholder as failed (per-result or whole-run failure). */

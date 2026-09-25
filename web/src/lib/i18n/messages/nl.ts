@@ -2826,6 +2826,20 @@ const nl: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "{n} geselecteerde plannen",
   "publishConfirm.list.scheduleConfirm": "{n} plannen",
   "publishConfirm.list.publishConfirm": "{n} publiceren",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Een video die zowel naar Pinterest als Instagram gaat, moet als twee aparte berichten worden ingepland. Plan opnieuw om te splitsen.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Voeg een Instagram-bijschrift toe voordat je deze Reel inplant.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram-bijschriften mogen geen links bevatten. Verwijder de link en plan opnieuw in.",
+  "studioBoard.card.instagramCaption.label": "Instagram-bijschrift",
+  "studioBoard.card.instagramCaption.help": "Instagram plaatst deze video apart, met deze tekst in plaats van de bovenstaande beschrijving. Links zijn niet toegestaan — probeer in plaats daarvan een call-to-action via een reactie-trefwoord.",
+  "studioBoard.card.instagramCaption.placeholder": "Reageer met SHOP en ik stuur je de link via DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Voeg een Instagram-bijschrift toe voordat je inplant.",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram-bijschriften mogen geen links bevatten. Verwijder deze en probeer opnieuw.",
+  "studioBoard.card.instagramCaption.splitNotice": "Gesplitst in 2 berichten: één voor Pinterest, één voor Instagram.",
+
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Splitsen en inplannen",
+
 };
 
 export default nl;

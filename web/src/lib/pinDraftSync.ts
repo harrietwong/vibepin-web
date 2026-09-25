@@ -80,7 +80,15 @@ export interface PinDraftSyncStatus {
 export interface PinDraftSyncIssue {
   draftId: string;
   updatedAt: string;
-  code: "destination_not_schedulable" | "destination_unavailable" | "quota_exceeded" | "payload_too_large";
+  code:
+    | "destination_not_schedulable"
+    | "destination_unavailable"
+    | "quota_exceeded"
+    | "payload_too_large"
+    // Mixed Pinterest+Instagram video split gate (design 0924 §2 (b′) / §3).
+    | "mixed_video_requires_split"
+    | "instagram_caption_required"
+    | "instagram_caption_contains_link";
   userMessageKey: string;
   retryable: false;
 }
@@ -726,6 +734,11 @@ function deterministicIssue(outcome: DraftSyncOutcome, sent: PutChunk[number]): 
     "destination_unavailable",
     "quota_exceeded",
     "payload_too_large",
+    // Without these the refused revision would stay in the outbox and be re-sent
+    // forever; they are action-required exactly like the codes above.
+    "mixed_video_requires_split",
+    "instagram_caption_required",
+    "instagram_caption_contains_link",
   ].includes(outcome.code ?? "")) return null;
   return {
     draftId: sent.id,

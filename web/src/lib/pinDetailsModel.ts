@@ -1,6 +1,7 @@
 import type { LinkedProduct, PinMetadataDraft } from "./pinMetadata";
 import { resolvePinProducts } from "./pinMetadata";
 import type { ContentMedia } from "./contentDraftModel";
+import type { ScheduledDestination } from "./pinDraftStore";
 import {
   getPinReadiness as getCanonicalReadiness,
   type PinDetailsStatus as CanonicalPinDetailsStatus,
@@ -70,6 +71,8 @@ export function getPinReadiness(input: {
   addedToPlanAt?: string | null;
   scheduledDate?: string | null;
   postedAt?: string | null;
+  /** See pinReadiness.ts ReadinessInput — omit to keep "board required" default. */
+  scheduledDestinations?: ScheduledDestination[] | null;
 }): PinReadiness {
   const canonical = getCanonicalReadiness(input);
   const missing = canonical.missingFields.map(field => field === "board" ? "boardId" : field) as PinReadiness["missing"];

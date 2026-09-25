@@ -268,6 +268,25 @@ export const STUDIO: string[] = [
   // "Publish separately" split that is §13's answer while the crop tool is deferred.
   "test-media-notice",
   "test-split-content-media",
+  // Mixed Pinterest+Instagram single-video draft auto-split (T1, design doc
+  // 0924-混合视频草稿自动拆分-技术设计-v0.1.md): the shared pure-function layer
+  // only — deterministic child id, idempotency, field whitelist, caption→title
+  // derivation, and the IG caption link/empty validation shared by UI/server/script.
+  "test-split-mixed-video-draft",
+  // T2 (same design doc): /api/pin-drafts refuses an unsplit mixed single-video
+  // schedule (mixed_video_requires_split) and a scheduled IG child with an empty /
+  // linked caption; the split pair is accepted and saving it twice leaves 2 rows.
+  "test-pin-drafts-mixed-video-gate",
+  // T2 block 6: operator-script entry (scripts/lib/splitMixedVideoOps.ts) —
+  // caption validated before any write, parent+child written, replay = 2 rows,
+  // an existing child never overwritten.
+  "test-split-mixed-video-ops",
+  // T3 (same design doc): the Studio card's Instagram-caption input box (shown only
+  // for a mixed single video, hidden when NEXT_PUBLIC_HIDE_IG_FB hides Instagram or
+  // once already split), the store-level split-and-schedule entry point
+  // (splitMixedVideoDraftInStore: 2 rows, idempotent replay, never clobbers an
+  // existing child), and the IG child's hidden title/board/websiteUrl fields.
+  "test-mixed-video-split-ui",
   // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).

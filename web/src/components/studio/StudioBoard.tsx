@@ -1112,7 +1112,7 @@ export function StudioBoard() {
   // Plan edit, and Batch Edit). The card applies results via onPersist → updateDraft.
 
   // ── Schedule = smart auto-assign (no pickers) ──────────────────────────────
-  const handleSchedule = useCallback((id: string) => {
+  const handleSchedule = useCallback((id: string, options?: { instagramCaption?: string }) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
     if (noBoardAccess || !isPinReady(draftReadiness(d))) {
       setActiveId(id);
@@ -1137,6 +1137,17 @@ export function StudioBoard() {
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const result = ensureScheduledPlanTime(id);
     if (result.ok) {
+      // Mixed Pinterest+Instagram single-video split (design doc
+      // 0924-混合视频草稿自动拆分-技术设计-v0.1.md T3): split AFTER the slot is
+      // assigned, so the Instagram child inherits the same plannedDate/plannedTime
+      // (splitMixedVideoDraft copies the parent's schedule fields onto the child).
+      // The card already blocked this call via instagramCaptionIssues when the box
+      // is showing, so `options.instagramCaption` here is always acceptable; the
+      // card only ever sends this option for a still-unsplit mixed video, so a
+      // caption-less call for anything else is a safe no-op inside the store fn.
+      if (options?.instagramCaption !== undefined) {
+        pinDraftStore.splitMixedVideoDraftInStore(id, { instagramCaption: options.instagramCaption });
+      }
       announceScheduled([id]);
       // PRD 5.2 — success toast gets an "Open in Plan" action that deep-links to the
       // exact Pin's edit drawer in Plan (same ?modal=publish&pinId= contract the
@@ -1227,7 +1238,7 @@ export function StudioBoard() {
     }
   }, [tr]);
 
-  const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
+  const handleCustomSchedule = useCallback((id: string, date: string, time: string, options?: { instagramCaption?: string }) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
     if (noBoardAccess || !isPinReady(draftReadiness(d))) {
       setActiveId(id);
@@ -1241,6 +1252,11 @@ export function StudioBoard() {
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const updated = pinDraftStore.smartScheduleDraft(id, { plannedDate: date, plannedTime: time }, null, { source: "manual" });
     if (updated) {
+      // See handleSchedule's comment: split AFTER the slot is written so the
+      // Instagram child inherits it (design T3).
+      if (options?.instagramCaption !== undefined) {
+        pinDraftStore.splitMixedVideoDraftInStore(id, { instagramCaption: options.instagramCaption });
+      }
       flashSaved();
       announceScheduled([id]);
       toast.success(tr("studioBoard.toast.customTimeScheduled")

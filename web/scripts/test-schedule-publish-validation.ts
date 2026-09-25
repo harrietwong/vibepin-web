@@ -92,7 +92,10 @@ async function main() {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
     assert.match(
       src,
-      /const handleSchedule = useCallback\(\(id: string\) => \{\s*\n\s*const d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
+      // `(id: string, options?: ...)`: the mixed-video split (T3) added an optional
+      // second parameter here — tolerate any parameter list, the invariant this
+      // guards is "reads pinDraftStore fresh", not the exact signature text.
+      /const handleSchedule = useCallback\(\(id: string[^)]*\) => \{\s*\n\s*const d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
       "handleSchedule must read the store fresh, not a closed-over draft",
     );
     assert.match(
@@ -109,7 +112,12 @@ async function main() {
     // Both actions guard on destinationError first (an unresolvable account must not
     // schedule or publish a half-recorded intent), then flush, then act. The ORDER is
     // what matters: flush() must land before the handler re-reads the store.
-    assert.match(src, /const doSchedule = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onSchedule\(draft\.id\);/);
+    // The mixed-video split (T3) inserted an Instagram-caption validation guard
+    // between the destinationError check and flush(), and onSchedule now takes an
+    // optional second argument — tolerate both (`[\s\S]*?` / `[^)]*`). What this
+    // pins is unchanged: destinationError is checked FIRST, flush() runs before
+    // onSchedule is called.
+    assert.match(src, /const doSchedule = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;[\s\S]*?\n\s*flush\(\);\s*\n\s*props\.onSchedule\(draft\.id[^)]*\);/);
     assert.match(src, /const doPublish = useCallback\(\(options\?: \{ onlyPending\?: boolean \}\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onPublish\(draft\.id, options\);/);
     // flush() must be a SYNCHRONOUS persistNow call (not merely clearing the debounce
     // timer) so the store write has landed before onSchedule/onPublish re-reads it.
@@ -327,7 +335,9 @@ async function main() {
   // ── Extra: all three UI surfaces wire the length gate into Schedule/Publish ──
   await test("StudioBoard.handleSchedule blocks on pinFieldErrors before ensureScheduledPlanTime", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
-    const fn = src.match(/const handleSchedule = useCallback\(\(id: string\) => \{[\s\S]*?\n  \}, \[[^\]]*noBoardAccess[^\]]*tr[^\]]*\]\);/);
+    // Tolerate the optional `options?: { instagramCaption?: string }` second
+    // parameter the mixed-video split (T3) added — same rationale as the 5/6 test.
+    const fn = src.match(/const handleSchedule = useCallback\(\(id: string[^)]*\) => \{[\s\S]*?\n  \}, \[[^\]]*noBoardAccess[^\]]*tr[^\]]*\]\);/);
     assert.ok(fn);
     assert.match(fn![0], /const lenErrors = pinFieldErrors\(\{ title: d\.title, description: d\.description \}\);/);
     assert.match(fn![0], /if \(lenErrors\.title \|\| lenErrors\.description\) \{/);
