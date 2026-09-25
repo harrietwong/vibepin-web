@@ -175,7 +175,8 @@ async function run() {
     const src = readFileSync(join(process.cwd(), "src/app/api/import/store-products/handler.ts"), "utf8");
     assert(src.includes('consumeRateLimit(id, "url_import")'), "store import must share the url_import bucket");
     const route = readFileSync(join(process.cwd(), "src/app/api/import/store-products/route.ts"), "utf8");
-    assert(/export async function POST/.test(route) && !/export (const|function) (?!POST)/.test(route), "route.ts must only export POST");
+    // Next.js segment config (`maxDuration`) is allowed; any other named export is not.
+    assert(/export async function POST/.test(route) && !/export (const|function) (?!POST|maxDuration)/.test(route), "route.ts must only export POST (plus maxDuration segment config)");
   });
 
   await test("one batch (4 pages + meta) consumes exactly ONE limiter slot", async () => {
