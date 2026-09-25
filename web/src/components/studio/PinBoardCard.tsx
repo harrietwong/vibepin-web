@@ -50,6 +50,12 @@ import { track } from "@/lib/analytics";
 import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
 import { explicitPublishDestinations } from "@/lib/studio/publishConfirmation";
 import { canEnterCardEdit, mediaAspectResetKey, resolveMediaAspectRatio, shouldShowStudioMetadataField, studioCardPresentation } from "@/lib/studio/studioCardPresentation";
+import {
+  instagramCaptionIssues,
+  shouldShowFieldOnInstagramChild,
+  shouldShowInstagramCaptionInput,
+} from "@/lib/studio/splitMixedVideoDraft";
+import { igFbHidden } from "@/lib/social/visibleProviders";
 import { AmazonCardSection } from "@/components/studio/AmazonCardSection";
 import {
   amazonClaimHints,
@@ -219,8 +225,14 @@ export type PinBoardCardProps = {
   /** Persistent reason a Publish-entry click stopped before the confirmation dialog. */
   publishEntryIssue?: PublishEntryIssue;
   onPersist: (id: string, patch: Partial<PinDraft>) => void;
-  onSchedule: (id: string) => void;
-  onCustomSchedule: (id: string, date: string, time: string) => void;
+  /**
+   * `instagramCaption` is passed ONLY for a mixed Pinterest+Instagram single-video
+   * draft (design doc 0924-混合视频草稿自动拆分-技术设计-v0.1.md T3) — the board
+   * validates it with `instagramCaptionIssues` and blocks Schedule itself before
+   * calling this, so a caller-side split always receives an acceptable caption.
+   */
+  onSchedule: (id: string, options?: { instagramCaption?: string }) => void;
+  onCustomSchedule: (id: string, date: string, time: string, options?: { instagramCaption?: string }) => void;
   onSelectProduct?: (draft: PinDraft) => void;
   /**
    * Regenerate ONE image, never the whole set. `mediaId` names the item the result
@@ -306,6 +318,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
    * destination without a connection id cannot be published and must never be stored.
    */
   const [destinationError, setDestinationError] = useState("");
+  /**
+   * Instagram caption for a mixed Pinterest+Instagram single-video draft (design
+   * doc 0924-混合视频草稿自动拆分-技术设计-v0.1.md T3). Card-local state, NOT a
+   * PinDraft field — T1's header is explicit that the caption is a caller-supplied
+   * parameter to `splitMixedVideoDraft`, never read off the draft, so this box is a
+   * staging area that only becomes durable once Schedule succeeds and the split
+   * writes it into the child's `description`. Reloading before scheduling loses a
+   * typed-but-unscheduled caption (the box goes back to empty and Schedule blocks
+   * again on `instagram_caption_required`) — the same non-durability every other
+   * uncommitted keystroke on this card has before the debounced autosave fires,
+   * except here there is no autosave target until the split happens.
+   */
+  const [instagramCaption, setInstagramCaption] = useState("");
+  const [instagramCaptionTouched, setInstagramCaptionTouched] = useState(false);
   // Keyword-chip interaction state (compact card): which chip shows its remove ×, and
   // which chip is briefly flashing "Copied". Card is keyed by draft.id upstream, so this
   // never leaks across drafts.
@@ -495,20 +521,39 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     syncAmazonLink(url, true);
   }, [handleChange, flush, syncAmazonLink]);
 
+  // ── Mixed Pinterest+Instagram single-video split (design T3) ────────────────
+  // `draft` (not local `selectedProviders` state) is the read source: changeProviders/
+  // changeAccounts persist to the store synchronously (persistDestinationSelection
+  // above calls props.onPersist immediately, no debounce), so this reacts the instant
+  // both platforms are ticked — same source `isMixedSingleVideo` reads server-side.
+  // Declared here (ahead of doSchedule/doCustomSchedule below) rather than beside the
+  // rest of the render-derived values further down, purely so those two callbacks can
+  // close over it without a forward reference.
+  const showInstagramCaptionInput = shouldShowInstagramCaptionInput(draft, { igFbHidden: igFbHidden() });
+  const instagramCaptionErrors = showInstagramCaptionInput ? instagramCaptionIssues(instagramCaption) : [];
+
   // Actions flush pending edits first. An unresolvable destination blocks both:
   // scheduling or publishing with a half-recorded intent is how a three-platform
   // choice silently executed as Pinterest-only.
   const doSchedule = useCallback(() => {
     if (destinationError) return;
+    if (showInstagramCaptionInput && instagramCaptionErrors.length) {
+      setInstagramCaptionTouched(true);
+      return;
+    }
     flush();
-    props.onSchedule(draft.id);
-  }, [flush, props, draft.id, destinationError]);
+    props.onSchedule(draft.id, showInstagramCaptionInput ? { instagramCaption } : undefined);
+  }, [flush, props, draft.id, destinationError, showInstagramCaptionInput, instagramCaptionErrors, instagramCaption]);
   const doCustomSchedule = useCallback(() => {
     if (!customDate || !customTime) return;
+    if (showInstagramCaptionInput && instagramCaptionErrors.length) {
+      setInstagramCaptionTouched(true);
+      return;
+    }
     flush();
     setCustomTimeOpen(false);
-    props.onCustomSchedule(draft.id, customDate, customTime);
-  }, [customDate, customTime, draft.id, flush, props]);
+    props.onCustomSchedule(draft.id, customDate, customTime, showInstagramCaptionInput ? { instagramCaption } : undefined);
+  }, [customDate, customTime, draft.id, flush, props, showInstagramCaptionInput, instagramCaptionErrors, instagramCaption]);
   /**
    * Regenerate ONE image (PRD §7).
    *
@@ -878,6 +923,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
   const editAriaLabel = `${tr("studioBoard.actions.edit")}: ${draft.title?.trim() || tr("studioBoard.card.untitledPin")}`;
+  // showInstagramCaptionInput/instagramCaptionErrors are declared earlier (ahead of
+  // doSchedule/doCustomSchedule) — reused here for the field-level error text and the
+  // child-field gating below.
+  const instagramCaptionError = instagramCaptionTouched && instagramCaptionErrors.length
+    ? (instagramCaptionErrors.includes("instagram_caption_contains_link")
+        ? tr("studioBoard.card.instagramCaption.errorLink")
+        : tr("studioBoard.card.instagramCaption.errorRequired"))
+    : "";
+  const isInstagramCaptionChild = draft.copyProfile === "instagram_caption";
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
@@ -1211,6 +1265,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
           <>
+          {shouldShowFieldOnInstagramChild(draft, "title") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
               <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
@@ -1220,12 +1275,44 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
               style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700 }} />
           </div>
+          )}
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
-            {tr("studioBoard.card.fields.description")}
+            {/* IG child: this description field IS the caption Instagram sends (design §3),
+                so the label reads "Instagram caption" instead of the generic Pinterest one. */}
+            {isInstagramCaptionChild ? tr("studioBoard.card.instagramCaption.label") : tr("studioBoard.card.fields.description")}
             <textarea data-testid="board-card-description" value={fields.description} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder={tr("studioBoard.card.fields.descriptionPlaceholder")}
               style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 60 }} />
           </label>
+          {/* Instagram caption input (design T3): only while a single video still carries
+              BOTH Pinterest and Instagram as explicit destinations — Schedule reads this
+              via card-local state (not a PinDraft field, see the state declaration) and
+              splits the draft on a successful schedule. Hidden once split (the parent no
+              longer has an Instagram destination) and hidden whenever NEXT_PUBLIC_HIDE_IG_FB
+              hides Instagram entirely. */}
+          {showInstagramCaptionInput && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label htmlFor={`board-card-ig-caption-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>
+                {tr("studioBoard.card.instagramCaption.label")}
+              </label>
+              <p style={{ margin: 0, fontSize: 11, lineHeight: 1.45, color: BUI.textSec }}>
+                {tr("studioBoard.card.instagramCaption.help")}
+              </p>
+              <textarea id={`board-card-ig-caption-${draft.id}`} data-testid="board-card-instagram-caption"
+                value={instagramCaption} disabled={!cardFieldsEditable || publishing || generating}
+                onChange={event => { setInstagramCaption(event.target.value); setInstagramCaptionTouched(true); }}
+                onBlur={() => setInstagramCaptionTouched(true)}
+                rows={3} placeholder={tr("studioBoard.card.instagramCaption.placeholder")}
+                aria-invalid={!!instagramCaptionError} aria-describedby={instagramCaptionError ? `board-card-ig-caption-error-${draft.id}` : undefined}
+                style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, resize: "vertical", minHeight: 60, ...(instagramCaptionError ? { borderColor: BUI.error } : {}) }} />
+              {instagramCaptionError && (
+                <p id={`board-card-ig-caption-error-${draft.id}`} data-testid="board-card-instagram-caption-error" role="alert"
+                  style={{ margin: 0, fontSize: 11, fontWeight: 600, color: BUI.error }}>
+                  {instagramCaptionError}
+                </p>
+              )}
+            </div>
+          )}
           {/* Ruling 3: removing the disclosure is warned about, never blocked. */}
           {amazonDisclosureMissing && (
             <div data-testid="card-amazon-disclosure-missing" role="status" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, fontSize: 10.5, lineHeight: 1.4, color: BUI.warning }}>
@@ -1239,12 +1326,14 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               </button>
             </div>
           )}
+          {shouldShowFieldOnInstagramChild(draft, "websiteUrl") && (
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.websiteUrl")}
             <input data-testid="board-card-url" value={fields.websiteUrl} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ websiteUrl: event.target.value })} onBlur={handleUrlBlur} placeholder="https://"
               style={{ ...fieldStyle, fontSize: 11.5 }} />
           </label>
+          )}
           {amazonSectionSource && (
             <AmazonCardSection
               draftId={draft.id}
@@ -1258,6 +1347,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               onUseLink={acceptAmazonLink}
             />
           )}
+          {shouldShowFieldOnInstagramChild(draft, "boardId") && (
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.card.fields.board")}
           <select data-testid="board-card-board" value={fields.boardId} disabled={!cardFieldsEditable || publishing || generating}
@@ -1269,6 +1359,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
           </label>
+          )}
           {shouldShowStudioMetadataField(lifecycle, "altText") && <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
             {tr("studioBoard.expanded.altTextOptional")}
             <textarea data-testid="board-card-alt" value={fields.altText} disabled={!cardFieldsEditable || publishing || generating}
@@ -1555,7 +1646,47 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           disabled={publishing || !cardFieldsEditable} onChange={handleChange}
           onGenerateCopy={() => aiRef.current?.generate()}
           aiBusyKey={draft.id}
-          onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
+          onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect}
+          hiddenFields={isInstagramCaptionChild ? ["title", "websiteUrl", "board"] : undefined}
+          descriptionLabel={isInstagramCaptionChild ? tr("studioBoard.card.instagramCaption.label") : undefined} />
+
+        {/* Instagram caption input (design T3) — same gate/behavior as the compact card;
+            see that block's comment for why this is card-local state, not a draft field. */}
+        {showInstagramCaptionInput && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <label htmlFor={`board-field-ig-caption-${draft.id}`} style={labelStyle}>
+              {tr("studioBoard.card.instagramCaption.label")}
+            </label>
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.45, color: BUI.textSec }}>
+              {tr("studioBoard.card.instagramCaption.help")}
+            </p>
+            <textarea id={`board-field-ig-caption-${draft.id}`} data-testid="board-field-instagram-caption"
+              value={instagramCaption} disabled={publishing || !cardFieldsEditable}
+              onChange={event => { setInstagramCaption(event.target.value); setInstagramCaptionTouched(true); }}
+              onBlur={() => setInstagramCaptionTouched(true)}
+              rows={3} placeholder={tr("studioBoard.card.instagramCaption.placeholder")}
+              aria-invalid={!!instagramCaptionError} aria-describedby={instagramCaptionError ? `board-field-ig-caption-error-${draft.id}` : undefined}
+              style={{ ...fieldStyle, resize: "vertical", minHeight: 64, ...(instagramCaptionError ? { borderColor: BUI.error } : {}) }} />
+            {instagramCaptionError && (
+              <p id={`board-field-ig-caption-error-${draft.id}`} data-testid="board-field-instagram-caption-error" role="alert"
+                style={{ margin: 0, fontSize: 11, fontWeight: 600, color: BUI.error }}>
+                {instagramCaptionError}
+              </p>
+            )}
+            {/* The server already rejected this draft's schedule (mixed_video_requires_split,
+                syncIssueNotice above) — the footer below shows Publish/Done here because the
+                CLIENT'S OWN optimistic scheduledDate/plannedAt still reads as "scheduled"
+                lifecycle (getPinLifecycle only checks local fields), so there is no Schedule
+                button to re-press. This is the one action that performs the split with the
+                caption just entered. */}
+            {syncIssue?.code === "mixed_video_requires_split" && (
+              <button type="button" data-testid="card-split-and-schedule" onClick={doSchedule} disabled={publishing || !!instagramCaptionErrors.length}
+                style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: instagramCaptionErrors.length ? "default" : "pointer", fontFamily: "inherit", opacity: instagramCaptionErrors.length ? 0.6 : 1 }}>
+                <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.card.instagramCaption.splitAction")}
+              </button>
+            )}
+          </div>
+        )}
 
         {cardFieldsEditable && <PublishDestinations
           selected={selectedProviders}

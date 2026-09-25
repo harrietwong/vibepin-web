@@ -2867,6 +2867,9 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Подписи Instagram не могут содержать ссылки. Удалите её и попробуйте снова.",
   "studioBoard.card.instagramCaption.splitNotice": "Разделено на 2 публикации: одна для Pinterest, одна для Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Разделить и запланировать",
+
 };
 
 export default ru;

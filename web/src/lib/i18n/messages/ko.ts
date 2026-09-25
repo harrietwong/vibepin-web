@@ -2813,6 +2813,9 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram 캡션에는 링크를 포함할 수 없습니다. 제거 후 다시 시도하세요.",
   "studioBoard.card.instagramCaption.splitNotice": "2개의 게시물로 분할되었습니다: Pinterest용 1개, Instagram용 1개.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "분할 후 예약",
+
 };
 
 export default ko;

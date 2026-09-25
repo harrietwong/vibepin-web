@@ -2837,6 +2837,9 @@ const pt: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Legendas do Instagram não podem conter links. Remova-o e tente novamente.",
   "studioBoard.card.instagramCaption.splitNotice": "Dividido em 2 publicações: uma para o Pinterest, outra para o Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Dividir e agendar",
+
 };
 
 export default pt;

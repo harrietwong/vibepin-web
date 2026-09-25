@@ -2817,6 +2817,9 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "لا يمكن أن تحتوي تعليقات Instagram على روابط. أزله وحاول مرة أخرى.",
   "studioBoard.card.instagramCaption.splitNotice": "تم التقسيم إلى منشورين: واحد لـ Pinterest وواحد لـ Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "تقسيم وجدولة",
+
 };
 
 export default ar;

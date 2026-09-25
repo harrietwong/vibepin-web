@@ -2793,6 +2793,9 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Opisy na Instagramie nie mogą zawierać linków. Usuń go i spróbuj ponownie.",
   "studioBoard.card.instagramCaption.splitNotice": "Podzielono na 2 posty: jeden dla Pinterest, jeden dla Instagrama.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Podziel i zaplanuj",
+
 };
 
 export default pl;

@@ -51,6 +51,13 @@ export type PinFieldsFormProps = {
   aiBusyKey?: string;
   onRegenerateField?: (field: "title" | "description") => void;
   onConnect?: () => void;
+  /** Instagram-only split child (design doc 0924-混合视频草稿自动拆分-技术设计-v0.1.md
+   *  T3): hide title/website URL/board — none apply to an Instagram-only Content. The
+   *  description field's own label ("Instagram caption" vs "Description") stays a
+   *  caller concern (see `descriptionLabel`) since PinFieldsForm has no draft context. */
+  hiddenFields?: ReadonlyArray<"title" | "websiteUrl" | "board">;
+  /** Overrides the Description field's label (default: pinForm.description). */
+  descriptionLabel?: string;
 };
 
 function RegenBtn({ title, onClick, disabled }: { title: string; onClick?: () => void; disabled?: boolean }) {
@@ -152,14 +159,16 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
 export function PinFieldsForm({
   value, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards, boardFieldError,
   titleFieldError, descriptionFieldError, disabled,
-  onChange, onGenerateCopy, aiBusyKey, onRegenerateField, onConnect,
+  onChange, onGenerateCopy, aiBusyKey, onRegenerateField, onConnect, hiddenFields, descriptionLabel,
 }: PinFieldsFormProps) {
   const { t: tr } = useLocale();
   const regen = (f: "title" | "description") =>
     onRegenerateField ? () => onRegenerateField(f) : undefined;
+  const hidden = (field: "title" | "websiteUrl" | "board") => !!hiddenFields?.includes(field);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+      {!hidden("title") && (
       <div>
         <FieldLabel text={tr("pinForm.pinTitle")} onGenerateCopy={onGenerateCopy} onRegen={regen("title")} disabled={disabled} aiBusyKey={aiBusyKey} />
         <input data-testid="board-field-title" value={value.title} disabled={disabled} maxLength={100}
@@ -170,9 +179,10 @@ export function PinFieldsForm({
           </p>
         )}
       </div>
+      )}
 
       <div>
-        <FieldLabel text={tr("pinForm.description")} onRegen={regen("description")} />
+        <FieldLabel text={descriptionLabel ?? tr("pinForm.description")} onRegen={regen("description")} />
         <textarea data-testid="board-field-description" value={value.description} disabled={disabled} maxLength={500}
           onChange={e => onChange({ description: e.target.value })} placeholder={tr("pinForm.descriptionPlaceholder")}
           rows={3} style={{ ...fieldStyle, resize: "vertical", minHeight: 64 }} />
@@ -183,12 +193,15 @@ export function PinFieldsForm({
         )}
       </div>
 
+      {!hidden("websiteUrl") && (
       <div>
         <FieldLabel text={tr("pinForm.websiteUrl")} hint={tr("pinForm.optional")} />
         <input data-testid="board-field-url" value={value.websiteUrl} disabled={disabled}
           onChange={e => onChange({ websiteUrl: e.target.value })} placeholder={tr("pinForm.websiteUrlPlaceholder")} style={fieldStyle} />
       </div>
+      )}
 
+      {!hidden("board") && (
       <div>
         <span style={labelStyle}>{tr("pinForm.pinterestBoard")}</span>
         {disconnected ? (
@@ -234,6 +247,7 @@ export function PinFieldsForm({
           </p>
         )}
       </div>
+      )}
     </div>
   );
 }

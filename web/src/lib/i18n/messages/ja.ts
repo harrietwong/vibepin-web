@@ -2819,6 +2819,9 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagramのキャプションにはリンクを含められません。削除してもう一度お試しください。",
   "studioBoard.card.instagramCaption.splitNotice": "2つの投稿に分割されました：Pinterest用とInstagram用。",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "分割して予約",
+
 };
 
 export default ja;

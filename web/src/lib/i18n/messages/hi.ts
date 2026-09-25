@@ -2813,6 +2813,9 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram कैप्शन में लिंक नहीं हो सकते। इसे हटाकर फिर से प्रयास करें।",
   "studioBoard.card.instagramCaption.splitNotice": "2 पोस्ट में विभाजित: एक Pinterest के लिए, एक Instagram के लिए।",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "विभाजित करें और शेड्यूल करें",
+
 };
 
 export default hi;

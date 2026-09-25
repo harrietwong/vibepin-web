@@ -2837,6 +2837,9 @@ const de: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram-Bildunterschriften dürfen keine Links enthalten. Entfernen Sie ihn und versuchen Sie es erneut.",
   "studioBoard.card.instagramCaption.splitNotice": "In 2 Beiträge aufgeteilt: einen für Pinterest, einen für Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Aufteilen & planen",
+
 };
 
 export default de;

@@ -247,6 +247,7 @@ export const studioBoardMessages = {
   "studioBoard.card.instagramCaption.errorRequired": "Add an Instagram caption before scheduling.",
   "studioBoard.card.instagramCaption.errorLink": "Instagram captions can't contain links. Remove the link and try again.",
   "studioBoard.card.instagramCaption.splitNotice": "Split into 2 posts: one for Pinterest, one for Instagram.",
+  "studioBoard.card.instagramCaption.splitAction": "Split & schedule",
   "studioBoard.actions.viewDetails": "View details",
   "studioBoard.card.publishTo": "Destinations",
   "studioBoard.card.editDestinations": "Edit destinations",

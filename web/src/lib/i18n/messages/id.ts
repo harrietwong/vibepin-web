@@ -2835,6 +2835,9 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Keterangan Instagram tidak boleh berisi tautan. Hapus lalu coba lagi.",
   "studioBoard.card.instagramCaption.splitNotice": "Dipisah menjadi 2 postingan: satu untuk Pinterest, satu untuk Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Pisahkan & jadwalkan",
+
 };
 
 export default id;

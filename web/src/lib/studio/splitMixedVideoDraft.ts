@@ -329,3 +329,42 @@ export function instagramCaptionIssues(caption: string | null | undefined): Inst
   }
   return issues;
 }
+
+// ── T3 UI gates ──────────────────────────────────────────────────────────────
+// Pure presentation policy the card renders directly, so the "does the caption box
+// show" / "does this child hide Pinterest-only fields" decisions are unit-testable
+// without mounting PinBoardCard.tsx (this repo's test scripts assert source-level,
+// never render a component — see scripts/test-media-notice.ts for the precedent).
+
+/**
+ * Whether the card should show the Instagram-caption input box (design T3
+ * acceptance: "视频卡同时选了 Pinterest 与 Instagram 目标时" AND never when IG is
+ * hidden by the product flag, even though in that case the destination could not
+ * have been selected in the first place — the task lists the hidden case as an
+ * explicit test, so it is gated here too rather than relied on transitively).
+ * Hidden once the draft has already been split (its Pinterest-only parent no
+ * longer carries an Instagram destination, so `isMixedSingleVideo` is already
+ * false for it — this function adds no extra state for that).
+ */
+export function shouldShowInstagramCaptionInput(
+  draft: Parameters<typeof isMixedSingleVideo>[0],
+  opts: { igFbHidden: boolean },
+): boolean {
+  if (opts.igFbHidden) return false;
+  return isMixedSingleVideo(draft);
+}
+
+/** The split child's Instagram-only card fields (design T3: "不显示标题/Board/Website
+ *  URL 字段 — IG 不用"). Distinct from `studioCardPresentation`'s lifecycle-driven
+ *  field visibility — this is keyed on `copyProfile`, not lifecycle, and only ever
+ *  narrows (never widens) what that policy already allows. */
+export const INSTAGRAM_CHILD_HIDDEN_FIELDS = ["title", "websiteUrl", "boardId"] as const;
+export type InstagramChildHiddenField = typeof INSTAGRAM_CHILD_HIDDEN_FIELDS[number];
+
+export function shouldShowFieldOnInstagramChild(
+  draft: { copyProfile?: unknown },
+  field: InstagramChildHiddenField,
+): boolean {
+  if (draft.copyProfile !== "instagram_caption") return true;
+  return !(INSTAGRAM_CHILD_HIDDEN_FIELDS as readonly string[]).includes(field);
+}

@@ -2837,6 +2837,9 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram-bijschriften mogen geen links bevatten. Verwijder deze en probeer opnieuw.",
   "studioBoard.card.instagramCaption.splitNotice": "Gesplitst in 2 berichten: één voor Pinterest, één voor Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Splitsen en inplannen",
+
 };
 
 export default nl;

@@ -3182,6 +3182,9 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Le didascalie di Instagram non possono contenere link. Rimuovilo e riprova.",
   "studioBoard.card.instagramCaption.splitNotice": "Diviso in 2 post: uno per Pinterest, uno per Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Dividi e pianifica",
+
 };
 
 export default it;

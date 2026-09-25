@@ -3074,6 +3074,9 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Los pies de foto de Instagram no pueden contener enlaces. Elimínalo e inténtalo de nuevo.",
   "studioBoard.card.instagramCaption.splitNotice": "Dividido en 2 publicaciones: una para Pinterest y otra para Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Dividir y programar",
+
 };
 
 export default es;

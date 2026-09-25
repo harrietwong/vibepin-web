@@ -2894,6 +2894,9 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram açıklamaları bağlantı içeremez. Kaldırıp tekrar deneyin.",
   "studioBoard.card.instagramCaption.splitNotice": "2 gönderiye bölündü: biri Pinterest, biri Instagram için.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Böl ve planla",
+
 };
 
 export default tr;

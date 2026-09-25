@@ -3254,6 +3254,9 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram 文案不能包含連結，請刪除後重試。",
   "studioBoard.card.instagramCaption.splitNotice": "已拆分為 2 則：一則發 Pinterest，一則發 Instagram。",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "拆分並排程",
+
 };
 
 export default zhTW;

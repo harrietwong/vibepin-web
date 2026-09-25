@@ -3251,6 +3251,9 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Instagram 文案不能包含链接，请删除后重试。",
   "studioBoard.card.instagramCaption.splitNotice": "已拆分为 2 条：一条发 Pinterest，一条发 Instagram。",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "拆分并排期",
+
 };
 
 export default zhCN;

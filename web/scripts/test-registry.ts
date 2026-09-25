@@ -279,6 +279,12 @@ export const STUDIO: string[] = [
   // caption validated before any write, parent+child written, replay = 2 rows,
   // an existing child never overwritten.
   "test-split-mixed-video-ops",
+  // T3 (same design doc): the Studio card's Instagram-caption input box (shown only
+  // for a mixed single video, hidden when NEXT_PUBLIC_HIDE_IG_FB hides Instagram or
+  // once already split), the store-level split-and-schedule entry point
+  // (splitMixedVideoDraftInStore: 2 rows, idempotent replay, never clobbers an
+  // existing child), and the IG child's hidden title/board/websiteUrl fields.
+  "test-mixed-video-split-ui",
   // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).

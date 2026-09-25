@@ -2889,6 +2889,9 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "Chú thích Instagram không được chứa liên kết. Hãy xóa rồi thử lại.",
   "studioBoard.card.instagramCaption.splitNotice": "Đã tách thành 2 bài đăng: một cho Pinterest, một cho Instagram.",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "Tách và lên lịch",
+
 };
 
 export default vi;

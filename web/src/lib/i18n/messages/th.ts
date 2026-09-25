@@ -2816,6 +2816,9 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.instagramCaption.errorLink": "แคปชัน Instagram ต้องไม่มีลิงก์ กรุณาลบแล้วลองใหม่",
   "studioBoard.card.instagramCaption.splitNotice": "แยกเป็น 2 โพสต์แล้ว: หนึ่งสำหรับ Pinterest และหนึ่งสำหรับ Instagram",
 
+  // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
+  "studioBoard.card.instagramCaption.splitAction": "แยกและตั้งเวลา",
+
 };
 
 export default th;
