@@ -36,8 +36,8 @@
 
 `backend/db/migrate_v83_instagram_comment_dm.sql`（纯新增 + 幂等：两张表 + 索引，RLS 开启、无 policy，只有 service role 可读写）。
 
-- 测试库 `snulmwprsahzqvdbyenc`：已 apply（2026-09-24）。
-- **生产库：未 apply**。上线前由部署会话按标准跑法 apply（需用户批准；apply 前打印并核对 project ref）。
+- 测试库 `snulmwprsahzqvdbyenc`：已 apply（2026-09-24）。**内部站 preview.vibepin.co 用的就是这个库，所以 Phase 1 不需要再 apply。**
+- 生产库 `jaxteelkecvlozdrdoog`：**不 apply**。用户已定 IG 功能只上内部站，对外站 vibepin.co 不上 IG（2026-09-25）。以后若对外上线，再由部署会话按标准跑法 apply（需用户批准）。
 
 未 apply 时端点返回 `{"ok":true,"available":false}` + 200，不会让 crontab 报警，但什么也不做。
 
@@ -49,11 +49,11 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 
 未配置 `CRON_SECRET` 时端点返回 **503 `cron_not_configured`**（绝不裸奔）。
 
-## crontab 行（部署会话在用户批准后添加）
+## crontab 行（内部站；部署会话在用户批准后添加）
 
 ```cron
-# 每 5 分钟轮询 IG 评论并发送关键词私信。与 publish-due 共用 CRON_SECRET。
-*/5 * * * * curl -fsS -m 70 -H "Authorization: Bearer $CRON_SECRET" https://<prod-domain>/api/cron/instagram-comment-dm >> /var/log/vibepin-ig-comment-dm.log 2>&1
+# 内部站：每 5 分钟轮询 IG 评论并发送关键词私信。写法（域名与密钥的取法）照抄内部站 publish-due 那一条。
+*/5 * * * * curl -fsS -m 70 -H "Authorization: Bearer $CRON_SECRET" https://preview.vibepin.co/api/cron/instagram-comment-dm >> /var/log/vibepin-ig-comment-dm.log 2>&1
 ```
 
 - 路由 `maxDuration = 60`，内部 **25 秒**后停止开始任何新工作（扫描帖子、翻评论页、抢占、发送都检查）。
@@ -123,9 +123,9 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 
 ## 上线顺序
 
-1. 部署会话：合并分支 → 门禁 → 部署（按项目部署纪律）。
-2. 部署会话：生产 apply v83（需用户批准）。
-3. 部署会话：按上面添加 crontab 行（需用户批准）。
+1. 部署会话：合并进内部站下一版 → 门禁 → 部署到内部站 preview.vibepin.co（按项目部署纪律）。
+2. v83：内部站用测试库，已 apply，无需操作（生产库不 apply，见上文）。
+3. 部署会话：按上面添加**内部站** crontab 行（需用户批准）。不要加到生产 runner。
 4. 站长：Meta 后台加两个权限 + Instagram App 打开「允许访问消息」。
 5. 站长：后台 `/admin/instagram-auto-dm` → **重新连接并授予评论 + 私信权限**（即 `features=comment_dm`）→ 回到后台确认显示"已授予"。
 6. 站长：先做上面的 **Phase 0 试运行**（三项全部记录）。
