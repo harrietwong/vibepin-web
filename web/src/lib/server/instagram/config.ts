@@ -60,6 +60,33 @@ export function instagramScopeString(): string {
   return INSTAGRAM_SCOPES.join(",");
 }
 
+/**
+ * OPT-IN scopes for the comment-keyword → private-reply (DM) automation.
+ *
+ * Never part of INSTAGRAM_SCOPES: a normal connect must keep asking for exactly
+ * basic + content_publish. These are appended ONLY when a super admin starts the
+ * connect with `?features=comment_dm` (see the connect route).
+ *
+ *   instagram_business_manage_comments — read comments (+ commenter username) and
+ *                                        send the private reply / public reply.
+ *                                        Meta's Private Replies doc lists this
+ *                                        (with basic) as the requirement.
+ *   instagram_business_manage_messages — requested as well; Meta's doc does not
+ *                                        list it for private replies, so whether
+ *                                        it is strictly needed is UNVERIFIED.
+ */
+export const INSTAGRAM_COMMENT_DM_SCOPES = [
+  "instagram_business_manage_comments",
+  "instagram_business_manage_messages",
+] as const;
+
+/** True when a stored grant (social_connections.scopes) covers every comment-DM scope. */
+export function hasInstagramCommentDmScopes(scopes: readonly string[] | null | undefined): boolean {
+  if (!Array.isArray(scopes)) return false;
+  const granted = new Set(scopes.map(s => String(s).trim()));
+  return INSTAGRAM_COMMENT_DM_SCOPES.every(scope => granted.has(scope));
+}
+
 export type InstagramEnv = {
   appId: string;
   appSecret: string;
@@ -110,12 +137,21 @@ export function isInstagramConfigured(): boolean {
  *
  * `state` is opaque random and never contains a user id.
  */
-export function buildAuthorizeUrl(env: InstagramEnv, state: string): string {
+export function buildAuthorizeUrl(
+  env: InstagramEnv,
+  state: string,
+  /**
+   * Opt-in scopes appended AFTER the base set (e.g. INSTAGRAM_COMMENT_DM_SCOPES).
+   * Omitted or empty, the URL is byte-for-byte the pre-existing one.
+   */
+  extraScopes: readonly string[] = [],
+): string {
+  const extra = extraScopes.filter(s => !(INSTAGRAM_SCOPES as readonly string[]).includes(s));
   const params = new URLSearchParams({
     client_id: env.appId,
     redirect_uri: env.redirectUri,
     response_type: "code",
-    scope: instagramScopeString(),
+    scope: extra.length ? [...INSTAGRAM_SCOPES, ...extra].join(",") : instagramScopeString(),
     state,
   });
   return `${INSTAGRAM_AUTHORIZE_URL}?${params.toString()}`;
