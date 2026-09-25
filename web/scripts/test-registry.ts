@@ -113,6 +113,8 @@ export const CORE: string[] = [
   "test-ai-copy-v2-facts",
   "test-ai-copy-v2-keyword-evidence",
   "test-ai-copy-v2-routes",
+  // P1 0925: seller-text grounding (real Echo Dot listing + manual entry, fail-closed guards).
+  "test-ai-copy-v2-seller-evidence",
   "test-ai-copy-v2-ui",
   "test-ai-copy-v2-video-cover",
   "test-ai-copy-v2-video-cover-hardening",
