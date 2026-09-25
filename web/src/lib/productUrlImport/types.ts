@@ -18,7 +18,12 @@ export type Provider =
   | "pinterest"
   | "generic"
   | "amazon"
+  | "marketplace_manual"
   | "unknown";
+
+/** Marketplaces that block automated reads; FR-04 gives them a manual-entry fallback
+ *  card instead of a network fetch (zero outbound calls, ever). */
+export type MarketplaceId = "temu" | "shein" | "aliexpress" | "tiktok_shop";
 
 export type AssetType = "product" | "reference";
 
@@ -59,6 +64,9 @@ export type ProductUrlImportResult = {
    * Absent on failure — never a shell of empty-string fields.
    */
   facts?:            ProductFacts;
+  /** Present only for `provider: "marketplace_manual"` (FR-04): which blocked
+   *  marketplace the pasted URL belongs to. Zero network calls are ever made for it. */
+  marketplace?:      MarketplaceId;
 };
 
 /**

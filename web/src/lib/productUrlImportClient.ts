@@ -57,8 +57,9 @@ export function reasonLabel(reason: string): string {
 }
 
 export type ImportStatus = "success" | "partial" | "blocked" | "unsupported" | "error" | "failed";
-export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "amazon" | "unknown";
+export type Provider     = "direct_image" | "shopify" | "woocommerce" | "etsy" | "pinterest" | "generic" | "amazon" | "marketplace_manual" | "unknown";
 export type AssetType    = "product" | "reference";
+export type MarketplaceId = "temu" | "shein" | "aliexpress" | "tiktok_shop";
 
 export type ProductUrlImportApiResponse = {
   results: Array<{
@@ -86,6 +87,8 @@ export type ProductUrlImportApiResponse = {
     debugCode?:       string;
     /** Amazon links only (text-only channel): link status, fetch outcome, page text. */
     amazon?:          AmazonImportMeta;
+    /** `provider: "marketplace_manual"` only (FR-04): which blocked marketplace. */
+    marketplace?:     MarketplaceId;
   }>;
 };
 

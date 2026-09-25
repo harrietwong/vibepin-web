@@ -111,6 +111,27 @@ export async function importUrl(
 
   const validated = validateImportUrl(rawUrl);
   if (!validated.ok) {
+    // FR-04: Temu / Shein / AliExpress / TikTok Shop get a manual-entry fallback
+    // instead of a plain failure. Zero network calls — this branches straight off
+    // the pure hostname classification, before any fetch would have happened.
+    if (validated.marketplace) {
+      const trimmed = rawUrl.trim();
+      let sourceDomain = "";
+      try { sourceDomain = sourceDomainFromUrl(new URL(trimmed)); } catch { /* unreachable: validateImportUrl already parsed it */ }
+      return {
+        sourceUrl:       trimmed,
+        sourceDomain,
+        originalUrl:     trimmed,
+        provider:        "marketplace_manual",
+        assetType:       "product",
+        status:          "unsupported",
+        marketplace:     validated.marketplace,
+        candidates:      [],
+        fallbackActions: ["manual_entry", "upload_image"],
+        debugCode:       `marketplace_manual_${validated.marketplace}`,
+        message:         "This marketplace does not allow automatic product reads. Upload a product photo and fill in the name and selling points — the link stays as the destination.",
+      };
+    }
     return {
       sourceUrl:    rawUrl.trim(),
       sourceDomain: "",

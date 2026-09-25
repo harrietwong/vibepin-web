@@ -16,11 +16,12 @@
 
 import type { AmazonMarketplace } from "@/lib/affiliate/amazon";
 import { parseAmazonLink } from "@/lib/affiliate/amazonLink";
-import type { AmazonImportMeta } from "@/lib/productUrlImport/types";
+import type { AmazonImportMeta, MarketplaceId } from "@/lib/productUrlImport/types";
+import { classifyManualMarketplace } from "@/lib/productUrlImport/urlSecurity";
 import type { ProductContext } from "@/lib/ai-copy/types";
 
-export type AmazonCardLinkStatus = "ok" | "no_asin" | "short_unexpanded" | "not_amazon";
-export type AmazonCardFetchStatus = "not_attempted" | "ok" | "blocked" | "failed";
+export type AmazonCardLinkStatus = "ok" | "no_asin" | "short_unexpanded" | "not_amazon" | "marketplace";
+export type AmazonCardFetchStatus = "not_attempted" | "ok" | "blocked" | "failed" | "manual_only";
 
 export type AmazonCardManual = {
   productName?: string;
@@ -50,6 +51,14 @@ export type AmazonCardSource = {
   extracted?: { title?: string; bullets?: string[]; brand?: string };
   manual: AmazonCardManual;
   resolvedAt: string;
+  /**
+   * FR-04: set only when `linkStatus === "marketplace"` — which blocked marketplace
+   * (Temu / Shein / AliExpress / TikTok Shop) this card's pasted link belongs to.
+   * Distinct from `marketplace` above (that field is the Amazon *regional* site,
+   * e.g. "amazon.com" vs "amazon.co.uk" — a different concept for a different link
+   * kind). A card never has both set.
+   */
+  manualMarketplace?: MarketplaceId;
 };
 
 /** Minimal import-result shape the card consumes (ProductUrlImportResult subset). */
@@ -174,6 +183,10 @@ export function canGenerateAmazonCopy(src: AmazonCardSource | undefined): boolea
  */
 export function amazonCardMode(src: AmazonCardSource): { mode: "idle" | "fetched" | "manual"; reason?: string } {
   if (src.fetch.status === "not_attempted") return { mode: "idle" };
+  // FR-04: a manual-entry marketplace card never attempts a fetch — "manual" is its
+  // steady state, not a failure, so it gets its own reason rather than falling into
+  // the generic "failed" wording below.
+  if (src.fetch.status === "manual_only") return { mode: "manual", reason: "marketplace_manual" };
   if (src.fetch.status === "ok") {
     return src.extracted?.title?.trim() ? { mode: "fetched" } : { mode: "manual", reason: "no_title" };
   }
@@ -256,4 +269,88 @@ export function amazonClaimHints(report: { issues?: Array<{ code: string; messag
 /** The draft is an Amazon affiliate card: it has Amazon context AND its current URL is Amazon. */
 export function isAmazonAffiliateDraft(draft: { destinationUrl?: string; amazonSource?: AmazonCardSource } | null | undefined): boolean {
   return !!draft?.amazonSource && draft.amazonSource.linkStatus !== "not_amazon" && isAmazonLink(draft.destinationUrl);
+}
+
+// ── FR-04: manual-entry marketplaces (Temu / Shein / AliExpress / TikTok Shop) ─────
+//
+// These reuse the exact same card shape (`AmazonCardSource`, `AmazonCardManual`) and
+// the exact same copy-context mapping as Amazon, but there is no fetch step at all:
+// `classifyManualMarketplace` is a pure hostname check (zero network), so the card
+// goes straight to manual mode. `isAmazonLink` / `isAmazonAffiliateDraft` /
+// `amazonSourceForUrl` / `buildAmazonCopyContext` above are UNCHANGED — Amazon links
+// still resolve through them exactly as before. The functions below only ADD the
+// marketplace branch alongside.
+
+/** Which blocked marketplace (if any) this URL belongs to. Null for Amazon, for
+ *  every normal importable URL, and for Instagram (not a marketplace). */
+export function classifyCardMarketplace(url: string | null | undefined): MarketplaceId | null {
+  const trimmed = (url ?? "").trim();
+  if (!trimmed) return null;
+  let hostname: string;
+  try { hostname = new URL(trimmed).hostname; } catch { return null; }
+  return classifyManualMarketplace(hostname);
+}
+
+/** True for an Amazon link OR one of the four manual-entry marketplaces — the set of
+ *  URLs that get a card-level product context section at all. */
+export function isCardMarketplaceLink(url: string | null | undefined): boolean {
+  return isAmazonLink(url) || classifyCardMarketplace(url) !== null;
+}
+
+/**
+ * Card context for a (possibly new) Website URL value, generalized over Amazon AND
+ * the manual-entry marketplaces (FR-04 §3: "reuse the Amazon fill-in structure, not a
+ * new component"). Amazon URLs go through `amazonSourceForUrl` untouched — this only
+ * adds the marketplace branch: a fresh `linkStatus: "marketplace"` / `fetch.status:
+ * "manual_only"` source with the user's manual fields carried across product changes,
+ * exactly like the Amazon branch carries them across ASIN changes.
+ */
+export function cardSourceForUrl(
+  url: string | null | undefined,
+  prev: AmazonCardSource | undefined,
+  now: string = new Date().toISOString(),
+): AmazonCardSource | null {
+  const amazon = amazonSourceForUrl(url, prev, now);
+  if (amazon) return amazon;
+  const pasted = (url ?? "").trim();
+  const marketplace = classifyCardMarketplace(pasted);
+  if (!marketplace) return null;
+  if (prev && prev.pastedUrl === pasted && prev.linkStatus === "marketplace") return prev;
+  return {
+    version: 1,
+    pastedUrl: pasted,
+    linkStatus: "marketplace",
+    manualMarketplace: marketplace,
+    fetch: { status: "manual_only" },
+    manual: { ...(prev?.manual ?? {}) },
+    resolvedAt: now,
+  };
+}
+
+/** The draft has a card-level product context section showing — Amazon OR one of the
+ *  manual-entry marketplaces, and the source matches the CURRENT destination URL. */
+export function isMarketplaceCardDraft(draft: { destinationUrl?: string; amazonSource?: AmazonCardSource } | null | undefined): boolean {
+  if (isAmazonAffiliateDraft(draft)) return true;
+  return !!draft?.amazonSource && draft.amazonSource.linkStatus === "marketplace" && classifyCardMarketplace(draft.destinationUrl) !== null;
+}
+
+/**
+ * Copy-context mapping for a manual-entry marketplace card — same field mapping as
+ * `buildAmazonCopyContext` (name → title, selling points → attributes, Brand/Material/
+ * Size → vendor/material/quantity, price/availability never passed), but `source` is
+ * the marketplace id and there is never a `page` (no fetch ever happens for these).
+ */
+export function buildMarketplaceCopyContext(src: AmazonCardSource): AmazonCopyContext {
+  const m = src.manual;
+  const product: ProductContext = {
+    title: clean(m.productName),
+    attributes: sellingPointList(m.sellingPoints),
+    vendor: clean(m.brand),
+    material: clean(m.material),
+    quantity: clean(m.size),
+    price: undefined,
+    availability: undefined,
+    source: src.manualMarketplace ?? "manual",
+  };
+  return { product };
 }

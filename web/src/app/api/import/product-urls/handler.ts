@@ -63,7 +63,13 @@ export async function handlePost(request: Request, deps: ProductUrlImportHandler
 
   const stringUrls = urls.filter((u): u is string => typeof u === "string");
   // Amazon links are rejected by the generic validator but have their own channel.
-  const importable = (u: string) => validateImportUrl(u).ok || parseAmazonLink(u).ok;
+  // FR-04 marketplaces (Temu/Shein/AliExpress/TikTok Shop) are also rejected by the
+  // generic validator, but importUrl() gives them a manual-entry result instead of a
+  // fetch — so they must reach importUrl too, not the early `failed` shortcut below.
+  const importable = (u: string) => {
+    const v = validateImportUrl(u);
+    return v.ok || !!v.marketplace || parseAmazonLink(u).ok;
+  };
   const invalid = stringUrls.filter(u => !importable(u));
   if (invalid.length === stringUrls.length && stringUrls.length > 0) {
     const results = stringUrls.map(sourceUrl => {

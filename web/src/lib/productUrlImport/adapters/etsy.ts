@@ -7,8 +7,8 @@ import type { AdapterResult } from "../types";
  */
 export const ETSY_BLOCKED_RESULT: Omit<AdapterResult, "candidates"> = {
   status:          "blocked",
-  message:         "Etsy blocks automatic image extraction. Upload an image directly, paste a direct image URL, or connect Etsy API.",
-  fallbackActions: ["upload_image", "paste_direct_image_url", "connect_etsy_api"],
+  message:         "Etsy does not allow automatic product reads. Upload a product photo or paste a direct image URL — the link stays as the destination.",
+  fallbackActions: ["upload_image", "paste_direct_image_url"],
   debugCode:       "etsy_http_403",
 };
 
