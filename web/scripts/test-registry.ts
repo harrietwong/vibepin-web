@@ -275,6 +275,10 @@ export const STUDIO: string[] = [
   // schedule (mixed_video_requires_split) and a scheduled IG child with an empty /
   // linked caption; the split pair is accepted and saving it twice leaves 2 rows.
   "test-pin-drafts-mixed-video-gate",
+  // T2 block 6: operator-script entry (scripts/lib/splitMixedVideoOps.ts) —
+  // caption validated before any write, parent+child written, replay = 2 rows,
+  // an existing child never overwritten.
+  "test-split-mixed-video-ops",
   // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).
