@@ -173,12 +173,18 @@ function toComment(mediaId: string, raw: Record<string, unknown>): InstagramComm
 export async function listMediaComments(
   mediaId: string,
   token: string,
-  opts: { stopBeforeMs: number; maxPages?: number },
+  opts: {
+    stopBeforeMs: number;
+    maxPages?: number;
+    /** Checked before every page after the first; true → stop paging, return what we have. */
+    isPastDeadline?: () => boolean;
+  },
 ): Promise<InstagramComment[]> {
   const maxPages = Math.max(1, opts.maxPages ?? COMMENTS_MAX_PAGES);
   const out: InstagramComment[] = [];
   let after: string | null = null;
   for (let page = 0; page < maxPages; page++) {
+    if (page > 0 && opts.isPastDeadline?.()) break;
     const params: Record<string, string> = {
       fields: "id,text,timestamp,from,username,parent_id",
       limit: String(COMMENTS_PAGE_SIZE),

@@ -14,7 +14,8 @@ import { runCommentDmForConnection } from "@/lib/server/instagram/commentDmRun";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const PREVIEW_BUDGET_MS = 45_000;
+// Same 25s start-new-work budget as the cron (see its route): pages are 15s-bounded.
+const PREVIEW_BUDGET_MS = 25_000;
 
 export async function POST(req: Request): Promise<Response> {
   const startedAt = Date.now();

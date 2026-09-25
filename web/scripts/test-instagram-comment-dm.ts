@@ -107,6 +107,8 @@ type Row = Record<string, unknown>;
 class FakeDb {
   tables: Record<string, Row[]> = { instagram_comment_dm_events: [], instagram_comment_dm_rules: [] };
   writes = 0;
+  /** When set and it returns true for an UPDATE payload, that update fails. */
+  failUpdate: ((patch: Row) => boolean) | null = null;
   private seq = 0;
   from(table: string) {
     return new Query(this, table);
@@ -186,6 +188,9 @@ class Query implements PromiseLike<{ data: unknown; error: null | { message: str
       return { data: this.returning ? [{ ...row }] : null, error: null };
     }
     if (this.op === "update") {
+      if (this.db.failUpdate?.(this.payload!)) {
+        return { data: null, error: { message: "simulated write failure" } };
+      }
       const hit = rows.filter(match);
       for (const r of hit) Object.assign(r, this.payload);
       return { data: this.returning ? hit.map(r => ({ ...r })) : null, error: null };
@@ -257,11 +262,11 @@ const conn: CommentDmConnection = {
   connection_status: "connected",
 };
 
-function deps(db: FakeDb) {
+function deps(db: FakeDb, now: () => number = () => NOW) {
   return {
     db: db as unknown as SupabaseClient,
     getToken: async () => ({ accessToken: "secret-token" }),
-    now: () => NOW,
+    now,
   };
 }
 const liveOpts = { dryRun: false, deadlineAt: NOW + 60_000 };
@@ -581,7 +586,7 @@ async function main(): Promise<void> {
     assert.deepEqual(calls.messages.map(m => m.commentId), ["c-9"]);
     const byId = Object.fromEntries(db.tables.instagram_comment_dm_events.map(e => [e.id, e]));
     assert.equal(byId["ev-stale"].status, "sent");
-    assert.equal(byId["ev-stale"].attempts, 2);
+    assert.equal(byId["ev-stale"].attempts, 1, "reclaim does not bump attempts (transient failures only)");
     assert.equal(byId["ev-fresh"].status, "claimed", "a fresh claim is left alone");
   });
 
@@ -642,6 +647,179 @@ async function main(): Promise<void> {
     assert.ok(calls.commentMedia.includes("m-bad"), "non-number count → still scanned");
     assert.ok(calls.commentMedia.includes("m-pinned"), "rule-specified media is always scanned");
     assert.equal(r.sent, 1);
+  });
+
+  await test("circuit breaker: 3 consecutive terminal 4xx stop the connection", async () => {
+    const db = new FakeDb();
+    const many = Array.from({ length: 5 }, (_, i) => rawComment(`c-${i}`, "price"));
+    const calls = installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: { "m-1": many },
+      sendResult: () => ({ status: 403, body: { error: { message: "(#10) Application does not have permission for this action", code: 10 } } }),
+    });
+    const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(r.outcome, "circuit_open");
+    assert.equal(calls.messages.length, 3, "stopped after the third consecutive terminal failure");
+    assert.equal(r.failed, 3);
+    assert.match(String(r.message), /Allow access to messages/);
+    assert.match(String(r.message), /does not have permission for this action/);
+    assert.equal(db.tables.instagram_comment_dm_events.length, 3, "remaining comments are not burned");
+  });
+
+  await test("circuit breaker counter resets on a successful send", async () => {
+    const db = new FakeDb();
+    const ids = ["a", "b", "c", "d", "e"];
+    const calls = installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: { "m-1": ids.map(id => rawComment(id, "price")) },
+      sendResult: id => (id === "c" ? null : { status: 400, body: { error: { message: "nope", code: 100 } } }),
+    });
+    const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    // a, b fail (2) → c sent (reset) → d, e fail (2): never 3 in a row.
+    assert.equal(r.outcome, "ok");
+    assert.equal(calls.messages.length, 5);
+    assert.equal(r.sent, 1);
+  });
+
+  await test("a failed 'sent' write stops the connection and is not counted as sent", async () => {
+    const db = new FakeDb();
+    db.failUpdate = patch => patch.status === "sent";
+    const calls = installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: { "m-1": [rawComment("c-1", "price"), rawComment("c-2", "price")] },
+    });
+    const errors: string[] = [];
+    const origErr = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+    try {
+      const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+      assert.equal(r.outcome, "error");
+      assert.equal(r.sent, 0);
+      assert.equal(r.dbErrors, 1);
+      assert.match(String(r.message), /DM was sent but not recorded/);
+    } finally {
+      console.error = origErr;
+    }
+    assert.equal(calls.messages.length, 1, "no further sends after a failed write");
+    assert.ok(errors.some(e => e.includes("simulated write failure")));
+    assert.ok(!errors.some(e => e.includes("secret-token")), "token never logged");
+  });
+
+  await test("a failed write on the failure path is reported too", async () => {
+    const db = new FakeDb();
+    db.failUpdate = patch => patch.status === "failed";
+    installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: { "m-1": [rawComment("c-1", "price")] },
+      sendResult: () => ({ status: 400, body: { error: { message: "nope", code: 100 } } }),
+    });
+    const origErr = console.error;
+    console.error = () => {};
+    try {
+      const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+      assert.equal(r.outcome, "error");
+      assert.equal(r.dbErrors, 1);
+      assert.equal(r.failed, 0);
+    } finally {
+      console.error = origErr;
+    }
+  });
+
+  await test("attempts: stop-class errors (190 / rate limit) never count; transient ones do", async () => {
+    const seed = (db: FakeDb, attempts: number) =>
+      db.tables.instagram_comment_dm_events.push({
+        id: "ev-1",
+        connection_id: CONN_ID,
+        rule_id: "r-1",
+        comment_id: "c-1",
+        media_id: "m-1",
+        comment_timestamp: iso(NOW - 2 * HOUR),
+        status: "claimed",
+        attempts,
+        created_at: iso(NOW - 20 * 60 * 1000),
+        updated_at: iso(NOW - 20 * 60 * 1000),
+      });
+    // Rate limit on a row already at attempts 4 → stays claimed, attempts unchanged.
+    let db = new FakeDb();
+    seed(db, 4);
+    installFetch({ media: [], comments: {}, sendResult: () => ({ status: 400, body: { error: { message: "limit", code: 17 } } }) });
+    let r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(r.outcome, "rate_limited");
+    assert.equal(db.tables.instagram_comment_dm_events[0].status, "claimed");
+    assert.equal(db.tables.instagram_comment_dm_events[0].attempts, 4);
+    // Token 190 likewise.
+    db = new FakeDb();
+    seed(db, 4);
+    installFetch({ media: [], comments: {}, sendResult: () => ({ status: 400, body: { error: { message: "bad token", code: 190 } } }) });
+    r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(r.outcome, "token_invalid");
+    assert.equal(db.tables.instagram_comment_dm_events[0].status, "claimed");
+    assert.equal(db.tables.instagram_comment_dm_events[0].attempts, 4);
+    // Transient 500 from 0 → attempts 1, still claimed.
+    db = new FakeDb();
+    seed(db, 0);
+    installFetch({ media: [], comments: {}, sendResult: () => ({ status: 500, body: { error: { message: "oops", code: 2 } } }) });
+    r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(db.tables.instagram_comment_dm_events[0].status, "claimed");
+    assert.equal(db.tables.instagram_comment_dm_events[0].attempts, 1);
+    // Transient 500 at attempts 4 → reaches the cap (5) → failed.
+    db = new FakeDb();
+    seed(db, 4);
+    installFetch({ media: [], comments: {}, sendResult: () => ({ status: 500, body: { error: { message: "oops", code: 2 } } }) });
+    r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(db.tables.instagram_comment_dm_events[0].status, "failed");
+    assert.equal(db.tables.instagram_comment_dm_events[0].attempts, 5);
+    assert.match(String(db.tables.instagram_comment_dm_events[0].last_error), /Gave up after 5 transient failures/);
+  });
+
+  await test("deadline: no new send starts once the budget is spent", async () => {
+    const db = new FakeDb();
+    let clock = NOW;
+    const calls = installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: { "m-1": [rawComment("c-1", "price"), rawComment("c-2", "price"), rawComment("c-3", "price")] },
+      sendResult: () => {
+        clock += 30_000; // each DM "takes" 30s of wall clock
+        return null;
+      },
+    });
+    const r = await runCommentDmForConnection(deps(db, () => clock), conn, [rule()], {
+      dryRun: false,
+      deadlineAt: NOW + 25_000,
+    });
+    assert.equal(r.outcome, "deadline");
+    assert.equal(calls.messages.length, 1);
+    assert.equal(db.tables.instagram_comment_dm_events.length, 1, "nothing claimed after the deadline");
+  });
+
+  await test("deadline is checked between comment pages", async () => {
+    const { listMediaComments } = await import("../src/lib/server/instagram/commentDm");
+    let pages = 0;
+    globalThis.fetch = (async () => {
+      pages++;
+      return Response.json({
+        data: [rawComment(`p${pages}`, "hi")],
+        paging: { cursors: { after: `cur${pages}` }, next: "https://graph.instagram.com/next" },
+      });
+    }) as typeof fetch;
+    let past = false;
+    const out = await listMediaComments("m-1", "tok", {
+      stopBeforeMs: 0,
+      maxPages: 4,
+      isPastDeadline: () => {
+        const was = past;
+        past = true; // deadline passes after the first page
+        return was;
+      },
+    });
+    // Page 1 fetched; before page 2 the check still said "not past" (first call) → page 2;
+    // before page 3 it is past → stop.
+    assert.equal(pages, 2);
+    assert.equal(out.length, 2);
+    pages = 0;
+    const all = await listMediaComments("m-1", "tok", { stopBeforeMs: 0, maxPages: 4, isPastDeadline: () => false });
+    assert.equal(pages, 4);
+    assert.equal(all.length, 4);
   });
 
   globalThis.fetch = originalFetch;

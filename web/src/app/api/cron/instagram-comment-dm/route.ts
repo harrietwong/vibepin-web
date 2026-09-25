@@ -13,8 +13,10 @@
  *
  * `?dryRun=1` → no claims, no sends, no writes; returns the would-send list.
  *
- * Safe at any frequency and from more than one caller: the unique claim is the
- * idempotency guarantee, and Meta itself accepts only one private reply per comment.
+ * Safe at any frequency and from more than one caller: the unique claim is OUR
+ * idempotency guarantee. (Meta's docs say each comment can only get one private
+ * reply; the actual error code for a duplicate send is still unverified, to be
+ * checked in Phase 0 — do not rely on Meta to reject a second send.)
  *
  * NOTE: route files may export ONLY Next.js handlers/config — a helper export here
  * breaks the production build.
@@ -28,8 +30,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Stop starting new work after this much of the 60s budget. */
-const RUN_BUDGET_MS = 45_000;
+/**
+ * Stop STARTING new work (media scan, comment page, claim, send) after 25s of the
+ * 60s maxDuration. Every Graph call has a 15s timeout, so the worst in-flight tail
+ * — a DM started at 24.9s (≤15s) plus its public reply (≤15s) plus row writes —
+ * still finishes before Vercel kills the function. Being killed between a sent DM
+ * and its `sent` write would leave the row `claimed` and retry it 15 min later.
+ */
+const RUN_BUDGET_MS = 25_000;
 
 function isMissingTable(message: string): boolean {
   return /instagram_comment_dm_(rules|events)/.test(message)

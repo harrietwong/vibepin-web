@@ -4,9 +4,13 @@
  * One run over one connection:
  *   1. scope gate  — the stored grant must include INSTAGRAM_COMMENT_DM_REQUIRED_SCOPES;
  *   2. token       — via the injected getter (production: getInstagramAccessToken);
- *   3. reclaim     — `claimed` rows untouched for CLAIM_STALE_MS are retried (Meta
- *                    accepts only one private reply per comment, so a retry after
- *                    an unknown outcome cannot double-send);
+ *   3. reclaim     — `claimed` rows untouched for CLAIM_STALE_MS are retried. A row
+ *                    only stays `claimed` after a send whose outcome was not
+ *                    recorded (crash / kill / failed write). Meta's docs say each
+ *                    comment can only get one private reply; the actual error code
+ *                    for a duplicate send is still unverified (Phase 0). The 25s
+ *                    start-new-work budget and checked row writes keep that window
+ *                    small;
  *   4. scan        — rule media + (if any all-posts rule) the recent media, newest
  *                    comments first, stopping at the oldest instant any rule can use;
  *   5. claim       — INSERT … ON CONFLICT (connection_id, comment_id) DO NOTHING
@@ -89,7 +93,9 @@ export type ConnectionOutcome =
   | "rate_limited"
   | "error"
   | "deadline"
-  | "send_cap";
+  | "send_cap"
+  /** Several consecutive terminal 4xx on one connection — likely an account-level problem. */
+  | "circuit_open";
 
 export type ConnectionRunResult = {
   connectionId: string;
@@ -106,6 +112,8 @@ export type ConnectionRunResult = {
   reclaimed: number;
   lostClaims: number;
   mediaErrors: Array<{ mediaId: string; message: string }>;
+  /** Event-row writes that failed (the run stops that connection on the first one). */
+  dbErrors: number;
 };
 
 export type RunOptions = {
@@ -179,7 +187,8 @@ export async function claimCommentEvent(
   const { data, error } = await db
     .from(EVENTS_TABLE)
     .upsert(
-      { ...row, status: "claimed", attempts: 1, created_at: nowIso, updated_at: nowIso },
+      // attempts counts TRANSIENT failures only (5xx / network); see deliver().
+      { ...row, status: "claimed", attempts: 0, created_at: nowIso, updated_at: nowIso },
       { onConflict: "connection_id,comment_id", ignoreDuplicates: true },
     )
     .select("id");
@@ -204,21 +213,45 @@ function emptyResult(conn: CommentDmConnection): ConnectionRunResult {
     reclaimed: 0,
     lostClaims: 0,
     mediaErrors: [],
+    dbErrors: 0,
   };
 }
 
-type DeliverVerdict = "sent" | "failed" | "retry" | "stop_token" | "stop_rate";
+type DeliverVerdict = "sent" | "failed" | "retry" | "stop_token" | "stop_rate" | "stop_db";
+
+type DeliverOutcome = {
+  verdict: DeliverVerdict;
+  message: string | null;
+  /** True only for a Meta terminal 4xx on the DM itself (feeds the circuit breaker). */
+  terminal?: boolean;
+};
+
+/** Consecutive terminal 4xx on one connection that trip the circuit breaker. */
+export const CIRCUIT_BREAKER_THRESHOLD = 3;
 
 /**
  * Send the private reply for an already-claimed event row and record the result.
  * The caller owns the claim; this never claims.
+ *
+ * `attempts` counts TRANSIENT failures only (5xx / network / is_transient): stop-class
+ * errors (token 190, rate limit) never burn the cap, because they say nothing about
+ * this comment. Every row write is checked; a failed write returns `stop_db` so the
+ * run stops the connection instead of reporting success it could not record.
  */
 async function deliver(
   db: SupabaseClient,
   ctx: { igUserId: string; token: string; nowIso: () => string },
   event: { id: string; attempts: number; commentId: string },
   rule: CommentDmRule,
-): Promise<{ verdict: DeliverVerdict; message: string | null }> {
+): Promise<DeliverOutcome> {
+  const write = async (patch: Record<string, unknown>, what: string): Promise<string | null> => {
+    const { error } = await db.from(EVENTS_TABLE).update(patch).eq("id", event.id);
+    if (!error) return null;
+    // Never log the token or the row payload — only which write failed and why.
+    console.error(`[instagram-comment-dm] event ${event.id}: recording "${what}" failed: ${error.message}`);
+    return trimErrorMessage(`Recording "${what}" failed: ${error.message}`);
+  };
+
   try {
     await sendPrivateReply(ctx.igUserId, event.commentId, rule.dmText, ctx.token);
   } catch (raw) {
@@ -226,35 +259,35 @@ async function deliver(
     const kind = kindOf(err);
     const message = trimErrorMessage(err.message);
     if (kind === "terminal") {
-      await db
-        .from(EVENTS_TABLE)
-        .update({ status: "failed", last_error: message, updated_at: ctx.nowIso() })
-        .eq("id", event.id);
-      return { verdict: "failed", message };
+      const dbErr = await write({ status: "failed", last_error: message, updated_at: ctx.nowIso() }, "failed");
+      if (dbErr) return { verdict: "stop_db", message: dbErr };
+      return { verdict: "failed", message, terminal: true };
     }
-    if (event.attempts >= MAX_SEND_ATTEMPTS) {
-      const final = trimErrorMessage(`Gave up after ${event.attempts} attempts: ${message}`);
-      await db
-        .from(EVENTS_TABLE)
-        .update({ status: "failed", last_error: final, updated_at: ctx.nowIso() })
-        .eq("id", event.id);
+    if (kind === "token_invalid" || kind === "rate_limited") {
+      // Stays `claimed`, attempts untouched; updated_at = now → reclaimed after CLAIM_STALE_MS.
+      const dbErr = await write({ last_error: message, updated_at: ctx.nowIso() }, "retry later");
+      if (dbErr) return { verdict: "stop_db", message: dbErr };
+      return { verdict: kind === "token_invalid" ? "stop_token" : "stop_rate", message };
+    }
+    const attempts = event.attempts + 1;
+    if (attempts >= MAX_SEND_ATTEMPTS) {
+      const final = trimErrorMessage(`Gave up after ${attempts} transient failures: ${message}`);
+      const dbErr = await write({ status: "failed", attempts, last_error: final, updated_at: ctx.nowIso() }, "failed");
+      if (dbErr) return { verdict: "stop_db", message: dbErr };
       return { verdict: "failed", message: final };
     }
-    // Stay `claimed`; updated_at = now → reclaimed after CLAIM_STALE_MS.
-    await db
-      .from(EVENTS_TABLE)
-      .update({ last_error: message, updated_at: ctx.nowIso() })
-      .eq("id", event.id);
-    if (kind === "token_invalid") return { verdict: "stop_token", message };
-    if (kind === "rate_limited") return { verdict: "stop_rate", message };
+    const dbErr = await write({ attempts, last_error: message, updated_at: ctx.nowIso() }, "retry later");
+    if (dbErr) return { verdict: "stop_db", message: dbErr };
     return { verdict: "retry", message };
   }
 
   const sentAt = ctx.nowIso();
-  await db
-    .from(EVENTS_TABLE)
-    .update({ status: "sent", sent_at: sentAt, last_error: null, updated_at: sentAt })
-    .eq("id", event.id);
+  const sentErr = await write({ status: "sent", sent_at: sentAt, last_error: null, updated_at: sentAt }, "sent");
+  if (sentErr) {
+    // The DM went out but the row still says `claimed`. Stop: never report this as
+    // a clean success, and never keep sending on a database we can't record to.
+    return { verdict: "stop_db", message: trimErrorMessage(`DM was sent but not recorded. ${sentErr}`) };
+  }
 
   const publicText = rule.publicReplyText?.trim();
   if (rule.publicReplyEnabled && publicText) {
@@ -265,10 +298,8 @@ async function deliver(
       publicStatus = trimErrorMessage(`failed: ${toMetaError(raw).message}`, 300);
     }
     // Recorded separately; a public-reply failure never touches the DM status.
-    await db
-      .from(EVENTS_TABLE)
-      .update({ public_reply_status: publicStatus, updated_at: ctx.nowIso() })
-      .eq("id", event.id);
+    const dbErr = await write({ public_reply_status: publicStatus, updated_at: ctx.nowIso() }, "public reply");
+    if (dbErr) return { verdict: "stop_db", message: dbErr };
   }
   return { verdict: "sent", message: null };
 }
@@ -307,8 +338,27 @@ export async function runCommentDmForConnection(
   const token = tokenInfo.accessToken;
   const ctx = { igUserId, token, nowIso };
   let attemptsThisRun = 0;
+  let consecutiveTerminal = 0;
 
-  const stopFor = (verdict: DeliverVerdict, message: string | null): boolean => {
+  const stopFor = (outcome: DeliverOutcome): boolean => {
+    const { verdict, message } = outcome;
+    if (verdict === "sent") consecutiveTerminal = 0;
+    if (outcome.terminal) {
+      consecutiveTerminal++;
+      if (consecutiveTerminal >= CIRCUIT_BREAKER_THRESHOLD) {
+        result.outcome = "circuit_open";
+        result.message = trimErrorMessage(
+          "Several consecutive sends failed; this may be a permissions/settings problem " +
+            `(for example 'Allow access to messages' is off). Meta: ${message ?? "unknown error"}`,
+        );
+        return true;
+      }
+    }
+    if (verdict === "stop_db") {
+      result.outcome = "error";
+      result.message = message;
+      return true;
+    }
     if (verdict === "stop_token") {
       result.outcome = "token_invalid";
       result.message = message;
@@ -324,6 +374,7 @@ export async function runCommentDmForConnection(
   const tally = (verdict: DeliverVerdict) => {
     if (verdict === "sent") result.sent++;
     else if (verdict === "failed") result.failed++;
+    else if (verdict === "stop_db") result.dbErrors++;
     else result.retryLater++;
   };
 
@@ -352,11 +403,11 @@ export async function runCommentDmForConnection(
         result.outcome = "send_cap";
         return result;
       }
-      const nextAttempts = (row.attempts ?? 0) + 1;
       // Conditional takeover: only the run whose UPDATE still sees a stale claim wins.
+      // attempts is NOT bumped here — it counts transient send failures only.
       const { data: taken, error: takeErr } = await db
         .from(EVENTS_TABLE)
-        .update({ attempts: nextAttempts, updated_at: nowIso() })
+        .update({ updated_at: nowIso() })
         .eq("id", row.id)
         .eq("status", "claimed")
         .lt("updated_at", cutoff)
@@ -366,26 +417,40 @@ export async function runCommentDmForConnection(
 
       const rule = row.rule_id ? rulesById.get(row.rule_id) : undefined;
       if (!rule) {
-        await db
+        const { error: skipErr } = await db
           .from(EVENTS_TABLE)
           .update({ status: "skipped", last_error: "Rule was removed or disabled before the reply was sent", updated_at: nowIso() })
           .eq("id", row.id);
+        if (skipErr) {
+          console.error(`[instagram-comment-dm] event ${row.id}: recording "skipped" failed: ${skipErr.message}`);
+          result.dbErrors++;
+          result.outcome = "error";
+          result.message = trimErrorMessage(`Recording "skipped" failed: ${skipErr.message}`);
+          return result;
+        }
         result.skipped++;
         continue;
       }
       const commentMs = commentTimeMs(row.comment_timestamp);
       if (commentMs === null || !isWithinReplyWindow(commentMs, now())) {
-        await db
+        const { error: expErr } = await db
           .from(EVENTS_TABLE)
           .update({ status: "failed", last_error: "Private-reply window (7 days) has passed", updated_at: nowIso() })
           .eq("id", row.id);
+        if (expErr) {
+          console.error(`[instagram-comment-dm] event ${row.id}: recording "expired" failed: ${expErr.message}`);
+          result.dbErrors++;
+          result.outcome = "error";
+          result.message = trimErrorMessage(`Recording "expired" failed: ${expErr.message}`);
+          return result;
+        }
         result.failed++;
         continue;
       }
       attemptsThisRun++;
-      const { verdict, message } = await deliver(db, ctx, { id: row.id, attempts: nextAttempts, commentId: row.comment_id }, rule);
-      tally(verdict);
-      if (stopFor(verdict, message)) return result;
+      const delivered = await deliver(db, ctx, { id: row.id, attempts: row.attempts ?? 0, commentId: row.comment_id }, rule);
+      tally(delivered.verdict);
+      if (stopFor(delivered)) return result;
     }
   }
 
@@ -440,7 +505,10 @@ export async function runCommentDmForConnection(
     }
     let comments: InstagramComment[];
     try {
-      comments = await listMediaComments(mediaId, token, { stopBeforeMs });
+      comments = await listMediaComments(mediaId, token, {
+        stopBeforeMs,
+        isPastDeadline: () => now() > opts.deadlineAt,
+      });
     } catch (raw) {
       const err = toMetaError(raw);
       const kind = kindOf(err);
@@ -512,9 +580,9 @@ export async function runCommentDmForConnection(
 
       // ── 6. Send ─────────────────────────────────────────────────────────
       attemptsThisRun++;
-      const sent = await deliver(db, ctx, { id: eventId, attempts: 1, commentId: comment.id }, verdict.rule);
-      tally(sent.verdict);
-      if (stopFor(sent.verdict, sent.message)) return result;
+      const delivered = await deliver(db, ctx, { id: eventId, attempts: 0, commentId: comment.id }, verdict.rule);
+      tally(delivered.verdict);
+      if (stopFor(delivered)) return result;
     }
   }
   return result;
