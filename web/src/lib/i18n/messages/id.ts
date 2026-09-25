@@ -2824,6 +2824,17 @@ const id: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Jadwalkan {n} yang dipilih",
   "publishConfirm.list.scheduleConfirm": "Jadwalkan {n}",
   "publishConfirm.list.publishConfirm": "Terbitkan {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Video yang dikirim ke Pinterest dan Instagram harus dijadwalkan sebagai dua postingan terpisah. Jadwalkan lagi untuk memisahkannya.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Tambahkan keterangan Instagram sebelum menjadwalkan Reel ini.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Keterangan Instagram tidak boleh berisi tautan. Hapus tautannya dan jadwalkan lagi.",
+  "studioBoard.card.instagramCaption.label": "Keterangan Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram akan memposting video ini secara terpisah, menggunakan teks ini alih-alih deskripsi di atas. Tautan tidak diperbolehkan — coba gunakan ajakan bertindak dengan kata kunci komentar sebagai gantinya.",
+  "studioBoard.card.instagramCaption.placeholder": "Komentar SHOP dan aku DM link-nya",
+  "studioBoard.card.instagramCaption.errorRequired": "Tambahkan keterangan Instagram sebelum menjadwalkan.",
+  "studioBoard.card.instagramCaption.errorLink": "Keterangan Instagram tidak boleh berisi tautan. Hapus lalu coba lagi.",
+  "studioBoard.card.instagramCaption.splitNotice": "Dipisah menjadi 2 postingan: satu untuk Pinterest, satu untuk Instagram.",
+
 };
 
 export default id;

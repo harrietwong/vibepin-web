@@ -2802,6 +2802,17 @@ const ko: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "선택한 {n}개 예약",
   "publishConfirm.list.scheduleConfirm": "{n}개 예약",
   "publishConfirm.list.publishConfirm": "{n}개 게시",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Pinterest와 Instagram에 모두 게시되는 동영상은 두 개의 별도 게시물로 예약해야 합니다. 다시 예약하여 분할하세요.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "이 릴스를 예약하기 전에 Instagram 캡션을 추가하세요.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram 캡션에는 링크를 포함할 수 없습니다. 링크를 제거하고 다시 예약하세요.",
+  "studioBoard.card.instagramCaption.label": "Instagram 캡션",
+  "studioBoard.card.instagramCaption.help": "Instagram은 이 동영상을 별도로 게시하며, 위의 설명 대신 이 캡션을 사용합니다. 링크는 허용되지 않습니다. 댓글 키워드 유도 문구를 사용해 보세요.",
+  "studioBoard.card.instagramCaption.placeholder": "SHOP이라고 댓글 달면 DM으로 링크 보내드려요",
+  "studioBoard.card.instagramCaption.errorRequired": "예약하기 전에 Instagram 캡션을 추가하세요.",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram 캡션에는 링크를 포함할 수 없습니다. 제거 후 다시 시도하세요.",
+  "studioBoard.card.instagramCaption.splitNotice": "2개의 게시물로 분할되었습니다: Pinterest용 1개, Instagram용 1개.",
+
 };
 
 export default ko;

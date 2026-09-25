@@ -2883,6 +2883,17 @@ const tr: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "{n} seçiliyi planla",
   "publishConfirm.list.scheduleConfirm": "{n} tanesini planla",
   "publishConfirm.list.publishConfirm": "{n} tanesini yayınla",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Hem Pinterest hem de Instagram'a gidecek bir video, iki ayrı gönderi olarak planlanmalıdır. Bölmek için tekrar planlayın.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Bu Reels'i planlamadan önce bir Instagram açıklaması ekleyin.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram açıklamaları bağlantı içeremez. Bağlantıyı kaldırıp tekrar planlayın.",
+  "studioBoard.card.instagramCaption.label": "Instagram açıklaması",
+  "studioBoard.card.instagramCaption.help": "Instagram bu videoyu ayrı olarak paylaşacak ve yukarıdaki açıklama yerine bu metni kullanacak. Bağlantılara izin verilmez — bunun yerine yorum anahtar kelimesiyle bir harekete geçirici mesaj deneyin.",
+  "studioBoard.card.instagramCaption.placeholder": "Yorumlara SHOP yaz, sana linki DM'den göndereyim",
+  "studioBoard.card.instagramCaption.errorRequired": "Planlamadan önce bir Instagram açıklaması ekleyin.",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram açıklamaları bağlantı içeremez. Kaldırıp tekrar deneyin.",
+  "studioBoard.card.instagramCaption.splitNotice": "2 gönderiye bölündü: biri Pinterest, biri Instagram için.",
+
 };
 
 export default tr;

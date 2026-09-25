@@ -2826,6 +2826,17 @@ const pt: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Agendar {n} selecionados",
   "publishConfirm.list.scheduleConfirm": "Agendar {n}",
   "publishConfirm.list.publishConfirm": "Publicar {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Um vídeo destinado ao Pinterest e ao Instagram precisa ser agendado como duas publicações separadas. Agende-o novamente para dividi-lo.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Adicione uma legenda do Instagram antes de agendar este Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Legendas do Instagram não podem conter links. Remova o link e agende novamente.",
+  "studioBoard.card.instagramCaption.label": "Legenda do Instagram",
+  "studioBoard.card.instagramCaption.help": "O Instagram publicará este vídeo separadamente, usando este texto em vez da descrição acima. Links não são permitidos — tente uma chamada para ação por palavra-chave nos comentários.",
+  "studioBoard.card.instagramCaption.placeholder": "Comente SHOP que eu te envio o link por DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Adicione uma legenda do Instagram antes de agendar.",
+  "studioBoard.card.instagramCaption.errorLink": "Legendas do Instagram não podem conter links. Remova-o e tente novamente.",
+  "studioBoard.card.instagramCaption.splitNotice": "Dividido em 2 publicações: uma para o Pinterest, outra para o Instagram.",
+
 };
 
 export default pt;

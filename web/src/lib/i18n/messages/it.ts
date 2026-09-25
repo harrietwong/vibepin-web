@@ -3171,6 +3171,17 @@ const it: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Programma {n} selezionati",
   "publishConfirm.list.scheduleConfirm": "Programma {n}",
   "publishConfirm.list.publishConfirm": "Pubblica {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Un video destinato sia a Pinterest che a Instagram deve essere pianificato come due post separati. Pianificalo di nuovo per dividerlo.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Aggiungi una didascalia Instagram prima di pianificare questo Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Le didascalie di Instagram non possono contenere link. Rimuovi il link e pianifica di nuovo.",
+  "studioBoard.card.instagramCaption.label": "Didascalia Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram pubblicherà questo video separatamente, usando questo testo al posto della descrizione qui sopra. I link non sono consentiti: prova invece una call to action con parola chiave nei commenti.",
+  "studioBoard.card.instagramCaption.placeholder": "Commenta SHOP e ti mando il link in DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Aggiungi una didascalia Instagram prima di pianificare.",
+  "studioBoard.card.instagramCaption.errorLink": "Le didascalie di Instagram non possono contenere link. Rimuovilo e riprova.",
+  "studioBoard.card.instagramCaption.splitNotice": "Diviso in 2 post: uno per Pinterest, uno per Instagram.",
+
 };
 
 export default it;

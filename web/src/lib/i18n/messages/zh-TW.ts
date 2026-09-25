@@ -3244,6 +3244,16 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleConfirm": "排程 {n} 個",
   "publishConfirm.list.publishConfirm": "發布 {n} 個",
   ...publicPricingZhTW,
+  // ── Mixed Pinterest+Instagram single-video split (T3, 0924 design doc) ──
+  // syncIssue.mixedVideoRequiresSplit/instagramCaptionRequired/instagramCaptionContainsLink
+  // already exist earlier in this file (T2) — not duplicated here.
+  "studioBoard.card.instagramCaption.label": "Instagram 文案",
+  "studioBoard.card.instagramCaption.help": "Instagram 會把這則影片單獨發佈一則，使用這段文案取代上方的說明。不能放連結——可以試試留言關鍵字引導，例如「留言 SHOP，我私訊你連結」。",
+  "studioBoard.card.instagramCaption.placeholder": "留言 SHOP，我私訊你連結",
+  "studioBoard.card.instagramCaption.errorRequired": "排程前請先填寫 Instagram 文案。",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram 文案不能包含連結，請刪除後重試。",
+  "studioBoard.card.instagramCaption.splitNotice": "已拆分為 2 則：一則發 Pinterest，一則發 Instagram。",
+
 };
 
 export default zhTW;

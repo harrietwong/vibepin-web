@@ -3241,6 +3241,16 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleConfirm": "排程 {n} 个",
   "publishConfirm.list.publishConfirm": "发布 {n} 个",
   ...publicPricingZhCN,
+  // ── Mixed Pinterest+Instagram single-video split (T3, 0924 design doc) ──
+  // syncIssue.mixedVideoRequiresSplit/instagramCaptionRequired/instagramCaptionContainsLink
+  // already exist earlier in this file (T2) — not duplicated here.
+  "studioBoard.card.instagramCaption.label": "Instagram 文案",
+  "studioBoard.card.instagramCaption.help": "Instagram 会把这条视频单独发一条，使用这段文案代替上面的描述。不能放链接——可以试试评论关键词引导，比如「评论 SHOP，我私信给你链接」。",
+  "studioBoard.card.instagramCaption.placeholder": "评论 SHOP，我私信给你链接",
+  "studioBoard.card.instagramCaption.errorRequired": "排期前请先填写 Instagram 文案。",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram 文案不能包含链接，请删除后重试。",
+  "studioBoard.card.instagramCaption.splitNotice": "已拆分为 2 条：一条发 Pinterest，一条发 Instagram。",
+
 };
 
 export default zhCN;

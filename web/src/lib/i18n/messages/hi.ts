@@ -2802,6 +2802,17 @@ const hi: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "चुने गए {n} शेड्यूल करें",
   "publishConfirm.list.scheduleConfirm": "{n} शेड्यूल करें",
   "publishConfirm.list.publishConfirm": "{n} पब्लिश करें",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Pinterest और Instagram दोनों पर जाने वाले वीडियो को दो अलग-अलग पोस्ट के रूप में शेड्यूल करना होगा। इसे विभाजित करने के लिए फिर से शेड्यूल करें।",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "इस Reel को शेड्यूल करने से पहले एक Instagram कैप्शन जोड़ें।",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram कैप्शन में लिंक नहीं हो सकते। लिंक हटाएं और फिर से शेड्यूल करें।",
+  "studioBoard.card.instagramCaption.label": "Instagram कैप्शन",
+  "studioBoard.card.instagramCaption.help": "Instagram इस वीडियो को अलग से पोस्ट करेगा, ऊपर दिए गए विवरण के बजाय इस टेक्स्ट का उपयोग करते हुए। लिंक की अनुमति नहीं है — इसके बजाय कमेंट-कीवर्ड कॉल टू एक्शन आज़माएं।",
+  "studioBoard.card.instagramCaption.placeholder": "SHOP कमेंट करें, मैं आपको DM पर लिंक भेज दूँगा",
+  "studioBoard.card.instagramCaption.errorRequired": "शेड्यूल करने से पहले एक Instagram कैप्शन जोड़ें।",
+  "studioBoard.card.instagramCaption.errorLink": "Instagram कैप्शन में लिंक नहीं हो सकते। इसे हटाकर फिर से प्रयास करें।",
+  "studioBoard.card.instagramCaption.splitNotice": "2 पोस्ट में विभाजित: एक Pinterest के लिए, एक Instagram के लिए।",
+
 };
 
 export default hi;

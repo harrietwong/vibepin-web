@@ -2808,6 +2808,17 @@ const ja: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "選択した{n}件を予約投稿",
   "publishConfirm.list.scheduleConfirm": "{n}件を予約投稿",
   "publishConfirm.list.publishConfirm": "{n}件を公開",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "PinterestとInstagramの両方に投稿する動画は、2つの別々の投稿として予約する必要があります。もう一度予約して分割してください。",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "このReelを予約する前にInstagramのキャプションを追加してください。",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagramのキャプションにはリンクを含めることができません。リンクを削除して再度予約してください。",
+  "studioBoard.card.instagramCaption.label": "Instagramキャプション",
+  "studioBoard.card.instagramCaption.help": "Instagramではこの動画を別に投稿し、上の説明文の代わりにこのキャプションを使用します。リンクは使用できません。代わりにコメントキーワードでの誘導を試してください。",
+  "studioBoard.card.instagramCaption.placeholder": "「SHOP」とコメントしたらDMでリンクをお送りします",
+  "studioBoard.card.instagramCaption.errorRequired": "予約する前にInstagramのキャプションを追加してください。",
+  "studioBoard.card.instagramCaption.errorLink": "Instagramのキャプションにはリンクを含められません。削除してもう一度お試しください。",
+  "studioBoard.card.instagramCaption.splitNotice": "2つの投稿に分割されました：Pinterest用とInstagram用。",
+
 };
 
 export default ja;

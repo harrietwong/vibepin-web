@@ -2856,6 +2856,17 @@ const ru: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Запланировать {n} выбранных",
   "publishConfirm.list.scheduleConfirm": "Запланировать {n}",
   "publishConfirm.list.publishConfirm": "Опубликовать {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Видео, публикуемое одновременно в Pinterest и Instagram, нужно запланировать как две отдельные публикации. Запланируйте его заново, чтобы разделить.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Добавьте подпись для Instagram перед планированием этого Reels.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Подписи Instagram не могут содержать ссылки. Удалите ссылку и запланируйте заново.",
+  "studioBoard.card.instagramCaption.label": "Подпись для Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram опубликует это видео отдельно, используя этот текст вместо описания выше. Ссылки не допускаются — попробуйте призыв к действию через ключевое слово в комментариях.",
+  "studioBoard.card.instagramCaption.placeholder": "Напишите SHOP в комментарии, и я пришлю ссылку в личные сообщения",
+  "studioBoard.card.instagramCaption.errorRequired": "Добавьте подпись для Instagram перед планированием.",
+  "studioBoard.card.instagramCaption.errorLink": "Подписи Instagram не могут содержать ссылки. Удалите её и попробуйте снова.",
+  "studioBoard.card.instagramCaption.splitNotice": "Разделено на 2 публикации: одна для Pinterest, одна для Instagram.",
+
 };
 
 export default ru;

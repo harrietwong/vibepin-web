@@ -2878,6 +2878,17 @@ const vi: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Lên lịch {n} mục đã chọn",
   "publishConfirm.list.scheduleConfirm": "Lên lịch {n}",
   "publishConfirm.list.publishConfirm": "Đăng {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Video đăng cả lên Pinterest và Instagram phải được lên lịch thành hai bài đăng riêng biệt. Hãy lên lịch lại để tách video.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Thêm chú thích Instagram trước khi lên lịch cho Reel này.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Chú thích Instagram không được chứa liên kết. Hãy xóa liên kết rồi lên lịch lại.",
+  "studioBoard.card.instagramCaption.label": "Chú thích Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram sẽ đăng video này riêng, sử dụng đoạn chú thích này thay cho mô tả ở trên. Không được chứa liên kết — hãy thử lời kêu gọi hành động bằng từ khóa bình luận thay thế.",
+  "studioBoard.card.instagramCaption.placeholder": "Bình luận SHOP để mình nhắn link riêng cho bạn",
+  "studioBoard.card.instagramCaption.errorRequired": "Thêm chú thích Instagram trước khi lên lịch.",
+  "studioBoard.card.instagramCaption.errorLink": "Chú thích Instagram không được chứa liên kết. Hãy xóa rồi thử lại.",
+  "studioBoard.card.instagramCaption.splitNotice": "Đã tách thành 2 bài đăng: một cho Pinterest, một cho Instagram.",
+
 };
 
 export default vi;

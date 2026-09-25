@@ -2813,6 +2813,17 @@ const fr: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "Planifier {n} sélectionné(s)",
   "publishConfirm.list.scheduleConfirm": "Planifier {n}",
   "publishConfirm.list.publishConfirm": "Publier {n}",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "Une vidéo destinée à la fois à Pinterest et à Instagram doit être programmée comme deux publications distinctes. Reprogrammez-la pour la diviser.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Ajoutez une légende Instagram avant de programmer ce Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Les légendes Instagram ne peuvent pas contenir de liens. Supprimez le lien et reprogrammez.",
+  "studioBoard.card.instagramCaption.label": "Légende Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram publiera cette vidéo séparément, en utilisant ce texte à la place de la description ci-dessus. Les liens ne sont pas autorisés : essayez plutôt un appel à l'action par mot-clé en commentaire.",
+  "studioBoard.card.instagramCaption.placeholder": "Commentez SHOP et je vous envoie le lien en DM",
+  "studioBoard.card.instagramCaption.errorRequired": "Ajoutez une légende Instagram avant de programmer.",
+  "studioBoard.card.instagramCaption.errorLink": "Les légendes Instagram ne peuvent pas contenir de liens. Supprimez-le et réessayez.",
+  "studioBoard.card.instagramCaption.splitNotice": "Divisé en 2 publications : une pour Pinterest, une pour Instagram.",
+
 };
 
 export default fr;

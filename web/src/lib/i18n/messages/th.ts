@@ -2805,6 +2805,17 @@ const th: Partial<Record<MessageKey, string>> = {
   "publishConfirm.list.scheduleTitle": "กำหนดเวลา {n} รายการที่เลือก",
   "publishConfirm.list.scheduleConfirm": "กำหนดเวลา {n} รายการ",
   "publishConfirm.list.publishConfirm": "เผยแพร่ {n} รายการ",
+  // ── Mixed Pinterest+Instagram single-video split (T2/T3, 0924 design doc) ──
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "วิดีโอที่โพสต์ไปทั้ง Pinterest และ Instagram ต้องถูกตั้งเวลาเป็นสองโพสต์แยกกัน กรุณาตั้งเวลาใหม่เพื่อแยกวิดีโอนี้",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "เพิ่มแคปชัน Instagram ก่อนตั้งเวลา Reel นี้",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "แคปชัน Instagram ต้องไม่มีลิงก์ กรุณาลบลิงก์แล้วตั้งเวลาใหม่",
+  "studioBoard.card.instagramCaption.label": "แคปชัน Instagram",
+  "studioBoard.card.instagramCaption.help": "Instagram จะโพสต์วิดีโอนี้แยกต่างหาก โดยใช้ข้อความนี้แทนคำอธิบายด้านบน ห้ามใส่ลิงก์ — ลองใช้คำกระตุ้นให้คอมเมนต์คีย์เวิร์ดแทน",
+  "studioBoard.card.instagramCaption.placeholder": "คอมเมนต์ SHOP แล้วฉันจะส่งลิงก์ให้ทาง DM",
+  "studioBoard.card.instagramCaption.errorRequired": "เพิ่มแคปชัน Instagram ก่อนตั้งเวลา",
+  "studioBoard.card.instagramCaption.errorLink": "แคปชัน Instagram ต้องไม่มีลิงก์ กรุณาลบแล้วลองใหม่",
+  "studioBoard.card.instagramCaption.splitNotice": "แยกเป็น 2 โพสต์แล้ว: หนึ่งสำหรับ Pinterest และหนึ่งสำหรับ Instagram",
+
 };
 
 export default th;
