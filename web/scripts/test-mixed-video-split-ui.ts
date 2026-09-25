@@ -228,8 +228,9 @@ test("PinBoardCard imports the T3 gate functions and the IG-hidden flag", () => 
   assert.match(cardSource, /igFbHidden/);
 });
 
-test("doSchedule/doCustomSchedule block on instagramCaptionErrors before calling onSchedule/onCustomSchedule", () => {
-  assert.match(cardSource, /if \(showInstagramCaptionInput && instagramCaptionErrors\.length\) \{\s*\n\s*setInstagramCaptionTouched\(true\);\s*\n\s*return;/);
+test("doSchedule/doCustomSchedule BOTH block on instagramCaptionErrors before calling onSchedule/onCustomSchedule", () => {
+  const guardCount = (cardSource.match(/if \(showInstagramCaptionInput && instagramCaptionErrors\.length\) \{\s*\n\s*setInstagramCaptionTouched\(true\);\s*\n\s*return;/g) ?? []).length;
+  assert.equal(guardCount, 2, "exactly one guard in doSchedule AND one in doCustomSchedule — removing either must fail this");
 });
 
 test("onSchedule/onCustomSchedule receive the caption only when the box is shown", () => {
