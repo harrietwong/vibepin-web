@@ -40,6 +40,52 @@ function check(name: string, ok: boolean, detail = "") {
 }
 function section(t: string) { console.log(`\n=== ${t} ===`); }
 
+/**
+ * Return the source text of the `{ … }` block whose opening brace is at `open`
+ * (inclusive of both braces), or null if it never closes. Skips braces inside
+ * line/block comments, '…' / "…" strings and `…` templates (with ${ } nesting).
+ */
+function matchedBlock(src: string, open: number): string | null {
+  if (src[open] !== "{") return null;
+  // Each entry is a brace frame: "code" for a real {, "tpl" for a template ${.
+  const stack: Array<"code" | "tpl"> = [];
+  let i = open;
+  const skipTemplate = (): void => {
+    // i is just past an opening backtick (or a closing } of ${…}); scan to the end
+    // of the template text or into the next ${.
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "\\") { i += 2; continue; }
+      if (c === "`") { i++; return; }
+      if (c === "$" && src[i + 1] === "{") { stack.push("tpl"); i += 2; return; }
+      i++;
+    }
+  };
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === "/" && n === "/") { const e = src.indexOf("\n", i); i = e < 0 ? src.length : e + 1; continue; }
+    if (c === "/" && n === "*") { const e = src.indexOf("*/", i + 2); i = e < 0 ? src.length : e + 2; continue; }
+    if (c === "'" || c === '"') {
+      i++;
+      while (i < src.length && src[i] !== c) i += src[i] === "\\" ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (c === "`") { i++; skipTemplate(); continue; }
+    if (c === "{") { stack.push("code"); i++; continue; }
+    if (c === "}") {
+      const top = stack.pop();
+      i++;
+      if (top === "tpl") { skipTemplate(); continue; }
+      if (stack.length === 0) return src.slice(open, i);
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
 // ── the capability rule itself ───────────────────────────────────────────────
 section("scheduling capability is separate from publishing capability");
 
@@ -372,9 +418,22 @@ section("the PUT route wires the destination-exists gate correctly");
   check("route calls requiredScheduleDestinations", route.includes("requiredScheduleDestinations("));
   check("route calls the server-side availability lookup",
     route.includes("unavailableScheduleDestinations("));
+  // Locate the WHOLE `if (incomingScheduledAt) { … }` block by brace matching instead
+  // of a fixed-width window: the mixed-video split gate (0924) inserted ~1000 chars of
+  // code + comments at the top of this block, which silently broke a {0,240} window
+  // even though the call never left the block. Brace matching is immune to that.
+  const IF_HEAD = "if (incomingScheduledAt) {";
+  const ifStart = route.indexOf(IF_HEAD);
+  const putStart = route.indexOf("export async function PUT(");
+  const ifBlock = ifStart >= 0 ? matchedBlock(route, ifStart + IF_HEAD.length - 1) : null;
+  check("the PUT route has exactly one `if (incomingScheduledAt) {` block, inside PUT",
+    ifStart >= 0 && route.indexOf(IF_HEAD, ifStart + 1) < 0 && putStart >= 0 && putStart < ifStart && ifBlock !== null);
   check("it collects targets only when the draft is being scheduled",
-    /if \(incomingScheduledAt\) \{[\s\S]{0,240}requiredScheduleDestinations\(p\)/.test(route),
+    ifBlock !== null && ifBlock.includes("requiredScheduleDestinations(p)"),
     "an unscheduled draft must not be refused for naming a removed account");
+  check("…and never outside that block (the PUT body before the if does not collect targets)",
+    putStart >= 0 && ifStart > putStart && !route.slice(putStart, ifStart).includes("requiredScheduleDestinations("),
+    "collecting before the scheduled-only branch would refuse unscheduled drafts");
   check("refusal is a per-draft destination_unavailable result",
     route.includes('code: "destination_unavailable"') && route.includes('status: "rejected"'));
   check("the gate runs BEFORE the upsert",
