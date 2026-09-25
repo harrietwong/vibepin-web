@@ -28,6 +28,7 @@
  */
 
 import { resolveScheduledDestinations } from "../social/scheduledDestinations";
+import { isSingleVideoPayload } from "../publish/singleVideoPayload";
 import type { ContentMedia } from "../contentDraftModel";
 import type { PinDraft, DraftStatus, ScheduledDestination } from "../pinDraftStore";
 import { EMPTY_TOUCHED, type MetadataTouchedFlags } from "../pinMetadata";
@@ -81,14 +82,13 @@ export type SplitMixedVideoDraftOptions = {
 const MAX_TITLE_LENGTH = 100; // same cap AI Copy v2 enforces (validateCopy.ts:349)
 
 /**
- * Same test cron uses to gate video fan-out (route.ts:172,
- * `isSingleVideoPayload`) — reimplemented here rather than imported because
- * that helper is a private, non-exported function scoped to the cron route
- * file. Keep this in sync with that definition if it ever changes.
+ * The SAME test the cron uses to gate the video path — imported from the shared
+ * module (lib/publish/singleVideoPayload.ts), never re-implemented, so "the
+ * splitter thinks it must split" and "the cron thinks it is a single video" can
+ * never disagree.
  */
 function isSingleVideoDraft(draft: Pick<PinDraft, "media">): boolean {
-  const media = Array.isArray(draft.media) ? draft.media : [];
-  return media.length === 1 && media[0]?.kind === "video";
+  return isSingleVideoPayload(draft);
 }
 
 /** True for a draft this module has already produced as a child — either by
@@ -140,7 +140,12 @@ function computeStatus(draft: Pick<PinDraft, "title" | "description" | "schedule
 }
 
 function cloneMedia(media: ContentMedia[]): ContentMedia[] {
-  return media.map(item => ({ ...item }));
+  // Same filter the shared single-video test applies before counting: a stray
+  // non-object entry does not make the draft "not a single video", so it must not
+  // be copied onto the child either.
+  return media
+    .filter((item): item is ContentMedia => !!item && typeof item === "object")
+    .map(item => ({ ...item }));
 }
 
 const TOUCHED_FOR_OPERATOR_COPY: MetadataTouchedFlags = {

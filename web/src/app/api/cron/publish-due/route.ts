@@ -34,6 +34,7 @@ import {
   releaseScheduledPost,
   usageEnforceFor,
 } from "@/lib/server/usage/meterScheduledPost";
+import { isSingleVideoPayload, payloadMediaObjects } from "@/lib/publish/singleVideoPayload";
 import {
   aggregateDelivery,
   classifyDelivery,
@@ -163,16 +164,9 @@ type DueRow = {
   publish_claimed_at?: string | null;
 };
 
-function payloadMedia(payload: Record<string, unknown>): Array<Record<string, unknown>> {
-  return Array.isArray(payload.media)
-    ? payload.media.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-    : [];
-}
-
-function isSingleVideoPayload(payload: Record<string, unknown>): boolean {
-  const media = payloadMedia(payload);
-  return media.length === 1 && media[0].kind === "video";
-}
+// `payloadMedia` / `isSingleVideoPayload` live in lib/publish/singleVideoPayload.ts so
+// the mixed-video splitter and the /api/pin-drafts gate share this exact test.
+const payloadMedia = payloadMediaObjects;
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });

@@ -6,12 +6,14 @@
  * Run: npx tsx scripts/test-split-mixed-video-draft.ts   (from web/)
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   splitMixedVideoDraft,
   instagramCaptionIssues,
   parentIdOf,
   titleFromCaption,
 } from "../src/lib/studio/splitMixedVideoDraft";
+import { isSingleVideoPayload } from "../src/lib/publish/singleVideoPayload";
 import type { PinDraft, ScheduledDestination } from "../src/lib/pinDraftStore";
 import type { ContentMedia } from "../src/lib/contentDraftModel";
 
@@ -404,6 +406,41 @@ test("parentIdOf: rejects non-string input", () => {
   assert.equal(parentIdOf(undefined), null);
   assert.equal(parentIdOf(null), null);
   assert.equal(parentIdOf(123), null);
+});
+
+// ── T2 block 1: one shared single-video test for splitter + cron ────────────
+
+test("shared isSingleVideoPayload: cron semantics — non-object entries are dropped before counting", () => {
+  assert.equal(isSingleVideoPayload({ media: [{ kind: "video" }] }), true);
+  assert.equal(isSingleVideoPayload({ media: [{ kind: "video" }, null] }), true);
+  assert.equal(isSingleVideoPayload({ media: [{ kind: "video" }, "junk", 3] }), true);
+  assert.equal(isSingleVideoPayload({ media: [{ kind: "video" }, { kind: "video" }] }), false);
+  assert.equal(isSingleVideoPayload({ media: [{ kind: "image" }] }), false);
+  assert.equal(isSingleVideoPayload({ media: [] }), false);
+  assert.equal(isSingleVideoPayload({}), false);
+  assert.equal(isSingleVideoPayload(null), false);
+  assert.equal(isSingleVideoPayload({ media: "video" }), false);
+});
+
+test("splitter agrees with the cron on a media list carrying a stray non-object entry", () => {
+  const draft = baseDraft({ media: [videoMedia(), null as unknown as ContentMedia] });
+  // The cron treats this as a single video, so the splitter must too — otherwise the
+  // cron would refuse the IG side of a draft the splitter left mixed.
+  assert.equal(isSingleVideoPayload(draft), true);
+  const result = splitMixedVideoDraft(draft, { instagramCaption: CAPTION, now: NOW });
+  assert.equal(result.split, true);
+  if (!result.split) return;
+  assert.equal(result.child.media?.length, 1, "the stray entry is not copied onto the child");
+  assert.equal(result.child.media?.[0]?.kind, "video");
+});
+
+test("splitter imports the shared helper instead of keeping a private copy", () => {
+  const splitSrc = readFileSync("src/lib/studio/splitMixedVideoDraft.ts", "utf8");
+  const cronSrc = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
+  assert.match(splitSrc, /from "\.\.\/publish\/singleVideoPayload"/);
+  assert.match(cronSrc, /from "@\/lib\/publish\/singleVideoPayload"/);
+  assert.doesNotMatch(cronSrc, /function isSingleVideoPayload\(/, "cron must not re-grow a private copy");
+  assert.doesNotMatch(splitSrc, /media\.length === 1 && media\[0\]/, "splitter must not re-grow a private copy");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
