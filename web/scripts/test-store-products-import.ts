@@ -633,10 +633,14 @@ async function run() {
   });
 
   await test("picker saves store batches to My Products only (source check: store_batch, no selection/draft/schedule)", () => {
-    const picker = readFileSync(join(process.cwd(), "src/components/studio/InlineCreateAssetPicker.tsx"), "utf8");
+    // Normalise line endings first: a CRLF checkout must not turn the "end of
+    // function" search into "rest of file" (which then matches unrelated words).
+    const picker = readFileSync(join(process.cwd(), "src/components/studio/InlineCreateAssetPicker.tsx"), "utf8").replace(/\r\n/g, "\n");
     const start = picker.indexOf("function saveStoreBatchProducts");
     assert(start >= 0, "saveStoreBatchProducts missing");
-    const body = picker.slice(start, picker.indexOf("\n  }\n", start));
+    const end = picker.indexOf("\n  }\n", start);
+    assert(end > start, "saveStoreBatchProducts end not found");
+    const body = picker.slice(start, end);
     assert(body.includes('source:           "store_batch"'), "source must be store_batch");
     assert(body.includes("collectionHandle") && body.includes("store:"), "store / collection not recorded");
     assert(!/addToSelection|draft|schedule|generate/i.test(body.replace(/\/\*[\s\S]*?\*\//g, "")), "batch save must not select, draft, schedule or generate");
