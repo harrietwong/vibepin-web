@@ -462,7 +462,7 @@ async function main(): Promise<void> {
       media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
       comments: { "m-1": [rawComment("c-1", "price"), rawComment("c-2", "price")] },
       sendResult: (id) => id === "c-1"
-        ? { status: 400, body: { error: { message: "This message is sent outside of allowed window.", code: 10, error_subcode: 2534022 } } }
+        ? { status: 400, body: { error: { message: "This message is sent outside of allowed window.", code: 10 } } }
         : null,
     });
     const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
