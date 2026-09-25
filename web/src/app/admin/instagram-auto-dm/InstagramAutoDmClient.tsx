@@ -123,7 +123,7 @@ const btn = "rounded-md border px-2.5 py-1 text-[12px] font-bold disabled:opacit
 const btnPrimary = "rounded-md px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50";
 
 export default function InstagramAutoDmClient() {
-  const { t } = useAdminChrome();
+  const { t, tFmt } = useAdminChrome();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
@@ -136,6 +136,8 @@ export default function InstagramAutoDmClient() {
   const [mediaError, setMediaError] = useState<Record<string, string>>({});
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, PreviewResult | { error: string }>>({});
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryNotice, setRetryNotice] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -266,6 +268,30 @@ export default function InstagramAutoDmClient() {
       await load();
     } catch (e) {
       setActionError((e as Error).message);
+    }
+  };
+
+  const retryFailed = async (connectionId: string) => {
+    if (!window.confirm(t("igdm.retryFailed.confirm"))) return;
+    setRetrying(connectionId);
+    setActionError(null);
+    try {
+      const res = await fetch("/api/admin/instagram-auto-dm/retry-failed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setRetryNotice(prev => ({
+        ...prev,
+        [connectionId]: tFmt("igdm.retryFailed.done", { count: Number(json.reset ?? 0) }),
+      }));
+      await load();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setRetrying(null);
     }
   };
 
@@ -447,6 +473,14 @@ export default function InstagramAutoDmClient() {
                 </a>
                 <button
                   type="button"
+                  className={btn}
+                  disabled={retrying !== null}
+                  onClick={() => void retryFailed(c.id)}
+                >
+                  {retrying === c.id ? t("igdm.retryFailed.running") : t("igdm.retryFailed.button")}
+                </button>
+                <button
+                  type="button"
                   className={btnPrimary}
                   style={{ background: "#0F766E" }}
                   disabled={previewing !== null || connRules.length === 0}
@@ -456,6 +490,11 @@ export default function InstagramAutoDmClient() {
                 </button>
               </div>
             </div>
+            {retryNotice[c.id] && (
+              <p className="border-b px-4 py-2 text-[12px] text-emerald-800" style={{ borderColor: card.borderColor }}>
+                {retryNotice[c.id]}
+              </p>
+            )}
             {!c.hasCommentDmScopes && (
               <p className="border-b px-4 py-2 text-[12px] text-amber-800" style={{ borderColor: card.borderColor, background: "rgba(245,158,11,0.08)" }}>
                 {t("igdm.scopes.help")}

@@ -32,6 +32,8 @@ import { hasInstagramCommentDmScopes } from "./config";
 import {
   CLAIM_STALE_MS,
   MAX_SEND_ATTEMPTS,
+  PRIVATE_REPLY_SAFETY_MARGIN_MS,
+  PRIVATE_REPLY_WINDOW_MS,
   classifyMetaError,
   commentTimeMs,
   evaluateComment,
@@ -586,6 +588,38 @@ export async function runCommentDmForConnection(
     }
   }
   return result;
+}
+
+/** updated_at written by a manual retry: far in the past, so the next reclaim picks it up. */
+export const MANUAL_RETRY_UPDATED_AT = "2000-01-01T00:00:00.000Z";
+
+/**
+ * Admin "Retry failed items": put this connection's `failed` events whose comment is
+ * still inside the private-reply window (7 days minus the 1h margin) back to
+ * `claimed`, attempts 0, updated_at far in the past — the next cron run's reclaim
+ * step then retries them. The CALLER must have verified the connection belongs to
+ * the requesting user. Returns the number of rows reset.
+ */
+export async function resetRetryableFailedEvents(
+  db: SupabaseClient,
+  connectionId: string,
+  nowMs: number = Date.now(),
+): Promise<number> {
+  const windowStart = new Date(nowMs - (PRIVATE_REPLY_WINDOW_MS - PRIVATE_REPLY_SAFETY_MARGIN_MS)).toISOString();
+  const { data, error } = await db
+    .from(EVENTS_TABLE)
+    .update({
+      status: "claimed",
+      attempts: 0,
+      last_error: "Manual retry requested",
+      updated_at: MANUAL_RETRY_UPDATED_AT,
+    })
+    .eq("connection_id", connectionId)
+    .eq("status", "failed")
+    .gte("comment_timestamp", windowStart)
+    .select("id");
+  if (error) throw new Error(`Could not reset failed events: ${error.message}`);
+  return ((data as unknown[] | null) ?? []).length;
 }
 
 /** Record the connection's last run on its rules (surfaced on the admin page). */

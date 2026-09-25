@@ -40,6 +40,7 @@ import {
   type InstagramComment,
 } from "../src/lib/server/instagram/commentDmLogic";
 import {
+  resetRetryableFailedEvents,
   runCommentDmForConnection,
   type CommentDmConnection,
 } from "../src/lib/server/instagram/commentDmRun";
@@ -820,6 +821,44 @@ async function main(): Promise<void> {
     const all = await listMediaComments("m-1", "tok", { stopBeforeMs: 0, maxPages: 4, isPastDeadline: () => false });
     assert.equal(pages, 4);
     assert.equal(all.length, 4);
+  });
+
+  await test("retry failed: only this connection's in-window failed rows reset, then retried", async () => {
+    const db = new FakeDb();
+    const ev = (id: string, over: Record<string, unknown>) => ({
+      id,
+      connection_id: CONN_ID,
+      rule_id: "r-1",
+      comment_id: `c-${id}`,
+      media_id: "m-1",
+      comment_timestamp: iso(NOW - 2 * HOUR),
+      status: "failed",
+      attempts: 5,
+      last_error: "boom",
+      created_at: iso(NOW - 3 * HOUR),
+      updated_at: iso(NOW - 3 * HOUR),
+      ...over,
+    });
+    db.tables.instagram_comment_dm_events.push(
+      ev("in-window", {}),
+      ev("too-old", { comment_timestamp: iso(NOW - 6 * DAY - 23.5 * HOUR) }),
+      ev("other-conn", { connection_id: "99999999-9999-4999-8999-999999999999" }),
+      ev("already-sent", { status: "sent" }),
+    );
+    const n = await resetRetryableFailedEvents(db as unknown as SupabaseClient, CONN_ID, NOW);
+    assert.equal(n, 1);
+    const byId = Object.fromEntries(db.tables.instagram_comment_dm_events.map(e => [e.id, e]));
+    assert.equal(byId["in-window"].status, "claimed");
+    assert.equal(byId["in-window"].attempts, 0);
+    assert.equal(byId["too-old"].status, "failed");
+    assert.equal(byId["other-conn"].status, "failed");
+    assert.equal(byId["already-sent"].status, "sent");
+    // The next run's reclaim step picks it up and sends it.
+    const calls = installFetch({ media: [], comments: {} });
+    const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.equal(r.reclaimed, 1);
+    assert.deepEqual(calls.messages.map(m => m.commentId), ["c-in-window"]);
+    assert.equal(byId["in-window"].status, "sent");
   });
 
   globalThis.fetch = originalFetch;
