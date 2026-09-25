@@ -351,6 +351,30 @@ async function main(): Promise<void> {
     assert.deepEqual(evaluateComment(comment({ timestamp: null }), wide, ctx), { eligible: false, reason: "no_timestamp" });
   });
 
+  await test("replies (explicit parent_id) are skipped; top-level comments are not", async () => {
+    const ctx = { account, nowMs: NOW };
+    assert.deepEqual(evaluateComment(comment({ parentId: "c-parent" }), [rule()], ctx), { eligible: false, reason: "reply" });
+    assert.equal(evaluateComment(comment({ parentId: null }), [rule()], ctx).eligible, true);
+    // End to end through the Graph mapper: parent_id is requested and a reply row is never DM'd.
+    const db = new FakeDb();
+    const calls = installFetch({
+      media: [{ id: "m-1", timestamp: metaTs(NOW - DAY) }],
+      comments: {
+        "m-1": [rawComment("c-reply", "price", { parent_id: "c-top" }), rawComment("c-top", "price")],
+      },
+    });
+    let commentsUrl = "";
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes("/comments?")) commentsUrl = String(input);
+      return inner(input, init);
+    }) as typeof fetch;
+    const r = await runCommentDmForConnection(deps(db), conn, [rule()], liveOpts);
+    assert.ok(commentsUrl.includes("parent_id"), "parent_id is requested");
+    assert.deepEqual(calls.messages.map(m => m.commentId), ["c-top"]);
+    assert.equal(r.sent, 1);
+  });
+
   await test("rule selection: media-specific first, then oldest; disabled ignored", () => {
     const all = rule({ id: "all-old", createdAt: iso(NOW - 20 * DAY) });
     const specificNew = rule({ id: "spec-new", mediaId: "m-1", createdAt: iso(NOW - 1 * DAY) });

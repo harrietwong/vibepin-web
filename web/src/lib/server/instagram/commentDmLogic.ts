@@ -43,6 +43,8 @@ export type InstagramComment = {
   fromId: string | null;
   /** username (falls back to from.username). */
   username: string | null;
+  /** parent_id — set when this is a reply to another comment (never DM'd). */
+  parentId?: string | null;
 };
 
 export type CommentAccount = {
@@ -158,7 +160,7 @@ export type CommentVerdict =
   | { eligible: true; rule: CommentDmRule; keyword: string }
   | {
       eligible: false;
-      reason: "already_handled" | "own_comment" | "no_timestamp" | "outside_window" | "no_match";
+      reason: "already_handled" | "reply" | "own_comment" | "no_timestamp" | "outside_window" | "no_match";
     };
 
 /**
@@ -172,6 +174,8 @@ export function evaluateComment(
   ctx: { account: CommentAccount; nowMs: number; handledCommentIds?: ReadonlySet<string> },
 ): CommentVerdict {
   if (ctx.handledCommentIds?.has(comment.id)) return { eligible: false, reason: "already_handled" };
+  // Only top-level comments qualify; a row that explicitly names a parent is a reply.
+  if (comment.parentId) return { eligible: false, reason: "reply" };
   if (isOwnComment(comment, ctx.account)) return { eligible: false, reason: "own_comment" };
   const commentMs = parseTs(comment.timestamp);
   if (commentMs === null) return { eligible: false, reason: "no_timestamp" };

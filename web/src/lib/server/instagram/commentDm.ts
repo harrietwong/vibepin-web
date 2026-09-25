@@ -3,7 +3,7 @@
  *
  * Endpoints (Instagram API with Instagram Login, host graph.instagram.com):
  *   GET  /<IG_USER_ID>/media?fields=id,timestamp,permalink,caption
- *   GET  /<IG_MEDIA_ID>/comments?fields=id,text,timestamp,from,username
+ *   GET  /<IG_MEDIA_ID>/comments?fields=id,text,timestamp,from,username,parent_id
  *        — top-level comments only, reverse-chronological, ≤50 per page, no
  *          timestamp filter (so we stop paging once a page is older than needed).
  *   POST /<IG_USER_ID>/messages   {"recipient":{"comment_id"},"message":{"text"}}
@@ -158,6 +158,10 @@ function toComment(mediaId: string, raw: Record<string, unknown>): InstagramComm
     timestamp: typeof raw.timestamp === "string" ? raw.timestamp : null,
     fromId,
     username,
+    parentId:
+      (typeof raw.parent_id === "string" && raw.parent_id) || typeof raw.parent_id === "number"
+        ? String(raw.parent_id)
+        : null,
   };
 }
 
@@ -176,7 +180,7 @@ export async function listMediaComments(
   let after: string | null = null;
   for (let page = 0; page < maxPages; page++) {
     const params: Record<string, string> = {
-      fields: "id,text,timestamp,from,username",
+      fields: "id,text,timestamp,from,username,parent_id",
       limit: String(COMMENTS_PAGE_SIZE),
     };
     if (after) params.after = after;
