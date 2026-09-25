@@ -39,6 +39,7 @@ import {
   type CommentDmRule,
   type InstagramComment,
 } from "../src/lib/server/instagram/commentDmLogic";
+import { exchangeCodeForTokens, parseGrantedPermissions } from "../src/lib/server/instagram/service";
 import {
   resetRetryableFailedEvents,
   runCommentDmForConnection,
@@ -315,6 +316,125 @@ async function main(): Promise<void> {
     assert.equal(hasInstagramCommentDmScopes(["instagram_business_basic", "instagram_business_manage_comments"]), true);
     assert.equal(hasInstagramCommentDmScopes([...INSTAGRAM_COMMENT_DM_SCOPES]), true);
     assert.equal(hasInstagramCommentDmScopes(null), false);
+  });
+
+  await test("parseGrantedPermissions: comma-separated string", () => {
+    assert.deepEqual(
+      parseGrantedPermissions("instagram_business_basic, instagram_business_manage_comments"),
+      ["instagram_business_basic", "instagram_business_manage_comments"],
+    );
+    assert.deepEqual(parseGrantedPermissions("a,a,  a ,b"), ["a", "b"], "dedupes and trims");
+  });
+
+  await test("parseGrantedPermissions: string array", () => {
+    assert.deepEqual(
+      parseGrantedPermissions(["instagram_business_basic", " instagram_business_manage_comments ", "instagram_business_basic"]),
+      ["instagram_business_basic", "instagram_business_manage_comments"],
+    );
+  });
+
+  await test("parseGrantedPermissions: object array (permission/name fields, declined excluded)", () => {
+    assert.deepEqual(
+      parseGrantedPermissions([
+        { permission: "instagram_business_basic", status: "granted" },
+        { permission: "instagram_business_manage_comments", status: "declined" },
+        { name: "instagram_business_manage_messages" },
+        { permission: "instagram_business_basic", status: "GRANTED" },
+      ]),
+      ["instagram_business_basic", "instagram_business_manage_messages"],
+      "declined (any case) excluded; entries without status kept; dedupes across permission/name",
+    );
+  });
+
+  await test("parseGrantedPermissions: value extracted from a data-wrapped response", () => {
+    const wrapped = { data: [{ permissions: "instagram_business_basic,instagram_business_manage_comments" }] };
+    const extracted = (wrapped.data[0] as { permissions?: unknown }).permissions;
+    assert.deepEqual(parseGrantedPermissions(extracted), ["instagram_business_basic", "instagram_business_manage_comments"]);
+  });
+
+  await test("parseGrantedPermissions: empty/garbage input never throws", () => {
+    assert.deepEqual(parseGrantedPermissions(undefined), []);
+    assert.deepEqual(parseGrantedPermissions(null), []);
+    assert.deepEqual(parseGrantedPermissions(""), []);
+    assert.deepEqual(parseGrantedPermissions("   "), []);
+    assert.deepEqual(parseGrantedPermissions(42), []);
+    assert.deepEqual(parseGrantedPermissions(true), []);
+    assert.deepEqual(parseGrantedPermissions({ foo: "bar" }), []);
+    assert.deepEqual(parseGrantedPermissions([1, 2, null, undefined, {}]), []);
+    assert.deepEqual(parseGrantedPermissions([{ permission: 5 }, { status: "granted" }]), []);
+  });
+
+  await test("exchangeCodeForTokens: granted scopes survive all three permissions shapes", async () => {
+    const prevEnv = {
+      INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID,
+      INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
+      INSTAGRAM_REDIRECT_URI: process.env.INSTAGRAM_REDIRECT_URI,
+    };
+    process.env.INSTAGRAM_APP_ID = "test-app-id";
+    process.env.INSTAGRAM_APP_SECRET = "test-app-secret";
+    process.env.INSTAGRAM_REDIRECT_URI = "https://vibepin.co/api/auth/instagram/callback";
+
+    const FAKE_USER_ID = "17841400000000001"; // kept as a string throughout — large IG ids lose precision as JS numbers
+    const inner = globalThis.fetch;
+    try {
+      const shapes: Array<{ name: string; shortBody: unknown }> = [
+        {
+          name: "flat, permissions as array",
+          shortBody: {
+            access_token: "short-tok",
+            user_id: FAKE_USER_ID,
+            permissions: ["instagram_business_basic", "instagram_business_manage_comments"],
+          },
+        },
+        {
+          name: "flat, permissions as comma-separated string",
+          shortBody: {
+            access_token: "short-tok",
+            user_id: FAKE_USER_ID,
+            permissions: "instagram_business_basic,instagram_business_manage_comments",
+          },
+        },
+        {
+          name: "wrapped in data:[{access_token,user_id,permissions}]",
+          shortBody: {
+            data: [
+              {
+                access_token: "short-tok",
+                user_id: FAKE_USER_ID,
+                permissions: "instagram_business_basic,instagram_business_manage_comments",
+              },
+            ],
+          },
+        },
+      ];
+
+      for (const shape of shapes) {
+        globalThis.fetch = (async (input: string | URL | Request) => {
+          const url = String(input);
+          if (url.startsWith("https://api.instagram.com/oauth/access_token")) {
+            return Response.json(shape.shortBody);
+          }
+          if (url.startsWith("https://graph.instagram.com/access_token")) {
+            return Response.json({ access_token: "long-tok", token_type: "bearer", expires_in: 5184000 });
+          }
+          throw new Error(`unmocked request ${url}`);
+        }) as typeof fetch;
+
+        const result = await exchangeCodeForTokens("test-code");
+        assert.ok(
+          result.scopes.includes("instagram_business_manage_comments"),
+          `${shape.name}: expected instagram_business_manage_comments in ${JSON.stringify(result.scopes)}`,
+        );
+        assert.equal(result.accessToken, "long-tok");
+        assert.equal(result.userId, FAKE_USER_ID);
+      }
+    } finally {
+      globalThis.fetch = inner;
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   await test("keyword match: NFKC, case-insensitive, trimmed substring, any keyword", () => {
