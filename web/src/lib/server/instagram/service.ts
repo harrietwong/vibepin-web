@@ -68,11 +68,63 @@ export type InstagramProfile = {
 type RawShortTokenResponse = {
   access_token?: string;
   user_id?: number | string;
-  permissions?: string;
+  permissions?: unknown;
+  data?: unknown;
   error_type?: string;
   error_message?: string;
   error?: { message?: string; type?: string; code?: number } | string;
 };
+
+/**
+ * Parse the granted-permissions field of the short-lived token exchange into a
+ * deduped, trimmed list of scope strings.
+ *
+ * The exact shape of Instagram's response for this field is UNVERIFIED — Meta's
+ * docs describe `{"data":[{"access_token","user_id","permissions":"a,b,c"}]}`, but
+ * our code reads access_token/user_id at the TOP level (and that works), which
+ * means the real response is flat and the real type/presence of `permissions` is
+ * unknown. This function is defensive: it accepts every shape we can think of so a
+ * format we haven't seen degrades to an empty list instead of throwing.
+ *
+ * Accepted shapes for the `permissions`-bearing value:
+ *   - a comma-separated string ("instagram_business_basic,instagram_..._comments")
+ *   - a string array (["instagram_business_basic", ...])
+ *   - an object array ([{ permission: "...", status: "granted" }, ...] or
+ *     [{ name: "...", status: "declined" }, ...]) — entries whose status is
+ *     "declined" (case-insensitive) are excluded; entries without a status are kept
+ */
+export function parseGrantedPermissions(raw: unknown): string[] {
+  const out = new Set<string>();
+  const add = (v: unknown) => {
+    if (typeof v !== "string") return;
+    const trimmed = v.trim();
+    if (trimmed) out.add(trimmed);
+  };
+
+  const collect = (value: unknown) => {
+    if (typeof value === "string") {
+      for (const part of value.split(",")) add(part);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === "string") {
+          add(entry);
+        } else if (entry && typeof entry === "object") {
+          const status = (entry as { status?: unknown }).status;
+          const declined = typeof status === "string" && status.trim().toLowerCase() === "declined";
+          if (declined) continue;
+          const name = (entry as { permission?: unknown; name?: unknown }).permission
+            ?? (entry as { permission?: unknown; name?: unknown }).name;
+          add(name);
+        }
+      }
+    }
+  };
+
+  collect(raw);
+  return Array.from(out);
+}
 
 type RawLongTokenResponse = {
   access_token?: string;
@@ -130,7 +182,21 @@ export async function exchangeCodeForTokens(code: string): Promise<InstagramToke
     body: shortBody.toString(),
   });
   const shortJson = (await shortRes.json().catch(() => ({}))) as RawShortTokenResponse;
-  if (!shortRes.ok || !shortJson.access_token || shortJson.user_id === undefined || shortJson.user_id === null) {
+
+  // Some responses may wrap the fields in `data: [{...}]` (Meta's documented shape)
+  // instead of putting them at the top level. Top-level values take priority;
+  // data[0] is only a fallback when the top-level field is absent.
+  const dataWrapper = Array.isArray((shortJson as { data?: unknown }).data)
+    ? ((shortJson as { data?: unknown[] }).data?.[0] as Record<string, unknown> | undefined)
+    : undefined;
+  const hasDataWrapper = dataWrapper !== undefined;
+
+  const accessToken = shortJson.access_token ?? (dataWrapper?.access_token as string | undefined);
+  const rawUserId = shortJson.user_id !== undefined && shortJson.user_id !== null
+    ? shortJson.user_id
+    : (dataWrapper?.user_id as number | string | undefined);
+
+  if (!shortRes.ok || !accessToken || rawUserId === undefined || rawUserId === null) {
     // Never echo the body/params (contains secret + code).
     throw new InstagramApiError(
       extractError(shortJson as Record<string, unknown>) || `Instagram token request failed (${shortRes.status})`,
@@ -138,12 +204,21 @@ export async function exchangeCodeForTokens(code: string): Promise<InstagramToke
       "token_exchange_failed",
     );
   }
-  const shortToken = shortJson.access_token;
-  const userId = String(shortJson.user_id);
+  const shortToken = accessToken;
+  const userId = String(rawUserId);
   // Instagram returns the actually-granted permissions on the short-lived exchange.
-  const granted = typeof shortJson.permissions === "string" && shortJson.permissions
-    ? shortJson.permissions.split(",").map(s => s.trim()).filter(Boolean)
-    : [];
+  // The real shape of this field is unverified in production — see
+  // parseGrantedPermissions for the shapes we defensively accept.
+  const rawPermissions = shortJson.permissions !== undefined ? shortJson.permissions : dataWrapper?.permissions;
+  const granted = parseGrantedPermissions(rawPermissions);
+  if (granted.length === 0) {
+    // Diagnostic only — never logs the token/code/secret. Helps confirm the real
+    // response shape in production without guessing.
+    console.warn(
+      `[instagram/service] exchangeCodeForTokens: no granted permissions parsed ` +
+      `(typeof permissions=${typeof rawPermissions}, dataWrapper=${hasDataWrapper})`,
+    );
+  }
 
   // ── Step 2: short-lived → long-lived (~60 days). GET graph.instagram.com. ─────
   const longParams = new URLSearchParams({
