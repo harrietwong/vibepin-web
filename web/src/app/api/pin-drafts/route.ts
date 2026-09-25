@@ -35,6 +35,7 @@ import {
   requiredScheduleDestinations,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
+import { mixedVideoScheduleIssue } from "@/lib/studio/splitMixedVideoDraft";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -328,6 +329,24 @@ export async function PUT(req: Request) {
       // publish. Collected here (cheap, pure) and resolved in one batch below —
       // the actual lookup is a database read and must not run per draft.
       if (incomingScheduledAt) {
+        // ── Mixed single-video gate (design 0924 §2 (b′), Fable ruling 4) ──────
+        // The server never splits — a server-made child would only reach the
+        // browser on its next pull, and the stale local parent's next PUT would
+        // write the Instagram destination straight back. It REFUSES instead: the
+        // caller (UI save path / operator script) runs `splitMixedVideoDraft` and
+        // sends the pair. Same predicate the splitter uses, so "must split" and
+        // "was split" cannot disagree. Only a SCHEDULED draft is refused; an
+        // unscheduled one is still being edited and saves normally.
+        const splitGate = mixedVideoScheduleIssue(d.draftId, p);
+        if (splitGate) {
+          rejected.set(d.draftId, {
+            draftId: d.draftId,
+            status: "rejected",
+            code: splitGate.code,
+            userMessageKey: splitGate.userMessageKey,
+            retryable: false,
+          });
+        }
         const destinations = requiredScheduleDestinations(p);
         if (!destinations.length) {
           rejected.set(d.draftId, {

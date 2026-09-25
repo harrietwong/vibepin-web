@@ -271,6 +271,10 @@ export const STUDIO: string[] = [
   // only — deterministic child id, idempotency, field whitelist, caption→title
   // derivation, and the IG caption link/empty validation shared by UI/server/script.
   "test-split-mixed-video-draft",
+  // T2 (same design doc): /api/pin-drafts refuses an unsplit mixed single-video
+  // schedule (mixed_video_requires_split) and a scheduled IG child with an empty /
+  // linked caption; the split pair is accepted and saving it twice leaves 2 rows.
+  "test-pin-drafts-mixed-video-gate",
   // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).

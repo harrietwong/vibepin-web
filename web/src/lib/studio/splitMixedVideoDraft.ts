@@ -91,6 +91,61 @@ function isSingleVideoDraft(draft: Pick<PinDraft, "media">): boolean {
   return isSingleVideoPayload(draft);
 }
 
+/**
+ * THE "this needs splitting" predicate: exactly one video (shared cron test) AND
+ * the explicit stored destinations (the cron's read rule) name BOTH Pinterest and
+ * Instagram. Used by `splitMixedVideoDraft` below and by the `/api/pin-drafts`
+ * server gate, so "the splitter would split this" and "the server refuses this
+ * unsplit" are one decision. Deliberately NOT gated on "is a child": a child that
+ * somehow carries both platforms is exactly as unpublishable as an unsplit parent.
+ */
+export function isMixedSingleVideo(
+  draft: Parameters<typeof resolveScheduledDestinations>[0] & { media?: unknown },
+): boolean {
+  if (!isSingleVideoDraft(draft as Pick<PinDraft, "media">)) return false;
+  const destinations = resolveScheduledDestinations(draft);
+  return destinations.some(d => d.provider === "pinterest")
+    && destinations.some(d => d.provider === "instagram");
+}
+
+/** True when `id` or the marker says this draft is a split-off Instagram child —
+ *  the server uses it only to TIGHTEN (run the caption check), never to grant. */
+export function isInstagramCaptionChild(draftId: string, payload: { copyProfile?: unknown }): boolean {
+  return payload.copyProfile === "instagram_caption" || parentIdOf(draftId) !== null;
+}
+
+export type MixedVideoScheduleIssueCode = "mixed_video_requires_split" | InstagramCaptionIssueCode;
+
+const SYNC_ISSUE_KEY: Record<MixedVideoScheduleIssueCode, string> = {
+  mixed_video_requires_split: "studioBoard.card.syncIssue.mixedVideoRequiresSplit",
+  instagram_caption_required: "studioBoard.card.syncIssue.instagramCaptionRequired",
+  instagram_caption_contains_link: "studioBoard.card.syncIssue.instagramCaptionContainsLink",
+};
+
+/**
+ * The `/api/pin-drafts` gate for a SCHEDULED draft (design §2 (b′) + §3, Fable
+ * ruling 4). Callers only invoke it for a draft that carries a schedule — an
+ * unscheduled draft is still being edited and is never refused here.
+ *   - unsplit mixed single video            → `mixed_video_requires_split`
+ *   - Instagram child with a bad caption    → first `instagramCaptionIssues` code
+ * Null when the draft may be scheduled.
+ */
+export function mixedVideoScheduleIssue(
+  draftId: string,
+  payload: Record<string, unknown>,
+): { code: MixedVideoScheduleIssueCode; userMessageKey: string } | null {
+  const draft = payload as Parameters<typeof isMixedSingleVideo>[0];
+  if (isMixedSingleVideo(draft)) {
+    return { code: "mixed_video_requires_split", userMessageKey: SYNC_ISSUE_KEY.mixed_video_requires_split };
+  }
+  if (isInstagramCaptionChild(draftId, payload)) {
+    const description = typeof payload.description === "string" ? payload.description : "";
+    const [issue] = instagramCaptionIssues(description);
+    if (issue) return { code: issue, userMessageKey: SYNC_ISSUE_KEY[issue] };
+  }
+  return null;
+}
+
 /** True for a draft this module has already produced as a child — either by
  *  its marker or (defensively, for a marker that got stripped somewhere) by
  *  its id shape. Prevents re-splitting a child into `id__ig__ig`. */
@@ -180,13 +235,11 @@ export function splitMixedVideoDraft(
   opts: SplitMixedVideoDraftOptions,
 ): SplitMixedVideoDraftResult {
   if (isAlreadyChild(draft)) return { split: false, parent: draft };
-  if (!isSingleVideoDraft(draft)) return { split: false, parent: draft };
+  if (!isMixedSingleVideo(draft)) return { split: false, parent: draft };
 
   const destinations = resolveScheduledDestinations(draft);
   const igDestinations = destinations.filter(d => d.provider === "instagram");
   const nonIgDestinations = destinations.filter(d => d.provider !== "instagram");
-  const hasPinterest = destinations.some(d => d.provider === "pinterest");
-  if (!hasPinterest || igDestinations.length === 0) return { split: false, parent: draft };
 
   const now = opts.now ?? new Date();
   const nowIso = now.toISOString();

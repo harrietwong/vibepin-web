@@ -679,6 +679,9 @@ const en = {
   "studioBoard.card.syncIssue.destinationUnavailable": "A selected publishing account is unavailable. Reconnect it or choose another account.",
   "studioBoard.card.syncIssue.quotaExceeded": "This draft could not be scheduled because the plan limit was reached.",
   "studioBoard.card.syncIssue.payloadTooLarge": "This draft is too large to sync. Remove some media or details and try again.",
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "A video going to both Pinterest and Instagram must be scheduled as two separate posts. Schedule it again to split it.",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "Add an Instagram caption before scheduling this Reel.",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram captions can't contain links. Remove the link and schedule again.",
   "studioBoard.card.syncIssue.review": "Review draft",
 
   // ── Merged namespace modules (see ./en/*.ts) ──

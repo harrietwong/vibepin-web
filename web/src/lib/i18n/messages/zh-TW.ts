@@ -526,6 +526,9 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.syncIssue.destinationUnavailable": "所選發布帳號目前無法使用。請重新連接或選擇其他帳號。",
   "studioBoard.card.syncIssue.quotaExceeded": "目前方案已達排程上限，此草稿尚未排程。",
   "studioBoard.card.syncIssue.payloadTooLarge": "此草稿內容過大，無法同步。請減少媒體或內容後重試。",
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "同時發往 Pinterest 和 Instagram 的影片需要拆成兩則分別排程。請重新排程以完成拆分。",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "排程這則 Reel 前請先填寫 Instagram 文案。",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram 文案不能包含連結。請刪除連結後重新排程。",
   "studioBoard.card.syncIssue.review": "檢查草稿",
 
   // ── opportunity ──

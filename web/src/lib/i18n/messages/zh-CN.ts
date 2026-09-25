@@ -529,6 +529,9 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.syncIssue.destinationUnavailable": "所选发布账号当前不可用。请重新连接或选择其他账号。",
   "studioBoard.card.syncIssue.quotaExceeded": "当前套餐已达到排期上限，此草稿尚未排期。",
   "studioBoard.card.syncIssue.payloadTooLarge": "此草稿内容过大，无法同步。请减少媒体或内容后重试。",
+  "studioBoard.card.syncIssue.mixedVideoRequiresSplit": "同时发往 Pinterest 和 Instagram 的视频需要拆成两条分别排期。请重新排期以完成拆分。",
+  "studioBoard.card.syncIssue.instagramCaptionRequired": "排期这条 Reel 前请先填写 Instagram 文案。",
+  "studioBoard.card.syncIssue.instagramCaptionContainsLink": "Instagram 文案不能包含链接。请删除链接后重新排期。",
   "studioBoard.card.syncIssue.review": "检查草稿",
   // ── connectPage ──
   "connectPage.openingPinterest": "正在打开 Pinterest…",
