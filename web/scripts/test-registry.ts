@@ -33,6 +33,8 @@ export const CORE: string[] = [
   "test-product-url-import",
   "test-product-url-import-auth",
   "test-product-facts",
+  // FR-03: URL-import facts → asset → linked product → AI copy context (no price).
+  "test-product-facts-copy-context",
   "test-amazon-url-channel",
   "test-amazon-link",
   "test-amazon-adapter",

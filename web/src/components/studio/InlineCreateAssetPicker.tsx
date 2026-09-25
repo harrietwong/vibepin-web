@@ -44,6 +44,7 @@ import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ProductImageSurface } from "@/components/products/ProductImageSurface";
 import { productOpportunityErrorInfo, type ProductOpportunityErrorInfo } from "@/lib/productOpportunitiesClient";
+import type { ProductFacts } from "@/lib/productUrlImport/types";
 
 export type InlineAssetItem = {
   id: string;
@@ -68,6 +69,8 @@ export type InlineAssetItem = {
   visualFormat?: string;
   /** Server-side commerce id (Shopify). NEVER the local asset id. */
   shopifyProductId?: string;
+  /** URL-import structured facts (FR-03) — carried to the LinkedProduct for AI copy context. */
+  facts?: ProductFacts;
 };
 
 export type InlineCreateAssetPickerProps = {
@@ -317,6 +320,7 @@ function toInlineAssetItem(item: assets.AssetItem): InlineAssetItem {
     // The SERVER product id, distinct from the local asset id above — it is what a
     // LinkedProduct should reference for a Shopify product.
     shopifyProductId: item.shopifyProductId,
+    facts: item.facts,
   };
 }
 
@@ -894,6 +898,9 @@ export function InlineCreateAssetPicker({
     sourceDomain: string;
     productUrl: string;
     extractionReason?: string;
+    facts?: ProductFacts;
+    price?: string;
+    currency?: string;
   }>) {
     const savedIds: string[] = [];
     for (const item of items) {
@@ -911,6 +918,9 @@ export function InlineCreateAssetPicker({
         productUrl:       item.productUrl,
         sourceDomain:     item.sourceDomain,
         extractionReason: item.extractionReason,
+        facts:            item.facts,
+        price:            item.price,
+        currency:         item.currency,
       });
       savedIds.push(saved.id);
     }

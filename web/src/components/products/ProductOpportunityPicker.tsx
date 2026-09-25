@@ -10,6 +10,7 @@ import { type ProductIdea } from "@/lib/productIdeas";
 import { cleanProductTitle } from "@/lib/productTitle";
 import { CATEGORIES } from "@/lib/categories";
 import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
+import { assetFieldsFromImportResult } from "@/lib/studio/importedProductFacts";
 import { deriveProductSaveCount } from "@/lib/productOpportunityCounts";
 import { isNonPinterestMerchantImageUrl } from "@/lib/productImageEvidence";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
@@ -266,10 +267,13 @@ export function ProductOpportunityPicker({
         const saved = assetStore.saveAsset({
           role: "product", source: "url", imageUrl, title, productUrl,
           sourceDomain: r.sourceDomain, store: r.sourceDomain,
+          // FR-03: structured facts (description/brand/price) ride on the asset.
+          ...assetFieldsFromImportResult(r),
         });
         const sel: PickerSelection = {
           id: saved.id, imageUrl, title, source: "url",
           productUrl, sourceDomain: r.sourceDomain ?? undefined,
+          price: saved.price,
         };
         setSelected(prev => ({ ...prev, [keyOf(sel)]: sel }));
         setLinkUrl("");

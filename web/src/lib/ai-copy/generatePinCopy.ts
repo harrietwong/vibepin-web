@@ -24,6 +24,7 @@ import {
   isAmazonAffiliateDraft,
   type AmazonCopyContext,
 } from "@/lib/studio/amazonCardSource";
+import { buildImportedFactsCopyContext, type ImportedFactsCopyContext } from "@/lib/studio/importedProductFacts";
 
 /**
  * Error thrown by generatePinterestPinCopy, carrying a machine-readable `code` so the
@@ -185,6 +186,28 @@ export function resolveAmazonCopyContext(
   return { ...buildAmazonCopyContext(source), affiliateDisclosure: "ad_hashtag", canGenerate: canGenerateAmazonCopy(source) };
 }
 
+/**
+ * URL-imported independent-store product context (FR-03), or null.
+ *
+ * Reads `facts` from the draft's PRIMARY linked product (same primaryProductId ?? [0]
+ * rule as the Shopify resolver); a draft with no linked products falls back to the
+ * setup product the base context already uses. Only URL imports carry `facts`, so a
+ * Shopify-linked or unlinked draft returns null and falls through unchanged.
+ * Price and availability are never part of the result (PRD FR-03-4 / ruling D3).
+ */
+export function resolveImportedProductFacts(
+  input: Pick<GeneratePinterestPinCopyInput, "setupSnapshot">,
+  storeDraft?: pinDraftStore.PinDraft | null,
+): ImportedFactsCopyContext | null {
+  const linked = storeDraft?.linkedProducts?.length
+    ? (storeDraft.linkedProducts.find(p => p.productId === storeDraft.primaryProductId) ?? storeDraft.linkedProducts[0])
+    : undefined;
+  const facts = linked
+    ? linked.facts
+    : input.setupSnapshot?.selectedProducts?.find(p => p.title?.trim() || p.productUrl?.trim())?.facts;
+  return facts ? buildImportedFactsCopyContext(facts) : null;
+}
+
 export function inferProductContext(input: GeneratePinterestPinCopyInput, storeDraft?: pinDraftStore.PinDraft | null): ProductContext {
   const product = input.setupSnapshot?.selectedProducts?.find(p => p.title?.trim() || p.productUrl?.trim());
   const productWithLooseMeta = product as typeof product & { category?: string; attributes?: string[] } | undefined;
@@ -201,6 +224,19 @@ export function inferProductContext(input: GeneratePinterestPinCopyInput, storeD
   const amazon = resolveAmazonCopyContext(input, storeDraft);
   if (amazon) {
     return { ...amazon.product, category: base.category, productUrl: base.productUrl };
+  }
+
+  // URL-imported independent-store product: store-declared title/brand only; the
+  // user's own product title wins; page text travels separately as pageContext.
+  const imported = resolveImportedProductFacts(input, storeDraft);
+  if (imported) {
+    const linked = storeDraft?.linkedProducts?.find(p => p.productId === storeDraft.primaryProductId) ?? storeDraft?.linkedProducts?.[0];
+    return {
+      ...base,
+      title: base.title || linked?.title?.trim() || imported.product.title,
+      source: base.source || linked?.source,
+      ...(imported.product.vendor ? { vendor: imported.product.vendor } : {}),
+    };
   }
 
   const shopify = resolvePrimaryShopifyProduct(storeDraft);
@@ -284,6 +320,11 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   const cacheHit = !!cachedAnalysis;
 
   const productContext = inferProductContext(input, storeDraft);
+  // Page text (seller wording → page_metadata): Amazon's fetched text, else the
+  // URL-imported product's title/description. Amazon keeps priority.
+  const copyPage = amazonContext
+    ? amazonContext.page
+    : resolveImportedProductFacts(input, storeDraft)?.page;
   const isVideoCover = storeDraft ? coverMedia(storeDraft)?.kind === "video" : false;
   const directionContext = resolveDirectionContext(storeDraft);
   const board = input.boards?.find(b => b.id === input.boardId);
@@ -300,7 +341,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       country,
       length: input.length,
       product: productContext,
-      ...(amazonContext?.page ? { page: amazonContext.page } : {}),
+      ...(copyPage ? { page: copyPage } : {}),
       ...(amazonContext ? { affiliateDisclosure: amazonContext.affiliateDisclosure } : {}),
       image: isVideoCover ? null : cachedAnalysis,
       imageUrl: isVideoCover ? undefined : input.imageUrl,

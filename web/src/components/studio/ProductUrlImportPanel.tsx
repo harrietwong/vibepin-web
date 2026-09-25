@@ -11,6 +11,8 @@ import {
   parseProductImportUrls,
   reasonLabel,
 } from "@/lib/productUrlImportClient";
+import type { ProductFacts } from "@/lib/productUrlImport/types";
+import { assetFieldsFromImportResult } from "@/lib/studio/importedProductFacts";
 
 const UI = {
   cardElev:     "var(--app-surface-3, #151F32)",
@@ -220,6 +222,10 @@ export type ProductUrlImportPanelProps = {
     sourceDomain: string;
     productUrl: string;
     extractionReason?: string;
+    /** FR-03: structured facts (incl. description) + display price for the asset. */
+    facts?: ProductFacts;
+    price?: string;
+    currency?: string;
   }>) => void;
   onCancel: () => void;
 };
@@ -310,6 +316,7 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
         sourceDomain:     result.sourceDomain,
         productUrl:       result.sourceUrl,
         extractionReason: candidate.reason,
+        ...assetFieldsFromImportResult(result),
       });
     }
     onSaveSelected(items);

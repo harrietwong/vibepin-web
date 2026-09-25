@@ -6,6 +6,7 @@
 import type { SetupSnapshot } from "./studioPersistence";
 import { getContentTemplates, LANG_FILLER_WORD, LANG_IDEAS_WORD } from "./i18n/contentTemplates";
 import type { LanguageCode } from "./i18n/config";
+import type { ProductFacts } from "./productUrlImport/types";
 
 export type MetadataConfidence = "high" | "medium" | "low";
 
@@ -37,6 +38,12 @@ export type LinkedProduct = {
   source:        ProductSourceKind;
   linkType:      ProductLinkType;
   status?:       "ready" | "import_issue" | "incomplete";
+  /**
+   * URL-import structured facts (FR-03). Rides in pin_drafts.payload (jsonb) so AI
+   * copy can ground on brand/title/description. Never written into the Pin's own
+   * title/description fields.
+   */
+  facts?:        ProductFacts;
 };
 
 export function normalizeProductSource(raw: string | undefined): ProductSourceKind {
@@ -616,6 +623,7 @@ type ProductSnapshotLike = {
   sourceDomain?: string;
   price?:        string;
   currency?:     string;
+  facts?:        ProductFacts;
 };
 
 /** Map a setup ProductSnapshot (or similar) to a LinkedProduct. */
@@ -637,6 +645,7 @@ export function toLinkedProduct(
     currency:     p.currency,
     source:       normalizeProductSource(p.source),
     linkType:     opts.linkType ?? "auto",
+    ...(p.facts ? { facts: p.facts } : {}),
   };
 }
 

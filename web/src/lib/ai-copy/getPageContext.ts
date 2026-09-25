@@ -30,8 +30,27 @@ function titleFromUrl(raw: string): PageContext {
   }
 }
 
-export async function getPageContext(destinationUrl: string): Promise<PageContext> {
+/**
+ * `known` — title/description the caller already has from a URL import's
+ * ProductFacts (FR-03). When present it wins over the cache and the URL slug, and is
+ * not cached (it belongs to the product, not the URL).
+ */
+export async function getPageContext(
+  destinationUrl: string,
+  known?: { title?: string; description?: string },
+): Promise<PageContext> {
   const normalized = normalizeUrl(destinationUrl);
+  const knownTitle = known?.title?.trim();
+  if (knownTitle) {
+    let domain: string | undefined;
+    try { domain = new URL(normalized).hostname.replace(/^www\./, ""); } catch { domain = undefined; }
+    return {
+      pageTitle: knownTitle,
+      ...(known?.description?.trim() ? { pageDescription: known.description.trim() } : {}),
+      ...(domain ? { domain } : {}),
+      source: "product_facts",
+    };
+  }
   if (!normalized) return { source: "none" };
   const cached = readCached<PageContext>("page", normalized, 7 * 24 * 60 * 60 * 1000);
   if (cached) return { ...cached, source: "cached" };

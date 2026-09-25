@@ -20,6 +20,7 @@
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 import type { SelectedCreativeAsset } from "./studio/creativeDirections";
+import type { ProductFacts } from "./productUrlImport/types";
 
 const DRAFT_KEY   = "vp:studio:draft";
 const HISTORY_KEY = "vp:studio:history";
@@ -55,6 +56,7 @@ export type ProductSnapshot = {
   source?:     string;          // platform / domain
   productUrl?: string;          // landing / affiliate URL when imported
   sourceDomain?: string;
+  facts?:      ProductFacts;    // URL-import structured facts (FR-03), AI copy context only
 };
 
 export type ReferenceSnapshot = {

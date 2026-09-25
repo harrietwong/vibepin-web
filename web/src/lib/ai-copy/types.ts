@@ -50,7 +50,8 @@ export type PageContext = {
   pageTitle?: string;
   pageDescription?: string;
   domain?: string;
-  source: "cached" | "url" | "none";
+  /** "product_facts" = title/description came from a URL import's ProductFacts. */
+  source: "cached" | "url" | "none" | "product_facts";
 };
 
 export type ProductContext = {

@@ -1,4 +1,4 @@
-import type { AmazonImportMeta } from "@/lib/productUrlImport/types";
+import type { AmazonImportMeta, ProductFacts } from "@/lib/productUrlImport/types";
 
 export const DEFAULT_MAX_URLS = 10;
 export const HARD_MAX_URLS = 20;
@@ -86,6 +86,8 @@ export type ProductUrlImportApiResponse = {
     debugCode?:       string;
     /** Amazon links only (text-only channel): link status, fetch outcome, page text. */
     amazon?:          AmazonImportMeta;
+    /** Independent-store structured facts (FR-01/02). Never present for Amazon. */
+    facts?:           ProductFacts;
   }>;
 };
 

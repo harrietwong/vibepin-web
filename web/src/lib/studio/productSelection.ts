@@ -20,6 +20,7 @@
  */
 
 import { normalizeProductSource, type LinkedProduct, type ProductSourceKind } from "@/lib/pinMetadata";
+import type { ProductFacts } from "@/lib/productUrlImport/types";
 
 export type ProductSelectionSource = ProductSourceKind;
 
@@ -55,6 +56,8 @@ export type CanonicalProductSelection = {
   tags?: string[];
   keyword?: string;
   visualFormat?: string;
+  /** URL-import structured facts (FR-03) — AI copy context only, never field values. */
+  facts?: ProductFacts;
 };
 
 /** A `javascript:`/`data:` URL must never reach a Pin's destination field. */
@@ -205,6 +208,7 @@ export function selectionFromAsset(asset: {
   visualFormat?: string;
   tags?: string[];
   shopifyProductId?: string;
+  facts?: ProductFacts;
 }): CanonicalProductSelection {
   return {
     id: asset.id,
@@ -225,6 +229,7 @@ export function selectionFromAsset(asset: {
     keyword: asset.keyword || undefined,
     visualFormat: asset.visualFormat || undefined,
     tags: asset.tags && asset.tags.length ? asset.tags : undefined,
+    ...(asset.facts ? { facts: asset.facts } : {}),
   };
 }
 
@@ -253,6 +258,7 @@ export function toLinkedProduct(selection: CanonicalProductSelection): LinkedPro
     source: selection.source,
     linkType: "manual",
     status: selection.status,
+    ...(selection.facts ? { facts: selection.facts } : {}),
   };
 }
 
@@ -273,5 +279,6 @@ export function selectionFromLinkedProduct(product: LinkedProduct): CanonicalPro
     price: product.price,
     currency: product.currency,
     status: product.status,
+    ...(product.facts ? { facts: product.facts } : {}),
   };
 }

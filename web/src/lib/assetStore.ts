@@ -11,6 +11,7 @@ import type {
   RiskFlag,
   SourceContext,
 } from "@/lib/assetClassification";
+import type { ProductFacts } from "@/lib/productUrlImport/types";
 import type { StoreSyncAdapter } from "./userStoreSync";
 import type { MediaOffloadCandidate } from "./mediaOffload";
 import { isLocalMediaUrl } from "./mediaUrl";
@@ -54,6 +55,12 @@ export type AssetItem = {
   shopifyProductId?: string;
   store?:        string;
   allImages?:    string[];
+  /**
+   * Structured facts from an independent-store URL import (FR-03). Copy context only:
+   * brand/title/description ground the AI; price/availability never leave the asset
+   * (the card shows `price`/`currency`, which mirror facts.price).
+   */
+  facts?:        ProductFacts;
   status?:       "ready" | "import_issue";
   createdAt:    string;
   lastUsedAt:   string;

@@ -311,6 +311,7 @@ function productUrlToSnapshot(imageUrl: string): ProductSnapshot {
     productUrl:   asset?.productUrl?.trim() || asset?.sourceUrl?.trim() || undefined,
     productId:    asset?.id,
     sourceDomain: asset?.sourceDomain,
+    ...(asset?.facts ? { facts: asset.facts } : {}),
   };
 }
 
