@@ -73,7 +73,7 @@
 | 环境 | project ref | 凭据文件 | 用途 |
 |---|---|---|---|
 | 生产 | `jaxteelkecvlozdrdoog` | `web/.env.local`、`backend/.env` | **只读探测**;写操作仅限用户明确批准的迁移/修复 |
-| 测试 | `snulmwprsahzqvdbyenc` | `web/.env.test.local` | 一切 E2E、seed、造用户、压测、可随时整体销毁 |
+| 测试 | `snulmwprsahzqvdbyenc` | `web/.env.test.local` | E2E、seed、造用户、压测;**同时是内部站 preview.vibepin.co 的真实数据库(见下方 2026-09-25 条),禁止整库销毁** |
 
 硬规则:
 1. **任何写操作(INSERT/UPDATE/DELETE/DDL/造用户)前必须先打印目标 project ref 并断言 ≠ `jaxteelkecvlozdrdoog`**;
@@ -81,9 +81,24 @@
 2. 造测试用户、seed 业务数据、跑破坏性 E2E → **一律指向 `.env.test.local`**,禁止用 `.env.local` 跑这类任务。
 3. 禁止把生产数据(用户、业务行、密钥)复制进测试库;测试库只灌 schema + 合成数据。
 4. 禁止用测试库凭据覆盖 `.env.local`;两个文件各自独立,互不写入。
-5. 清理测试数据只在测试库执行(可整库 reset);**永不对生产库执行批量删除**。
+5. 清理测试数据只在测试库执行,且**只删自动化自己建的账号及其数据**(见下方账号隔离);**永不对生产库执行批量删除**。
 6. Supabase Management API token(`backend/.env.migration`)是账号级的,对两个项目都有效——
    因此每次 `run_migration.py` / Management API 调用都必须显式确认 project_ref 指向哪个库。
+
+### 测试库兼做内部站数据库:账号隔离(2026-09-25 用户裁决,不可绕过)
+
+测试站 `preview.vibepin.co` 是**公司内部同事用的站**(IG 发布、IG 评论关键词私信、后台记录都在这里),
+连的就是测试库。同事在上面连的是**真实 IG/Pinterest 账号、真实发帖、真实私信记录**。
+用户决定:内部站继续用测试库,自动化测试也继续用这个库,**靠账号隔离区分**。因此:
+
+1. **禁止整库 reset / 清空 / 删 schema / TRUNCATE**,禁止"重建测试库"。需要干净环境就新建测试账号,不要清库。
+2. **自动化只许碰自己的账号**:测试账号邮箱必须用保留域名 `@example.com`、`@example.test`、`@vibepin.test`,
+   并带用途前缀(如 `e2e-cockpit-`、`qa.mvp0924.`)。清理只能按"本次创建的 id"或"本脚本专用前缀"删,
+   **永远不按时间范围、不按整表删,不删任何非保留域名邮箱的账号及其数据**。
+3. 同事账号(真实邮箱)及其草稿、排期、社媒连接、私信记录一律视为**正式数据**:不拿来做测试夹具、不改、不删。
+4. 在测试库跑迁移:只允许 additive/幂等的 DDL;破坏性 DDL(DROP/TRUNCATE/不可逆 ALTER)与生产同等对待,须用户逐条确认。
+5. 需要只看测试数据时,按邮箱保留域名过滤,不要删别人的数据来"让界面干净"。
+6. 测试项目已关闭公开注册(`disable_signup=true`),同事账号只能通过后台 admin API 创建。
 
 ## 上下文管理
 全程保持上下文精简:子代理只带回结论(改了什么/验证结果/发现的真问题),不带中间过程。
