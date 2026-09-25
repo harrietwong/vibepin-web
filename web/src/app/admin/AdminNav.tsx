@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy, Sparkles } from "lucide-react";
+import { Sun, LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy, Sparkles, MessageCircle } from "lucide-react";
 import { useAdminChrome } from "./AdminChromeProvider";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
@@ -80,6 +80,13 @@ const ADMIN_NAV: AdminNavItem[] = [
     labelKey: "nav.creativeIntelligence",
     icon: Sparkles,
     matchFn: (p) => p === "/admin/creative-intelligence" || p.startsWith("/admin/creative-intelligence/"),
+  },
+  {
+    id: "instagram-auto-dm",
+    href: "/admin/instagram-auto-dm",
+    labelKey: "nav.igAutoDm",
+    icon: MessageCircle,
+    matchFn: (p) => p === "/admin/instagram-auto-dm" || p.startsWith("/admin/instagram-auto-dm/"),
   },
 ];
 
