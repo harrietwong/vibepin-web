@@ -392,8 +392,8 @@ export function mergeFacts(parts: Array<ProductFacts | undefined>): ProductFacts
   let price: ProductFactsPrice | undefined;
   let availability: ProductFactsAvailability | undefined;
   let contributingSource: ProductFactsSource | undefined;
-  let sourceUrl = sorted[0].sourceUrl;
-  let fetchedAt = sorted[0].fetchedAt;
+  const sourceUrl = sorted[0].sourceUrl;
+  const fetchedAt = sorted[0].fetchedAt;
 
   for (const part of sorted) {
     if (title === undefined && part.title !== undefined) { title = part.title; contributingSource ??= part.source; }

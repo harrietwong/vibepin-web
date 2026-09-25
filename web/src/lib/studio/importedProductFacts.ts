@@ -9,7 +9,10 @@
  *    the whole `facts` object plus the card's display price. `price`/`currency`
  *    follow the Shopify asset convention (amount and ISO code in separate fields,
  *    see ShopifyProductPickerPanel) so every existing price chip renders it the
- *    same way; an "unknown" currency is left out rather than printed.
+ *    same way; an "unknown" currency is left out rather than printed. `description`
+ *    lands on the asset even when the page had no structured `facts` at all — a
+ *    generic page with only a scraped title/description must not lose that text
+ *    just because it never produced a `ProductFacts` object.
  *
  *  - `buildImportedFactsCopyContext` — what the AI copy request may see. Mirrors
  *    `buildAmazonCopyContext`: store-declared structured fields become
@@ -28,17 +31,25 @@ export type ImportedAssetFields = {
   facts?: ProductFacts;
   price?: string;
   currency?: string;
+  description?: string;
 };
 
-export function assetFieldsFromImportResult(result: { facts?: ProductFacts } | null | undefined): ImportedAssetFields {
+export function assetFieldsFromImportResult(
+  result: { facts?: ProductFacts; description?: string } | null | undefined,
+): ImportedAssetFields {
   const facts = result?.facts;
-  if (!facts) return {};
+  if (!facts) {
+    const description = result?.description?.trim();
+    return description ? { description } : {};
+  }
   const amount = facts.price?.amount?.trim();
   const currency = facts.price?.currency?.trim();
+  const description = facts.description?.trim() ?? result?.description?.trim();
   return {
     facts,
     ...(amount ? { price: amount } : {}),
     ...(amount && currency && currency.toLowerCase() !== "unknown" ? { currency } : {}),
+    ...(description ? { description } : {}),
   };
 }
 

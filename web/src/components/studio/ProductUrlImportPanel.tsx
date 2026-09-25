@@ -232,6 +232,8 @@ export type ProductUrlImportPanelProps = {
     facts?: ProductFacts;
     price?: string;
     currency?: string;
+    /** FR-03: scraped description; populated even when the page had no `facts`. */
+    description?: string;
   }>) => void;
   onCancel: () => void;
 };

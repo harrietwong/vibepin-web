@@ -2762,6 +2762,14 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "Teks menyebutkan “{value}”. Konfirmasi di {field} lalu coba lagi.",
   "studioBoard.amazon.disclosureMissing": "Pin ini tidak memiliki pengungkapan #ad. Pin afiliasi harus mengungkapkan hubungan ini.",
   "studioBoard.amazon.addDisclosure": "Tambahkan #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Produk Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "Produk Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "Produk AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "Produk TikTok Shop",
+  "studioBoard.marketplace.intro": "Platform ini tidak mengizinkan pembacaan data produk secara otomatis. Unggah foto produk dan isi nama serta poin jual di bawah ini — tautan akan tetap menjadi tujuan.",
+  "studioBoard.marketplace.productName": "Nama produk",
+  "studioBoard.marketplace.productNameRequired": "Tambahkan nama produk untuk membuat teks bagi tautan ini.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Sebelum memposting Pin afiliasi Amazon",
   "amazonRiskNotice.body": "Pinterest tidak termasuk dalam daftar jejaring sosial yang disetujui Amazon Associates, jadi mempromosikan tautan Associates di sana adalah area abu-abu. Tinjau kebijakan Amazon dan putuskan sendiri. Pemberitahuan ini bersifat informasi, bukan jaminan kepatuhan.",

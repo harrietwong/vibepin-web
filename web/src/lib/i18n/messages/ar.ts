@@ -2744,6 +2744,14 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "ذكر النص «{value}». أكّد ذلك في {field} ثم أعد المحاولة.",
   "studioBoard.amazon.disclosureMissing": "لا يحتوي هذا الـ Pin على إفصاح #ad. يجب أن تفصح دبابيس التسويق بالعمولة عن هذه العلاقة.",
   "studioBoard.amazon.addDisclosure": "أضف #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "منتج Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "منتج Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "منتج AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "منتج TikTok Shop",
+  "studioBoard.marketplace.intro": "لا تسمح هذه المنصة بقراءة بيانات المنتج تلقائيًا. حمّل صورة للمنتج واملأ الاسم ونقاط البيع أدناه — سيظل الرابط هو الوجهة.",
+  "studioBoard.marketplace.productName": "اسم المنتج",
+  "studioBoard.marketplace.productNameRequired": "أضف اسم المنتج لإنشاء نص لهذا الرابط.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "قبل نشر دبابيس Amazon التسويقية",
   "amazonRiskNotice.body": "لا يندرج Pinterest ضمن قائمة الشبكات الاجتماعية المعتمدة من Amazon Associates، لذا فإن الترويج لروابط Associates هناك يُعد منطقة رمادية. راجع سياسات Amazon وقرر بنفسك. هذا الإشعار للعلم فقط، وليس ضمانًا للامتثال.",

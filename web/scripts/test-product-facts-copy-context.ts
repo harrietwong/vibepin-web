@@ -128,6 +128,16 @@ async function main() {
     const noPrice = assetFieldsFromImportResult({ facts: { ...FACTS_SHOPIFY, price: undefined } });
     assert.equal("price" in noPrice, false); assert.equal("currency" in noPrice, false);
   });
+  await test("no facts but a page description → description alone (no facts key, no fake facts object)", () => {
+    const f = assetFieldsFromImportResult({ description: "A generic page with no structured data." });
+    assert.deepEqual(f, { description: "A generic page with no structured data." });
+    assert.equal("facts" in f, false);
+    assert.deepEqual(assetFieldsFromImportResult({ description: "  " }), {}, "blank description is not kept");
+  });
+  await test("facts present → description prefers facts.description over the raw page description", () => {
+    const f = assetFieldsFromImportResult({ facts: FACTS_SHOPIFY, description: "stale page text" });
+    assert.equal(f.description, FACTS_SHOPIFY.description);
+  });
   await test("saveAsset persists facts + price to localStorage (survives cache reset)", () => {
     assetStore.__resetAssetStoreForTests();
     mem.clear();
@@ -153,6 +163,66 @@ async function main() {
     assert.equal(again.id, first.id);
     assert.deepEqual(again.facts, FACTS_SHOPIFY);
     assert.equal(again.title, "Old", "existing user-visible title is not overwritten");
+  });
+  await test("re-importing the same URL REFRESHES facts/price/currency/description (D3: stale price)", () => {
+    assetStore.__resetAssetStoreForTests();
+    mem.clear();
+    const first = assetStore.saveAsset({
+      role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "Old title",
+      ...assetFieldsFromImportResult({ facts: FACTS_SHOPIFY }),
+    });
+    assert.equal(first.price, "62.00");
+    const RESTOCKED: ProductFacts = {
+      ...FACTS_SHOPIFY,
+      description: "Restocked in a new colourway.",
+      brand: "Quiet Spaces Home",
+      price: { amount: "58.00", currency: "USD" },
+      fetchedAt: "2026-09-26T00:00:00.000Z",
+    };
+    const again = assetStore.saveAsset({
+      role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "New title (ignored)",
+      ...assetFieldsFromImportResult({ facts: RESTOCKED }),
+    });
+    assert.equal(again.id, first.id);
+    assert.equal(again.price, "58.00", "price refreshed, not stuck at the old $62.00");
+    assert.equal(again.currency, "USD");
+    assert.equal(again.description, "Restocked in a new colourway.");
+    assert.equal(again.facts?.brand, "Quiet Spaces Home", "brand lives inside facts and is refreshed with it");
+    assert.deepEqual(again.facts, RESTOCKED);
+    assert.equal(again.title, "Old title", "title is user-editable — still only backfilled, never overwritten");
+  });
+  await test("re-import whose new facts DROP the price clears the stale one (no silently-kept old price)", () => {
+    assetStore.__resetAssetStoreForTests();
+    mem.clear();
+    assetStore.saveAsset({
+      role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "Throw",
+      ...assetFieldsFromImportResult({ facts: FACTS_SHOPIFY }),
+    });
+    const NO_PRICE: ProductFacts = { ...FACTS_SHOPIFY, price: undefined, completeness: "partial" };
+    const again = assetStore.saveAsset({
+      role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "Throw",
+      ...assetFieldsFromImportResult({ facts: NO_PRICE }),
+    });
+    assert.equal(again.price, undefined, "no price in the fresh facts → old price is not kept");
+    assert.equal(again.currency, undefined);
+  });
+  await test("re-saving WITHOUT facts (e.g. a plain re-select) never touches the existing price (gate on item.facts)", () => {
+    assetStore.__resetAssetStoreForTests();
+    mem.clear();
+    assetStore.saveAsset({
+      role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "Throw",
+      ...assetFieldsFromImportResult({ facts: FACTS_SHOPIFY }),
+    });
+    const again = assetStore.saveAsset({ role: "product", source: "url", imageUrl: "https://cdn.example/throw-1.jpg", title: "Throw", price: "1.00" });
+    assert.equal(again.price, "62.00", "no facts on this save → existing price is left alone, not backfilled from a bare price");
+    assert.deepEqual(again.facts, FACTS_SHOPIFY);
+  });
+  await test("Shopify asset save (no facts) is unaffected by the refresh path — still plain backfill", () => {
+    assetStore.__resetAssetStoreForTests();
+    mem.clear();
+    assetStore.saveAsset({ role: "product", source: "shopify", imageUrl: "https://cdn.example/shopify-1.jpg", title: "Walnut Board", price: "19.99", currency: "USD" });
+    const again = assetStore.saveAsset({ role: "product", source: "shopify", imageUrl: "https://cdn.example/shopify-1.jpg", title: "Walnut Board", price: "24.99", currency: "USD" });
+    assert.equal(again.price, "19.99", "Shopify re-sync still only backfills — a present price is not overwritten");
   });
 
   console.log("\n[draft carry: selection chain]");

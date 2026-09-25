@@ -2821,6 +2821,14 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "Metinde “{value}” belirtildi. {field} alanında onaylayıp tekrar deneyin.",
   "studioBoard.amazon.disclosureMissing": "Bu Pin'de #ad ifşası yok. İştirak Pinleri bu ilişkiyi açıklamalıdır.",
   "studioBoard.amazon.addDisclosure": "#ad ekle",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu ürünü",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein ürünü",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress ürünü",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop ürünü",
+  "studioBoard.marketplace.intro": "Bu platform, ürün bilgilerinin otomatik okunmasına izin vermiyor. Bir ürün fotoğrafı yükleyin ve aşağıya ürün adını ve satış noktalarını girin — bağlantı hedef olarak kalır.",
+  "studioBoard.marketplace.productName": "Ürün adı",
+  "studioBoard.marketplace.productNameRequired": "Bu bağlantı için metin oluşturmak üzere ürün adını ekleyin.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Amazon iştirak Pinlerini paylaşmadan önce",
   "amazonRiskNotice.body": "Pinterest, Amazon Associates'in onayladığı sosyal ağlar listesinde yer almadığından, orada Associates bağlantılarını tanıtmak gri bir alandır. Amazon'un politikalarını inceleyin ve kendiniz karar verin. Bu bildirim bilgilendirme amaçlıdır, uyumluluk garantisi değildir.",

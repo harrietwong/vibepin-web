@@ -2743,6 +2743,14 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "ข้อความกล่าวถึง “{value}” กรุณายืนยันใน {field} แล้วลองอีกครั้ง",
   "studioBoard.amazon.disclosureMissing": "Pin นี้ไม่มีการระบุ #ad Pin แบบพันธมิตรควรเปิดเผยความสัมพันธ์นี้",
   "studioBoard.amazon.addDisclosure": "เพิ่ม #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "สินค้า Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "สินค้า Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "สินค้า AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "สินค้า TikTok Shop",
+  "studioBoard.marketplace.intro": "แพลตฟอร์มนี้ไม่อนุญาตให้อ่านข้อมูลสินค้าโดยอัตโนมัติ กรุณาอัปโหลดรูปสินค้าและกรอกชื่อกับจุดขายด้านล่าง — ลิงก์จะยังคงเป็นปลายทาง",
+  "studioBoard.marketplace.productName": "ชื่อสินค้า",
+  "studioBoard.marketplace.productNameRequired": "เพิ่มชื่อสินค้าเพื่อสร้างข้อความสำหรับลิงก์นี้",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "ก่อนโพสต์ Pin พันธมิตร Amazon",
   "amazonRiskNotice.body": "Pinterest ไม่อยู่ในรายชื่อเครือข่ายสังคมที่ Amazon Associates อนุมัติ ดังนั้นการโปรโมตลิงก์ Associates ที่นั่นจึงเป็นพื้นที่สีเทา โปรดตรวจสอบนโยบายของ Amazon และตัดสินใจด้วยตัวเอง ประกาศนี้เป็นข้อมูลเท่านั้น ไม่ใช่การรับประกันการปฏิบัติตามข้อกำหนด",

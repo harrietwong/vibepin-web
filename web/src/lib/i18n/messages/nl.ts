@@ -2764,6 +2764,14 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "De tekst noemt “{value}”. Bevestig dit in {field} en probeer het opnieuw.",
   "studioBoard.amazon.disclosureMissing": "Deze Pin heeft geen #ad-vermelding. Affiliate-Pins moeten deze relatie vermelden.",
   "studioBoard.amazon.addDisclosure": "#ad toevoegen",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu-product",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein-product",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress-product",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop-product",
+  "studioBoard.marketplace.intro": "Dit platform staat geen automatisch uitlezen van productgegevens toe. Upload een productfoto en vul hieronder de naam en verkoopargumenten in — de link blijft de bestemming.",
+  "studioBoard.marketplace.productName": "Productnaam",
+  "studioBoard.marketplace.productNameRequired": "Voeg de productnaam toe om tekst voor deze link te genereren.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Voordat je Amazon-affiliate-Pins plaatst",
   "amazonRiskNotice.body": "Pinterest staat niet op de lijst met goedgekeurde sociale netwerken van Amazon Associates, dus het promoten van Associates-links daar is een grijs gebied. Bekijk het beleid van Amazon en beslis zelf. Deze melding is informatief en geen garantie voor naleving.",

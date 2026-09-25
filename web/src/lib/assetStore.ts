@@ -61,6 +61,13 @@ export type AssetItem = {
    * (the card shows `price`/`currency`, which mirror facts.price).
    */
   facts?:        ProductFacts;
+  /**
+   * Scraped page description for a URL import (FR-03). Mirrors `facts.description`
+   * when `facts` exists; also populated when a generic page produced only a
+   * title/description and never a full `ProductFacts` object, so that text is not
+   * lost. Never user-authored — a re-import overwrites it like `facts`.
+   */
+  description?:  string;
   status?:       "ready" | "import_issue";
   createdAt:    string;
   lastUsedAt:   string;
@@ -149,9 +156,26 @@ export function saveAsset(item: Omit<AssetItem, "id" | "createdAt" | "lastUsedAt
     const nowIso = new Date().toISOString();
     const merged: AssetItem = { ...existing, lastUsedAt: nowIso };
     let backfilled = false;
+    // Machine-extracted fields (FR-03 re-import, ruling D3): when the new save carries
+    // `facts` — i.e. a URL re-import, never Shopify/Etsy/upload — the store's own data
+    // has moved on since the last import, so these fields are REFRESHED (old value
+    // replaced, not just filled when absent). A stale price is exactly the D3 risk:
+    // keeping yesterday's price on a live Pin misleads buyers. `title` and every other
+    // user-editable field are deliberately excluded and still only backfill below.
+    if (item.facts) {
+      merged.facts = item.facts;
+      merged.price = item.price;
+      merged.currency = item.currency;
+      merged.description = item.description;
+      backfilled = true;
+    }
     for (const [key, value] of Object.entries(item)) {
       // Identity/audit fields are owned by the store and are never taken from input.
       if (key === "id" || key === "createdAt" || key === "updatedAt") continue;
+      // Already refreshed wholesale above when facts are present — do not let the
+      // generic backfill loop re-touch them (it would be a no-op for a present
+      // `value` anyway, but skip explicitly to keep the two paths from drifting).
+      if (item.facts && (key === "facts" || key === "price" || key === "currency" || key === "description")) continue;
       if (value === undefined || value === null || value === "") continue;
       const current = (merged as Record<string, unknown>)[key];
       if (current === undefined || current === null || current === "") {
@@ -159,10 +183,10 @@ export function saveAsset(item: Omit<AssetItem, "id" | "createdAt" | "lastUsedAt
         backfilled = true;
       }
     }
-    // A backfill is a real content change, so it must advance the LWW timestamp the
-    // sync adapter reads — assetTs() prefers `updatedAt`, so leaving it stale would
-    // let the server's older copy win and silently undo the migration on other
-    // devices. `lastUsedAt` alone is not enough. Only bump when something actually
+    // A backfill (or a facts refresh) is a real content change, so it must advance the
+    // LWW timestamp the sync adapter reads — assetTs() prefers `updatedAt`, so leaving
+    // it stale would let the server's older copy win and silently undo the migration on
+    // other devices. `lastUsedAt` alone is not enough. Only bump when something actually
     // changed, so a plain re-selection stays a no-op for sync purposes.
     if (backfilled) merged.updatedAt = nowIso;
     const next = [...items];

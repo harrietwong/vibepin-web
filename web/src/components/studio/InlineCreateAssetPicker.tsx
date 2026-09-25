@@ -901,6 +901,7 @@ export function InlineCreateAssetPicker({
     facts?: ProductFacts;
     price?: string;
     currency?: string;
+    description?: string;
   }>) {
     const savedIds: string[] = [];
     for (const item of items) {
@@ -921,6 +922,7 @@ export function InlineCreateAssetPicker({
         facts:            item.facts,
         price:            item.price,
         currency:         item.currency,
+        description:      item.description,
       });
       savedIds.push(saved.id);
     }

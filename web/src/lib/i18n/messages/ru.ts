@@ -2794,6 +2794,14 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "В тексте упоминается «{value}». Подтвердите это в поле {field} и повторите попытку.",
   "studioBoard.amazon.disclosureMissing": "У этого Pin нет отметки #ad. Партнёрские Pin должны раскрывать эти отношения.",
   "studioBoard.amazon.addDisclosure": "Добавить #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Товар Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "Товар Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "Товар AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "Товар TikTok Shop",
+  "studioBoard.marketplace.intro": "Эта платформа не позволяет автоматически считывать данные о товаре. Загрузите фото товара и заполните ниже название и преимущества — ссылка останется местом назначения.",
+  "studioBoard.marketplace.productName": "Название товара",
+  "studioBoard.marketplace.productNameRequired": "Добавьте название товара, чтобы создать текст для этой ссылки.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Перед публикацией партнёрских Pin от Amazon",
   "amazonRiskNotice.body": "Pinterest не входит в список социальных сетей, одобренных Amazon Associates, поэтому продвижение ссылок Associates там находится в серой зоне. Ознакомьтесь с политиками Amazon и решите самостоятельно. Это уведомление носит информационный характер и не является гарантией соответствия требованиям.",

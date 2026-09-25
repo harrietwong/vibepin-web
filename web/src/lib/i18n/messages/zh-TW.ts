@@ -3181,6 +3181,14 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "文案中提到了「{value}」。請在{field}中確認後重試。",
   "studioBoard.amazon.disclosureMissing": "此 Pin 沒有 #ad 揭露標示。聯盟推廣 Pin 應揭露該關係。",
   "studioBoard.amazon.addDisclosure": "新增 #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu 商品",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein 商品",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress 商品",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop 商品",
+  "studioBoard.marketplace.intro": "此平台不支援自動讀取商品資訊。請上傳商品照片，並在下方填寫商品名稱與賣點——連結仍會作為跳轉目的地保留。",
+  "studioBoard.marketplace.productName": "商品名稱",
+  "studioBoard.marketplace.productNameRequired": "請填寫商品名稱，才能為此連結產生文案。",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "發布 Amazon 聯盟 Pin 前須知",
   "amazonRiskNotice.body": "Pinterest 不在 Amazon Associates 核准的社群網路名單中，因此在其上推廣 Associates 連結屬於灰色地帶。請查閱 Amazon 的相關政策並自行判斷。此提示僅供參考，不構成合規保證。",

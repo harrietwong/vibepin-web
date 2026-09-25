@@ -2746,6 +2746,14 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "文章内で「{value}」に言及しています。{field}で確認してから再試行してください。",
   "studioBoard.amazon.disclosureMissing": "このPinには#ad表記がありません。アフィリエイトPinはこの関係を開示する必要があります。",
   "studioBoard.amazon.addDisclosure": "#adを追加",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu商品",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein商品",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress商品",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop商品",
+  "studioBoard.marketplace.intro": "このプラットフォームでは商品データを自動取得できません。商品写真をアップロードし、以下に商品名とセールスポイントを入力してください——リンクは遷移先として維持されます。",
+  "studioBoard.marketplace.productName": "商品名",
+  "studioBoard.marketplace.productNameRequired": "このリンクの文章を生成するには、商品名を入力してください。",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Amazonアフィリエイトのピンを投稿する前に",
   "amazonRiskNotice.body": "PinterestはAmazon Associatesが承認しているソーシャルネットワークの一覧には含まれていないため、そこでAssociatesリンクを宣伝することはグレーゾーンです。Amazonのポリシーを確認し、ご自身で判断してください。この通知は情報提供を目的としたものであり、コンプライアンスを保証するものではありません。",

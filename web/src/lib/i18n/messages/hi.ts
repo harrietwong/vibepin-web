@@ -2740,6 +2740,14 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "टेक्स्ट में “{value}” का उल्लेख किया गया। {field} में इसकी पुष्टि करें और फिर से कोशिश करें।",
   "studioBoard.amazon.disclosureMissing": "इस Pin में #ad प्रकटीकरण नहीं है। एफिलिएट Pin में यह संबंध बताया जाना चाहिए।",
   "studioBoard.amazon.addDisclosure": "#ad जोड़ें",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu उत्पाद",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein उत्पाद",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress उत्पाद",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop उत्पाद",
+  "studioBoard.marketplace.intro": "यह प्लेटफ़ॉर्म उत्पाद डेटा अपने आप पढ़ने की अनुमति नहीं देता। कृपया उत्पाद का फ़ोटो अपलोड करें और नीचे नाम व खासियतें भरें — लिंक गंतव्य के रूप में बना रहेगा।",
+  "studioBoard.marketplace.productName": "उत्पाद का नाम",
+  "studioBoard.marketplace.productNameRequired": "इस लिंक के लिए टेक्स्ट जनरेट करने हेतु उत्पाद का नाम जोड़ें।",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Amazon एफिलिएट Pin पोस्ट करने से पहले",
   "amazonRiskNotice.body": "Pinterest, Amazon Associates की स्वीकृत सोशल नेटवर्क सूची में नहीं है, इसलिए वहां Associates लिंक को बढ़ावा देना एक ग्रे एरिया है। Amazon की नीतियों की समीक्षा करें और स्वयं निर्णय लें। यह सूचना केवल जानकारी के लिए है, अनुपालन की गारंटी नहीं है।",

@@ -2740,6 +2740,14 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "문구에서 “{value}”을(를) 언급했습니다. {field}에서 확인 후 다시 시도하세요.",
   "studioBoard.amazon.disclosureMissing": "이 Pin에는 #ad 표시가 없습니다. 제휴 Pin은 이 관계를 공개해야 합니다.",
   "studioBoard.amazon.addDisclosure": "#ad 추가",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu 상품",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein 상품",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress 상품",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop 상품",
+  "studioBoard.marketplace.intro": "이 플랫폼은 상품 정보를 자동으로 가져올 수 없습니다. 상품 사진을 업로드하고 아래에 이름과 판매 포인트를 입력하세요 — 링크는 그대로 대상 링크로 유지됩니다.",
+  "studioBoard.marketplace.productName": "상품명",
+  "studioBoard.marketplace.productNameRequired": "이 링크의 문구를 생성하려면 상품명을 추가하세요.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Amazon 제휴 Pin을 게시하기 전에",
   "amazonRiskNotice.body": "Pinterest는 Amazon Associates가 승인한 소셜 네트워크 목록에 없으므로, 그곳에서 Associates 링크를 홍보하는 것은 회색 지대입니다. Amazon의 정책을 검토하고 직접 판단하세요. 이 안내는 정보 제공을 위한 것이며 컴플라이언스를 보장하지 않습니다.",

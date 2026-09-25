@@ -2816,6 +2816,14 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "Nội dung có đề cập đến “{value}”. Hãy xác nhận tại {field} rồi thử lại.",
   "studioBoard.amazon.disclosureMissing": "Pin này chưa có nhãn #ad. Pin liên kết tiếp thị nên công khai mối quan hệ này.",
   "studioBoard.amazon.addDisclosure": "Thêm #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Sản phẩm Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "Sản phẩm Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "Sản phẩm AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "Sản phẩm TikTok Shop",
+  "studioBoard.marketplace.intro": "Nền tảng này không cho phép đọc dữ liệu sản phẩm tự động. Hãy tải lên ảnh sản phẩm và điền tên cùng các điểm bán hàng bên dưới — liên kết vẫn là điểm đến.",
+  "studioBoard.marketplace.productName": "Tên sản phẩm",
+  "studioBoard.marketplace.productNameRequired": "Thêm tên sản phẩm để tạo nội dung cho liên kết này.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Trước khi đăng Pin liên kết tiếp thị Amazon",
   "amazonRiskNotice.body": "Pinterest không nằm trong danh sách mạng xã hội được Amazon Associates chấp thuận, vì vậy việc quảng bá liên kết Associates ở đó là vùng xám. Hãy xem lại chính sách của Amazon và tự quyết định. Thông báo này chỉ mang tính thông tin, không phải cam kết tuân thủ.",

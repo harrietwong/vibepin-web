@@ -2764,6 +2764,14 @@ const de: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "Der Text erwähnt „{value}“. Bestätigen Sie dies in {field} und versuchen Sie es erneut.",
   "studioBoard.amazon.disclosureMissing": "Dieser Pin hat keinen #ad-Hinweis. Affiliate-Pins sollten diese Beziehung offenlegen.",
   "studioBoard.amazon.addDisclosure": "#ad hinzufügen",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu-Produkt",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein-Produkt",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress-Produkt",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop-Produkt",
+  "studioBoard.marketplace.intro": "Diese Plattform erlaubt kein automatisches Auslesen von Produktdaten. Laden Sie ein Produktfoto hoch und geben Sie unten Name und Verkaufsargumente ein — der Link bleibt das Ziel.",
+  "studioBoard.marketplace.productName": "Produktname",
+  "studioBoard.marketplace.productNameRequired": "Fügen Sie den Produktnamen hinzu, um Text für diesen Link zu generieren.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Bevor Sie Amazon-Affiliate-Pins veröffentlichen",
   "amazonRiskNotice.body": "Pinterest steht nicht auf der Liste der von Amazon Associates zugelassenen sozialen Netzwerke, daher ist die Bewerbung von Associates-Links dort ein Graubereich. Prüfen Sie die Richtlinien von Amazon und entscheiden Sie selbst. Dieser Hinweis dient der Information und ist keine Compliance-Garantie.",

@@ -3001,6 +3001,14 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.amazon.claimHint": "El texto menciona “{value}”. Confírmalo en {field} e inténtalo de nuevo.",
   "studioBoard.amazon.disclosureMissing": "Este Pin no tiene el aviso #ad. Los Pines de afiliados deben revelar esta relación.",
   "studioBoard.amazon.addDisclosure": "Añadir #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Producto de Temu",
+  "studioBoard.marketplace.sectionTitle.shein": "Producto de Shein",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "Producto de AliExpress",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "Producto de TikTok Shop",
+  "studioBoard.marketplace.intro": "Esta plataforma no permite leer los datos del producto automáticamente. Sube una foto del producto y completa el nombre y los puntos de venta a continuación; el enlace seguirá siendo el destino.",
+  "studioBoard.marketplace.productName": "Nombre del producto",
+  "studioBoard.marketplace.productNameRequired": "Añade el nombre del producto para generar texto para este enlace.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Antes de publicar Pines de afiliado de Amazon",
   "amazonRiskNotice.body": "Pinterest no está en la lista de redes sociales aprobadas por Amazon Associates, así que promocionar enlaces de Associates allí es una zona gris. Revisa las políticas de Amazon y decide por ti mismo. Este aviso es informativo, no una garantía de cumplimiento.",
