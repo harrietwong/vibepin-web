@@ -69,7 +69,7 @@ export function visibleProductSourceFilters(
       case "shopify":      return !!opts.shopifyEnabled || hasShopifyProducts(items);
       case "amazon":       return hasAmazonProducts(items);
       case "uploaded":     return items.some(i => i.source === "upload");
-      case "url_imported": return items.some(i => i.source === "url");
+      case "url_imported": return items.some(i => isUrlImportedSource(i.source));
       default:             return false;
     }
   });
@@ -97,7 +97,7 @@ export function isValidProductImageUrl(imageUrl?: string): boolean {
 
 export function isBrokenProductImport(item: AssetItem): boolean {
   if (item.role !== "product") return false;
-  if (item.source !== "url") return false;
+  if (!isUrlImportedSource(item.source)) return false;
   return !isValidProductImageUrl(item.imageUrl);
 }
 
@@ -107,7 +107,7 @@ export function isBrokenProductImport(item: AssetItem): boolean {
 
 export function productSourceLabel(item: AssetItem): string {
   if (item.source === "upload") return "Uploaded product image";
-  if (item.source === "url") return "Imported from link";
+  if (isUrlImportedSource(item.source)) return "Imported from link";
   if (item.source === "product_signal" || item.source === "product_ideas") return "VibePin product opportunity";
   if (item.source === "shopify") return "Shopify";
   return "My product";
@@ -176,7 +176,7 @@ export function filterMyProducts(
   } else if (filter === "uploaded") {
     list = list.filter(i => i.source === "upload");
   } else if (filter === "url_imported") {
-    list = list.filter(i => i.source === "url" && isValidProductImageUrl(i.imageUrl));
+    list = list.filter(i => isUrlImportedSource(i.source) && isValidProductImageUrl(i.imageUrl));
   }
 
   // Sorting is orthogonal to the source filter — including for "import_issues",
@@ -196,4 +196,13 @@ export function filterMyProducts(
 
 export function countBrokenImports(items: AssetItem[]): number {
   return dedupeProductAssets(items).filter(isBrokenProductImport).length;
+}
+
+/**
+ * Link-imported sources: single product links (`url`) and FR-06 store/collection
+ * batch imports (`store_batch`). Both live under the "Imported links" chip and share
+ * the broken-import triage.
+ */
+export function isUrlImportedSource(source: string | undefined): boolean {
+  return source === "url" || source === "store_batch";
 }

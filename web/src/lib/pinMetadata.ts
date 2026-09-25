@@ -49,7 +49,8 @@ export type LinkedProduct = {
 export function normalizeProductSource(raw: string | undefined): ProductSourceKind {
   switch (raw) {
     case "url":
-    case "url_imported":   return "url_imported";
+    case "url_imported":
+    case "store_batch":    return "url_imported";
     case "product_signal":
     case "product_ideas":
     case "product_signals": return "product_ideas";

@@ -35,6 +35,8 @@ export const CORE: string[] = [
   "test-product-facts",
   // FR-03: URL-import facts → asset → linked product → AI copy context (no price).
   "test-product-facts-copy-context",
+  // FR-06 stage 1: Shopify store / collection batch import (auth, SSRF, paging, cache, facts).
+  "test-store-products-import",
   "test-amazon-url-channel",
   "test-amazon-link",
   "test-amazon-adapter",

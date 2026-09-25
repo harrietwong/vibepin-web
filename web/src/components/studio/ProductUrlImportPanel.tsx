@@ -13,6 +13,9 @@ import {
 } from "@/lib/productUrlImportClient";
 import type { ProductFacts } from "@/lib/productUrlImport/types";
 import { assetFieldsFromImportResult } from "@/lib/studio/importedProductFacts";
+import { isStoreImportUrl, type StoreBatchSaveItem } from "@/lib/studio/storeBatchImport";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { StoreProductsImportPanel } from "@/components/studio/StoreProductsImportPanel";
 
 const UI = {
   cardElev:     "var(--app-surface-3, #151F32)",
@@ -234,9 +237,18 @@ export type ProductUrlImportPanelProps = {
     currency?: string;
   }>) => void;
   onCancel: () => void;
+  /**
+   * FR-06: when provided (product pool only), a single Shopify store / collection
+   * link — or the "Import products from a store" button — opens the batch list.
+   * The caller saves the chosen products to My Products only.
+   */
+  onSaveStoreProducts?: (items: StoreBatchSaveItem[]) => void;
 };
 
-export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCancel }: ProductUrlImportPanelProps) {
+export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCancel, onSaveStoreProducts }: ProductUrlImportPanelProps) {
+  const { t } = useLocale();
+  const storeImportEnabled = role === "product" && !!onSaveStoreProducts;
+  const [storeMode,          setStoreMode]          = useState<{ url: string; autoLoad: boolean } | null>(null);
   const [urlText,            setUrlText]            = useState("");
   const [phase,              setPhase]              = useState<Phase>("empty");
   const [results,            setResults]            = useState<ProductUrlImportApiResponse["results"]>([]);
@@ -258,6 +270,12 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
 
   async function runExtraction(urls: string[]) {
     if (!urls.length) return;
+    // FR-06: exactly one pasted Shopify store / collection link → batch list instead
+    // of single-page image extraction.
+    if (storeImportEnabled && urls.length === 1 && isStoreImportUrl(urls[0])) {
+      setStoreMode({ url: urls[0], autoLoad: true });
+      return;
+    }
     setPhase("loading");
     setError(null);
     setLoadingUrls(urls);
@@ -345,8 +363,16 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
         </p>
       </div>
 
-      <div style={{ padding: 16 }}>
-        {(phase === "empty" || phase === "loading") && (
+      <div style={{ padding: 16, minWidth: 0 }}>
+        {storeMode && onSaveStoreProducts && (
+          <StoreProductsImportPanel
+            initialUrl={storeMode.url}
+            autoLoad={storeMode.autoLoad}
+            onSave={items => { onSaveStoreProducts(items); setStoreMode(null); handleClear(); }}
+            onBack={() => setStoreMode(null)}
+          />
+        )}
+        {!storeMode && (phase === "empty" || phase === "loading") && (
           <>
             <textarea
               data-testid="url-import-textarea"
@@ -380,7 +406,7 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
               Supports direct image URLs and product pages with product images.
             </p>
             {error && <p style={{ margin: "8px 0 0", fontSize: 11, color: "#F87171" }}>{error}</p>}
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
               <button
                 type="button"
                 data-testid="url-import-extract"
@@ -408,11 +434,29 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
               >
                 Clear
               </button>
+              {storeImportEnabled && (
+                <button
+                  type="button"
+                  data-testid="url-import-open-store"
+                  disabled={phase === "loading"}
+                  onClick={() => {
+                    const single = parsed.urls.length === 1 ? parsed.urls[0] : "";
+                    setStoreMode({ url: single, autoLoad: false });
+                  }}
+                  style={{
+                    padding: "8px 14px", borderRadius: 9,
+                    border: `1px solid ${UI.borderStrong}`, background: "transparent",
+                    color: "#C4B5FD", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  {t("studioModals.storeImport.openButton")}
+                </button>
+              )}
             </div>
           </>
         )}
 
-        {phase === "loading" && loadingUrls.length > 0 && (
+        {!storeMode && phase === "loading" && loadingUrls.length > 0 && (
           <div data-testid="url-import-loading" style={{ marginTop: 16 }}>
             {loadingUrls.map(url => (
               <div key={url} data-testid="url-import-extracting" style={{ marginBottom: 14 }}>
@@ -426,7 +470,7 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
           </div>
         )}
 
-        {phase === "review" && (
+        {!storeMode && phase === "review" && (
           <div data-testid="url-import-results">
             {results.map(result => (
               <ResultGroup
@@ -449,7 +493,7 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
         )}
       </div>
 
-      {phase === "review" && (
+      {!storeMode && phase === "review" && (
         <footer style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: `1px solid ${UI.border}`, background: "rgba(0,0,0,0.15)" }}>
           <span data-testid="url-import-selected-count" style={{ flex: 1, color: selectableCount ? "#C4B5FD" : UI.textSec, fontSize: 12, fontWeight: 800 }}>
             {selectableCount} image{selectableCount === 1 ? "" : "s"} selected

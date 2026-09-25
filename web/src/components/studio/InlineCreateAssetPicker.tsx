@@ -45,6 +45,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ProductImageSurface } from "@/components/products/ProductImageSurface";
 import { productOpportunityErrorInfo, type ProductOpportunityErrorInfo } from "@/lib/productOpportunitiesClient";
 import type { ProductFacts } from "@/lib/productUrlImport/types";
+import type { StoreBatchSaveItem } from "@/lib/studio/storeBatchImport";
 
 export type InlineAssetItem = {
   id: string;
@@ -335,7 +336,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 function assetLabel(source: string): string {
   if (source === "upload") return "Uploaded product image";
-  if (source === "url") return "Imported from link";
+  if (source === "url" || source === "store_batch") return "Imported from link";
   if (source === "product_signal" || source === "product_ideas") return "VibePin product opportunity";
   if (source === "viral_pin") return "Pin Ideas";
   if (source === "pin_opportunity") return "Pin Opportunities";
@@ -660,7 +661,7 @@ function filterMyReferences(items: assets.AssetItem[], filter: MyRefsFilter, sea
   if (filter === "uploaded") {
     list = list.filter(i => i.source === "upload");
   } else if (filter === "url_imported") {
-    list = list.filter(i => i.source === "url");
+    list = list.filter(i => i.source === "url" || i.source === "store_batch");
   } else if (filter === "pin_ideas") {
     list = list.filter(i => i.source === "viral_pin" || i.source === "pin_opportunity");
   } else if (filter === "recent") {
@@ -928,6 +929,38 @@ export function InlineCreateAssetPicker({
     setShowProductUrlImport(false);
   }
 
+  /**
+   * FR-06: Shopify store / collection batch import. Saves the chosen products to My
+   * Products ONLY — no draft, no schedule, no generation, and (unlike a single-link
+   * import) nothing is auto-added to the current selection: up to 100 products land
+   * at once, and the user picks which to use afterwards (PRD C1/C4).
+   */
+  function saveStoreBatchProducts(items: StoreBatchSaveItem[]) {
+    for (const item of items) {
+      assets.saveAsset({
+        role:             "product",
+        assetRole:        "product_image",
+        itemType:         "product",
+        productType:      "physical_product",
+        destinationType:  "product_page",
+        sourceContext:    "url_imported",
+        source:           "store_batch",
+        imageUrl:         item.imageUrl,
+        title:            item.title,
+        sourceUrl:        item.sourceUrl,
+        productUrl:       item.productUrl,
+        sourceDomain:     item.sourceDomain,
+        store:            item.store,
+        collectionHandle: item.collectionHandle,
+        allImages:        item.allImages,
+        facts:            item.facts,
+        price:            item.price,
+        currency:         item.currency,
+      });
+    }
+    setShowProductUrlImport(false);
+  }
+
   function selectProductIdea(product: ProductIdea) {
     const mapped = mapProductIdeaToPickerAsset(product, kwCatMap);
     // saveAsset dedupes by imageUrl+role AND backfills fields a previously-saved
@@ -1166,6 +1199,7 @@ export function InlineCreateAssetPicker({
             <ProductUrlImportPanel
               role="product"
               onSaveSelected={items => { saveUrlImportedProducts(items); setShowProductUrlImport(false); }}
+              onSaveStoreProducts={saveStoreBatchProducts}
               onCancel={() => setShowProductUrlImport(false)}
             />
           )}
