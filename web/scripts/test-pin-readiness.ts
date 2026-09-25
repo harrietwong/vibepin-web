@@ -89,6 +89,43 @@ test("F3: missing board blocks publishing without changing plan status", () => {
   assert.deepEqual(result.missingFields, ["board"]);
 });
 
+// F4-F6: mixed-video split's Instagram-only child (design doc
+// 0924-混合视频草稿自动拆分-技术设计-v0.1.md) has no boardId — the board requirement
+// must lift ONLY when the draft's own explicit destinations are known and name no
+// Pinterest target. Omitted/empty destinations (every pre-existing caller) must keep
+// requiring a board — this is the regression the coordinator's ruling specifically
+// protects.
+test("F4: an explicit Instagram-only destination list needs no board", () => {
+  const result = getPinReadiness({
+    ...fullDetails,
+    boardId: "",
+    plannedDate: "2026-07-01",
+    scheduledDestinations: [{ provider: "instagram", socialConnectionId: "conn-ig", capturedAt: "2026-09-24T00:00:00.000Z" }],
+  });
+  assert.equal(result.detailsStatus, "ready");
+  assert.deepEqual(result.missingFields, []);
+});
+
+test("F5: Pinterest + Instagram destinations still require a board (regression)", () => {
+  const result = getPinReadiness({
+    ...fullDetails,
+    boardId: "",
+    plannedDate: "2026-07-01",
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "conn-pin", capturedAt: "2026-09-24T00:00:00.000Z" },
+      { provider: "instagram", socialConnectionId: "conn-ig", capturedAt: "2026-09-24T00:00:00.000Z" },
+    ],
+  });
+  assert.equal(result.detailsStatus, "need_details");
+  assert.deepEqual(result.missingFields, ["board"]);
+});
+
+test("F6: no destinations at all (legacy/未选目标) still requires a board (regression, safe default)", () => {
+  const result = getPinReadiness({ ...fullDetails, boardId: "", plannedDate: "2026-07-01", scheduledDestinations: [] });
+  assert.equal(result.detailsStatus, "need_details");
+  assert.deepEqual(result.missingFields, ["board"]);
+});
+
 // G. Ready but needs date
 test("G: ready details but needs_date planStatus", () => {
   const result = getPinReadiness({ ...fullDetails, addedToPlanAt: "2026-06-01T10:00:00Z" });

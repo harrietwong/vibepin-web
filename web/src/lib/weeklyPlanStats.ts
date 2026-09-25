@@ -20,6 +20,10 @@ export function draftReadiness(d: PinDraft): ReadinessInput {
     destinationUrl:   d.destinationUrl,
     boardId:          d.boardId || d.metadataDraft?.boardId || "",
     primaryProductId: d.metadataDraft?.primaryProduct?.productId || d.metadataDraft?.linkedProductId || "",
+    // Lets pinReadiness lift the board requirement for an explicit non-Pinterest
+    // destination set (mixed-video split's Instagram-only child). Omitting/emptying
+    // this preserves "board required" — see pinReadiness.ts's boardRequired().
+    scheduledDestinations: d.scheduledDestinations,
   };
 }
 

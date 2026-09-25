@@ -1,13 +1,19 @@
 import { contentMedia, type ContentMedia } from "@/lib/contentDraftModel";
+import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
+import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
 /**
  * pinReadiness.ts — single source of truth for "is this Pin ready to publish?"
  *
  * Shared by Weekly Plan counts and the Batch Edit publish gate so both surfaces
  * agree on what "Ready" / "Needs details" means. A Pin is Ready when it has a
- * publishable image and a REAL Pinterest board selected (boardId). Copy, alt text,
- * Website URL, and product metadata remain editable recommendations, but never
- * block scheduling or publishing. Pure functions — safe in render and on server.
+ * publishable image and a REAL Pinterest board selected (boardId) — UNLESS its
+ * explicit destinations are known and name no Pinterest target (e.g. the
+ * Instagram-only child of the mixed-video split, design doc
+ * docs/coordination/0924-混合视频草稿自动拆分-技术设计-v0.1.md T3), in which case a
+ * board is not required. Copy, alt text, Website URL, and product metadata remain
+ * editable recommendations, but never block scheduling or publishing. Pure
+ * functions — safe in render and on server.
  */
 
 export type RequiredField = "image" | "board";
@@ -31,7 +37,33 @@ export type ReadinessInput = {
   planningStatus?: string | null;
   /** Set when a pin has been added to plan but not yet given a date/time. */
   addedToPlanAt?: string | null;
+  /**
+   * The draft's explicit stored destination intent (same shape/read-rule as
+   * `resolveScheduledDestinations` — pass the draft's own `scheduledDestinations`
+   * array straight through). OMITTED or EMPTY means "unknown / no explicit
+   * destinations" and preserves today's default: a Pinterest board is required.
+   * Only a NON-EMPTY list that names no Pinterest destination lifts the board
+   * requirement — see `boardRequired()` below. Never derive this from anything
+   * other than the draft's own stored field; that is the one read-rule every
+   * other publish path already agrees on.
+   */
+  scheduledDestinations?: ScheduledDestination[] | null;
 };
+
+/**
+ * Whether THIS draft's readiness check should require a Pinterest board.
+ * Default (no explicit destinations, or an empty list) is TRUE — unchanged
+ * behavior for every existing caller that does not pass `scheduledDestinations`.
+ * Only an explicit, non-empty destination list that names no "pinterest" entry
+ * (e.g. the Instagram-only split child) turns this off.
+ */
+function boardRequired(d: Pick<ReadinessInput, "scheduledDestinations">): boolean {
+  const explicit = Array.isArray(d.scheduledDestinations) ? d.scheduledDestinations : [];
+  if (!explicit.length) return true;
+  const resolved = resolveScheduledDestinations({ scheduledDestinations: explicit });
+  if (!resolved.length) return true;
+  return resolved.some(dest => dest.provider === "pinterest");
+}
 
 export const REQUIRED_FIELD_LABELS: Record<RequiredField, string> = {
   image:          "Image",
@@ -111,7 +143,7 @@ export function pinMissingFields(d: ReadinessInput): RequiredField[] {
   const missing: RequiredField[] = [];
   if (!isPublishableContentMedia(d))     missing.push("image");
   // Copy, alt text, Website URL, and product metadata are recommendations only.
-  if (!clean(d.boardId))                 missing.push("board");
+  if (boardRequired(d) && !clean(d.boardId)) missing.push("board");
   return REQUIRED_ORDER.filter(f => missing.includes(f));
 }
 
