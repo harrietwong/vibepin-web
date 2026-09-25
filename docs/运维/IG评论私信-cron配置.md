@@ -27,7 +27,7 @@
 
 | 规则 | 实现 |
 |---|---|
-| 每条评论只能私信 **一次** | 事件表 `UNIQUE(connection_id, comment_id)`；先抢占（insert … on conflict do nothing）再发，抢不到就不发 |
+| Meta 文档称每条评论只能收到**一次** private reply（重复发送时 Meta 实际返回的错误码**尚未验证**，Phase 0 核实） | 我们自己的保证：事件表 `UNIQUE(connection_id, comment_id)`；先抢占（insert … on conflict do nothing）再发，抢不到就不发。**不依赖 Meta 拒绝第二次发送** |
 | 必须在评论后 **7 天内** 发 | 只处理 7 天减 1 小时安全余量内的评论 |
 | 私信进对方 Inbox（已关注）或 Request 文件夹（未关注） | 无需处理 |
 | 私信会附带被评论帖子的链接 | Meta 自动加 |
@@ -56,9 +56,11 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 */5 * * * * curl -fsS -m 70 -H "Authorization: Bearer $CRON_SECRET" https://<prod-domain>/api/cron/instagram-comment-dm >> /var/log/vibepin-ig-comment-dm.log 2>&1
 ```
 
-- 路由 `maxDuration = 60`，内部 45 秒后停止开始新工作（干净退出），所以 curl 超时给 70 秒。
+- 路由 `maxDuration = 60`，内部 **25 秒**后停止开始任何新工作（扫描帖子、翻评论页、抢占、发送都检查）。
+  每个 Graph 请求 15 秒超时，所以 24.9 秒开始的一次私信（≤15s）+ 公开回复（≤15s）+ 写库仍能在 60 秒内结束，
+  避免"私信已发但函数被杀、行没更新成 sent → 15 分钟后重试"。curl 超时给 70 秒。
 - 每个连接每次最多尝试 40 条私信；多出来的下一轮继续。
-- 多个调用方/重叠调用安全：唯一约束保证同一评论最多发一次。
+- 多个调用方/重叠调用安全：唯一约束保证同一评论最多被抢占一次（测试库实测：5 轮 × 8 路并发抢占，每轮恰好 1 个成功）。
 - 手动看"会发给谁"而不真发：`GET /api/cron/instagram-comment-dm?dryRun=1`（同样要 Bearer）。
   不抢占、不发送、不写库，返回 would-send 列表。
 
@@ -67,16 +69,25 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 | outcome | 含义 | 处理 |
 |---|---|---|
 | `ok` | 正常 | — |
-| `missing_scopes` | 该连接没授予评论/私信权限 | 后台页点"重新连接并授予评论 + 私信权限" |
+| `missing_scopes` | 该连接没授予 `instagram_business_manage_comments`（运行只要求这一项；`manage_messages` 仍会申请但不作硬性要求） | 后台页点"重新连接并授予评论 + 私信权限" |
 | `no_token` | 连接已断开/过期 | 重新连接 |
 | `token_invalid` | Meta 返回 OAuthException 190 | 重新连接；已抢占的行保持 `claimed`，重连后自动重试 |
 | `rate_limited` | Meta 限流（code 4/17/32/613 或 HTTP 429） | 本轮停止该连接，下一轮自动继续 |
 | `deadline` / `send_cap` | 时间预算 / 条数上限用完 | 下一轮继续 |
-| `error` | 读库等内部错误 | 看日志 |
+| `circuit_open` | 同一连接本轮**连续 3 次**终止性 4xx（多半是账号级问题，如没开「允许访问消息」） | 本轮停止该连接，不再消耗其它评论；`last_run_error` 里有 Meta 原始报错。修好设置后在后台点「重试失败项」 |
+| `error` | 读库/写库等内部错误（任何一次事件行写入失败都会停止该连接；私信已发但没记上的不计入 sent） | 看日志 `[instagram-comment-dm]` |
 
-`claimed` 超过 15 分钟未更新的行会被下一轮重新接管重试（Meta 同一评论只接受一次私信，所以重试不会重复发）；
-可重试错误（5xx/网络/限流）最多尝试 5 次后记为 `failed`。其它 4xx 直接 `failed`，`last_error` 保存 Meta 原始报错（截断约 500 字）。
-公开回复只在私信成功后才发，它失败不会改变私信状态（记在 `public_reply_status`）。
+`claimed` 超过 15 分钟未更新的行会被下一轮重新接管重试。行只有在"发送结果没能记上"（进程被杀/写库失败）
+或可重试错误时才停在 `claimed`；25 秒预算 + 写库检查把这个窗口压到很小，但**重试是否会被 Meta 拒绝为重复发送尚未验证**（见 Phase 0）。
+
+- `attempts` 只统计**暂时性失败**（5xx / 网络 / `is_transient`），满 5 次记为 `failed`。
+  停止类错误（token 190、限流 4/17/32/613/429）和重新接管**都不计数**。
+- 其它 4xx 直接 `failed`，`last_error` 保存 Meta 原始报错（截断约 500 字）。
+- 公开回复只在私信成功后才发，它失败不会改变私信状态（记在 `public_reply_status`）。
+- 后台「重试失败项」：把**该账号**、评论仍在 7 天（减 1 小时）窗口内的 `failed` 行改回 `claimed`
+  （attempts 归零、updated_at 设为很早的时间），下一轮 cron 的接管步骤会重试。
+- **规则全部停用时**：该账号遗留的 `claimed` 行不会被处理（只有有启用规则的连接才会跑）；
+  7 天内重新启用任一规则后会被重新接管。若对应规则已被删除/停用，接管时记为 `skipped`。
 
 ## Meta 后台配置
 
@@ -98,6 +109,18 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 - 授予的权限以 Meta token 交换返回的 `permissions` 为准写入 `social_connections.scopes`；
   若 Meta 未返回 `permissions`，回退值只含基础两项，后台会显示"未授予"——此时再重连一次即可。
 
+## Phase 0 试运行（上线前必做）
+
+在真实启用规则前，用站长自己的账号做一次小规模验证，并把结果记下来：
+
+1. **分页假设**：找一条评论数 > 50 的帖子，建一条只针对它的规则（停用状态），点「预览匹配」，
+   确认**最新**的评论出现在结果里（验证 Meta 按新到旧返回、我们只翻前几页的假设）。
+2. **单次私信**：用第二个 Instagram 账号在自己的帖子下评论关键词 → 启用规则 → 等一轮 cron（≤5 分钟），
+   确认第二个账号**恰好收到一条**私信，后台记录为 `sent`。
+3. **重复发送错误码**：若日志/后台出现对同一评论的第二次 private reply 被 Meta 拒绝，
+   记录 Meta 返回的 `code` / `error_subcode` / message，回填到本文档和 `commentDmLogic.ts` 的分类说明里
+   （目前该错误码**未验证**，代码不依赖它）。
+
 ## 上线顺序
 
 1. 部署会话：合并分支 → 门禁 → 部署（按项目部署纪律）。
@@ -105,7 +128,8 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 3. 部署会话：按上面添加 crontab 行（需用户批准）。
 4. 站长：Meta 后台加两个权限 + Instagram App 打开「允许访问消息」。
 5. 站长：后台 `/admin/instagram-auto-dm` → **重新连接并授予评论 + 私信权限**（即 `features=comment_dm`）→ 回到后台确认显示"已授予"。
-6. 站长：新建规则（默认停用，开始时间默认 7 天前）→ **预览匹配**（只看不发）→ 确认名单无误。
-7. 站长：启用规则。下一轮 cron（≤5 分钟）开始真实发送；后台"最近记录"看 `sent` / `failed` 与报错。
+6. 站长：先做上面的 **Phase 0 试运行**（三项全部记录）。
+7. 站长：新建规则（默认停用，开始时间默认 7 天前）→ **预览匹配**（只看不发）→ 确认名单无误。
+8. 站长：启用规则。下一轮 cron（≤5 分钟）开始真实发送；后台"最近记录"看 `sent` / `failed` 与报错。
 
 回滚：在后台停用规则即可立即停止发送（无需改代码或 crontab）。

@@ -231,7 +231,7 @@ const en = {
   "igdm.retryFailed.running": "Queuing…",
   "igdm.events.title": "Recent events",
   "igdm.events.empty": "No events yet.",
-  "igdm.footer": "Comment webhooks need Meta Advanced Access, so this polls. Meta allows exactly one private reply per comment, within 7 days.",
+  "igdm.footer": "Comment webhooks need Meta Advanced Access, so this polls. Meta's docs say each comment can get only one private reply, within 7 days; each comment is claimed once here before sending.",
 } as const;
 
 const zh: Record<keyof typeof en, string> = {
@@ -425,7 +425,7 @@ const zh: Record<keyof typeof en, string> = {
   "igdm.retryFailed.running": "处理中…",
   "igdm.events.title": "最近记录",
   "igdm.events.empty": "暂无记录。",
-  "igdm.footer": "评论 webhook 需要 Meta 高级权限，所以这里用轮询。Meta 规定每条评论只能私信一次，且须在 7 天内。",
+  "igdm.footer": "评论 webhook 需要 Meta 高级权限，所以这里用轮询。Meta 文档称每条评论只能收到一次私信，且须在 7 天内；本系统在发送前对每条评论只抢占一次。",
 };
 
 export type AdminMessageKey = keyof typeof en;
