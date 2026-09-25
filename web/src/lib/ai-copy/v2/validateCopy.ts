@@ -269,9 +269,17 @@ const MATERIAL_TRAILING_QUALIFIERS = new Set<string>([
   "free", "color", "colored", "colour", "coloured", "inspired", "alternative", "substitute", "pattern",
 ]);
 
-/** Words that may directly precede a material without qualifying it ("made of silk"). */
-const MATERIAL_LEADING_CONNECTORS = new Set<string>([
-  "of", "made", "crafted", "constructed", "woven", "knit", "knitted", "using", "featuring", "features", "real", "genuine", "solid", "pure",
+/**
+ * Words that, directly before a material, make it a different / imitation material
+ * ("faux leather", "PU leather", "lab grown diamonds"). Any other preceding adjective
+ * ("speckled ceramic", "glazed stoneware", "genuine leather") leaves the material
+ * itself asserted. Hyphen-glued forms ("leather-free", "silk-like") are rejected
+ * separately, and negated sentences never reach this check.
+ */
+const MATERIAL_LEADING_WEAKENERS = new Set<string>([
+  "faux", "fake", "pu", "vegan", "imitation", "synthetic", "artificial", "simulated", "simulant",
+  "mock", "pseudo", "eco", "bonded", "reconstituted", "microfiber", "poly", "art", "art.",
+  "lab", "grown", "created", "cultured", "cubic", "plastic", "paper", "printed",
 ]);
 
 type SegToken = { text: string; sepBefore: string };
@@ -343,7 +351,7 @@ function materialFlanksOk(c: SellerClause, start: number, length: number): boole
   if (start > 0) {
     const prev = c.tokens[start - 1];
     if (isHyphenJoin(first.sepBefore)) return false;
-    if (!isHardBoundary(first.sepBefore) && !STOPWORDS.has(prev.text) && !MATERIAL_LEADING_CONNECTORS.has(prev.text)) return false;
+    if (!isHardBoundary(first.sepBefore) && MATERIAL_LEADING_WEAKENERS.has(prev.text)) return false;
   }
   const endIdx = start + length;
   if (endIdx < c.tokens.length) {

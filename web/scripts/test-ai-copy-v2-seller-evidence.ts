@@ -166,6 +166,9 @@ for (const [page, title, why] of [
   ["Faux leather exterior with gold stitching", "Leather Bag", "faux leather does not ground bare leather"],
   ["PU leather exterior", "Leather Bag", "PU leather does not ground bare leather"],
   ["Soft vegan leather strap", "Leather Strap", "vegan leather does not ground bare leather"],
+  ["Synthetic leather upper", "Leather Shoes", "synthetic leather does not ground bare leather"],
+  ["Imitation silk lining", "Silk Lined Jacket", "imitation silk does not ground bare silk"],
+  ["Set with lab grown diamonds", "Diamond Ring", "lab grown diamonds do not ground diamond"],
   ["Gold tone finish", "Gold Necklace", "gold tone does not ground bare gold"],
   ["Silk-like polyester fabric", "Silk Scarf", "silk-like does not ground bare silk"],
   ["Leather-free vegan construction", "Leather Wallet", "leather-free does not ground leather"],
@@ -187,6 +190,15 @@ test("material: 不是真丝 (Chinese negation) grounds nothing", () => {
 test("material: a clean affirmative seller sentence grounds it (\"Made of genuine leather.\" → \"genuine leather\")", () => {
   const r = run(pageCard("Made of genuine leather. Fits a 13-inch laptop."), { title: "Genuine Leather Laptop Sleeve", description: "A slim sleeve." },
     [{ type: "material", value: "genuine leather", field: "title" }]);
+  assert.deepEqual(unsupported(r), [], JSON.stringify(r.issues));
+});
+test("material: an ordinary adjective before the material keeps it asserted (\"Handmade Speckled Ceramic Mug\" → ceramic)", () => {
+  const card = createFactCardV1({ sessionId: "s", draftId: "d", locale: "en", facts: buildFacts({ draftId: "d", idempotencyKey: "k", productContext: { title: "Handmade Speckled Ceramic Mug", attributes: ["Glazed stoneware", "Holds 12 oz", "Dishwasher safe"] } }) });
+  const r = run(card, { title: "Speckled Ceramic Mug", description: "Glazed stoneware that holds 12 oz and is dishwasher safe." }, [
+    { type: "material", value: "ceramic", field: "title" },
+    { type: "material", value: "Glazed stoneware", field: "description" },
+    { type: "numeric_commercial", value: "12 oz", field: "description" },
+  ]);
   assert.deepEqual(unsupported(r), [], JSON.stringify(r.issues));
 });
 test("brand: 'does not work with Spotify' does not ground Spotify", () => {

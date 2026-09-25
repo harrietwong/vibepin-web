@@ -135,6 +135,32 @@ async function main() {
     }
   });
 
+  await test("P1 0925: detector prompt defines the claim types the validator checks (grounding-blind, verbatim values)", () => {
+    const d: string = orch.DETECTOR_SYSTEM;
+    assert.ok(/value must be copied exactly as written/.test(d), "verbatim value");
+    assert.ok(/Colors, finishes seen in a photo, shapes, sizes, parts or features, and objects in the scene or background are not material/.test(d));
+    assert.ok(/Ordinary product features, capabilities, and uses .* are not efficacy/.test(d));
+    assert.ok(/"Find it on Amazon" is not an availability claim/.test(d));
+    assert.ok(!/grounding|facts:/i.test(d.replace("self-reported", "")), "detector never sees grounding facts");
+  });
+  await test("P1 0925: incomplete claim detection is retried once; twice incomplete stays a closed 422", async () => {
+    for (const [answers, expectOk] of [[["garbage", { claims: [] }], true], [["garbage", "garbage"], false]] as const) {
+      let detects = 0;
+      const queue = [...answers];
+      __setCopyProviderForTests({
+        async generate() { return out("Create a calm reading corner with warm neutral details."); },
+        async detectClaims() { detects++; return queue.shift(); },
+      });
+      if (expectOk) {
+        const r = await orchestrateCopyGeneration(req()).catch((e: { validationReport?: unknown }) => { throw new Error(JSON.stringify(e.validationReport)); });
+        assert.equal(r.validationReport.valid, true);
+      } else {
+        await assert.rejects(orchestrateCopyGeneration(req()), (e: unknown) => e instanceof ValidationErrorV2 && e.validationReport.issues.some(i => i.code === "CLAIM_DETECTION_INCOMPLETE"));
+      }
+      assert.equal(detects, 2, "exactly one retry");
+    }
+  });
+
   console.log("\n[orchestrator: 500 budget boundary]");
   await test("496-char body + ' #ad' = exactly 500 → valid without repair", async () => {
     const calls = newCalls();

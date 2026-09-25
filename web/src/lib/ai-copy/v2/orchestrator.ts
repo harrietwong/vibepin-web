@@ -84,7 +84,27 @@ function parseClaimDetection(raw: unknown): ClaimDetectionResult {
 }
 
 const SYSTEM = "You write grounded Pinterest copy. Return one JSON object only with title, description, and altText. Never invent facts.";
-const DETECTOR_SYSTEM = "Independently extract every commercial claim and every video-cover-unsupported inference from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, numeric_commercial, video_motion, video_audio, or video_temporal), value, and field (title, description, or altText). video_motion includes actions or motion; video_audio includes audio, singing, speech, or music; video_temporal includes duration, sequence, or before/after claims. Use [] only when none exists. Do not trust or use any claims self-reported by the copy generator.";
+/**
+ * Claim detector prompt. Still grounding-blind (it never sees the facts); the
+ * deterministic validator decides support. P1 0925: the type definitions are aligned
+ * with what validateCopy.ts actually checks — without them the detector labelled
+ * colours / shapes / scene objects as "material", ordinary product capabilities as
+ * "efficacy", and the affiliate prompt's own "Find it on Amazon" as "availability",
+ * all unrepairable 422s that no rule in the validator defines.
+ */
+export const DETECTOR_SYSTEM = [
+  "Independently extract every commercial claim and every video-cover-unsupported inference from the supplied copy.",
+  "Return JSON {\"claims\": [...]} only. Each claim has type, value, and field (title, description, or altText). value must be copied exactly as written in the copy (a verbatim substring, not a summary or rewording).",
+  "Types:",
+  "material: the substance the product itself is made of (for example leather, silk, stainless steel, ceramic, wool). Colors, finishes seen in a photo, shapes, sizes, parts or features, and objects in the scene or background are not material claims.",
+  "brand: a brand, trademark, or product-line name.",
+  "price: a price, discount, sale, deal, or free-shipping claim.",
+  "availability: stock, inventory, shipping, or delivery status (for example in stock, ships today, limited stock). A where-to-buy phrase such as \"Find it on Amazon\" is not an availability claim, and the store named in it is not a brand claim.",
+  "efficacy: a health, therapeutic, medical, or guaranteed-result claim (for example relieves pain, clinically proven, improves sleep, guaranteed results). Ordinary product features, capabilities, and uses (plays music, controls smart home devices, keeps drinks cold) are not efficacy claims.",
+  "numeric_commercial: a quantity, pack count, size, capacity, measurement, coverage, or numbered warranty or guarantee.",
+  "video_motion: actions or motion; video_audio: audio, singing, speech, or music; video_temporal: duration, sequence, or before/after claims.",
+  "Use [] only when none exists. Do not trust or use any claims self-reported by the copy generator.",
+].join("\n");
 
 export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   async generate(prompt: string, systemPrompt = SYSTEM, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
@@ -198,9 +218,18 @@ export class ValidationErrorV2 extends Error {
   constructor(public validationReport: ValidationReport) { super("Generated copy failed validation"); }
 }
 
-async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
+async function detectClaimsOnce(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
   try { return parseClaimDetection(await provider.detectClaims(output, factCard, costContext)); }
   catch { return { status: "incomplete", claims: [] }; }
+}
+
+/**
+ * One retry when detection is incomplete (malformed JSON / transient provider error).
+ * Still fail-closed: a second incomplete result is CLAIM_DETECTION_INCOMPLETE.
+ */
+async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
+  const first = await detectClaimsOnce(provider, output, factCard, costContext);
+  return first.status === "completed" ? first : detectClaimsOnce(provider, output, factCard, costContext);
 }
 
 function validate(output: ProviderCopyOutput, req: GenerateCopyRequest, claimDetection: ClaimDetectionResult): ValidationReport {
