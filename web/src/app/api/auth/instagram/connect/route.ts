@@ -25,7 +25,13 @@ import {
 } from "@/lib/server/authUser";
 import { ConfigurationError } from "@/lib/server/pinterest/errors";
 import { canConnectAnotherAccount } from "@/lib/server/social/connectionLimit";
-import { buildAuthorizeUrl, getInstagramEnv, isInstagramConfigured } from "@/lib/server/instagram/config";
+import {
+  buildAuthorizeUrl,
+  getInstagramEnv,
+  isInstagramConfigured,
+  INSTAGRAM_COMMENT_DM_SCOPES,
+} from "@/lib/server/instagram/config";
+import { requireSuperAdminFromRequest } from "@/lib/server/superAdmin";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_RETURN_COOKIE,
@@ -129,12 +135,35 @@ function connectConfigError(): ConfigurationError | null {
 
 type ConnectPayload = { authorizeUrl: string; state: string };
 
-function buildConnectPayload(): ConnectPayload {
+function buildConnectPayload(extraScopes: readonly string[] = []): ConnectPayload {
   const configErr = connectConfigError();
   if (configErr) throw configErr;
   const state = generateState();
-  const authorizeUrl = buildAuthorizeUrl(getInstagramEnv(), state);
+  const authorizeUrl = buildAuthorizeUrl(getInstagramEnv(), state, extraScopes);
   return { authorizeUrl, state };
+}
+
+/**
+ * Opt-in extra scopes for `?features=comment_dm` (internal comment → DM automation).
+ *
+ * Honoured ONLY when the requester is a super admin AND is the same user as the
+ * session starting this connect; for everyone else the param is silently ignored
+ * and the authorize URL is exactly the normal one. No feature param → no extra
+ * scopes, no super-admin lookup at all.
+ */
+async function requestedExtraScopes(req: NextRequest, uid: string): Promise<readonly string[]> {
+  const features = (req.nextUrl.searchParams.get("features") ?? "")
+    .split(",")
+    .map(f => f.trim())
+    .filter(Boolean);
+  if (!features.includes("comment_dm")) return [];
+  try {
+    const admin = await requireSuperAdminFromRequest(req);
+    if (admin && admin.id === uid) return INSTAGRAM_COMMENT_DM_SCOPES;
+  } catch (err) {
+    console.error("[instagram/connect] super-admin check failed, ignoring features:", (err as Error).message);
+  }
+  return [];
 }
 
 function attachOAuthStateCookie(
@@ -183,9 +212,11 @@ export async function GET(req: NextRequest) {
     return settingsRedirect(req, "account_limit");
   }
 
+  const extraScopes = await requestedExtraScopes(req, uid);
+
   let payload: ConnectPayload;
   try {
-    payload = buildConnectPayload();
+    payload = buildConnectPayload(extraScopes);
   } catch (err) {
     if (err instanceof ConfigurationError) return configErrorResponse(req, err, false);
     console.error("[instagram/connect] unexpected error:", (err as Error).message);
