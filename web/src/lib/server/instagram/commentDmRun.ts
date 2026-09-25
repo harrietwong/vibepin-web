@@ -2,7 +2,7 @@
  * Instagram comment keyword → private reply (DM): orchestration (server-only).
  *
  * One run over one connection:
- *   1. scope gate  — the stored grant must include INSTAGRAM_COMMENT_DM_SCOPES;
+ *   1. scope gate  — the stored grant must include INSTAGRAM_COMMENT_DM_REQUIRED_SCOPES;
  *   2. token       — via the injected getter (production: getInstagramAccessToken);
  *   3. reclaim     — `claimed` rows untouched for CLAIM_STALE_MS are retried (Meta
  *                    accepts only one private reply per comment, so a retry after

@@ -80,11 +80,19 @@ export const INSTAGRAM_COMMENT_DM_SCOPES = [
   "instagram_business_manage_messages",
 ] as const;
 
-/** True when a stored grant (social_connections.scopes) covers every comment-DM scope. */
+/**
+ * The scopes the automation actually REQUIRES before it runs: only the documented
+ * one (Meta Private Replies doc: instagram_business_basic + _manage_comments; basic
+ * is always part of the grant). manage_messages is still REQUESTED (see above) but
+ * not required, so a grant without it is not blocked on an unverified assumption.
+ */
+export const INSTAGRAM_COMMENT_DM_REQUIRED_SCOPES = ["instagram_business_manage_comments"] as const;
+
+/** True when a stored grant (social_connections.scopes) covers the required comment-DM scope(s). */
 export function hasInstagramCommentDmScopes(scopes: readonly string[] | null | undefined): boolean {
   if (!Array.isArray(scopes)) return false;
   const granted = new Set(scopes.map(s => String(s).trim()));
-  return INSTAGRAM_COMMENT_DM_SCOPES.every(scope => granted.has(scope));
+  return INSTAGRAM_COMMENT_DM_REQUIRED_SCOPES.every(scope => granted.has(scope));
 }
 
 export type InstagramEnv = {

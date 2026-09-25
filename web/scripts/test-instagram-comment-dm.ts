@@ -303,9 +303,10 @@ async function main(): Promise<void> {
     assert.equal(dup.searchParams.get("scope"), "instagram_business_basic,instagram_business_content_publish");
   });
 
-  await test("hasInstagramCommentDmScopes needs both scopes", () => {
+  await test("hasInstagramCommentDmScopes requires only manage_comments (the documented scope)", () => {
     assert.equal(hasInstagramCommentDmScopes(["instagram_business_basic", "instagram_business_content_publish"]), false);
-    assert.equal(hasInstagramCommentDmScopes(["instagram_business_manage_comments"]), false);
+    assert.equal(hasInstagramCommentDmScopes(["instagram_business_manage_messages"]), false);
+    assert.equal(hasInstagramCommentDmScopes(["instagram_business_basic", "instagram_business_manage_comments"]), true);
     assert.equal(hasInstagramCommentDmScopes([...INSTAGRAM_COMMENT_DM_SCOPES]), true);
     assert.equal(hasInstagramCommentDmScopes(null), false);
   });
