@@ -1,4 +1,5 @@
 import type { AmazonImportMeta, ProductFacts } from "@/lib/productUrlImport/types";
+import type { StoreProductsImportResponse } from "@/lib/productUrlImport/storeBatchShared";
 
 export const DEFAULT_MAX_URLS = 10;
 export const HARD_MAX_URLS = 20;
@@ -125,6 +126,25 @@ export async function fetchProductUrlImport(urls: string[]): Promise<ProductUrlI
   }
 
   return resp.json() as Promise<ProductUrlImportApiResponse>;
+}
+
+/**
+ * FR-06: Shopify store / collection batch import. One request per batch; the server
+ * derives every endpoint itself — only the pasted URL is sent.
+ */
+export async function fetchStoreProductsImport(url: string): Promise<StoreProductsImportResponse> {
+  const resp = await fetch("/api/import/store-products", {
+    method:  "POST",
+    headers: await importAuthHeaders(),
+    body:    JSON.stringify({ url }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Import failed (${resp.status})`);
+  }
+
+  return resp.json() as Promise<StoreProductsImportResponse>;
 }
 
 export function autoSelectTopCandidates(

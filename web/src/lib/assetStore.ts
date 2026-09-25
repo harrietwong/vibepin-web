@@ -25,7 +25,9 @@ export type AssetSource =
   | "viral_pin"
   | "url"
   | "recent"
-  | "shopify";
+  | "shopify"
+  /** FR-06: saved from a Shopify store / collection batch import (`store` + `collectionHandle` record where). */
+  | "store_batch";
 
 export type AssetItem = {
   id:           string;
@@ -54,6 +56,8 @@ export type AssetItem = {
   /** Server-side commerce id (e.g. Shopify store_products.id). NEVER the local asset id. */
   shopifyProductId?: string;
   store?:        string;
+  /** FR-06 store batch import: the Shopify collection handle the product came from, if any. */
+  collectionHandle?: string;
   allImages?:    string[];
   /**
    * Structured facts from an independent-store URL import (FR-03). Copy context only:
