@@ -262,6 +262,33 @@ test("a mixed_video_requires_split sync issue on an already-locally-scheduled ca
   assert.match(cardSource, /syncIssue\?\.code === "mixed_video_requires_split"/);
 });
 
+const studioBoardSource = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
+
+test("StudioBoard.handleSchedule accepts the instagramCaption option and calls splitMixedVideoDraftInStore AFTER the slot is assigned", () => {
+  assert.match(studioBoardSource, /const handleSchedule = useCallback\(\(id: string, options\?: \{ instagramCaption\?: string \}\)/);
+  const scheduleBody = studioBoardSource.slice(
+    studioBoardSource.indexOf("const handleSchedule = useCallback"),
+    studioBoardSource.indexOf("const handleCustomSchedule = useCallback"),
+  );
+  const slotIdx = scheduleBody.indexOf("ensureScheduledPlanTime(id)");
+  const splitIdx = scheduleBody.indexOf("splitMixedVideoDraftInStore(id");
+  assert.ok(slotIdx > -1 && splitIdx > -1, "both calls are present");
+  assert.ok(splitIdx > slotIdx, "the split call comes AFTER the schedule slot is written, so the IG child inherits it");
+});
+
+test("StudioBoard.handleCustomSchedule accepts the instagramCaption option and calls splitMixedVideoDraftInStore AFTER the slot is assigned", () => {
+  assert.match(studioBoardSource, /const handleCustomSchedule = useCallback\(\(id: string, date: string, time: string, options\?: \{ instagramCaption\?: string \}\)/);
+  const customBody = studioBoardSource.slice(studioBoardSource.indexOf("const handleCustomSchedule = useCallback"));
+  const slotIdx = customBody.indexOf("smartScheduleDraft(id");
+  const splitIdx = customBody.indexOf("splitMixedVideoDraftInStore(id");
+  assert.ok(slotIdx > -1 && splitIdx > -1, "both calls are present");
+  assert.ok(splitIdx > slotIdx, "the split call comes AFTER the schedule slot is written, so the IG child inherits it");
+});
+
+test("StudioBoard wires onSchedule/onCustomSchedule straight to these handlers (no separate untouched pair)", () => {
+  assert.match(studioBoardSource, /onSchedule=\{handleSchedule\} onCustomSchedule=\{handleCustomSchedule\}/);
+});
+
 const formSource = readFileSync("src/components/pins/PinFieldsForm.tsx", "utf8");
 
 test("PinFieldsForm supports hiddenFields for title/websiteUrl/board", () => {
