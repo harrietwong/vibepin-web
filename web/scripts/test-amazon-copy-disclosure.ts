@@ -161,6 +161,15 @@ async function main() {
     }
   });
 
+  await test("P1 0925: the repair model sees every issue's message (which word to remove), not just its code", () => {
+    const s = orch.describeRepairIssues({ valid: false, issues: [
+      { code: "DESCRIPTIVE_ONLY_VIOLATION", field: "title", message: 'Descriptive-only fact "green" cannot be used in product title' },
+      { code: "DESCRIPTION_TOO_LONG", field: "description", message: "Description length (512) exceeds maximum of 496 characters" },
+    ] });
+    assert.ok(s.includes('title:DESCRIPTIVE_ONLY_VIOLATION (Descriptive-only fact "green" cannot be used in product title)'), s);
+    assert.ok(s.includes("description:DESCRIPTION_TOO_LONG (Description length (512) exceeds maximum of 496 characters)"), s);
+  });
+
   console.log("\n[orchestrator: 500 budget boundary]");
   await test("496-char body + ' #ad' = exactly 500 → valid without repair", async () => {
     const calls = newCalls();

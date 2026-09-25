@@ -142,9 +142,18 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   }
 
   async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
-    const issues = report.issues.map(issue => issue.code === "DESCRIPTION_TOO_LONG" ? `${issue.field}:${issue.code} (${issue.message})` : `${issue.field}:${issue.code}`).join(", ");
-    return this.generate(`${prompt}\n\nRepair these validation issues: ${issues}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM, costContext);
+    return this.generate(`${prompt}\n\nRepair these validation issues: ${describeRepairIssues(report)}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM, costContext);
   }
+}
+
+/**
+ * Issue list shown to the repair model. Every issue carries its message, so the model
+ * knows WHICH word to remove (e.g. `Descriptive-only fact "green" cannot be used in
+ * product title`), not just the code. Only repairable reports reach repair, so no
+ * message here can invite an unsupported claim back in.
+ */
+export function describeRepairIssues(report: ValidationReport): string {
+  return report.issues.map(issue => `${issue.field}:${issue.code} (${issue.message})`).join(", ");
 }
 
 let override: CopyGenerationProvider | null = null;
