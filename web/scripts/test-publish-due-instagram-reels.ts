@@ -558,6 +558,18 @@ function nextTick(): void { draft.publish_claimed_at = null; }
     assert.equal(draft.payload.errorCategory, "content");
   });
 
+  await test("R14: the route hands the STORED row's copyProfile to the Reel dispatcher", false, async () => {
+    draft.payload.copyProfile = "instagram_caption";
+    await run();
+    assert.equal(reelDispatchCalls, 1);
+    assert.equal(reelDispatchInputs[0].copyProfile, "instagram_caption");
+  });
+
+  await test("R15: an ordinary Reel row hands no copyProfile (title behaviour unchanged)", false, async () => {
+    await run();
+    assert.equal(reelDispatchInputs[0].copyProfile, undefined);
+  });
+
   // ── Part 2: the real due binding ─────────────────────────────────────────────
   console.log("\n--- dispatchDueInstagramReel (real module, fake durable dispatcher) ---");
   const { dispatchDueInstagramReel } = await import("../src/lib/server/publish/v76InstagramReelsDue");
@@ -580,6 +592,13 @@ function nextTick(): void { draft.publish_claimed_at = null; }
     assert.equal(lastProviderPost?.caption, "Frozen caption");
     assert.equal(out.result.outcome, "published");
     assert.equal(out.observed?.providerStatus, 200);
+  });
+
+  await test("D1b: a split-off IG child (copyProfile instagram_caption) sends NO title; caption = description", false, async () => {
+    providerAnswer = () => ({ ok: true, status: "published", externalPostId: "ig-100", providerStatus: 200 });
+    await dispatchDueInstagramReel({} as never, { ...dueInput, copyProfile: "instagram_caption" }, socialDeps);
+    assert.equal(lastProviderPost?.title, undefined, "no title — the caption must not open with it or with \"Untitled content\"");
+    assert.equal(lastProviderPost?.caption, "Frozen caption");
   });
 
   await test("D2: Instagram's error text is carried back; a URL-bearing one is dropped", false, async () => {

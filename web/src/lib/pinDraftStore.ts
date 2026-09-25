@@ -172,6 +172,17 @@ export interface PinDraft {
   // ── Create Pins board (studioBoardV2) ──────────────────────────────────────
   /** AI‑Pin → source‑upload relationship of record (the reliable link). */
   parentDraftId?:      string;
+  // ── Mixed Pinterest+Instagram video split (design 0924, T2) ──────────────────
+  // Set only on the Instagram child `splitMixedVideoDraft` produces (id
+  // `${parent}__ig`). Ride the pin_drafts payload — no migration.
+  /** "instagram_caption": `description` IS the complete Instagram caption; the
+   *  Reel publish paths send NO separate title (Fable ruling 2 — `title` holds the
+   *  caption's first line only so status/confirmation checks pass). */
+  copyProfile?:        "instagram_caption";
+  /** The draft this child was split off from. Display/navigation only — metering
+   *  never reads it (pairing is derived from the id, Fable ruling 1). Distinct from
+   *  `parentDraftId`, which means "AI image's source upload". */
+  splitFromDraftId?:   string;
   /** Snapshot of the parent's image at generation time — display only, NOT the link. */
   sourceImageUrl?:     string;
   // ── Reference → result association (create-pin PRD Section G2) ─────────────

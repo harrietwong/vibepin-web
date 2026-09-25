@@ -13,10 +13,10 @@
  * ── Why the IG caption is a parameter, not read off the draft ───────────────
  * There is no per-platform copy field on `PinDraft` today (design §1) — the
  * only description available is the Pinterest one. Threading it in as
- * `opts.instagramCaption` keeps this module from having to grow `PinDraft`
- * (a hot, multi-session conflict file) as part of T1. T2 decides where the
- * caption text actually comes from (UI input box / operator script queue
- * field) and passes it in.
+ * `opts.instagramCaption` keeps the split a pure projection: the caption text
+ * comes from the caller (UI input box in T3, the operator queue's
+ * `copy.instagram.caption` via scripts/lib/splitMixedVideoOps.ts) and lands
+ * in the child's `description` — which, per design §3, IS the IG caption.
  *
  * ── Determinism / idempotency ────────────────────────────────────────────────
  * The child id is always `${parentId}__ig` (design §2). Splitting is a pure
@@ -38,10 +38,10 @@ import { sanitizeHandoffField } from "../weeklyPlanHandoff";
  *  T2's server/script callers can recognize the shape without re-deriving it. */
 export const IG_CHILD_ID_SUFFIX = "__ig";
 
-/** The marker fields a split-off Instagram child carries. Kept as an
- *  intersection type rather than new `PinDraft` fields so this module does
- *  not have to touch `pinDraftStore.ts` (T2 lifts these onto the interface
- *  when it wires the Reel publish path to skip the title). */
+/** The marker fields a split-off Instagram child carries, made REQUIRED. T2
+ *  lifted both onto `PinDraft` as optional fields (pinDraftStore.ts), so a
+ *  child round-trips through the store and the pin_drafts payload; this type
+ *  only narrows them to "always present" for the value this module returns. */
 export type SplitChildMarkers = {
   /** How the Reel publish path should treat this draft's copy (design §3):
    *  present ⇒ do not prepend/attach a separate title, the description IS
@@ -53,12 +53,11 @@ export type SplitChildMarkers = {
 };
 
 /**
- * `copyProfile` is optional here (not on `PinDraft` itself — see
- * `SplitChildMarkers`) purely so this function accepts EITHER a plain
- * `PinDraft` or a draft this module previously produced as a child, and can
- * recognize the latter to stay idempotent (§ idempotency above).
+ * Accepts EITHER a plain `PinDraft` or a draft this module previously produced
+ * as a child (`PinDraft.copyProfile` set), and recognizes the latter to stay
+ * idempotent (§ idempotency above).
  */
-export type SplitMixedVideoDraftInput = PinDraft & { copyProfile?: "instagram_caption" };
+export type SplitMixedVideoDraftInput = PinDraft;
 
 export type SplitChildDraft = PinDraft & SplitChildMarkers;
 

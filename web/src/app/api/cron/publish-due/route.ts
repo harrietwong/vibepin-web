@@ -1485,6 +1485,8 @@ export async function GET(req: Request): Promise<Response> {
             destination: frozenDestination,
             scheduleAt: row.scheduled_at ?? undefined,
             latestStartMs: deadlineMs,
+            // From the owner's stored row: a split-off IG child sends no title.
+            copyProfile: row.payload.copyProfile,
           });
           // What was actually observed. The provider's status only when the provider
           // was really asked this round and answered on the network — the dispatcher's

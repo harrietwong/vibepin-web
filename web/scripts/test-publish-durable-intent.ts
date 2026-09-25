@@ -116,6 +116,13 @@ async function main() {
       row: { ...storedRow, updated_at: "2026-09-01T12:00:00+00:00" },
     }), OWNER, receipt), { ok: true, priorIntentId: null }, "equivalent Postgres timestamptz serialization must not make a valid receipt stale");
   });
+  await test("stored validation reports the STORED row's copyProfile (and only when set)", async () => {
+    const withProfile = { ...storedRow, payload: { ...draft, copyProfile: "instagram_caption" } };
+    assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({ row: withProfile }), OWNER, receipt),
+      { ok: true, priorIntentId: null, copyProfile: "instagram_caption" }, "copyProfile is not in the fingerprint, so the receipt still validates");
+    const junk = { ...storedRow, payload: { ...draft, copyProfile: "something_else" } };
+    assert.deepEqual(await validateStoredImmediatePublishReceipt(storedDb({ row: junk }), OWNER, receipt), { ok: true, priorIntentId: null });
+  });
   await test("server accepts the exact lifecycle snapshot if sync wins the route race", async () => {
     const priorIntentId = `publish:${draft.contentId}:prior1234`;
     const retryDraft: PinDraft = {

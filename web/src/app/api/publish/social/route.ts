@@ -79,6 +79,7 @@ import {
   type PublishIntentClaim,
 } from "@/lib/server/publish/publishIntentLedger";
 import { dispatchSupabaseV76InstagramReel } from "@/lib/server/publish/v76InstagramReelsServer";
+import { reelPostTitle } from "@/lib/publish/reelCopy";
 import type { PublishDestination } from "@/lib/contentDraftModel";
 
 export const dynamic = "force-dynamic";
@@ -507,7 +508,16 @@ export async function POST(req: Request) {
           return getSocialProviderById(connection.authProvider).publishPost({
             provider: "instagram",
             connection,
-            post: { ...post, imageUrls: [], videoUrls: [signedFrozenCopyUrl] },
+            // A split-off IG child (stored copyProfile) sends no title: its
+            // description IS the caption (Fable ruling 2, reelCopy.ts). The receipt
+            // binding above still checked the submitted title; only the provider
+            // hand-off drops it.
+            post: {
+              ...post,
+              title: reelPostTitle(stored.copyProfile, post.title),
+              imageUrls: [],
+              videoUrls: [signedFrozenCopyUrl],
+            },
             userId: uid,
           });
         },

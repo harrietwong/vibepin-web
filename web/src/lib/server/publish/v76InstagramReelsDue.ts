@@ -34,6 +34,7 @@ import type { PublishResult, SocialConnection } from "@/lib/social/types";
 import { safeProviderMessage } from "@/lib/server/pinterest/videoPinAdapter";
 import { dispatchSupabaseV76InstagramReel } from "./v76InstagramReelsServer";
 import type { DurableVideoPublishResult } from "./v76PinterestVideoPublish";
+import { reelPostTitle } from "@/lib/publish/reelCopy";
 
 /** What the Instagram provider actually answered on THIS dispatch, when it was asked. */
 export type DueReelProviderObservation = {
@@ -73,6 +74,10 @@ export async function dispatchDueInstagramReel(
     destination: PublishDestination;
     scheduleAt?: string;
     latestStartMs?: number;
+    /** The stored draft's `copyProfile` (read by the caller from the owner's
+     *  row). "instagram_caption" ⇒ no title is sent (reelCopy.ts). Never put into
+     *  the receipt: it is not part of the confirmation fingerprint. */
+    copyProfile?: unknown;
   },
   socialDeps?: DueReelSocialDeps,
 ): Promise<DueReelDispatchResult> {
@@ -125,7 +130,9 @@ export async function dispatchDueInstagramReel(
         // The FROZEN copy the schedule authorized, not the live draft: the same
         // source of truth the Pinterest video path reads (`current.receipt`).
         post: {
-          title: current.receipt.title || undefined,
+          // A split-off IG child's description IS the caption — no title (Fable
+          // ruling 2); every other Reel keeps the frozen title as before.
+          title: reelPostTitle(input.copyProfile, current.receipt.title),
           caption: current.receipt.description || undefined,
           destinationUrl: current.receipt.destinationUrl || undefined,
           altText: current.receipt.altText || undefined,
