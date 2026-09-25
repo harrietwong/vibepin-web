@@ -5,12 +5,28 @@ export type {
   CandidateReason,
   ImportStatus,
   PageFetcher,
+  ProductFacts,
+  ProductFactsAvailability,
+  ProductFactsPrice,
+  ProductFactsSource,
   ProductImageCandidate,
   ProductUrlImportResponse,
   ProductUrlImportResult,
   Provider,
   RawCandidate,
 } from "./types";
+
+// FR-01/FR-02: structured product facts extraction
+export {
+  cleanDescription,
+  factsFromJsonLd,
+  factsFromOgMeta,
+  factsFromShopifyProductJson,
+  factsFromWooCommerce,
+  mergeFacts,
+  withFactsImages,
+} from "./productFacts";
+export type { ShopifyProductJsonProduct, ShopifyProductJsonVariant } from "./productFacts";
 
 // Security
 export {

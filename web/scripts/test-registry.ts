@@ -32,6 +32,7 @@ export const CORE: string[] = [
   "test-pin-metadata",
   "test-product-url-import",
   "test-product-url-import-auth",
+  "test-product-facts",
   "test-amazon-url-channel",
   "test-amazon-link",
   "test-amazon-adapter",

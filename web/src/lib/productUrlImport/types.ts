@@ -52,6 +52,47 @@ export type ProductUrlImportResult = {
   debugCode?:       string;
   /** Present only for Amazon links (text-only channel; never has image candidates). */
   amazon?:          AmazonImportMeta;
+  /**
+   * Structured product facts (price / brand / availability / description) for
+   * independent-store pages (FR-01/FR-02). Never present for the Amazon channel
+   * (see `amazon.extracted`, which is text-only and has no price semantics).
+   * Absent on failure — never a shell of empty-string fields.
+   */
+  facts?:            ProductFacts;
+};
+
+/**
+ * Structured facts extracted from a single already-fetched page response — never a
+ * new outbound request. Every field is filled only when the page states it
+ * explicitly; nothing here is inferred (no price guesses, no brand-from-image).
+ */
+export type ProductFactsSource = "shopify_json" | "jsonld" | "woocommerce" | "og_meta" | "manual";
+
+export type ProductFactsPrice = {
+  amount:     string;
+  currency:   string;
+  compareAt?: string;
+};
+
+export type ProductFactsAvailability = "in_stock" | "out_of_stock" | "preorder" | "unknown";
+
+export type ProductFacts = {
+  title?:        string;
+  /** Cleaned plain text, HTML stripped, whitespace collapsed, capped at 1000 chars. */
+  description?:  string;
+  /** JSON-LD `brand.name` / Shopify `vendor`. */
+  brand?:        string;
+  price?:        ProductFactsPrice;
+  availability?: ProductFactsAvailability;
+  /** Same images as `candidates`, capped at 8. Filled by the orchestrator after finalizeCandidates. */
+  images?:       string[];
+  /** Normalized page URL. */
+  sourceUrl:     string;
+  /** ISO timestamp of when the facts were extracted. */
+  fetchedAt:     string;
+  source:        ProductFactsSource;
+  /** "partial" whenever price or brand is missing. */
+  completeness:  "full" | "partial";
 };
 
 /**
@@ -110,6 +151,8 @@ export type AdapterResult = {
   message?:         string;
   fallbackActions?: string[];
   debugCode?:       string;
+  /** Facts without `images` filled yet — the orchestrator fills `images` from the finalized candidate list. */
+  facts?:           ProductFacts;
 };
 
 /** Injectable page fetcher; default implementation is in urlImportService.ts */

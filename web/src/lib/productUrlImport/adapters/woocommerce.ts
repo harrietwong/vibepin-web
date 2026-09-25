@@ -1,4 +1,5 @@
 import { extractCandidatesFromHtml, resolveUrl } from "../extractFromHtml";
+import { factsFromWooCommerce } from "../productFacts";
 import type { AdapterResult, RawCandidate } from "../types";
 
 /** Extracts full-res images from WooCommerce product gallery data attributes. */
@@ -40,11 +41,13 @@ export function woocommerceAdapter(html: string, pageUrl: string): AdapterResult
 
   // Gallery images first, then JSON-LD / og:image
   const candidates = [...galleryCandidates, ...genericCandidates];
+  const facts = factsFromWooCommerce(html, pageUrl);
 
   return {
     status: candidates.length ? "success" : "failed",
     title,
     description,
     candidates,
+    facts,
   };
 }

@@ -17,7 +17,7 @@ function parseDimension(value: unknown): number | undefined {
   return undefined;
 }
 
-function extractMeta(html: string, key: string, attr: "property" | "name"): string | null {
+export function extractMeta(html: string, key: string, attr: "property" | "name"): string | null {
   const re1 = new RegExp(`<meta[^>]+${attr}=["']${key}["'][^>]+content=["']([^"']+)["']`, "i");
   const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+${attr}=["']${key}["']`, "i");
   return html.match(re1)?.[1] ?? html.match(re2)?.[1] ?? null;

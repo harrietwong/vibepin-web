@@ -1,6 +1,7 @@
 import type { AssetType, PageFetcher, Provider, ProductUrlImportResult } from "./types";
 import { isDirectImageUrl, sourceDomainFromUrl, validateImportUrl } from "./urlSecurity";
 import { finalizeCandidates, toProductCandidates } from "./extractFromHtml";
+import { mergeFacts, withFactsImages } from "./productFacts";
 import { directImageAdapter } from "./adapters/directImage";
 import { ETSY_BLOCKED_RESULT, etsyAdapter } from "./adapters/etsy";
 import { PINTEREST_BLOCKED_RESULT, pinterestAdapter } from "./adapters/pinterest";
@@ -213,6 +214,9 @@ export async function importUrl(
       ...fallback,
       title:       adapterResult.title ?? fallback.title,
       description: adapterResult.description ?? fallback.description,
+      // Keep facts from the original adapter (e.g. Shopify JSON price/brand) even
+      // when it had no image candidates; merge in whatever the generic fallback found.
+      facts:       mergeFacts([adapterResult.facts, fallback.facts]),
     };
   }
 
@@ -223,8 +227,11 @@ export async function importUrl(
       status:  "failed",
       message: adapterResult.message,
       error:   "Could not extract product images",
+      // No candidates means no page content was usable — do not attach facts either.
     };
   }
+
+  const finalCandidates = toProductCandidates(finalizeCandidates(adapterResult.candidates, finalUrl));
 
   return {
     originalUrl,
@@ -236,8 +243,9 @@ export async function importUrl(
     status:          "success",
     title:           adapterResult.title ?? `Imported from ${sourceDomain}`,
     description:     adapterResult.description,
-    candidates:      toProductCandidates(finalizeCandidates(adapterResult.candidates, finalUrl)),
+    candidates:      finalCandidates,
     message:         adapterResult.message,
     fallbackActions: adapterResult.fallbackActions,
+    facts:           withFactsImages(adapterResult.facts, finalCandidates.map(c => c.imageUrl)),
   };
 }
