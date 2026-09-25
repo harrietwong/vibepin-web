@@ -30,6 +30,9 @@ import type {
   ClaimDetectionResult,
 } from "./types";
 
+/** Default description cap (the platform limit). */
+export const DEFAULT_DESCRIPTION_MAX = 800;
+
 export interface ValidateCopyInput {
   title: string;
   description: string;
@@ -519,7 +522,7 @@ function isCanonicallySupported(
 
 export function validateCopy(input: ValidateCopyInput): ValidationReport {
   const { title, description, altText, factCard, keywords, claimDetection } = input;
-  const descriptionMax = input.descriptionMax ?? 800;
+  const descriptionMax = input.descriptionMax ?? DEFAULT_DESCRIPTION_MAX;
   const issues: ValidationIssue[] = [];
   const detectedClaims: DetectedClaim[] = claimDetection?.status === "completed"
     ? claimDetection.claims

@@ -116,10 +116,23 @@ async function main() {
   await test("flag on: prompt carries the Amazon line and the reduced description cap", () => {
     const p = buildPromptForSession(req({ affiliateDisclosure: "ad_hashtag" }));
     assert.ok(p.includes(AFFILIATE_PROMPT_LINE));
-    assert.ok(p.includes("hard limits title 100, description 496."), p);
+    assert.ok(p.includes("counted in characters (not words) including spaces and punctuation: title 100, description 496."), p);
     const seo = buildPromptForSession(req({ affiliateDisclosure: "ad_hashtag", lengthPreference: "seo-rich" }));
-    assert.ok(seo.includes("description 350-496"), "seo-rich guide clamped under the cap");
+    assert.ok(seo.includes("description 321-421 characters"), "seo-rich guide stays well under the 496 cap (P1 0925)");
     assert.ok(!seo.includes("400-700"));
+  });
+
+  await test("P1 0925: every prompt states the verbatim-wording rule and a character (not word) unit, targets under the cap", () => {
+    for (const r of [req(), req({ affiliateDisclosure: "ad_hashtag" })]) {
+      for (const lengthPreference of ["short", "standard", "seo-rich"] as const) {
+        const p = buildPromptForSession({ ...r, lengthPreference });
+        assert.ok(p.includes(orch.GROUNDED_WORDING_LINE), "grounded wording line");
+        assert.ok(p.includes("counted in characters (not words)"), "unit stated");
+        const cap = orch.descriptionBudgetFor(r);
+        const upper = Number(/description \d+-(\d+) characters/.exec(p)?.[1]);
+        assert.ok(upper > 0 && upper <= Math.floor(cap * 0.85), `${lengthPreference}: target upper ${upper} vs cap ${cap}`);
+      }
+    }
   });
 
   console.log("\n[orchestrator: 500 budget boundary]");
@@ -198,12 +211,14 @@ async function main() {
       assert.ok(r.description.length <= 500, `raw ${n} → ${r.description.length}`);
     }
   });
-  await test("flag off: repair report and prompt pass through unchanged", async () => {
+  await test("flag off: repair report unchanged; repair prompt adds only the shorten-only length line", async () => {
     const calls = newCalls();
     __setCopyProviderForTests(provider({ generate: out(filler(801)), repair: [out(filler(300))] }, calls));
     await orchestrateCopyGeneration(req());
     assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(801) exceeds maximum of 800")));
-    assert.equal(calls.repairPrompts[0], calls.generatePrompts[0], "flag-off repair prompt is the generate prompt, byte-identical");
+    assert.ok(calls.repairPrompts[0].startsWith(calls.generatePrompts[0]), "flag-off repair prompt extends the generate prompt");
+    assert.ok(calls.repairPrompts[0].includes("The previous description was 801 characters. Shorten it to at most 680 characters (hard limit 800)"), calls.repairPrompts[0]);
+    assert.ok(!calls.repairPrompts[0].includes("server appends the disclosure"), "no affiliate line when flag off");
   });
 
   console.log("\n[orchestrator: flag off regression]");
@@ -218,9 +233,9 @@ async function main() {
   await test("flag off: prompt has no Amazon line and the original limits", () => {
     const p = buildPromptForSession(req());
     assert.ok(!p.includes("Amazon"));
-    assert.ok(p.includes("hard limits title 100, description 800."));
+    assert.ok(p.includes("title 100, description 800."));
     const seo = buildPromptForSession(req({ lengthPreference: "seo-rich" }));
-    assert.ok(seo.includes("title 70-95, description 400-700"));
+    assert.ok(seo.includes("title 70-95 characters, description 350-680 characters"));
   });
 
   console.log("\n[validateCopy descriptionMax]");
