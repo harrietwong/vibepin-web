@@ -415,6 +415,10 @@ export async function runCommentDmForConnection(
   if (activeRules.some(r => !r.mediaId)) {
     try {
       for (const m of await listRecentMedia(igUserId, token, now())) {
+        // Rate-limit economy: an all-posts scan skips media Meta reports as having
+        // zero comments. A missing / non-numeric count is still scanned (never a
+        // false skip), and media named by a rule were already added above.
+        if (m.commentsCount === 0) continue;
         if (!mediaIds.includes(m.id)) mediaIds.push(m.id);
       }
     } catch (raw) {

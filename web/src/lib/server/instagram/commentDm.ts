@@ -101,6 +101,8 @@ export type CommentDmMedia = {
   timestamp: string | null;
   permalink: string | null;
   caption: string | null;
+  /** Meta's comments_count; null when the field was missing / not a number. */
+  commentsCount: number | null;
 };
 
 export const RECENT_MEDIA_LIMIT = 50;
@@ -114,7 +116,7 @@ export async function listRecentMedia(
 ): Promise<CommentDmMedia[]> {
   const json = await graphGet<{ data?: Array<Record<string, unknown>> }>(
     `${encodeURIComponent(igUserId)}/media`,
-    { fields: "id,timestamp,permalink,caption", limit: String(RECENT_MEDIA_LIMIT) },
+    { fields: "id,timestamp,permalink,caption,comments_count", limit: String(RECENT_MEDIA_LIMIT) },
     token,
   );
   const oldest = nowMs - RECENT_MEDIA_MAX_AGE_MS;
@@ -125,6 +127,7 @@ export async function listRecentMedia(
       timestamp: typeof m.timestamp === "string" ? m.timestamp : null,
       permalink: typeof m.permalink === "string" ? m.permalink : null,
       caption: typeof m.caption === "string" ? m.caption : null,
+      commentsCount: typeof m.comments_count === "number" && Number.isFinite(m.comments_count) ? m.comments_count : null,
     }))
     .filter(m => {
       const t = m.timestamp ? Date.parse(m.timestamp.replace(/([+-]\d{2})(\d{2})$/, "$1:$2")) : NaN;

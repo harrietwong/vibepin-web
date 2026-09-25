@@ -202,12 +202,18 @@ class Query implements PromiseLike<{ data: unknown; error: null | { message: str
 type SendBehaviour = { status: number; body: unknown } | null;
 
 function installFetch(opts: {
-  media: Array<{ id: string; timestamp: string }>;
+  media: Array<{ id: string; timestamp: string; comments_count?: unknown }>;
   comments: Record<string, Array<Record<string, unknown>>>;
   sendResult?: (commentId: string, n: number) => SendBehaviour;
   replyResult?: () => SendBehaviour;
 }) {
-  const calls = { messages: [] as Array<{ commentId: string; text: string }>, replies: 0, gets: 0 };
+  const calls = {
+    messages: [] as Array<{ commentId: string; text: string }>,
+    replies: 0,
+    gets: 0,
+    commentMedia: [] as string[],
+    mediaUrls: [] as string[],
+  };
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     assert.ok(url.startsWith("https://graph.instagram.com/v25.0/"), `unexpected host: ${url}`);
@@ -215,11 +221,13 @@ function installFetch(opts: {
     await new Promise(r => setTimeout(r, 1));
     if (method === "GET" && url.includes(`/${IG_USER}/media?`)) {
       calls.gets++;
+      calls.mediaUrls.push(url);
       return Response.json({ data: opts.media });
     }
     const cm = url.match(/\/v25\.0\/([^/?]+)\/comments\?/);
     if (method === "GET" && cm) {
       calls.gets++;
+      calls.commentMedia.push(decodeURIComponent(cm[1]));
       return Response.json({ data: opts.comments[decodeURIComponent(cm[1])] ?? [] });
     }
     if (method === "POST" && url.endsWith(`/${IG_USER}/messages`)) {
@@ -582,6 +590,33 @@ async function main(): Promise<void> {
     const r = await runCommentDmForConnection(deps(db), conn, [rule({ mediaId: "old-media" })], liveOpts);
     assert.equal(r.sent, 1);
     assert.equal(calls.messages[0].commentId, "c-1");
+  });
+
+  await test("all-posts scan skips comments_count=0 media; missing count still scanned; rule media always scanned", async () => {
+    const db = new FakeDb();
+    const calls = installFetch({
+      media: [
+        { id: "m-zero", timestamp: metaTs(NOW - DAY), comments_count: 0 },
+        { id: "m-some", timestamp: metaTs(NOW - DAY), comments_count: 3 },
+        { id: "m-nofield", timestamp: metaTs(NOW - DAY) },
+        { id: "m-bad", timestamp: metaTs(NOW - DAY), comments_count: "7" },
+        { id: "m-pinned", timestamp: metaTs(NOW - DAY), comments_count: 0 },
+      ],
+      comments: { "m-nofield": [rawComment("c-1", "price")] },
+    });
+    const r = await runCommentDmForConnection(
+      deps(db),
+      conn,
+      [rule({ id: "all" }), rule({ id: "pinned", mediaId: "m-pinned", keywords: ["link"] })],
+      liveOpts,
+    );
+    assert.ok(calls.mediaUrls[0].includes("comments_count"), "comments_count is requested");
+    assert.ok(!calls.commentMedia.includes("m-zero"), "zero-comment media is never requested for /comments");
+    assert.ok(calls.commentMedia.includes("m-some"));
+    assert.ok(calls.commentMedia.includes("m-nofield"), "missing field → still scanned");
+    assert.ok(calls.commentMedia.includes("m-bad"), "non-number count → still scanned");
+    assert.ok(calls.commentMedia.includes("m-pinned"), "rule-specified media is always scanned");
+    assert.equal(r.sent, 1);
   });
 
   globalThis.fetch = originalFetch;
