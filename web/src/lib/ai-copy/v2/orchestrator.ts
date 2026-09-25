@@ -35,7 +35,9 @@ export interface GenerateCopyRequest {
   /**
    * Affiliate (Amazon) copy: the server appends this disclosure marker to the
    * description BEFORE validation, and the description cap becomes 500 including it
-   * (design §3.4). Absent → behaviour is byte-identical to before.
+   * (design §3.4). Absent → no disclosure is appended; the description cap is the shared
+   * default (500, P1 0925) and prompt / repair / detector wording is the same as for
+   * affiliate copy apart from the Amazon line and the disclosure budget.
    */
   affiliateDisclosure?: AffiliateDisclosureKind;
 }
