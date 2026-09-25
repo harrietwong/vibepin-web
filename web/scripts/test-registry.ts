@@ -80,6 +80,8 @@ export const CORE: string[] = [
   "test-v76-instagram-reels-durable",
   "test-publish-due-instagram-reels",
   "test-instagram-recent-media",
+  // IG comment keyword -> private reply (f354454e): hermetic unit suite (fakes only).
+  "test-instagram-comment-dm",
   "test-publish-due-video-races",
   "test-pinterest-video-legacy-route",
   "test-published-pin-summary",
@@ -464,6 +466,13 @@ export const EXCLUDED: Record<string, string> = {
     "DORMANT — no route, worker, webhook, publish path, Billing UI or cron touches them " +
     "until Phase 3 wires them up — so this suite is the sole evidence that reservation, " +
     "settlement, release and expiry behave correctly under real concurrency.",
+  "test-instagram-comment-dm-claim-live":
+    "REAL-POSTGRES concurrency proof for the v83 Instagram comment->DM claim: N parallel " +
+    "claimCommentEvent calls against the real unique constraint must yield exactly one row. " +
+    "Writes one @example.test social_connections row plus its event rows in the isolated " +
+    "Supabase test project and deletes exactly those ids. Needs TEST_SUPABASE_URL / " +
+    "_SERVICE_ROLE_KEY / _PROJECT_REF and aborts on the production ref, so it runs via " +
+    "`npm run test:instagram-comment-dm-claim-live`, not the hermetic `npm test` gate.",
 };
 
 /**
