@@ -29,6 +29,7 @@ import {
   type AmazonCardSource,
   type AmazonClaimHint,
 } from "@/lib/studio/amazonCardSource";
+import type { MarketplaceId } from "@/lib/productUrlImport/types";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 
 export const AMAZON_REFETCH_COOLDOWN_MS = 60_000;
@@ -65,11 +66,28 @@ export type AmazonCardSectionProps = {
   onFetch: () => void;
   onManualChange: (patch: Partial<AmazonCardManual>) => void;
   onUseLink: (url: string) => void;
+  /**
+   * FR-04: set only for the four manual-entry marketplaces. Undefined (default)
+   * renders the Amazon section exactly as before — fetch button, clean-link chip,
+   * tag warnings. When set, there is no fetch step at all (zero network for these
+   * hosts): no fetch button, no clean-link chip, no Amazon tag warnings, just the
+   * explanatory line + the same name / selling points / Brand / Material / Size
+   * fields Amazon uses.
+   */
+  marketplace?: MarketplaceId;
+};
+
+const MARKETPLACE_TITLE_KEYS: Record<MarketplaceId, MessageKey> = {
+  temu: "studioBoard.marketplace.sectionTitle.temu",
+  shein: "studioBoard.marketplace.sectionTitle.shein",
+  aliexpress: "studioBoard.marketplace.sectionTitle.aliexpress",
+  tiktok_shop: "studioBoard.marketplace.sectionTitle.tiktok_shop",
 };
 
 export function AmazonCardSection(props: AmazonCardSectionProps) {
   const { t: tr } = useLocale();
-  const { source, disabled, fetching, claimHints } = props;
+  const { source, disabled, fetching, claimHints, marketplace } = props;
+  const isMarketplace = !!marketplace;
   const [settingsVersion, setSettingsVersion] = useState(0);
   const [now, setNow] = useState(() => Date.now());
 
@@ -88,11 +106,12 @@ export function AmazonCardSection(props: AmazonCardSectionProps) {
   }, [props.lastFetchAt]);
 
   // Suggestion from the expanded/resolved URL when the import produced one (short
-  // links), else from what was pasted.
+  // links), else from what was pasted. Marketplace cards never fetch, so there is no
+  // Amazon-tag suggestion to compute for them.
   const suggestion = useMemo(
-    () => suggestAmazonLinkNormalization(source.resolvedUrl ?? source.pastedUrl, getAmazonAffiliateSettings()),
+    () => (isMarketplace ? null : suggestAmazonLinkNormalization(source.resolvedUrl ?? source.pastedUrl, getAmazonAffiliateSettings())),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [source.resolvedUrl, source.pastedUrl, settingsVersion],
+    [isMarketplace, source.resolvedUrl, source.pastedUrl, settingsVersion],
   );
   const chipUrl = suggestion && suggestion.suggestedUrl !== source.pastedUrl ? suggestion.suggestedUrl : null;
   const warnings = (suggestion?.warnings ?? []).map(w => WARNING_KEYS[w]).filter((k): k is MessageKey => Boolean(k));
@@ -104,13 +123,18 @@ export function AmazonCardSection(props: AmazonCardSectionProps) {
   const hinted = new Set(claimHints.map(h => h.field));
   const canRefetch = !fetching && cooldownLeft === 0 && source.linkStatus !== "no_asin";
 
-  const statusText = fetching
-    ? tr("studioBoard.amazon.fetching")
-    : mode.mode === "fetched"
-      ? tr("studioBoard.amazon.fetched")
-      : mode.mode === "manual"
-        ? tr(MANUAL_REASON_KEYS[mode.reason ?? ""] ?? "studioBoard.amazon.manualIntro")
-        : tr("studioBoard.amazon.notFetched");
+  const statusText = isMarketplace
+    ? tr("studioBoard.marketplace.intro")
+    : fetching
+      ? tr("studioBoard.amazon.fetching")
+      : mode.mode === "fetched"
+        ? tr("studioBoard.amazon.fetched")
+        : mode.mode === "manual"
+          ? tr(MANUAL_REASON_KEYS[mode.reason ?? ""] ?? "studioBoard.amazon.manualIntro")
+          : tr("studioBoard.amazon.notFetched");
+
+  const nameLabel: MessageKey = isMarketplace ? "studioBoard.marketplace.productName" : "studioBoard.amazon.productName";
+  const nameRequiredLabel: MessageKey = isMarketplace ? "studioBoard.marketplace.productNameRequired" : "studioBoard.amazon.productNameRequired";
 
   const input = (field: keyof AmazonCardManual, label: MessageKey, value: string, highlight = false) => (
     <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 3, margin: 0 }}>
@@ -122,10 +146,10 @@ export function AmazonCardSection(props: AmazonCardSectionProps) {
   );
 
   return (
-    <div data-testid="card-amazon-section" style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 9px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
+    <div data-testid="card-amazon-section" data-marketplace={marketplace ?? undefined} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 9px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-        <span style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.amazon.sectionTitle")}</span>
-        {source.linkStatus !== "no_asin" && (
+        <span style={{ ...labelStyle, margin: 0 }}>{isMarketplace ? tr(MARKETPLACE_TITLE_KEYS[marketplace]) : tr("studioBoard.amazon.sectionTitle")}</span>
+        {!isMarketplace && source.linkStatus !== "no_asin" && (
           <button type="button" data-testid="amazon-fetch" disabled={disabled || !canRefetch} onClick={props.onFetch}
             style={{ border: "none", background: "none", padding: 0, color: BUI.purple, fontSize: 10.5, fontWeight: 800, cursor: disabled || !canRefetch ? "default" : "pointer", opacity: disabled || !canRefetch ? 0.6 : 1, fontFamily: "inherit" }}>
             {fetching
@@ -142,7 +166,7 @@ export function AmazonCardSection(props: AmazonCardSectionProps) {
         {statusText}
       </p>
 
-      {chipUrl && (
+      {!isMarketplace && chipUrl && (
         <button type="button" data-testid="amazon-clean-link-chip" disabled={disabled} title={tr("studioBoard.amazon.cleanLinkHint").replace("{url}", chipUrl)}
           onClick={() => props.onUseLink(chipUrl)}
           style={{ alignSelf: "flex-start", maxWidth: "100%", display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 999, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -150,22 +174,22 @@ export function AmazonCardSection(props: AmazonCardSectionProps) {
         </button>
       )}
 
-      {warnings.map(key => (
+      {!isMarketplace && warnings.map(key => (
         <p key={key} data-testid="amazon-link-warning" style={{ margin: 0, fontSize: 10.5, lineHeight: 1.4, color: BUI.warning, display: "flex", gap: 5, alignItems: "flex-start" }}>
           <AlertTriangle style={{ width: 11, height: 11, flexShrink: 0, marginTop: 1 }} /> {tr(key)}
         </p>
       ))}
 
       <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 3, margin: 0 }}>
-        {tr("studioBoard.amazon.productName")}
+        {tr(nameLabel)}
         <input data-testid="amazon-productName" value={productName} disabled={disabled}
           onChange={event => props.onManualChange({ productName: event.target.value })}
           style={{ ...fieldStyle, fontSize: 11.5, ...(!canGenerateAmazonCopy(source) ? { borderColor: BUI.warning } : {}) }} />
       </label>
       {!canGenerateAmazonCopy(source) && (
-        <p data-testid="amazon-name-required" style={{ margin: 0, fontSize: 10.5, color: BUI.warning }}>{tr("studioBoard.amazon.productNameRequired")}</p>
+        <p data-testid="amazon-name-required" style={{ margin: 0, fontSize: 10.5, color: BUI.warning }}>{tr(nameRequiredLabel)}</p>
       )}
-      {source.extracted?.bullets?.length ? (
+      {!isMarketplace && source.extracted?.bullets?.length ? (
         <p style={{ margin: 0, fontSize: 10.5, color: BUI.textMuted }}>
           {tr("studioBoard.amazon.fetchedBullets").replace("{n}", String(source.extracted.bullets.length))}
         </p>

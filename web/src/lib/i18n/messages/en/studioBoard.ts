@@ -456,6 +456,14 @@ export const studioBoardMessages = {
   "studioBoard.amazon.claimHint": "The copy mentioned “{value}”. Confirm it in {field} and try again.",
   "studioBoard.amazon.disclosureMissing": "This Pin has no #ad disclosure. Affiliate Pins should disclose the relationship.",
   "studioBoard.amazon.addDisclosure": "Add #ad",
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; English only — no fetch, no UA) ──
+  "studioBoard.marketplace.sectionTitle.temu": "Temu product",
+  "studioBoard.marketplace.sectionTitle.shein": "Shein product",
+  "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress product",
+  "studioBoard.marketplace.sectionTitle.tiktok_shop": "TikTok Shop product",
+  "studioBoard.marketplace.intro": "This platform doesn't allow automatic product reads. Upload a product photo and fill in the name and selling points below — the link stays as the destination.",
+  "studioBoard.marketplace.productName": "Product name",
+  "studioBoard.marketplace.productNameRequired": "Add the product name to generate copy for this link.",
   // ── One-time Amazon risk notice (board banner) ──
   "amazonRiskNotice.title": "Before you post Amazon affiliate Pins",
   "amazonRiskNotice.body": "Pinterest is not on Amazon Associates' list of approved social networks, so promoting Associates links there is a grey area. Review Amazon's policies and decide for yourself. This notice is information, not a compliance guarantee.",

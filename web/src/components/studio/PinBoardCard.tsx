@@ -59,10 +59,12 @@ import { igFbHidden } from "@/lib/social/visibleProviders";
 import { AmazonCardSection } from "@/components/studio/AmazonCardSection";
 import {
   amazonClaimHints,
-  amazonSourceForUrl,
   canGenerateAmazonCopy,
-  isAmazonAffiliateDraft,
+  cardSourceForUrl,
+  classifyCardMarketplace,
   isAmazonLink,
+  isCardMarketplaceLink,
+  isMarketplaceCardDraft,
   type AmazonCardManual,
   type AmazonCardSource,
   type AmazonClaimHint,
@@ -487,10 +489,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       importFn: fetchProductUrlImport,
     }).finally(() => setAmazonFetching(false));
   }, [draft.id, persistAmazonSource]);
-  /** Recognise an Amazon link in the saved URL; fetch once per newly pasted product. */
+  /** Recognise an Amazon link OR a manual-entry marketplace link (FR-04) in the saved
+   *  URL; fetch once per newly pasted Amazon product. Marketplace links never fetch
+   *  (fetch.status starts at "manual_only", not "not_attempted"), so this guard —
+   *  unchanged — already excludes them; it only ever fires for real Amazon links. */
   const syncAmazonLink = useCallback((url: string, autoFetch: boolean) => {
     const current = getDraft(draft.id) ?? draft;
-    const next = amazonSourceForUrl(url, current.amazonSource);
+    const next = cardSourceForUrl(url, current.amazonSource);
     if (!next) return;
     if (next !== current.amazonSource) persistAmazonSource(next);
     if (autoFetch && next.fetch.status === "not_attempted" && next.linkStatus !== "no_asin") startAmazonFetch();
@@ -499,11 +504,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     flush();
     syncAmazonLink(pendingRef.current.websiteUrl, true);
   }, [flush, syncAmazonLink]);
-  // A saved Amazon URL without context (older draft, other entry point) gets its
-  // context on mount — no automatic fetch; the section offers the button.
+  // A saved Amazon or manual-marketplace URL without context (older draft, other
+  // entry point) gets its context on mount — no automatic fetch either way; the
+  // section offers the button (Amazon) or is already in manual mode (marketplace).
   useEffect(() => {
-    if (draft.amazonSource || !isAmazonLink(draft.destinationUrl)) return;
-    const seeded = amazonSourceForUrl(draft.destinationUrl, undefined);
+    if (draft.amazonSource || !isCardMarketplaceLink(draft.destinationUrl)) return;
+    const seeded = cardSourceForUrl(draft.destinationUrl, undefined);
     if (seeded) persistAmazonSource(seeded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.id]);
@@ -880,12 +886,18 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       ? tr("studioBoard.card.needsAttention")
       : status.label;
   const publishing = props.publishing;
-  // Amazon card without a product name: generation is gated (design §2.3). The
-  // section explains why and hosts the field that unlocks it.
-  const amazonNeedsName = isAmazonAffiliateDraft(draft) && !canGenerateAmazonCopy(draft.amazonSource);
-  const amazonSectionSource = draft.amazonSource && draft.amazonSource.pastedUrl === fields.websiteUrl.trim() && isAmazonLink(fields.websiteUrl)
+  // Amazon OR manual-entry marketplace card (FR-04) without a product name:
+  // generation is gated (design §2.3, extended to marketplace cards by the same
+  // rule — no name, no grounded copy). The section explains why and hosts the field
+  // that unlocks it.
+  const amazonNeedsName = isMarketplaceCardDraft(draft) && !canGenerateAmazonCopy(draft.amazonSource);
+  const amazonSectionSource = draft.amazonSource && draft.amazonSource.pastedUrl === fields.websiteUrl.trim() && isCardMarketplaceLink(fields.websiteUrl)
     ? draft.amazonSource : null;
-  const amazonDisclosureMissing = !!amazonSectionSource && !!fields.description.trim() && !hasAffiliateDisclosure(fields.description);
+  const cardMarketplace = classifyCardMarketplace(fields.websiteUrl);
+  // #ad affiliate disclosure is an AMAZON-specific compliance requirement (Amazon
+  // Associates policy) — it does not apply to the manual-entry marketplaces, so this
+  // stays gated on isAmazonLink specifically, not the broader marketplace predicate.
+  const amazonDisclosureMissing = !!amazonSectionSource && isAmazonLink(fields.websiteUrl) && !!fields.description.trim() && !hasAffiliateDisclosure(fields.description);
   const aiCopyPanel = (
     <PinAICopyPanel
       ref={aiRef}
@@ -1345,6 +1357,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               onFetch={startAmazonFetch}
               onManualChange={onAmazonManualChange}
               onUseLink={acceptAmazonLink}
+              marketplace={cardMarketplace ?? undefined}
             />
           )}
           {shouldShowFieldOnInstagramChild(draft, "boardId") && (

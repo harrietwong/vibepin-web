@@ -71,7 +71,7 @@ function FallbackActionChips({ actions }: { actions: string[] }) {
   const labels: Record<string, string> = {
     upload_image:           "Upload image",
     paste_direct_image_url: "Paste direct image URL",
-    connect_etsy_api:       "Connect Etsy API",
+    manual_entry:           "Enter product details manually",
   };
   return (
     <div data-testid="url-import-fallback-actions" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
@@ -136,9 +136,15 @@ function ResultGroup({
     );
   }
 
-  // Blocked (Etsy 403, Pinterest blocked, etc.)
+  // Blocked (Etsy 403, Pinterest blocked, marketplace manual-entry, etc.)
   if (result.status === "blocked" || result.status === "unsupported") {
     const msg = result.message ?? result.error ?? "This URL could not be imported automatically.";
+    const MARKETPLACE_NAMES: Record<string, string> = {
+      temu: "Temu", shein: "Shein", aliexpress: "AliExpress", tiktok_shop: "TikTok Shop",
+    };
+    const providerLabel = result.marketplace
+      ? MARKETPLACE_NAMES[result.marketplace] ?? "This marketplace"
+      : result.provider === "etsy" ? "Etsy" : result.provider === "pinterest" ? "Pinterest" : "Provider";
     return (
       <div data-testid="url-import-result-group" style={{ marginBottom: 16 }}>
         <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 800, color: "#C4B5FD" }}>
@@ -150,7 +156,7 @@ function ResultGroup({
           background: "rgba(251,191,36,0.06)",
         }}>
           <p style={{ margin: 0, fontSize: 12, color: "#FDE68A", fontWeight: 700 }}>
-            {result.provider === "etsy" ? "Etsy" : result.provider === "pinterest" ? "Pinterest" : "Provider"} blocks automatic extraction
+            {providerLabel} blocks automatic extraction
           </p>
           <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textSec, lineHeight: 1.5 }}>{msg}</p>
           {result.fallbackActions?.length ? <FallbackActionChips actions={result.fallbackActions} /> : null}

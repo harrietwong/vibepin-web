@@ -47,6 +47,9 @@ export const CORE: string[] = [
   "test-amazon-risk-notice",
   // T4: Amazon context + #ad on the Plan drawer / Batch Edit entry points.
   "test-amazon-entry-points",
+  // FR-04/FR-05 (0925): Temu/Shein/AliExpress/TikTok Shop manual-entry fallback,
+  // Etsy connect_etsy_api dead-button removal.
+  "test-marketplace-manual",
   "test-generation-recovery-audit-language",
   "test-generation-manifest",
   "test-retry-scope",

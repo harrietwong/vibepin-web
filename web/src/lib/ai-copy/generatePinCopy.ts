@@ -18,10 +18,12 @@ import type {
 import { generatePinterestPinCopyV2, isAICopyV2ClientEnabled } from "./generatePinCopyV2";
 import type { AffiliateDisclosureKind } from "./affiliateDisclosure";
 import {
-  amazonSourceForUrl,
   buildAmazonCopyContext,
+  buildMarketplaceCopyContext,
   canGenerateAmazonCopy,
+  cardSourceForUrl,
   isAmazonAffiliateDraft,
+  isMarketplaceCardDraft,
   type AmazonCopyContext,
 } from "@/lib/studio/amazonCardSource";
 import { buildImportedFactsCopyContext, type ImportedFactsCopyContext } from "@/lib/studio/importedProductFacts";
@@ -163,27 +165,41 @@ function resolvePrimaryShopifyProduct(storeDraft?: pinDraftStore.PinDraft | null
 /** Exported for direct unit testing (test-shopify-ai-grounding.ts, WP6 §10) — same
  *  function generatePinterestPinCopy() calls internally, not a parallel copy. */
 /**
- * Amazon affiliate card context (T3, design §3.2), or null for every other card.
- * The card counts as Amazon only while its CURRENT Website URL is an Amazon link and
- * it carries an amazonSource (a stale source behind a changed URL is ignored).
+ * Amazon OR manual-entry-marketplace card context (T3 design §3.2; FR-04 generalizes
+ * it to Temu/Shein/AliExpress/TikTok Shop), or null for every other card. The card
+ * counts as Amazon/marketplace only while its CURRENT Website URL is that kind of
+ * link and it carries an amazonSource (a stale source behind a changed URL is
+ * ignored) — same rule for both kinds, unchanged from the original Amazon-only logic.
+ *
+ * `affiliateDisclosure` (#ad) is an Amazon Associates compliance requirement and is
+ * only ever set for the Amazon branch; it is omitted (not `undefined`-valued, simply
+ * absent from the object) for marketplace cards, so callers that only spread it when
+ * present (`...(amazonContext ? { affiliateDisclosure: ... } : {})`) never attach a
+ * disclosure marker to non-Amazon affiliate copy.
  */
 export function resolveAmazonCopyContext(
   input: Pick<GeneratePinterestPinCopyInput, "destinationUrl" | "destinationUrlIsCurrent">,
   storeDraft?: pinDraftStore.PinDraft | null,
-): (AmazonCopyContext & { affiliateDisclosure: AffiliateDisclosureKind; canGenerate: boolean }) | null {
+): (AmazonCopyContext & { affiliateDisclosure?: AffiliateDisclosureKind; canGenerate: boolean }) | null {
   // Studio card: the stored draft is fresh (the card flushes pending edits before
   // generating); the prop copy of the URL can lag one debounce behind. Plan drawer /
   // Batch Edit: the caller's own unsaved URL is the current one.
   const destinationUrl = input.destinationUrlIsCurrent
     ? input.destinationUrl
     : storeDraft?.destinationUrl ?? input.destinationUrl;
-  // T4: an Amazon URL is an Amazon card on EVERY entry point (Plan drawer, Batch Edit),
-  // even when it never passed through the Studio card that records amazonSource. The
-  // context is derived from the URL (same pure function the card uses), carrying any
-  // stored manual facts; without a product name the §2.3 gate applies as on the card.
-  const source = amazonSourceForUrl(destinationUrl, storeDraft?.amazonSource) ?? undefined;
-  if (!source || !isAmazonAffiliateDraft({ destinationUrl, amazonSource: source })) return null;
-  return { ...buildAmazonCopyContext(source), affiliateDisclosure: "ad_hashtag", canGenerate: canGenerateAmazonCopy(source) };
+  // T4: an Amazon/marketplace URL is a card on EVERY entry point (Plan drawer, Batch
+  // Edit), even when it never passed through the Studio card that records
+  // amazonSource. The context is derived from the URL (same pure function the card
+  // uses), carrying any stored manual facts; without a product name the §2.3 gate
+  // applies as on the card.
+  const source = cardSourceForUrl(destinationUrl, storeDraft?.amazonSource) ?? undefined;
+  if (!source || !isMarketplaceCardDraft({ destinationUrl, amazonSource: source })) return null;
+  if (isAmazonAffiliateDraft({ destinationUrl, amazonSource: source })) {
+    return { ...buildAmazonCopyContext(source), affiliateDisclosure: "ad_hashtag", canGenerate: canGenerateAmazonCopy(source) };
+  }
+  // Manual-entry marketplace: same field mapping, no #ad (not an Amazon Associates
+  // link), never a page (no fetch ever happens for these hosts).
+  return { ...buildMarketplaceCopyContext(source), canGenerate: canGenerateAmazonCopy(source) };
 }
 
 /**
