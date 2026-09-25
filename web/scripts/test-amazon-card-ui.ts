@@ -48,9 +48,10 @@ async function main() {
     assert.equal(leaked, null, `raw keys rendered: ${leaked?.join(", ")}`);
   };
 
-  await test("every Amazon key the components reference exists in en (39 new keys)", () => {
+  await test("every Amazon key the components reference exists in en (40 keys: 39 from T3 + studioBoard.amazon.copyRequiresV2 from c712e7f3)", () => {
     const keys = Object.keys(en).filter(k => k.startsWith("studioBoard.amazon.") || k.startsWith("amazonRiskNotice."));
-    assert.equal(keys.length, 39);
+    assert.equal(keys.length, 40);
+    assert.ok(keys.includes("studioBoard.amazon.copyRequiresV2"), "the 40th key is the v2-required gate message");
     const files = ["src/components/studio/AmazonCardSection.tsx", "src/components/studio/AmazonRiskNoticeBanner.tsx", "src/components/studio/PinBoardCard.tsx", "src/components/pins/PinAICopyPanel.tsx"];
     const used = new Set(files.flatMap(f => readFileSync(f, "utf8").match(/"(?:studioBoard\.amazon|amazonRiskNotice)\.[A-Za-z_.]+"/g) ?? []).map(s => s.slice(1, -1)));
     for (const key of used) assert.ok(key in en, `missing en key ${key}`);

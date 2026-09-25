@@ -193,7 +193,11 @@ function sellingPointList(raw: string | undefined): string[] | undefined {
 export type AmazonCopyContext = {
   /** productContext — user-declared facts only (product_catalog / asserted). */
   product: ProductContext;
-  /** pageContext — fetched page text (page_metadata), never catalog assertions. */
+  /**
+   * pageContext — fetched page text (page_metadata), never catalog assertions. It is the
+   * seller-asserted listing text: a claim stated verbatim in one non-negated sentence of
+   * it is grounded by validateCopy (seller-text path, P1 0925); nothing else is.
+   */
   page?: { title?: string; description?: string };
 };
 

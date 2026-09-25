@@ -2,7 +2,7 @@
  * validateCopy.ts — Validation engine for AI Copy v2.
  *
  * Enforces:
- *  - Hard platform character limits (title <= 100, description <= 800).
+ *  - Hard character limits (title <= 100, description <= 500 — Studio's schedule/publish cap).
  *  - Keyword occurrence frequency (title <= 1, description <= 2).
  *  - Consecutive word stuffing (>=3 consecutive identical non-stopwords).
  *  - Grounding checks: unsupported material, efficacy/therapeutic, price,
@@ -30,6 +30,14 @@ import type {
   ClaimDetectionResult,
 } from "./types";
 
+/**
+ * Default description cap. Must equal pinReadiness.DESCRIPTION_MAX_LENGTH (500): Studio
+ * blocks Schedule/Publish above it, so an 800-char v2 description (the old default) was
+ * valid here but unschedulable there (Preview P1 0925: a 627-char non-Amazon result).
+ * Pinned by test-ai-copy-v2-facts.
+ */
+export const DEFAULT_DESCRIPTION_MAX = 500;
+
 export interface ValidateCopyInput {
   title: string;
   description: string;
@@ -38,7 +46,7 @@ export interface ValidateCopyInput {
   keywords?: string[];
   claimDetection: ClaimDetectionResult;
   /**
-   * Description cap. Defaults to the platform limit (800). Affiliate copy passes 500,
+   * Description cap. Defaults to DEFAULT_DESCRIPTION_MAX (500). Affiliate copy passes 500,
    * Studio's schedule cap, because the appended disclosure must fit inside it (design §3.4).
    */
   descriptionMax?: number;
@@ -214,8 +222,204 @@ function hasUncoveredMaterialTrap(
   }
 
   return trapStarts.some(start =>
-    trapTokens.some((_token, offset) => !covered[start + offset]),
+    trapTokens.some((_token, offset) => !covered[start + offset]) &&
+    !sellerTextCoversMaterialAt(textTokens, start, trapTokens.length, factCard),
   );
+}
+
+// ── Seller-text evidence (P1 0925) ─────────────────────────────────────────────
+//
+// Product-page text and the merchant's own typed product name / selling points are
+// the SELLER's asserted statements. They arrive as free-text `general` facts with no
+// canonicalClaim, so before this path no claim copied from them — not even a
+// verbatim "Amazon Music, Apple Music, Spotify" — could ever be grounded (Preview:
+// 7/7 Amazon generations 422). A claim is grounded by seller text only when:
+//  - the fact is user_input / product_catalog / page_metadata, trust verified or
+//    asserted, copy_allowed, category general (never image_observed / ai_inferred /
+//    board_context; commercially-categorised facts keep the canonicalClaim rule);
+//  - the claim's tokens appear CONTIGUOUSLY inside one sentence of that text
+//    (no fuzzy/paraphrase matching);
+//  - that sentence carries no negation cue in any supported language (fail closed:
+//    "not in the business of selling", "sin", "不是" ground nothing);
+//  - material only: the matched span is not glued to a qualifier on either side
+//    ("faux leather", "PU leather", "gold tone", "silk-like", "leather-free").
+// Price, availability and therapeutic efficacy are never grounded this way.
+
+const SELLER_TEXT_SOURCES = new Set<FactItem["source"]>(["user_input", "product_catalog", "page_metadata"]);
+
+const NEGATION_TOKENS = new Set<string>([
+  // en
+  "not", "no", "never", "without", "neither", "nor", "none", "cannot", "non",
+  // es / pt / it / fr / de / nl
+  "sin", "nunca", "ni", "tampoco", "ningún", "ninguna", "ninguno",
+  "não", "nao", "sem", "nem", "nenhum", "nenhuma",
+  "senza", "mai", "nessun", "nessuno", "nessuna",
+  "ne", "pas", "sans", "jamais", "aucun", "aucune",
+  "nicht", "kein", "keine", "keinen", "keinem", "keiner", "ohne", "nie", "niemals",
+  "niet", "geen", "zonder", "nooit",
+]);
+// Scripts without spaces: any negation morpheme in the sentence fails it closed
+// (this also rejects e.g. 不锈钢 — acceptable: fail closed, never open).
+const CJK_NEGATION_RE = /[不没沒無无非未]|ない|なし|ません|않|없|아니/u;
+
+/** Words that turn a preceding bare material into a different/weaker material. */
+const MATERIAL_TRAILING_QUALIFIERS = new Set<string>([
+  "tone", "toned", "plated", "plating", "coated", "coating", "filled", "like", "look", "looking",
+  "effect", "finish", "style", "styled", "blend", "blended", "imitation", "print", "printed",
+  "free", "color", "colored", "colour", "coloured", "inspired", "alternative", "substitute", "pattern",
+]);
+
+/**
+ * Words that, directly before a material, make it a different / imitation material
+ * ("faux leather", "PU leather", "lab grown diamonds"). Any other preceding adjective
+ * ("speckled ceramic", "glazed stoneware", "genuine leather") leaves the material
+ * itself asserted. Hyphen-glued forms ("leather-free", "silk-like") are rejected
+ * separately, and negated sentences never reach this check.
+ */
+const MATERIAL_LEADING_WEAKENERS = new Set<string>([
+  "faux", "fake", "pu", "vegan", "imitation", "synthetic", "artificial", "simulated", "simulant",
+  "mock", "pseudo", "eco", "bonded", "reconstituted", "microfiber", "poly", "art", "art.",
+  "lab", "grown", "created", "cultured", "cubic", "plastic", "paper", "printed",
+]);
+
+type SegToken = { text: string; sepBefore: string };
+
+function segmentTokens(text: string): { tokens: SegToken[]; trailing: string } {
+  const normalized = text.normalize("NFC").toLowerCase();
+  const tokens: SegToken[] = [];
+  let sep = "";
+  const Segmenter = (Intl as unknown as { Segmenter?: WordSegmenterConstructor }).Segmenter;
+  if (Segmenter) {
+    for (const item of new Segmenter(undefined, { granularity: "word" }).segment(normalized)) {
+      if (item.isWordLike) { tokens.push({ text: item.segment, sepBefore: sep }); sep = ""; }
+      else sep += item.segment;
+    }
+    return { tokens, trailing: sep };
+  }
+  const re = /[\p{L}\p{N}]+/gu;
+  let last = 0; let m: RegExpExecArray | null;
+  while ((m = re.exec(normalized))) {
+    tokens.push({ text: m[0], sepBefore: normalized.slice(last, m.index) });
+    last = m.index + m[0].length;
+  }
+  return { tokens, trailing: normalized.slice(last) };
+}
+
+/** Sentence-level clauses: bullets/lines, then sentence ends before a capital, and ; */
+function sellerClauses(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .flatMap(line => line.split(/(?<=[.!?…])\s+(?=[\p{Lu}\p{N}"“(])|[;；。！？]/u))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function clauseIsNegated(clause: string, tokens: SegToken[]): boolean {
+  if (CJK_NEGATION_RE.test(clause)) return true;
+  return tokens.some(t => NEGATION_TOKENS.has(t.text) || /n['’]t$/.test(t.text));
+}
+
+/** "leather-free", "silk-like": a hyphen with no surrounding space glues two words. */
+function isHyphenJoin(sep: string): boolean {
+  return /^[-‐‑]+$/u.test(sep);
+}
+/** Punctuation between words ("leather, suede", "Charcoal – Play") is a real boundary. */
+function isHardBoundary(sep: string): boolean {
+  return /\S/u.test(sep) && !isHyphenJoin(sep);
+}
+
+interface SellerClause { clause: string; tokens: SegToken[]; trailing: string }
+
+function sellerTextClauses(factCard: FactCardV1): SellerClause[] {
+  const out: SellerClause[] = [];
+  for (const fact of factCard.facts) {
+    if (!SELLER_TEXT_SOURCES.has(fact.source)) continue;
+    if (fact.trustLevel !== "verified" && fact.trustLevel !== "asserted") continue;
+    if (fact.claimPolicy !== "copy_allowed") continue;
+    if (fact.category && fact.category !== "general") continue;
+    for (const clause of sellerClauses(fact.value)) {
+      const { tokens, trailing } = segmentTokens(clause);
+      if (tokens.length === 0 || clauseIsNegated(clause, tokens)) continue;
+      out.push({ clause, tokens, trailing });
+    }
+  }
+  return out;
+}
+
+function materialFlanksOk(c: SellerClause, start: number, length: number): boolean {
+  const first = c.tokens[start];
+  if (start > 0) {
+    const prev = c.tokens[start - 1];
+    if (isHyphenJoin(first.sepBefore)) return false;
+    if (!isHardBoundary(first.sepBefore) && MATERIAL_LEADING_WEAKENERS.has(prev.text)) return false;
+  }
+  const endIdx = start + length;
+  if (endIdx < c.tokens.length) {
+    const next = c.tokens[endIdx];
+    if (isHyphenJoin(next.sepBefore)) return false;
+    if (!isHardBoundary(next.sepBefore) && MATERIAL_TRAILING_QUALIFIERS.has(next.text)) return false;
+  }
+  return true;
+}
+
+function sellerTextSupports(phraseTokens: string[], factCard: FactCardV1, material: boolean): boolean {
+  if (phraseTokens.length === 0) return false;
+  for (const c of sellerTextClauses(factCard)) {
+    const texts = c.tokens.map(t => t.text);
+    for (const start of tokenSequenceStarts(texts, phraseTokens)) {
+      if (!material || materialFlanksOk(c, start, phraseTokens.length)) return true;
+    }
+  }
+  return false;
+}
+
+/** Brand lists ("Amazon Music, Spotify, Apple Music") are one brand claim per item. */
+function brandListItems(value: string): string[][] {
+  return value
+    .split(/,|\/|&|、|和|及|\band\b|\bor\b/iu)
+    .map(part => tokenizeWords(part).filter(t => !STOPWORDS.has(t)))
+    .filter(tokens => tokens.length > 0);
+}
+
+const THERAPEUTIC_RE =
+  /\b(?:clinically proven|cure[sd]?|curing|heal[sd]?|healing|treat[sd]?|treating|treatment|migraine[s]?|chronic anxiety|anxiety relief|pain relief|therapeutic|anti-inflammatory)\b/i;
+
+function supportedBySellerText(type: CommercialDetectedClaimType, claimValue: string, factCard: FactCardV1): boolean {
+  switch (type) {
+    case "brand": {
+      const items = brandListItems(claimValue);
+      return items.length > 0 && items.every(item => sellerTextSupports(item, factCard, false));
+    }
+    case "numeric_commercial":
+      return sellerTextSupports(tokenizeWords(claimValue), factCard, false);
+    case "material":
+      return sellerTextSupports(tokenizeWords(claimValue), factCard, true);
+    case "efficacy":
+      if (THERAPEUTIC_RE.test(claimValue)) return false;
+      return sellerTextSupports(tokenizeWords(claimValue), factCard, false);
+    case "price":
+    case "availability":
+      return false;
+  }
+}
+
+/**
+ * A bare trap-material occurrence in the copy is covered by seller text when some
+ * copy window around it (up to 3 tokens either side) is itself a flank-clean seller
+ * material phrase: copy "Genuine Leather Sleeve" + page "Made of genuine leather."
+ */
+function sellerTextCoversMaterialAt(
+  textTokens: string[],
+  start: number,
+  length: number,
+  factCard: FactCardV1,
+): boolean {
+  for (let a = Math.max(0, start - 3); a <= start; a++) {
+    for (let b = start + length; b <= Math.min(textTokens.length, start + length + 3); b++) {
+      if (sellerTextSupports(textTokens.slice(a, b), factCard, true)) return true;
+    }
+  }
+  return false;
 }
 
 function supportsMaterialClaim(canonicalClaim: string, claimValue: string): boolean {
@@ -284,6 +488,16 @@ function isClaimSupported(
   const eligibleFacts = getEligibleFacts(factCard, type);
   const val = claimValue.normalize("NFC").toLowerCase().trim();
   if (!val) return true;
+  if (isCanonicallySupported(type, claimValue, val, eligibleFacts)) return true;
+  return supportedBySellerText(type, claimValue, factCard);
+}
+
+function isCanonicallySupported(
+  type: CommercialDetectedClaimType,
+  claimValue: string,
+  val: string,
+  eligibleFacts: FactItem[],
+): boolean {
 
   switch (type) {
     case "material": {
@@ -321,7 +535,7 @@ function isClaimSupported(
 
 export function validateCopy(input: ValidateCopyInput): ValidationReport {
   const { title, description, altText, factCard, keywords, claimDetection } = input;
-  const descriptionMax = input.descriptionMax ?? 800;
+  const descriptionMax = input.descriptionMax ?? DEFAULT_DESCRIPTION_MAX;
   const issues: ValidationIssue[] = [];
   const detectedClaims: DetectedClaim[] = claimDetection?.status === "completed"
     ? claimDetection.claims

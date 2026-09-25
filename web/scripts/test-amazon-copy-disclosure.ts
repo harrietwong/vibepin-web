@@ -116,10 +116,58 @@ async function main() {
   await test("flag on: prompt carries the Amazon line and the reduced description cap", () => {
     const p = buildPromptForSession(req({ affiliateDisclosure: "ad_hashtag" }));
     assert.ok(p.includes(AFFILIATE_PROMPT_LINE));
-    assert.ok(p.includes("hard limits title 100, description 496."), p);
+    assert.ok(p.includes("counted in characters (not words) including spaces and punctuation: title 100, description 496."), p);
     const seo = buildPromptForSession(req({ affiliateDisclosure: "ad_hashtag", lengthPreference: "seo-rich" }));
-    assert.ok(seo.includes("description 350-496"), "seo-rich guide clamped under the cap");
+    assert.ok(seo.includes("description 321-421 characters"), "seo-rich guide stays well under the 496 cap (P1 0925)");
     assert.ok(!seo.includes("400-700"));
+  });
+
+  await test("P1 0925: every prompt states the verbatim-wording rule and a character (not word) unit, targets under the cap", () => {
+    for (const r of [req(), req({ affiliateDisclosure: "ad_hashtag" })]) {
+      for (const lengthPreference of ["short", "standard", "seo-rich"] as const) {
+        const p = buildPromptForSession({ ...r, lengthPreference });
+        assert.ok(p.includes(orch.GROUNDED_WORDING_LINE), "grounded wording line");
+        assert.ok(p.includes("counted in characters (not words)"), "unit stated");
+        const cap = orch.descriptionBudgetFor(r);
+        const upper = Number(/description \d+-(\d+) characters/.exec(p)?.[1]);
+        assert.ok(upper > 0 && upper <= Math.floor(cap * 0.85), `${lengthPreference}: target upper ${upper} vs cap ${cap}`);
+      }
+    }
+  });
+
+  await test("P1 0925: detector prompt defines the claim types the validator checks (grounding-blind, verbatim values)", () => {
+    const d: string = orch.DETECTOR_SYSTEM;
+    assert.ok(/value must be copied exactly as written/.test(d), "verbatim value");
+    assert.ok(/Colors, finishes seen in a photo, shapes, sizes, parts or features, and objects in the scene or background are not material/.test(d));
+    assert.ok(/Ordinary product features, capabilities, and uses .* are not efficacy/.test(d));
+    assert.ok(/"Find it on Amazon" is not an availability claim/.test(d));
+    assert.ok(!/grounding|facts:/i.test(d.replace("self-reported", "")), "detector never sees grounding facts");
+  });
+  await test("P1 0925: incomplete claim detection is retried once; twice incomplete stays a closed 422", async () => {
+    for (const [answers, expectOk] of [[["garbage", { claims: [] }], true], [["garbage", "garbage"], false]] as const) {
+      let detects = 0;
+      const queue = [...answers];
+      __setCopyProviderForTests({
+        async generate() { return out("Create a calm reading corner with warm neutral details."); },
+        async detectClaims() { detects++; return queue.shift(); },
+      });
+      if (expectOk) {
+        const r = await orchestrateCopyGeneration(req()).catch((e: { validationReport?: unknown }) => { throw new Error(JSON.stringify(e.validationReport)); });
+        assert.equal(r.validationReport.valid, true);
+      } else {
+        await assert.rejects(orchestrateCopyGeneration(req()), (e: unknown) => e instanceof ValidationErrorV2 && e.validationReport.issues.some(i => i.code === "CLAIM_DETECTION_INCOMPLETE"));
+      }
+      assert.equal(detects, 2, "exactly one retry");
+    }
+  });
+
+  await test("P1 0925: the repair model sees every issue's message (which word to remove), not just its code", () => {
+    const s = orch.describeRepairIssues({ valid: false, issues: [
+      { code: "DESCRIPTIVE_ONLY_VIOLATION", field: "title", message: 'Descriptive-only fact "green" cannot be used in product title' },
+      { code: "DESCRIPTION_TOO_LONG", field: "description", message: "Description length (512) exceeds maximum of 496 characters" },
+    ] });
+    assert.ok(s.includes('title:DESCRIPTIVE_ONLY_VIOLATION (Descriptive-only fact "green" cannot be used in product title)'), s);
+    assert.ok(s.includes("description:DESCRIPTION_TOO_LONG (Description length (512) exceeds maximum of 496 characters)"), s);
   });
 
   console.log("\n[orchestrator: 500 budget boundary]");
@@ -198,35 +246,38 @@ async function main() {
       assert.ok(r.description.length <= 500, `raw ${n} → ${r.description.length}`);
     }
   });
-  await test("flag off: repair report and prompt pass through unchanged", async () => {
+  await test("flag off: repair report unchanged; repair prompt adds only the shorten-only length line", async () => {
     const calls = newCalls();
-    __setCopyProviderForTests(provider({ generate: out(filler(801)), repair: [out(filler(300))] }, calls));
+    __setCopyProviderForTests(provider({ generate: out(filler(501)), repair: [out(filler(300))] }, calls));
     await orchestrateCopyGeneration(req());
-    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(801) exceeds maximum of 800")));
-    assert.equal(calls.repairPrompts[0], calls.generatePrompts[0], "flag-off repair prompt is the generate prompt, byte-identical");
+    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(501) exceeds maximum of 500")));
+    assert.ok(calls.repairPrompts[0].startsWith(calls.generatePrompts[0]), "flag-off repair prompt extends the generate prompt");
+    assert.ok(calls.repairPrompts[0].includes("The previous description was 501 characters. Shorten it to at most 425 characters (hard limit 500)"), calls.repairPrompts[0]);
+    assert.ok(!calls.repairPrompts[0].includes("server appends the disclosure"), "no affiliate line when flag off");
   });
 
   console.log("\n[orchestrator: flag off regression]");
-  await test("flag off: output is the provider text byte-for-byte (no #ad), 800 cap unchanged", async () => {
+  await test("flag off: output is the provider text byte-for-byte (no #ad) up to the 500 cap", async () => {
     const calls = newCalls();
-    const text = filler(700);
+    const text = filler(500);
     __setCopyProviderForTests(provider({ generate: out(text) }, calls));
     const r = await orchestrateCopyGeneration(req());
     assert.equal(r.description, text);
-    assert.equal(calls.repairInputs.length, 0, "700 chars is fine under the default 800 cap");
+    assert.equal(calls.repairInputs.length, 0, "500 chars is fine under the default 500 cap");
   });
   await test("flag off: prompt has no Amazon line and the original limits", () => {
     const p = buildPromptForSession(req());
     assert.ok(!p.includes("Amazon"));
-    assert.ok(p.includes("hard limits title 100, description 800."));
+    assert.ok(p.includes("title 100, description 500."));
     const seo = buildPromptForSession(req({ lengthPreference: "seo-rich" }));
-    assert.ok(seo.includes("title 70-95, description 400-700"));
+    assert.ok(seo.includes("title 70-95 characters, description 325-425 characters"));
   });
 
   console.log("\n[validateCopy descriptionMax]");
-  await test("default max stays 800; explicit 500 flags a 501-char description", () => {
+  await test("default max is 500 (Studio cap, P1 0925): 500 passes, 501 flagged with or without explicit max", () => {
     const base = { title: "Calm Reading Corner", altText: "alt", factCard: factCard(), claimDetection: { status: "completed" as const, claims: [] } };
-    assert.equal(validateCopy({ ...base, description: filler(600) }).valid, true);
+    assert.equal(validateCopy({ ...base, description: filler(500) }).valid, true);
+    assert.ok(validateCopy({ ...base, description: filler(501) }).issues.some(i => i.code === "DESCRIPTION_TOO_LONG"));
     assert.equal(validateCopy({ ...base, description: filler(500), descriptionMax: 500 }).valid, true);
     const r = validateCopy({ ...base, description: filler(501), descriptionMax: 500 });
     assert.ok(r.issues.some(i => i.code === "DESCRIPTION_TOO_LONG"));

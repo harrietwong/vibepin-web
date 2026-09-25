@@ -1,6 +1,6 @@
 /** Grounded single-result generation with one optional repair. */
 import { chatJson, providerConfig, CopyError, PROVIDER_MESSAGE, languageInstructions, type ChatCostContext } from "@/lib/ai-copy/visionServer";
-import { containsTokenPhrase, validateCopy } from "./validateCopy";
+import { containsTokenPhrase, DEFAULT_DESCRIPTION_MAX, validateCopy } from "./validateCopy";
 import { summarizeFacts } from "./factCard";
 import type { ClaimDetectionResult, CopyResultV2, DetectedClaim, DetectedClaimType, FactCardV1, KeywordEvidence, ValidationReport } from "./types";
 import {
@@ -35,7 +35,9 @@ export interface GenerateCopyRequest {
   /**
    * Affiliate (Amazon) copy: the server appends this disclosure marker to the
    * description BEFORE validation, and the description cap becomes 500 including it
-   * (design §3.4). Absent → behaviour is byte-identical to before.
+   * (design §3.4). Absent → no disclosure is appended; the description cap is the shared
+   * default (500, P1 0925) and prompt / repair / detector wording is the same as for
+   * affiliate copy apart from the Amazon line and the disclosure budget.
    */
   affiliateDisclosure?: AffiliateDisclosureKind;
 }
@@ -84,7 +86,27 @@ function parseClaimDetection(raw: unknown): ClaimDetectionResult {
 }
 
 const SYSTEM = "You write grounded Pinterest copy. Return one JSON object only with title, description, and altText. Never invent facts.";
-const DETECTOR_SYSTEM = "Independently extract every commercial claim and every video-cover-unsupported inference from the supplied copy. Return JSON with claims only. Each claim has type (material, brand, price, availability, efficacy, numeric_commercial, video_motion, video_audio, or video_temporal), value, and field (title, description, or altText). video_motion includes actions or motion; video_audio includes audio, singing, speech, or music; video_temporal includes duration, sequence, or before/after claims. Use [] only when none exists. Do not trust or use any claims self-reported by the copy generator.";
+/**
+ * Claim detector prompt. Still grounding-blind (it never sees the facts); the
+ * deterministic validator decides support. P1 0925: the type definitions are aligned
+ * with what validateCopy.ts actually checks — without them the detector labelled
+ * colours / shapes / scene objects as "material", ordinary product capabilities as
+ * "efficacy", and the affiliate prompt's own "Find it on Amazon" as "availability",
+ * all unrepairable 422s that no rule in the validator defines.
+ */
+export const DETECTOR_SYSTEM = [
+  "Independently extract every commercial claim and every video-cover-unsupported inference from the supplied copy.",
+  "Return JSON {\"claims\": [...]} only. Each claim has type, value, and field (title, description, or altText). value must be copied exactly as written in the copy (a verbatim substring, not a summary or rewording).",
+  "Types:",
+  "material: the substance the product itself is made of (for example leather, silk, stainless steel, ceramic, wool). Colors, finishes seen in a photo, shapes, sizes, parts or features, and objects in the scene or background are not material claims.",
+  "brand: a brand, trademark, or product-line name.",
+  "price: a price, discount, sale, deal, or free-shipping claim.",
+  "availability: stock, inventory, shipping, or delivery status (for example in stock, ships today, limited stock). A where-to-buy phrase such as \"Find it on Amazon\" is not an availability claim, and the store named in it is not a brand claim.",
+  "efficacy: a health, therapeutic, medical, or guaranteed-result claim (for example relieves pain, clinically proven, improves sleep, guaranteed results). Ordinary product features, capabilities, and uses (plays music, controls smart home devices, keeps drinks cold) are not efficacy claims.",
+  "numeric_commercial: a quantity, pack count, size, capacity, measurement, coverage, or numbered warranty or guarantee.",
+  "video_motion: actions or motion; video_audio: audio, singing, speech, or music; video_temporal: duration, sequence, or before/after claims.",
+  "Use [] only when none exists. Do not trust or use any claims self-reported by the copy generator.",
+].join("\n");
 
 export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   async generate(prompt: string, systemPrompt = SYSTEM, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
@@ -120,9 +142,18 @@ export class DefaultCopyGenerationProvider implements CopyGenerationProvider {
   }
 
   async repair(original: ProviderCopyOutput, report: ValidationReport, prompt: string, costContext?: ChatCostContext): Promise<ProviderCopyOutput> {
-    const issues = report.issues.map(issue => `${issue.field}:${issue.code}`).join(", ");
-    return this.generate(`${prompt}\n\nRepair these validation issues: ${issues}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM, costContext);
+    return this.generate(`${prompt}\n\nRepair these validation issues: ${describeRepairIssues(report)}.\nPrevious JSON: ${JSON.stringify(original)}\nReturn the complete JSON schema again.`, SYSTEM, costContext);
   }
+}
+
+/**
+ * Issue list shown to the repair model. Every issue carries its message, so the model
+ * knows WHICH word to remove (e.g. `Descriptive-only fact "green" cannot be used in
+ * product title`), not just the code. Only repairable reports reach repair, so no
+ * message here can invite an unsupported claim back in.
+ */
+export function describeRepairIssues(report: ValidationReport): string {
+  return report.issues.map(issue => `${issue.field}:${issue.code} (${issue.message})`).join(", ");
 }
 
 let override: CopyGenerationProvider | null = null;
@@ -145,13 +176,38 @@ function selectedPhrases(evidence: KeywordEvidence): string[] {
 
 export const AFFILIATE_PROMPT_LINE = "This Pin links to a product on Amazon. Prefer 'Find it on Amazon' style phrasing; never use 'Buy now', 'Add to cart', price, deal, discount, stock or rating claims. Do not add any disclosure hashtag yourself.";
 
+/**
+ * Grounding rule stated to the model (P1 0925). The validator grounds a brand /
+ * material / number / capability claim only when it appears VERBATIM in one sentence
+ * of the seller's text, so a paraphrase ("dedicated mic-off button" for "a mic off
+ * button") is an unrepairable 422. Tell the model the rule it is judged by.
+ */
+export const GROUNDED_WORDING_LINE = "Mention a brand, product line, material, size, number, compatibility, or product capability only if it appears in the grounding facts, and then reuse the exact wording from the facts: do not paraphrase, merge, or embellish it. Leave out anything the facts do not state.";
+
+/** The description cap the model writes to (affiliate: 500 minus the appended marker). */
+export function descriptionBudgetFor(req: Pick<GenerateCopyRequest, "affiliateDisclosure">): number {
+  return req.affiliateDisclosure ? affiliateDescriptionBudget(req.affiliateDisclosure) : DEFAULT_DESCRIPTION_MAX;
+}
+
+/**
+ * Target ranges in CHARACTERS, derived from the cap. The model overshoots a target
+ * that sits at the cap (Preview: 611-796 characters against "250-450 ... 496" with no
+ * unit), so the upper end of every target stays well under the hard limit.
+ */
+export function lengthGuide(length: NonNullable<GenerateCopyRequest["lengthPreference"]>, cap: number): string {
+  if (length === "short") return `title 40-60 characters, description 120-${Math.min(220, Math.floor(cap * 0.45))} characters`;
+  if (length === "seo-rich") {
+    const upper = Math.floor(cap * 0.85);
+    return `title 70-95 characters, description ${Math.min(350, upper - 100)}-${upper} characters`;
+  }
+  return `title 50-80 characters, description 200-${Math.min(380, Math.floor(cap * 0.75))} characters`;
+}
+
 export function buildPromptForSession(req: GenerateCopyRequest): string {
   const length = req.lengthPreference ?? "standard";
   // Affiliate copy: the model's own description budget excludes the disclosure the
   // server appends afterwards, so the final text fits Studio's 500 cap (design §3.4).
-  const descriptionBudget = req.affiliateDisclosure ? affiliateDescriptionBudget(req.affiliateDisclosure) : null;
-  const seoRichDescription = descriptionBudget === null ? "400-700" : `350-${descriptionBudget}`;
-  const guide = length === "short" ? "title 40-60, description 150-250" : length === "seo-rich" ? `title 70-95, description ${seoRichDescription}` : "title 50-80, description 250-450";
+  const descriptionBudget = descriptionBudgetFor(req);
   const facts = req.factCard.facts.filter(f => f.claimPolicy !== "blocked").map(f => `- ${f.key}: ${f.value} (${f.claimPolicy})`);
   const keywords = selectedPhrases(req.keywordEvidence);
   return [
@@ -160,7 +216,8 @@ export function buildPromptForSession(req: GenerateCopyRequest): string {
       ? "Visual grounding is one frozen video cover frame only. Describe only the supplied static taxonomy facts; never add motion, actions, sequence, time, audio, speech, music, performance, efficacy, brand, material, price, stock, inventory, quantity, or numeric commercial claims from that frame."
       : "",
     req.affiliateDisclosure ? AFFILIATE_PROMPT_LINE : "",
-    `Length preference: ${length}; ${guide}; hard limits title 100, description ${descriptionBudget ?? 800}.`,
+    GROUNDED_WORDING_LINE,
+    `Length preference: ${length}; target ${lengthGuide(length, descriptionBudget)}. Hard limits, counted in characters (not words) including spaces and punctuation: title 100, description ${descriptionBudget}. Two or three short sentences are enough; never exceed the description limit.`,
     `Grounding facts:\n${facts.length ? facts.join("\n") : "No product claims are authorized."}`,
     req.angleRequest?.trim() ? `Requested angle: ${req.angleRequest.trim()}` : "",
     keywords.length && req.keywordEvidence.degradedMode === "none" ? `Optional demand-backed keywords (use naturally, never force):\n${keywords.map(k => `- ${k}`).join("\n")}` : "No reliable keyword demand data. Use grounded semantics only.",
@@ -172,9 +229,18 @@ export class ValidationErrorV2 extends Error {
   constructor(public validationReport: ValidationReport) { super("Generated copy failed validation"); }
 }
 
-async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
+async function detectClaimsOnce(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
   try { return parseClaimDetection(await provider.detectClaims(output, factCard, costContext)); }
   catch { return { status: "incomplete", claims: [] }; }
+}
+
+/**
+ * One retry when detection is incomplete (malformed JSON / transient provider error).
+ * Still fail-closed: a second incomplete result is CLAIM_DETECTION_INCOMPLETE.
+ */
+async function detectClaims(provider: CopyGenerationProvider, output: ProviderCopyOutput, factCard: FactCardV1, costContext?: ChatCostContext): Promise<ClaimDetectionResult> {
+  const first = await detectClaimsOnce(provider, output, factCard, costContext);
+  return first.status === "completed" ? first : detectClaimsOnce(provider, output, factCard, costContext);
 }
 
 function validate(output: ProviderCopyOutput, req: GenerateCopyRequest, claimDetection: ClaimDetectionResult): ValidationReport {
@@ -214,11 +280,23 @@ function reportForRepair(report: ValidationReport, raw: ProviderCopyOutput, req:
   };
 }
 
-/** Repair prompt for affiliate copy: states the raw budget explicitly (see reportForRepair). */
-function promptForRepair(prompt: string, req: GenerateCopyRequest): string {
-  if (!req.affiliateDisclosure) return prompt;
-  const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
-  return `${prompt}\nThe description you return must be at most ${budget} characters; the server appends the disclosure afterwards.`;
+/**
+ * Repair prompt. A length-only repair must SHORTEN, never rewrite: it states the raw
+ * budget in characters and forbids new claims, so the second validation cannot fail on
+ * a fact the first draft did not contain. Affiliate copy also states that the server
+ * appends the disclosure (see reportForRepair).
+ */
+function promptForRepair(prompt: string, req: GenerateCopyRequest, report: ValidationReport, raw: ProviderCopyOutput): string {
+  const lines: string[] = [];
+  if (report.issues.some(issue => issue.code === "DESCRIPTION_TOO_LONG")) {
+    const budget = descriptionBudgetFor(req);
+    lines.push(`The previous description was ${raw.description.length} characters. Shorten it to at most ${Math.floor(budget * 0.85)} characters (hard limit ${budget}) by deleting whole sentences or clauses. Keep the remaining wording as it is; do not add any new brand, material, number, feature, or claim.`);
+  }
+  if (req.affiliateDisclosure) {
+    const budget = affiliateDescriptionBudget(req.affiliateDisclosure);
+    lines.push(`The description you return must be at most ${budget} characters; the server appends the disclosure afterwards.`);
+  }
+  return lines.length ? `${prompt}\n${lines.join("\n")}` : prompt;
 }
 
 export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promise<CopyResultV2> {
@@ -232,7 +310,7 @@ export async function orchestrateCopyGeneration(req: GenerateCopyRequest): Promi
   let report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
   if (!report.valid) {
     if (!isRepairableWithoutInventingFacts(report) || !provider.repair) throw new ValidationErrorV2(report);
-    raw = await provider.repair(raw, reportForRepair(report, raw, req), promptForRepair(prompt, req), req.costContext);
+    raw = await provider.repair(raw, reportForRepair(report, raw, req), promptForRepair(prompt, req, report, raw), req.costContext);
     output = withDisclosure(raw, req);
     report = validate(output, req, await detectClaims(provider, output, req.factCard, req.costContext));
     if (!report.valid) throw new ValidationErrorV2(report);

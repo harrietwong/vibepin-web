@@ -8,7 +8,7 @@
  *  - Frozen shared contracts: KeywordEvidence (honest provenance, structured relevance, no volumeSignal,
  *    selectedKeywordIds, degradedMode union), ValidationReport (closed issue codes),
  *    CopyResultV2 (required fields, structured fact summary, no clusterId).
- *  - Hard length limits: title <= 100, description <= 800; no truncation mutation.
+ *  - Hard length limits: title <= 100, description <= 500 (Studio schedule cap); no truncation mutation.
  *  - Exact keyword frequency: title <= 1, description <= 2.
  *  - Repetitive stuffing: 3 consecutive identical non-stopwords fail; stopwords & 2 reps pass.
  *  - Grounding checks: deterministic traps for silk, sterling silver, therapeutic, price,
@@ -33,7 +33,9 @@ import {
   createFactCardV1,
   summarizeFacts,
 } from "../src/lib/ai-copy/v2/factCard";
+import { DESCRIPTION_MAX_LENGTH } from "../src/lib/pinReadiness";
 import {
+  DEFAULT_DESCRIPTION_MAX,
   validateCopy as validateCopyV2,
   type ValidateCopyInput,
 } from "../src/lib/ai-copy/v2/validateCopy";
@@ -168,7 +170,7 @@ assert.equal(sampleResult.degradedMode, "none");
 
 console.log("   FactCardV1 & shared contracts passed.");
 
-// ── 2. Hard Platform Limits (100 title, 800 description) ─────────────────────
+// ── 2. Hard Limits (100 title, 500 description = Studio schedule cap) ────────
 console.log("2. Checking hard length limits...");
 
 const validCard: FactCardV1 = createFactCardV1({
@@ -191,12 +193,14 @@ const titleOver = validateCopy({ title: "A".repeat(101), description: "Mug desc"
 assert.equal(titleOver.valid, false);
 assert.ok(titleOver.issues.some(i => i.code === "TITLE_TOO_LONG" && i.field === "title"));
 
-const descOver = validateCopy({ title: "Mug", description: "B".repeat(801), factCard: validCard });
+const descOver = validateCopy({ title: "Mug", description: "B".repeat(501), factCard: validCard });
 assert.equal(descOver.valid, false);
 assert.ok(descOver.issues.some(i => i.code === "DESCRIPTION_TOO_LONG" && i.field === "description"));
 
-const exactReport = validateCopy({ title: "A".repeat(100), description: "B".repeat(800), factCard: validCard });
+const exactReport = validateCopy({ title: "A".repeat(100), description: "B".repeat(500), factCard: validCard });
 assert.ok(!exactReport.issues.some(i => i.code === "TITLE_TOO_LONG" || i.code === "DESCRIPTION_TOO_LONG"));
+// The v2 default must be exactly what Studio lets the merchant schedule (P1 0925).
+assert.equal(DEFAULT_DESCRIPTION_MAX, DESCRIPTION_MAX_LENGTH);
 
 console.log("   Hard length limits passed.");
 

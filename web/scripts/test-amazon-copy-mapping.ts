@@ -249,14 +249,25 @@ async function main() {
     const r = validateWith({ ...fresh(), manual: { productName: "Stanley 40oz tumbler", brand: "Stanley", size: "40 oz" } });
     assert.equal(r.valid, true, JSON.stringify(r.issues));
   });
-  await test("name only (no Brand/Size) → UNSUPPORTED_BRAND_CLAIM + UNSUPPORTED_NUMERIC_CLAIM (the 422 the fields prevent)", () => {
-    const r = validateWith({ ...fresh(), manual: { productName: "Stanley 40oz tumbler" } });
+  await test("name without brand/size, nothing fetched → UNSUPPORTED_BRAND_CLAIM + UNSUPPORTED_NUMERIC_CLAIM (the 422 the fields prevent)", () => {
+    const r = validateWith({ ...fresh(), manual: { productName: "Insulated travel tumbler" } });
     assert.equal(r.valid, false);
     assert.ok(codes(r).includes("UNSUPPORTED_BRAND_CLAIM")); assert.ok(codes(r).includes("UNSUPPORTED_NUMERIC_CLAIM"));
   });
-  await test("fetched page title mentioning the brand does NOT authorise it (page_metadata)", () => {
+  // P1 0925 ruling: the merchant's typed product name and the fetched listing text are
+  // the seller's own asserted statements (user_input / product_catalog / page_metadata),
+  // so a claim copied verbatim from them is grounded (test-ai-copy-v2-seller-evidence).
+  await test("typed product name grounds the brand the user typed; a size typed differently (40oz vs 40 oz) is still flagged", () => {
+    const r = validateWith({ ...fresh(), manual: { productName: "Stanley 40oz tumbler" } });
+    assert.deepEqual(codes(r), ["UNSUPPORTED_NUMERIC_CLAIM"], JSON.stringify(r.issues));
+  });
+  await test("fetched page title grounds claims it states verbatim (Stanley, 40 oz)", () => {
     const r = validateWith({ ...fresh(), fetch: { status: "ok" }, extracted: { title: "Stanley Quencher 40 oz", brand: "Stanley" } });
-    assert.ok(codes(r).includes("UNSUPPORTED_BRAND_CLAIM"));
+    assert.equal(r.valid, true, JSON.stringify(r.issues));
+  });
+  await test("fetched byline brand alone (not in title/bullets, never passed) does NOT authorise it", () => {
+    const r = validateWith({ ...fresh(), fetch: { status: "ok" }, extracted: { title: "Quencher 40 oz tumbler", brand: "Stanley" } });
+    assert.deepEqual(codes(r), ["UNSUPPORTED_BRAND_CLAIM"], JSON.stringify(r.issues));
   });
   await test("Brand only → brand passes, size still flagged (field-level pointer)", () => {
     const r = validateWith({ ...fresh(), manual: { productName: "Tumbler", brand: "Stanley" } });
