@@ -2,7 +2,7 @@
  * validateCopy.ts — Validation engine for AI Copy v2.
  *
  * Enforces:
- *  - Hard platform character limits (title <= 100, description <= 800).
+ *  - Hard character limits (title <= 100, description <= 500 — Studio's schedule/publish cap).
  *  - Keyword occurrence frequency (title <= 1, description <= 2).
  *  - Consecutive word stuffing (>=3 consecutive identical non-stopwords).
  *  - Grounding checks: unsupported material, efficacy/therapeutic, price,
@@ -30,8 +30,13 @@ import type {
   ClaimDetectionResult,
 } from "./types";
 
-/** Default description cap (the platform limit). */
-export const DEFAULT_DESCRIPTION_MAX = 800;
+/**
+ * Default description cap. Must equal pinReadiness.DESCRIPTION_MAX_LENGTH (500): Studio
+ * blocks Schedule/Publish above it, so an 800-char v2 description (the old default) was
+ * valid here but unschedulable there (Preview P1 0925: a 627-char non-Amazon result).
+ * Pinned by test-ai-copy-v2-facts.
+ */
+export const DEFAULT_DESCRIPTION_MAX = 500;
 
 export interface ValidateCopyInput {
   title: string;
@@ -41,7 +46,7 @@ export interface ValidateCopyInput {
   keywords?: string[];
   claimDetection: ClaimDetectionResult;
   /**
-   * Description cap. Defaults to the platform limit (800). Affiliate copy passes 500,
+   * Description cap. Defaults to DEFAULT_DESCRIPTION_MAX (500). Affiliate copy passes 500,
    * Studio's schedule cap, because the appended disclosure must fit inside it (design §3.4).
    */
   descriptionMax?: number;

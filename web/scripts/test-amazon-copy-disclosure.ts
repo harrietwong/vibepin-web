@@ -213,35 +213,36 @@ async function main() {
   });
   await test("flag off: repair report unchanged; repair prompt adds only the shorten-only length line", async () => {
     const calls = newCalls();
-    __setCopyProviderForTests(provider({ generate: out(filler(801)), repair: [out(filler(300))] }, calls));
+    __setCopyProviderForTests(provider({ generate: out(filler(501)), repair: [out(filler(300))] }, calls));
     await orchestrateCopyGeneration(req());
-    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(801) exceeds maximum of 800")));
+    assert.ok(calls.repairReports[0].issues.some(i => i.message.includes("(501) exceeds maximum of 500")));
     assert.ok(calls.repairPrompts[0].startsWith(calls.generatePrompts[0]), "flag-off repair prompt extends the generate prompt");
-    assert.ok(calls.repairPrompts[0].includes("The previous description was 801 characters. Shorten it to at most 680 characters (hard limit 800)"), calls.repairPrompts[0]);
+    assert.ok(calls.repairPrompts[0].includes("The previous description was 501 characters. Shorten it to at most 425 characters (hard limit 500)"), calls.repairPrompts[0]);
     assert.ok(!calls.repairPrompts[0].includes("server appends the disclosure"), "no affiliate line when flag off");
   });
 
   console.log("\n[orchestrator: flag off regression]");
-  await test("flag off: output is the provider text byte-for-byte (no #ad), 800 cap unchanged", async () => {
+  await test("flag off: output is the provider text byte-for-byte (no #ad) up to the 500 cap", async () => {
     const calls = newCalls();
-    const text = filler(700);
+    const text = filler(500);
     __setCopyProviderForTests(provider({ generate: out(text) }, calls));
     const r = await orchestrateCopyGeneration(req());
     assert.equal(r.description, text);
-    assert.equal(calls.repairInputs.length, 0, "700 chars is fine under the default 800 cap");
+    assert.equal(calls.repairInputs.length, 0, "500 chars is fine under the default 500 cap");
   });
   await test("flag off: prompt has no Amazon line and the original limits", () => {
     const p = buildPromptForSession(req());
     assert.ok(!p.includes("Amazon"));
-    assert.ok(p.includes("title 100, description 800."));
+    assert.ok(p.includes("title 100, description 500."));
     const seo = buildPromptForSession(req({ lengthPreference: "seo-rich" }));
-    assert.ok(seo.includes("title 70-95 characters, description 350-680 characters"));
+    assert.ok(seo.includes("title 70-95 characters, description 325-425 characters"));
   });
 
   console.log("\n[validateCopy descriptionMax]");
-  await test("default max stays 800; explicit 500 flags a 501-char description", () => {
+  await test("default max is 500 (Studio cap, P1 0925): 500 passes, 501 flagged with or without explicit max", () => {
     const base = { title: "Calm Reading Corner", altText: "alt", factCard: factCard(), claimDetection: { status: "completed" as const, claims: [] } };
-    assert.equal(validateCopy({ ...base, description: filler(600) }).valid, true);
+    assert.equal(validateCopy({ ...base, description: filler(500) }).valid, true);
+    assert.ok(validateCopy({ ...base, description: filler(501) }).issues.some(i => i.code === "DESCRIPTION_TOO_LONG"));
     assert.equal(validateCopy({ ...base, description: filler(500), descriptionMax: 500 }).valid, true);
     const r = validateCopy({ ...base, description: filler(501), descriptionMax: 500 });
     assert.ok(r.issues.some(i => i.code === "DESCRIPTION_TOO_LONG"));
