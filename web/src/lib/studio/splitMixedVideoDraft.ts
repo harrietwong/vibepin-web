@@ -29,14 +29,15 @@
 
 import { resolveScheduledDestinations } from "../social/scheduledDestinations";
 import { isSingleVideoPayload } from "../publish/singleVideoPayload";
+import { IG_CHILD_ID_SUFFIX, parentIdOf } from "../publish/splitPairIdentity";
 import type { ContentMedia } from "../contentDraftModel";
 import type { PinDraft, DraftStatus, ScheduledDestination } from "../pinDraftStore";
 import { EMPTY_TOUCHED, type MetadataTouchedFlags } from "../pinMetadata";
 import { sanitizeHandoffField } from "../weeklyPlanHandoff";
 
-/** Suffix that names an Instagram child produced by this module. Exported so
- *  T2's server/script callers can recognize the shape without re-deriving it. */
-export const IG_CHILD_ID_SUFFIX = "__ig";
+// The child-id rule lives in lib/publish/splitPairIdentity.ts (dependency-free, so the
+// cron can import it for metering); re-exported here so there is one definition.
+export { IG_CHILD_ID_SUFFIX, parentIdOf } from "../publish/splitPairIdentity";
 
 /** The marker fields a split-off Instagram child carries, made REQUIRED. T2
  *  lifted both onto `PinDraft` as optional fields (pinDraftStore.ts), so a
@@ -151,22 +152,6 @@ export function mixedVideoScheduleIssue(
 function isAlreadyChild(draft: Pick<PinDraft, "id"> & { copyProfile?: string }): boolean {
   if (draft.copyProfile === "instagram_caption") return true;
   return parentIdOf(draft.id) !== null;
-}
-
-/**
- * Strict inverse of the child-id rule: only a real `${x}__ig` where `x` is
- * non-empty and does not itself end in `__ig` (which would mean `id` was
- * already a child id with a second suffix appended — never a legitimate
- * parent). Case-sensitive, no trimming — a stray space or wrong case is not
- * a match, it is a different (and invalid) id.
- */
-export function parentIdOf(childId: unknown): string | null {
-  if (typeof childId !== "string") return null;
-  if (!childId.endsWith(IG_CHILD_ID_SUFFIX)) return null;
-  const prefix = childId.slice(0, -IG_CHILD_ID_SUFFIX.length);
-  if (!prefix) return null;
-  if (prefix.endsWith(IG_CHILD_ID_SUFFIX)) return null;
-  return prefix;
 }
 
 /** First non-blank line of `caption`, trimmed, capped at 100 chars — Fable

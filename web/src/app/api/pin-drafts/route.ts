@@ -36,6 +36,7 @@ import {
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
 import { mixedVideoScheduleIssue } from "@/lib/studio/splitMixedVideoDraft";
+import { scheduledPostUnits } from "@/lib/publish/splitPairIdentity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -295,6 +296,9 @@ export async function PUT(req: Request) {
   // one scheduled_post metered event). Only tracked when the scheduled_at column
   // exists; skipped entirely otherwise.
   const newlyScheduledDraftIds: string[] = [];
+  // …and the scheduled_at each of them derives, so a split pair due at the same
+  // instant can be pre-checked as the ONE unit the cron will charge for it.
+  const newlyScheduledAt = new Map<string, string>();
   // Drafts in this request that ask to be scheduled to a destination we cannot
   // honour at due time. Collected, then REFUSED below — never quietly stripped.
   const unschedulable: Array<{ draftId: string; providers: string[] }> = [];
@@ -313,7 +317,10 @@ export async function PUT(req: Request) {
     if (scheduledAtAvailable) {
       const incomingScheduledAt = buildScheduledAt(p);
       const wasScheduled = existingScheduled.get(d.draftId) ?? false;
-      if (incomingScheduledAt && !wasScheduled) newlyScheduledDraftIds.push(d.draftId);
+      if (incomingScheduledAt && !wasScheduled) {
+        newlyScheduledDraftIds.push(d.draftId);
+        newlyScheduledAt.set(d.draftId, incomingScheduledAt);
+      }
       // A future-dated Pin may only name destinations whose intent we can actually
       // persist and replay. That is now every platform with a publish path: intent
       // rides the draft as scheduledDestinations[] and the due worker reads it back.
@@ -440,7 +447,8 @@ export async function PUT(req: Request) {
   if (quotaCandidateIds.length > 0) {
     try {
       const plan = await resolvePlan(userId);
-      const allowance = await checkAllowance(userId, "scheduled_post", quotaCandidateIds.length, plan);
+      const units = scheduledPostUnits(quotaCandidateIds, newlyScheduledAt);
+      const allowance = await checkAllowance(userId, "scheduled_post", units, plan);
       if (!allowance.allowed) {
         for (const draftId of quotaCandidateIds) {
           rejected.set(draftId, {

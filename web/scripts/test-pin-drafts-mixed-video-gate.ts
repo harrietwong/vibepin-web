@@ -55,6 +55,8 @@ let table: Row[] = [];
 let log: string[] = [];
 let writePayloads: Array<Record<string, unknown>> = [];
 let meterCalls: string[] = [];
+/** Units each quota pre-check asked for (T2 block 4). */
+let allowanceAmounts: number[] = [];
 let allowanceAllowed = true;
 const unavailableDraftIds = new Set<string>();
 /** 在下一次写入落地之前跑一次的钩子 —— 用它模拟 cron 抢在中间 CAS 写入。 */
@@ -69,6 +71,7 @@ function resetDb() {
   log = [];
   writePayloads = [];
   meterCalls = [];
+  allowanceAmounts = [];
   allowanceAllowed = true;
   unavailableDraftIds.clear();
   beforeWrite = null;
@@ -197,7 +200,10 @@ const originalLoad = (Module as any)._load;
   }
   if (/[\\/]server[\\/]usage(\.ts)?$/.test(request) || request === "@/lib/server/usage") {
     return {
-      checkAllowance: async () => ({ allowed: allowanceAllowed, used: allowanceAllowed ? 0 : 100, limit: 100 }),
+      checkAllowance: async (_u: string, _t: string, amount: number) => {
+        allowanceAmounts.push(amount);
+        return { allowed: allowanceAllowed, used: allowanceAllowed ? 0 : 100, limit: 100 };
+      },
       recordUsage: async (args: { referenceId?: string }) => {
         meterCalls.push(String(args.referenceId));
         return { ok: true };
@@ -402,6 +408,38 @@ async function main() {
     const draft = { ...child, description: "", scheduledDate: "", scheduledTime: "", plannedAt: "" };
     const { byId } = await put(route, [{ draftId: draft.id, updatedAt: draft.updatedAt, payload: draft as unknown as Record<string, unknown> }]);
     assert.equal(byId.get("d1__ig")!.status, "applied");
+  });
+
+  console.log("\n=== quota pre-check counts a split pair due together as ONE unit (T2 block 4) ===");
+
+  await test("pair saved together at the SAME instant → pre-checked as 1 unit", async () => {
+    resetDb();
+    const { parent, child } = split();
+    await put(route, [
+      { draftId: parent.id, updatedAt: parent.updatedAt, payload: parent as unknown as Record<string, unknown> },
+      { draftId: child.id, updatedAt: child.updatedAt, payload: child as unknown as Record<string, unknown> },
+    ]);
+    assert.deepEqual(allowanceAmounts, [1]);
+  });
+
+  await test("pair saved together at DIFFERENT instants → 2 units", async () => {
+    resetDb();
+    const { parent, child } = split();
+    const moved = { ...child, scheduledDate: "2026-10-11", plannedAt: "2026-10-11T09:00:00.000Z" };
+    await put(route, [
+      { draftId: parent.id, updatedAt: parent.updatedAt, payload: parent as unknown as Record<string, unknown> },
+      { draftId: moved.id, updatedAt: moved.updatedAt, payload: moved as unknown as Record<string, unknown> },
+    ]);
+    assert.deepEqual(allowanceAmounts, [2]);
+  });
+
+  await test("two unrelated drafts at the same instant stay 2 units", async () => {
+    resetDb();
+    await put(route, [
+      { draftId: "a1", updatedAt: "2026-09-24T00:00:00.000Z", payload: mixedPayload("a1", "2026-09-24T00:00:00.000Z", { scheduledDestinations: [PIN_DEST] }) },
+      { draftId: "b1", updatedAt: "2026-09-24T00:00:00.000Z", payload: mixedPayload("b1", "2026-09-24T00:00:00.000Z", { scheduledDestinations: [PIN_DEST] }) },
+    ]);
+    assert.deepEqual(allowanceAmounts, [2]);
   });
 
   console.log(`\n${passed} passed`);

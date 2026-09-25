@@ -35,6 +35,7 @@ import {
   usageEnforceFor,
 } from "@/lib/server/usage/meterScheduledPost";
 import { isSingleVideoPayload, payloadMediaObjects } from "@/lib/publish/singleVideoPayload";
+import { scheduledPostMeterIdentity } from "@/lib/publish/splitPairIdentity";
 import {
   aggregateDelivery,
   classifyDelivery,
@@ -692,7 +693,20 @@ export async function GET(req: Request): Promise<Response> {
       // attempt the user really made. Fail-open in shadow: consumeScheduledPost never
       // throws, so a ledger outage cannot stop a scheduled publish.
       // Kept so a refund below releases the EXACT key that was charged.
-      meterKey = deriveScheduledPostKey(row.vibepin_user_id, String(row.draft_id ?? ""), row.scheduled_at);
+      //
+      // ── A split pair is ONE distribution when due together (Fable ruling, T2 block 4) ──
+      // A mixed Pinterest+Instagram video is stored as two rows, `foo` and `foo__ig`.
+      // The child meters under its PARENT's id (derived from the id alone, never a
+      // payload field) with its OWN scheduled_at: both due at the same instant → the
+      // same key → the second consume replays (1 unit); rescheduled apart → two keys →
+      // two units. The fresh-only refund gate above then yields "refund only when
+      // neither half was sent" with no extra code. The user id in the key keeps the
+      // pairing owner-scoped. See lib/publish/splitPairIdentity.ts.
+      meterKey = deriveScheduledPostKey(
+        row.vibepin_user_id,
+        scheduledPostMeterIdentity(String(row.draft_id ?? "")),
+        row.scheduled_at,
+      );
       const consumed = await consumeScheduledPost({
         userId: row.vibepin_user_id,
         key: meterKey,

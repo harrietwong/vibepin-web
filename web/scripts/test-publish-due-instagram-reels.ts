@@ -570,6 +570,97 @@ function nextTick(): void { draft.publish_claimed_at = null; }
     assert.equal(reelDispatchInputs[0].copyProfile, undefined);
   });
 
+  // ── Metering a split pair (Fable ruling, T2 block 4, option A) ──────────────
+  // `foo` (Pinterest-only) and `foo__ig` (Instagram-only) are two rows. Same due
+  // instant ⇒ one distribution ⇒ 1 unit; refund only when NEITHER half was sent;
+  // moved apart ⇒ 2 units; another owner's `foo__ig` never pairs with this `foo`.
+  const OTHER_OWNER = "cccccccc-2222-4222-8222-cccccccccccc";
+  const pairRow = (id: string, dests: Array<Record<string, unknown>>, over: Partial<DraftRow> = {}): DraftRow => {
+    const row = baseVideoDraft(dests);
+    return { ...row, draft_id: id, payload: { ...row.payload, contentId: id }, ...over };
+  };
+  const parentRow = (over: Partial<DraftRow> = {}) => pairRow(DRAFT, [PIN_DEST], over);
+  const childRow = (over: Partial<DraftRow> = {}) =>
+    pairRow(`${DRAFT}__ig`, [IG_DEST], over);
+  const pinterestFails = () => {
+    pinterestVideoBehaviour = async () => ({
+      outcome: "failed", retryAllowed: true,
+      evidence: { stage: "created", classification: "definite_rejection", providerStatus: 400, providerMessage: "Invalid video" },
+    });
+  };
+  const reelFails = () => { reelBehaviour = async () => { throw new Error("publish_asset_lease_materialization_failed"); }; };
+  const netCharged = () => consumeCalls.filter(c => c.fresh).length - releaseCalls.length;
+  const runRow = async (row: DraftRow) => { draft = row; await run(); };
+
+  await test("M1: both halves due together and both succeed → ONE unit (second consume replays the parent key)", false, async () => {
+    await runRow(parentRow());
+    await runRow(childRow());
+    assert.equal(consumeCalls.length, 2);
+    assert.equal(consumeCalls[0].key, consumeCalls[1].key, "the child meters under its parent's key");
+    assert.deepEqual(consumeCalls.map(c => c.fresh), [true, false]);
+    assert.equal(releaseCalls.length, 0);
+    assert.equal(netCharged(), 1);
+  });
+
+  await test("M2: Pinterest succeeds, Instagram fails → 1 unit, NOT refunded", false, async () => {
+    await runRow(parentRow());
+    reelFails();
+    await runRow(childRow());
+    assert.equal(rowFor("instagram")?.status, "failed");
+    assert.equal(releaseCalls.length, 0, "the replaying child may never release the parent's earned unit");
+    assert.equal(netCharged(), 1);
+  });
+
+  await test("M3a: Pinterest fails first, then Instagram succeeds → net 1 unit", false, async () => {
+    pinterestFails();
+    await runRow(parentRow());
+    assert.deepEqual(releaseCalls.map(r => r.reason), ["rejected"], "nothing sent yet: the fresh parent is refunded");
+    await runRow(childRow());
+    assert.equal(rowFor("instagram")?.status, "published");
+    assert.deepEqual(consumeCalls.map(c => c.fresh), [true, true], "the re-armed key charges the delivered child");
+    assert.equal(netCharged(), 1);
+  });
+
+  await test("M3b: Instagram succeeds first, then Pinterest fails → net 1 unit, NOT refunded", false, async () => {
+    await runRow(childRow());
+    pinterestFails();
+    await runRow(parentRow());
+    assert.deepEqual(consumeCalls.map(c => c.fresh), [true, false]);
+    assert.equal(releaseCalls.length, 0, "IG delivered: the unit stands");
+    assert.equal(netCharged(), 1);
+  });
+
+  await test("M4: both halves fail → net 0 (refunded)", false, async () => {
+    pinterestFails();
+    await runRow(parentRow());
+    reelFails();
+    await runRow(childRow());
+    assert.equal(netCharged(), 0);
+    assert.ok(releaseCalls.length >= 1);
+  });
+
+  await test("M5: halves rescheduled to DIFFERENT instants → two publish events, 2 units", false, async () => {
+    const later = "2026-09-24T18:00:00.000Z";
+    await runRow(parentRow());
+    await runRow(childRow({ scheduled_at: later }));
+    assert.notEqual(consumeCalls[0].key, consumeCalls[1].key);
+    assert.deepEqual(consumeCalls.map(c => c.fresh), [true, true]);
+    assert.equal(netCharged(), 2);
+  });
+
+  await test("M6: another owner's forged `foo__ig` never pairs with this owner's `foo`", false, async () => {
+    await runRow(parentRow());
+    await runRow(childRow({ vibepin_user_id: OTHER_OWNER }));
+    assert.notEqual(consumeCalls[0].key, consumeCalls[1].key, "the key hashes the owner");
+    assert.deepEqual(consumeCalls.map(c => c.fresh), [true, true]);
+  });
+
+  await test("M7: an ordinary (non-split) draft still meters under its own id", false, async () => {
+    const { deriveScheduledPostKey } = await import("../src/lib/server/usage/meterScheduledPost");
+    await runRow(parentRow());
+    assert.equal(consumeCalls[0].key, deriveScheduledPostKey(OWNER, DRAFT, DUE_AT));
+  });
+
   // ── Part 2: the real due binding ─────────────────────────────────────────────
   console.log("\n--- dispatchDueInstagramReel (real module, fake durable dispatcher) ---");
   const { dispatchDueInstagramReel } = await import("../src/lib/server/publish/v76InstagramReelsDue");
