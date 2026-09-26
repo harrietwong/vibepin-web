@@ -3014,7 +3014,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioModals.storeImport.back": "返回連結匯入",
   "studioModals.storeImport.foundCount": "來自 {store} 的 {n} 件商品",
   "studioModals.storeImport.selectAll": "全選",
-  "studioModals.storeImport.selectNone": "全部取消",
+  "studioModals.storeImport.selectNone": "取消全選",
   "studioModals.storeImport.selectedCount": "已選 {n} 件",
   "studioModals.storeImport.truncated": "僅顯示前 100 件",
   "studioModals.storeImport.noImage": "沒有圖片——上傳一張才能使用此商品",

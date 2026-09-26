@@ -2516,7 +2516,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioModals.storeImport.back": "กลับไปนำเข้าด้วยลิงก์",
   "studioModals.storeImport.foundCount": "สินค้า {n} รายการจาก {store}",
   "studioModals.storeImport.selectAll": "เลือกทั้งหมด",
-  "studioModals.storeImport.selectNone": "ไม่เลือกเลย",
+  "studioModals.storeImport.selectNone": "ยกเลิกการเลือกทั้งหมด",
   "studioModals.storeImport.selectedCount": "เลือกแล้ว {n} รายการ",
   "studioModals.storeImport.truncated": "แสดง 100 รายการแรก",
   "studioModals.storeImport.noImage": "ไม่มีรูปภาพ — อัปโหลดรูปเพื่อใช้สินค้านี้",

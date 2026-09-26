@@ -2745,7 +2745,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioModals.storeImport.back": "Volver a la importación por enlace",
   "studioModals.storeImport.foundCount": "{n} productos de {store}",
   "studioModals.storeImport.selectAll": "Seleccionar todo",
-  "studioModals.storeImport.selectNone": "No seleccionar ninguno",
+  "studioModals.storeImport.selectNone": "Deseleccionar todo",
   "studioModals.storeImport.selectedCount": "{n} seleccionados",
   "studioModals.storeImport.truncated": "Mostrando los primeros 100",
   "studioModals.storeImport.noImage": "Sin imagen — sube una para usar este producto",
