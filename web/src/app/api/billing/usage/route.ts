@@ -43,7 +43,10 @@
  *
  * Response contract (the Settings usage UI depends on this shape):
  *   {
- *     plan: "free" | "starter" | "pro" | "business",
+ *     plan: "free" | "starter" | "pro" | "business",   // resolvePlan — the plan the quotas use
+ *     planSource: "subscription" | "app_metadata" | "whitelist" | "default",
+ *     meteringMode: "off" | "shadow" | "enforce",   // USAGE_METERING_MODE (ledger on/off)
+ *     connectedAccountsPerPlatform: number | null,  // PLAN_ENTITLEMENTS[plan]
  *     state: "metered" | "unmetered", // 5xx is the unavailable state
  *     metered: boolean,              // false => no usage_accounts row yet
  *     periodStart: ISO | null,       // null when unmetered (no real period yet)
@@ -65,7 +68,8 @@
 
 import { NextResponse } from "next/server";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
-import { resolvePlan } from "@/lib/server/entitlements";
+import { resolvePlanDetailed, type PlanSource } from "@/lib/server/entitlements";
+import { usageMeteringMode } from "@/lib/server/usage/meterGeneration";
 import { createServerClient } from "@/lib/supabase";
 import { PLAN_ENTITLEMENTS, type PlanKey } from "@/lib/server/planEntitlements";
 
@@ -125,21 +129,34 @@ export async function GET(req: Request) {
   try {
     // resolvePlan never throws (it degrades to "free"); a hard failure below is
     // treated as a real error (500) rather than a silent Free downgrade.
-    const [plan, account] = await Promise.all([
-      resolvePlan(userId) as Promise<PlanKey>,
+    const [planDetail, account] = await Promise.all([
+      resolvePlanDetailed(userId),
       fetchUsageAccount(userId),
     ]);
+    const plan = planDetail.plan as PlanKey;
+    const planSource: PlanSource = planDetail.source;
+    // Whether the ledger is being written at all right now. The Billing UI uses it
+    // to decide whether "no account row" can be read as "nothing used yet" (ledger
+    // on: every metered action seeds the row first via ensureUsageAccount) or must
+    // stay "not tracked" (ledger off).
+    const meteringMode = usageMeteringMode();
 
     const entitlements = PLAN_ENTITLEMENTS[plan] ?? PLAN_ENTITLEMENTS.free;
     const includedImages = entitlements.monthlyAiImages;
     const includedText = entitlements.monthlyAiTextGenerations;
     const includedPosts = entitlements.monthlyScheduledPosts;
+    // Same config row, so the plan card can describe the plan from the SAME numbers
+    // the meters show (never a hard-coded "Free: 10 images" sentence).
+    const connectedAccountsPerPlatform = entitlements.connectedAccountsPerPlatform;
 
     if (!account) {
       // No account row: metering has never touched this user. Report the plan's
       // included allowances and say so — never fabricate measured zeros.
       return NextResponse.json({
         plan,
+        planSource,
+        meteringMode,
+        connectedAccountsPerPlatform,
         state: "unmetered" as const,
         metered: false,
         periodStart: null,
@@ -153,6 +170,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       plan,
+      planSource,
+      meteringMode,
+      connectedAccountsPerPlatform,
       state: "metered" as const,
       metered: true,
       periodStart: account.period_start,

@@ -392,6 +392,27 @@ async function main() {
     );
   });
 
+  await test("resolvePlanDetailed reports which rung decided the plan (display provenance)", async () => {
+    const wl = "zhihuihuang321@gmail.com";
+    const sub = (plan: string) => [{ plan, lastEventAt: "2026-07-16T00:00:00.000Z" }];
+    const cases: Array<[string, Parameters<typeof deps>[0], string, string]> = [
+      ["nothing → free/default", { email: "a@example.com" }, "free", "default"],
+      ["live sub → subscription", { email: "a@example.com", subs: sub("starter") }, "starter", "subscription"],
+      ["cache only → app_metadata", { email: "a@example.com", appPlan: "pro" }, "pro", "app_metadata"],
+      ["whitelist raises free → whitelist", { email: wl }, "pro", "whitelist"],
+      ["whitelist raises starter sub → whitelist", { email: wl, subs: sub("starter") }, "pro", "whitelist"],
+      ["whitelist + real business sub → subscription (floor changed nothing)", { email: wl, subs: sub("business") }, "business", "subscription"],
+      ["whitelist + real pro sub → subscription", { email: wl, subs: sub("pro") }, "pro", "subscription"],
+    ];
+    for (const [label, opts, plan, source] of cases) {
+      const d = await ent.resolvePlanDetailed("u1", deps(opts));
+      assertEq(d.plan, plan, `${label}: plan`);
+      assertEq(d.source, source, `${label}: source`);
+      // resolvePlan must remain exactly the .plan of the detailed result.
+      assertEq(await ent.resolvePlan("u1", deps(opts)), d.plan, `${label}: resolvePlan parity`);
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

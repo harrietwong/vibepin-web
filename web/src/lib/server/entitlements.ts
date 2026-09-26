@@ -252,6 +252,33 @@ export function highestPlanFromGrants(grants: ActiveSubscriptionGrant[]): PlanKe
  * unknown plan strings) resolves to "free" before the floor.
  */
 export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promise<PlanKey> {
+  return (await resolvePlanDetailed(userId, deps)).plan;
+}
+
+/**
+ * Which rung of the truth order decided the resolved plan. DISPLAY ONLY — it never
+ * drives an entitlement decision on its own:
+ *   - "subscription": a live access-granting Creem subscription;
+ *   - "app_metadata": the trusted app_metadata.plan cache;
+ *   - "whitelist":    the PRO_EMAIL_WHITELIST floor RAISED the plan (an internal
+ *                     allowance — the user is not paying for it);
+ *   - "default":      nothing matched → free.
+ * A whitelisted email that already holds Pro/Business via a real subscription is
+ * reported as "subscription" (the floor changed nothing).
+ */
+export type PlanSource = "subscription" | "app_metadata" | "whitelist" | "default";
+
+export type ResolvedPlanDetail = { plan: PlanKey; source: PlanSource };
+
+/**
+ * resolvePlan plus the rung that decided it. resolvePlan delegates here, so the
+ * plan value is identical by construction — this only adds provenance, so the
+ * Settings → Billing plan card can say "internal allowance" instead of "Free".
+ */
+export async function resolvePlanDetailed(
+  userId: string,
+  deps?: ResolvePlanDeps,
+): Promise<ResolvedPlanDetail> {
   const getUserById = deps?.getUserById ?? defaultGetUserById;
   const getActiveSubscriptions =
     deps?.getActiveSubscriptions ?? defaultGetActiveSubscriptions;
@@ -267,10 +294,14 @@ export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promi
   //     (active / trialing / scheduled-cancel-not-expired). Highest wins so two
   //     coexisting subs resolve to the better plan.
   let plan: PlanKey = "free";
+  let source: PlanSource = "default";
   try {
     const grants = await getActiveSubscriptions(userId);
     const fromSub = highestPlanFromGrants(grants);
-    if (fromSub !== "free") plan = fromSub;
+    if (fromSub !== "free") {
+      plan = fromSub;
+      source = "subscription";
+    }
   } catch {
     // fall through to the app_metadata cache
   }
@@ -278,15 +309,19 @@ export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promi
   // (b) Trusted cache fallback: app_metadata.plan (service-role-writable only).
   if (plan === "free" && user) {
     const fromApp = normalizePlanKey(user.appPlan);
-    if (fromApp) plan = fromApp;
+    if (fromApp) {
+      plan = fromApp;
+      source = "app_metadata";
+    }
   }
 
   // Whitelist floor at "pro" — needs the email, which requires the user lookup.
   const email = (user?.email ?? "").trim().toLowerCase();
   if (email && PRO_EMAIL_WHITELIST.includes(email) && PLAN_RANK[plan] < PLAN_RANK.pro) {
     plan = "pro";
+    source = "whitelist";
   }
-  return plan;
+  return { plan, source };
 }
 
 // ── Billing interval of the active plan ──────────────────────────────────────
