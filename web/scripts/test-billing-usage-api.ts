@@ -64,6 +64,8 @@ let accountRow: Record<string, unknown> | null = null;
 let accountError: { message: string } | null = null;
 /** The plan resolvePlan should report. */
 let currentPlan = "free";
+/** The provenance resolvePlanDetailed should report alongside currentPlan. */
+let currentSource = "default";
 
 const calls = {
   select: 0,
@@ -133,6 +135,10 @@ const originalLoad = (Module as any)._load;
       resolvePlan: async () => {
         calls.resolvePlan++;
         return currentPlan;
+      },
+      resolvePlanDetailed: async () => {
+        calls.resolvePlan++;
+        return { plan: currentPlan, source: currentSource };
       },
     };
   }
@@ -316,6 +322,40 @@ async function main() {
     const body = await res.json();
     assertEq(body.scheduledPosts.included, null, "Business scheduled posts are unlimited → null");
     assertEq(PLAN_ENTITLEMENTS.business.monthlyScheduledPosts, null, "config sanity check");
+  });
+
+  await test("plan card fields: planSource + connectedAccountsPerPlatform come from the SAME resolved plan", async () => {
+    resetCalls();
+    currentPlan = "pro";
+    currentSource = "whitelist";
+    accountError = null;
+    accountRow = null;
+    const res = await GET(request(VALID_BEARER));
+    const body = await res.json();
+    assertEq(body.plan, "pro", "plan");
+    assertEq(body.planSource, "whitelist", "internal allowance is reported as such, not as Free");
+    assertEq(body.connectedAccountsPerPlatform, PLAN_ENTITLEMENTS.pro.connectedAccountsPerPlatform, "connections per platform");
+    assertEq(body.aiImages.included, PLAN_ENTITLEMENTS.pro.monthlyAiImages, "meters use the same plan");
+    assert(["off", "shadow", "enforce"].includes(body.meteringMode), "meteringMode is always reported");
+    currentSource = "default";
+  });
+
+  await test("meteringMode mirrors USAGE_METERING_MODE (read-only; default off)", async () => {
+    resetCalls();
+    currentPlan = "free";
+    accountError = null;
+    accountRow = null;
+    const prev = process.env.USAGE_METERING_MODE;
+    try {
+      delete process.env.USAGE_METERING_MODE;
+      assertEq((await (await GET(request(VALID_BEARER))).json()).meteringMode, "off", "unset → off");
+      process.env.USAGE_METERING_MODE = "shadow";
+      assertEq((await (await GET(request(VALID_BEARER))).json()).meteringMode, "shadow", "shadow");
+      assertEq(calls.rpc, 0, "reporting the mode never touches the ledger");
+    } finally {
+      if (prev === undefined) delete process.env.USAGE_METERING_MODE;
+      else process.env.USAGE_METERING_MODE = prev;
+    }
   });
 
   // ── 4) Failure posture ────────────────────────────────────────────────────────

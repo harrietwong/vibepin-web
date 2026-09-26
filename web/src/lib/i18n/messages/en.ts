@@ -264,6 +264,13 @@ const en = {
   "billing.usageLoading": "Loading usage…",
   "billing.usageNotMetered": "No usage recorded yet this period.",
   "billing.usageIncluded": "{included} included in your plan",
+  "billing.internalBadge": "Internal",
+  "billing.internalPlanNote": "Internal whitelist account",
+  "billing.internalNoBilling": "This internal account gets Pro-level allowances without a subscription. You can still subscribe on the Pricing page.",
+  "billing.planIncludes": "Connected accounts per platform: {connections}. Each month: {images} AI images and {posts} scheduled posts.",
+  "billing.usageUsedCount": "Used {used}",
+  "billing.usageLimitReached": "Limit reached",
+  "billing.bonusImages": "Bonus AI images: {count} (never expire)",
   "billing.usageHistory": "Usage history",
   "billing.noUsage": "No usage data yet. Detailed usage will appear here once tracking is enabled.",
 
