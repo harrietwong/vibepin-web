@@ -95,6 +95,7 @@ import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard, type PublishEntryIssue } from "@/components/studio/PinBoardCard";
+import { VideoUploadPlaceholderCard } from "@/components/studio/VideoUploadPlaceholderCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { creativeSetupKeyForScratchProduct, loadCreativeSetup, saveCreativeSetup } from "@/lib/studio/creativeSetupStore";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
@@ -381,6 +382,8 @@ export function StudioBoard() {
   const [videoBatch, setVideoBatch] = useState<VideoBatchState | null>(null);
   const videoQueueRef = useRef<{ scope: VideoRecoveryScope; queue: AppendableVideoUploadQueue } | null>(null);
   const videoQueueItemSequenceRef = useRef(0);
+  // Failed upload placeholders the user closed; the queue item itself is untouched.
+  const [dismissedVideoItemIds, setDismissedVideoItemIds] = useState<ReadonlySet<string>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [activeId, setActiveIdState] = useState<string | null>(null);
@@ -1975,6 +1978,14 @@ export function StudioBoard() {
   );
   const videoQueueSummary = videoBatch ? summarizeVideoUploadQueue(videoBatch) : null;
   const visibleVideoQueueItems = videoBatch ? selectVisibleVideoQueueItems(videoBatch) : [];
+  // Grid placeholders: in-flight items plus failed ones the user has not closed.
+  // Cancelled items are excluded — they would otherwise spin forever.
+  const placeholderVideoItems = visibleVideoQueueItems.filter(item =>
+    item.state === "queued" || item.state === "uploading"
+      || (item.state === "failed" && !dismissedVideoItemIds.has(item.id)),
+  );
+  const placeholderFailedCount = placeholderVideoItems.filter(item => item.state === "failed").length;
+  const dismissVideoItem = (id: string) => setDismissedVideoItemIds(prev => new Set(prev).add(id));
   const cancellableVideoItems = videoBatch?.items.filter(item =>
     (item.state === "queued" || item.state === "uploading")
       && !item.finalized
@@ -1992,50 +2003,6 @@ export function StudioBoard() {
       <div data-testid="studio-board-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <input ref={fileRef} type="file" accept={fileAccept} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
-
-      {videoBatch && (
-        <section data-testid="video-upload-batch" role="status" aria-live="polite"
-          style={{ margin: "10px 22px 0", padding: "10px 12px", borderRadius: 10, border: `1px solid ${BUI.border}`, background: "#20242B", color: BUI.text, display: "flex", flexDirection: "column", gap: 5 }}>
-          <strong style={{ fontSize: 12 }}>
-            Video uploads · Active {videoQueueSummary?.active ?? 0} · Queued {videoQueueSummary?.queued ?? 0} · Completed {videoQueueSummary?.completed ?? 0} · Failed {videoQueueSummary?.failed ?? 0}
-            {videoQueueSummary?.cancelled ? ` · Cancelled ${videoQueueSummary.cancelled}` : ""}
-          </strong>
-          <div role="list" aria-label="Video uploads needing attention"
-            style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 240, overflowY: "auto" }}>
-          {visibleVideoQueueItems.map((item, index) => {
-            const retryable = item.state === "failed" && Boolean(item.inspection || item.finalized);
-            const cancellable = (item.state === "queued" || item.state === "uploading")
-              && !item.finalized
-              && item.attempt?.phase !== "finalize_pending";
-            return (
-              <div role="listitem" key={item.id} data-testid={`video-upload-item-${item.id}`} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, color: BUI.textSec, overflowWrap: "anywhere" }}>
-                  {item.file.name} · {item.state}{item.state === "failed" ? ` · ${videoBatchErrorMessage(item.error?.code ?? "") ?? `Code: ${item.error?.code ?? "video_upload_failed"}`}${item.error?.requestId ? ` · Request ${item.error.requestId}` : ""}` : ""}
-                </span>
-                {retryable ? (
-                  <button type="button" data-testid={index === 0 ? "video-upload-retry" : `video-upload-retry-${item.id}`} onClick={() => retryVideoItem(item.id)}
-                    style={{ padding: "5px 9px", borderRadius: 7, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
-                    Retry
-                  </button>
-                ) : null}
-                {cancellable ? (
-                  <button type="button" data-testid={index === 0 ? "video-upload-cancel" : `video-upload-cancel-${item.id}`} onClick={() => cancelVideoItem(item.id)}
-                    style={{ padding: "5px 9px", borderRadius: 7, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
-                    Cancel
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-          </div>
-          {cancellableVideoItems.length > 1 ? (
-            <button type="button" data-testid="video-upload-cancel-all" onClick={cancelVideoBatch}
-              style={{ alignSelf: "flex-start", marginTop: 3, padding: "6px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800, cursor: "pointer" }}>
-              Cancel all active uploads
-            </button>
-          ) : null}
-        </section>
-      )}
 
       {uploadFailures.length > 0 && (
         <section data-testid="upload-error-evidence" role="status"
@@ -2067,6 +2034,30 @@ export function StudioBoard() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
             {savedIndicator}
+            {videoBatch && (videoQueueSummary?.active || videoQueueSummary?.queued || placeholderFailedCount) ? (
+              <div data-testid="video-upload-batch" role="status" aria-live="polite"
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px" }}>
+                {(videoQueueSummary?.active ?? 0) + (videoQueueSummary?.queued ?? 0) > 0 && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Loader2 style={{ width: 12, height: 12 }} className="animate-spin" />
+                    {tr("studioBoard.videoUpload.chip")
+                      .replace("{done}", String(videoQueueSummary?.completed ?? 0))
+                      .replace("{total}", String(videoQueueSummary?.total ?? 0))}
+                  </span>
+                )}
+                {placeholderFailedCount ? (
+                  <span data-testid="video-upload-batch-failed" style={{ color: BUI.error, fontSize: 11.5, fontWeight: 800 }}>
+                    {tr("studioBoard.videoUpload.chipFailed").replace("{n}", String(placeholderFailedCount))}
+                  </span>
+                ) : null}
+                {cancellableVideoItems.length > 1 ? (
+                  <button type="button" data-testid="video-upload-cancel-all" onClick={cancelVideoBatch}
+                    style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 0, textDecoration: "underline", fontFamily: "inherit" }}>
+                    {tr("studioBoard.videoUpload.cancelAll")}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <Link href="/app/history" data-testid="board-history" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, textDecoration: "none", border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px" }}>
               <Clock style={{ width: 12, height: 12 }} /> {tr("studioBoard.history")}
             </Link>
@@ -2175,7 +2166,7 @@ export function StudioBoard() {
             )}
           </div>
         )}
-        {items.length === 0 && counts.all === 0 ? (
+        {items.length === 0 && counts.all === 0 && placeholderVideoItems.length === 0 ? (
           // Empty → upload-first workspace
           <div data-testid="board-empty" onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={onDrop}
             style={{ minHeight: 380, borderRadius: 16, border: `2px dashed ${dragOver ? BUI.purple : BUI.borderHi}`, background: dragOver ? "rgba(124,58,237,0.05)" : BUI.surface, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, textAlign: "center", padding: 24 }}>
@@ -2199,7 +2190,7 @@ export function StudioBoard() {
               </button>
             )}
           </div>
-        ) : items.length === 0 && filter === "unscheduled" && counts.scheduled > 0 ? (
+        ) : items.length === 0 && filter === "unscheduled" && counts.scheduled > 0 && placeholderVideoItems.length === 0 ? (
           // Unscheduled is empty, but the board has scheduled content — a dedicated
           // "you're caught up" guide, not the generic upload-empty-state (PRD 5.1/6,
           // product optimization point 6).
@@ -2229,6 +2220,24 @@ export function StudioBoard() {
             style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${STUDIO_UI.cardMinWidth}px, 1fr))`, gap: STUDIO_UI.cardGap, alignItems: "start" }}>
             {/* One-time, non-blocking Amazon notice (T3, design §5); spans the grid. */}
             <AmazonRiskNoticeBanner hasAmazonCard={items.some(({ draft }) => isAmazonLink(draft.destinationUrl))} />
+            {/* In-flight video uploads (queued/uploading/failed) render as same-size
+                placeholder cards at the front of the grid. `placeholderVideoItems`
+                already drops `succeeded` items, so once an item's real draft exists
+                its placeholder is gone in the same render — no overlap, no gap. Only
+                shown for the "unscheduled" filter, since that is where a video draft
+                always lands once created. */}
+            {filter === "unscheduled" && placeholderVideoItems.map((item) => {
+              const retryable = item.state === "failed" && Boolean(item.inspection || item.finalized);
+              const cancellable = (item.state === "queued" || item.state === "uploading")
+                && !item.finalized
+                && item.attempt?.phase !== "finalize_pending";
+              return (
+                <VideoUploadPlaceholderCard
+                  key={item.id} item={item} cancellable={cancellable} retryable={retryable}
+                  onCancel={cancelVideoItem} onRetry={retryVideoItem} onDismiss={dismissVideoItem}
+                />
+              );
+            })}
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}

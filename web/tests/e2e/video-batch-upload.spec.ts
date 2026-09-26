@@ -210,6 +210,11 @@ function video(name: string) {
   return { name, mimeType: "video/mp4", buffer: VIDEO };
 }
 
+// Video uploads render as placeholder cards in the board grid (no top-of-page panel).
+const UPLOAD_PLACEHOLDERS = '[data-testid^="video-upload-item-"]';
+const RETRY_BUTTONS = `${UPLOAD_PLACEHOLDERS} [data-testid^="video-upload-retry-"]`;
+const CANCEL_BUTTONS = `${UPLOAD_PLACEHOLDERS} [data-testid^="video-upload-cancel-"]`;
+
 test.describe("video batch upload (fully mocked)", () => {
   test.describe.configure({ timeout: 90_000 });
 
@@ -332,9 +337,10 @@ test.describe("video batch upload (fully mocked)", () => {
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([video("alpha.mp4"), video("beta.mp4")]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
     const cards = page.getByTestId("pin-board-card");
-    await expect(cards).toHaveCount(2, { timeout: 20_000 });
+    await expect(cards).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(0);
+    await expect(page.getByTestId("video-upload-batch")).toHaveCount(0);
     await expect(cards.nth(0).getByTestId("content-media-video").first()).toBeVisible();
     await expect(cards.nth(1).getByTestId("content-media-video").first()).toBeVisible();
     const drafts = await page.evaluate(() => {
@@ -357,14 +363,15 @@ test.describe("video batch upload (fully mocked)", () => {
       video("needs-retry.mp4"),
     ]);
 
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 1 · Failed 1", { timeout: 30_000 });
-    await expect(page.getByTestId("video-upload-retry")).toBeVisible();
+    await expect(page.locator(`${UPLOAD_PLACEHOLDERS}[data-video-upload-state="failed"]`)).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.getByTestId("video-upload-batch-failed")).toBeVisible();
+    await expect(page.locator(RETRY_BUTTONS)).toBeVisible();
     await expect(page.getByTestId("pin-board-card")).toHaveCount(2, { timeout: 20_000 });
     expect(state.uploadCalls).toEqual([0, 0]);
 
-    await page.getByTestId("video-upload-retry").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Completed 2 · Failed 0", { timeout: 30_000 });
-    await expect(page.getByTestId("pin-board-card")).toHaveCount(3, { timeout: 20_000 });
+    await page.locator(RETRY_BUTTONS).click();
+    await expect(page.getByTestId("pin-board-card")).toHaveCount(3, { timeout: 30_000 });
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(0);
   });
 
   test("cancel stops an in-flight batch and does not create drafts", async ({ page }) => {
@@ -372,9 +379,10 @@ test.describe("video batch upload (fully mocked)", () => {
     await gotoStudio(page);
     await requireVideoFlag(page);
     await page.getByTestId("board-upload-input").setInputFiles([video("cancel-me.mp4")]);
-    await expect(page.getByTestId("video-upload-cancel")).toBeVisible({ timeout: 30_000 });
-    await page.getByTestId("video-upload-cancel").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 1", { timeout: 15_000 });
+    await expect(page.locator(CANCEL_BUTTONS)).toBeVisible({ timeout: 30_000 });
+    await page.locator(CANCEL_BUTTONS).click();
+    // A cancelled item leaves no spinning placeholder behind.
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(0, { timeout: 15_000 });
     await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
     expect(state.finalizeCalls).toEqual([]);
   });
@@ -385,12 +393,13 @@ test.describe("video batch upload (fully mocked)", () => {
     await requireVideoFlag(page);
     const input = page.getByTestId("board-upload-input");
     await input.setInputFiles([video("first.mp4")]);
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 1", { timeout: 30_000 });
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(1, { timeout: 30_000 });
     await expect(input).toBeEnabled();
     await input.setInputFiles([video("second.mp4")]);
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Active 2", { timeout: 30_000 });
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(2, { timeout: 30_000 });
     await page.getByTestId("video-upload-cancel-all").click();
-    await expect(page.getByTestId("video-upload-batch")).toContainText("Cancelled 2", { timeout: 15_000 });
+    await expect(page.locator(UPLOAD_PLACEHOLDERS)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByTestId("video-upload-batch")).toHaveCount(0);
   });
 
   test("reload recovers a finalized receipt into its original owner draft", async ({ page }) => {

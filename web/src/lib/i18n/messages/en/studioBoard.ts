@@ -7,6 +7,17 @@ export const studioBoardMessages = {
   "studioBoard.uploadMore": "Upload more",
   "studioBoard.uploadingProgress": "Uploading {done}/{total}…",
 
+  // ── Video upload placeholder cards + compact status chip ──
+  "studioBoard.videoUpload.waiting": "Waiting…",
+  "studioBoard.videoUpload.uploading": "Uploading…",
+  "studioBoard.videoUpload.failedGeneric": "Upload failed",
+  "studioBoard.videoUpload.retry": "Retry",
+  "studioBoard.videoUpload.cancelAria": "Cancel this upload",
+  "studioBoard.videoUpload.chip": "Uploading {done}/{total}",
+  "studioBoard.videoUpload.chipFailed": "{n} failed",
+  "studioBoard.videoUpload.cancelAll": "Cancel all",
+  "studioBoard.videoUpload.dismiss": "Dismiss",
+
   // ── Status navigation and quiet exception notice ──
   "studioBoard.filters.drafts": "Drafts",
   "studioBoard.filters.scheduled": "Scheduled",

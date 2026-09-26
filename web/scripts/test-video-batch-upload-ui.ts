@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createVideoBatchState, selectVisibleVideoQueueItems, videoBatchErrorMessage, type VideoBatchItem } from "../src/lib/studio/videoBatchUpload";
 
 const source = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
+const card = readFileSync("src/components/studio/VideoUploadPlaceholderCard.tsx", "utf8");
 let passed = 0;
 function test(name: string, run: () => void) { run(); passed++; console.log(`  OK ${name}`); }
 
@@ -30,33 +31,36 @@ test("the Studio creates a single discriminated video draft only after private f
   assert.doesNotMatch(source, /imageUrl:\s*finalized\.proxyUrl/);
 });
 
-test("the active queue keeps picker entry points enabled and reports aggregate counts", () => {
-  assert.match(source, /Video uploads · Active \{videoQueueSummary\?\.active/);
-  assert.match(source, /Queued \{videoQueueSummary\?\.queued/);
-  assert.match(source, /Completed \{videoQueueSummary\?\.completed/);
-  assert.match(source, /Failed \{videoQueueSummary\?\.failed/);
+test("the active queue shows a compact status chip (not a top-of-page panel) and keeps picker entry points enabled", () => {
+  assert.doesNotMatch(source, /Video uploads · Active/);
+  assert.match(source, /data-testid="video-upload-batch" role="status"/);
+  assert.match(source, /tr\("studioBoard\.videoUpload\.chip"\)/);
+  assert.match(source, /tr\("studioBoard\.videoUpload\.chipFailed"\)/);
   assert.doesNotMatch(source, /data-testid="board-upload-more"[^>]*disabled=\{uploading\}/);
   assert.doesNotMatch(source, /data-testid="board-upload-primary"[^>]*disabled=\{uploading\}/);
 });
 
-test("retry and cancel are per-item queue actions and display only safe error fields", () => {
+test("retry and cancel are per-item queue actions on placeholder cards and display only safe error fields", () => {
   assert.match(source, /queue\.retry\(id\)/);
   assert.match(source, /queue\.cancel\(id\)/);
-  assert.match(source, /data-testid=\{index === 0 \? "video-upload-retry"/);
-  assert.match(source, /data-testid=\{index === 0 \? "video-upload-cancel"/);
+  assert.match(source, /onCancel=\{cancelVideoItem\} onRetry=\{retryVideoItem\} onDismiss=\{dismissVideoItem\}/);
   assert.match(source, /data-testid="video-upload-cancel-all"/);
-  assert.match(source, /item\.error\?\.code/);
-  assert.match(source, /item\.error\?\.requestId/);
+  assert.match(card, /data-testid=\{`video-upload-retry-\$\{item\.id\}`\}/);
+  assert.match(card, /data-testid=\{`video-upload-cancel-\$\{item\.id\}`\}/);
+  assert.match(card, /data-testid=\{`video-upload-dismiss-\$\{item\.id\}`\}/);
+  assert.match(card, /videoBatchErrorMessage\(item\.error\?\.code/);
+  // requestId is kept as evidence in attributes, never in visible copy.
+  assert.match(card, /data-request-id=\{item\.error\?\.requestId/);
+  assert.doesNotMatch(card, />\s*\{?[^<]*Request \$\{item\.error/);
   assert.doesNotMatch(source, /signedUrl.*video-batch|video-batch.*signedUrl/);
   assert.doesNotMatch(source, /privatePath.*video-batch|video-batch.*privatePath/);
 });
-
 test("the Studio gives video_too_large a clear Preview size-limit message", () => {
   assert.match(source, /videoBatchErrorMessage/);
   assert.equal(videoBatchErrorMessage("video_too_large"), "Video exceeds the Preview 50 MiB limit.");
 });
 
-test("later terminal rows remain reachable in an accessible bounded queue region", () => {
+test("placeholders show in-flight and undismissed failed items, never cancelled ones", () => {
   const items = Array.from({ length: 11 }, (_, index): VideoBatchItem => ({
     id: `terminal-${index}`,
     ordinal: 0,
@@ -66,11 +70,14 @@ test("later terminal rows remain reachable in an accessible bounded queue region
   }));
   assert.equal(selectVisibleVideoQueueItems(createVideoBatchState("ui-reachability", items)).length, 11);
   assert.match(source, /selectVisibleVideoQueueItems\(videoBatch\)/);
-  assert.match(source, /aria-label="Video uploads needing attention"/);
-  assert.match(source, /overflowY: "auto"/);
+  const start = source.indexOf("const placeholderVideoItems");
+  const filter = source.slice(start, source.indexOf(");", start));
+  assert.match(filter, /item\.state === "queued" \|\| item\.state === "uploading"/);
+  assert.match(filter, /item\.state === "failed" && !dismissedVideoItemIds\.has\(item\.id\)/);
+  assert.doesNotMatch(filter, /cancelled/);
+  assert.match(source, /placeholderVideoItems\.map\(/);
   assert.doesNotMatch(source, /filter\(item => item\.state !== "succeeded"\)\.slice\(0, 8\)/);
 });
-
 test("queue ownership disposes on replacement and unmount and gates state by queue identity", () => {
   assert.match(source, /existing\?\.queue\.dispose\(\)/);
   assert.match(source, /holder\?\.queue\.dispose\(\)/);
