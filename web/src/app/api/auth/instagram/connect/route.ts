@@ -32,6 +32,8 @@ import {
   INSTAGRAM_COMMENT_DM_SCOPES,
 } from "@/lib/server/instagram/config";
 import { requireSuperAdminFromRequest } from "@/lib/server/superAdmin";
+import { getOwnInstagramConnection } from "@/lib/server/instagram/commentDmAdmin";
+import { decideExtraScopes, type ExtraScopesReason } from "@/lib/server/instagram/connectScopes";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_RETURN_COOKIE,
@@ -144,35 +146,88 @@ function buildConnectPayload(extraScopes: readonly string[] = []): ConnectPayloa
 }
 
 /**
- * Opt-in extra scopes for `?features=comment_dm` (internal comment → DM automation).
- *
- * Honoured ONLY when the requester is a super admin AND is the same user as the
- * session starting this connect; for everyone else the param is silently ignored
- * and the authorize URL is exactly the normal one. No feature param → no extra
- * scopes, no super-admin lookup at all.
+ * Extra scopes for `?features=comment_dm` (internal comment → DM automation), OR
+ * for a plain `reconnect=<id>` aimed at a row that already has those scopes (see
+ * connectScopes.ts — prevents a generic Reconnect from washing out an existing
+ * comment-DM grant). Both cases are gated to a super admin reconnecting/connecting
+ * as themselves; for everyone else the authorize URL is exactly the normal one.
  */
-async function requestedExtraScopes(req: NextRequest, uid: string): Promise<readonly string[]> {
+async function requestedExtraScopes(
+  req: NextRequest,
+  uid: string,
+  reconnectId: string | null,
+): Promise<readonly string[]> {
   const features = (req.nextUrl.searchParams.get("features") ?? "")
     .split(",")
     .map(f => f.trim())
     .filter(Boolean);
-  if (!features.includes("comment_dm")) return [];
-  try {
-    const admin = await requireSuperAdminFromRequest(req);
-    if (admin && admin.id === uid) {
+
+  const { scopes, reason } = await decideExtraScopes(
+    { uid, features, reconnectId },
+    {
+      superAdminId: async () => {
+        try {
+          const admin = await requireSuperAdminFromRequest(req);
+          return admin?.id ?? null;
+        } catch (err) {
+          console.error("[instagram/connect] super-admin check failed:", (err as Error).message);
+          throw err;
+        }
+      },
+      ownConnection: async (u, id) => {
+        try {
+          const row = await getOwnInstagramConnection(u, id);
+          return row ? { user_id: row.user_id, scopes: row.scopes } : null;
+        } catch (err) {
+          console.error("[instagram/connect] reconnect target read failed:", (err as Error).message);
+          throw err;
+        }
+      },
+    },
+  );
+
+  logExtraScopesDecision(features.includes("comment_dm"), reason, scopes.length > 0);
+  return scopes;
+}
+
+/**
+ * Preserves the exact pre-existing info/warn wording for the `features=comment_dm`
+ * path (anything grepping logs for it must keep matching); the reconnect-preserve
+ * path — which did not exist before — gets its own distinct lines.
+ */
+function logExtraScopesDecision(featureRequested: boolean, reason: ExtraScopesReason, honored: boolean): void {
+  if (reason === "not_requested") return; // the common case — no log noise
+
+  if (featureRequested) {
+    if (honored) {
       console.info(
         `[instagram/connect] comment_dm requested and honored, appending extra scopes: ${INSTAGRAM_COMMENT_DM_SCOPES.join(",")}`,
       );
-      return INSTAGRAM_COMMENT_DM_SCOPES;
+      return;
     }
-    console.warn(
-      `[instagram/connect] comment_dm requested but not honored: ${admin ? "id mismatch" : "not super admin"}`,
-    );
-  } catch (err) {
-    console.error("[instagram/connect] super-admin check failed, ignoring features:", (err as Error).message);
-    console.warn("[instagram/connect] comment_dm requested but not honored: check threw");
+    const why = reason === "id_mismatch" ? "id mismatch" : reason === "check_threw" ? "check threw" : "not super admin";
+    console.warn(`[instagram/connect] comment_dm requested but not honored: ${why}`);
+    return;
   }
-  return [];
+
+  // reconnect (no features=comment_dm) path
+  if (honored) {
+    console.info(
+      `[instagram/connect] preserve existing comment-dm grant on reconnect, appending extra scopes: ${INSTAGRAM_COMMENT_DM_SCOPES.join(",")}`,
+    );
+    return;
+  }
+  const why: Record<ExtraScopesReason, string> = {
+    feature_honored: "",
+    reconnect_preserved: "",
+    not_requested: "",
+    not_super_admin: "not super admin",
+    id_mismatch: "id mismatch",
+    target_missing_or_foreign: "reconnect target missing or not owned by this user",
+    target_lacks_scopes: "reconnect target does not already have comment-dm scopes",
+    check_threw: "check threw",
+  };
+  console.warn(`[instagram/connect] reconnect scope-preserve not honored: ${why[reason]}`);
 }
 
 function attachOAuthStateCookie(
@@ -221,7 +276,7 @@ export async function GET(req: NextRequest) {
     return settingsRedirect(req, "account_limit");
   }
 
-  const extraScopes = await requestedExtraScopes(req, uid);
+  const extraScopes = await requestedExtraScopes(req, uid, reconnectId);
 
   let payload: ConnectPayload;
   try {

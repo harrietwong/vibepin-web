@@ -133,3 +133,15 @@ Instagram 相关沿用已有的 `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `I
 8. 站长：启用规则。下一轮 cron（≤5 分钟）开始真实发送；后台"最近记录"看 `sent` / `failed` 与报错。
 
 回滚：在后台停用规则即可立即停止发送（无需改代码或 crontab）。
+
+## 权限等级与可见性(2026-09-25 内部站实测)
+
+- 内部站第一轮真实运行:`mediaScanned 3, commentsSeen 0`,而被扫的帖子里至少一条 Meta 报告 `comments_count > 0`
+  → **评论存在但接口没返回**。改成按帖子直扫(绕过 comments_count 过滤)后依旧 0 条。
+- 当前判断(**待验证**):App 的 `instagram_business_manage_comments` 处于"准备测试"(Standard Access),
+  这一级别下接口只返回**应用角色用户**(管理员/开发者/Instagram 测试员)的数据,普通顾客的评论被过滤。
+  否定条件:把测试用的第二个 IG 账号加为 Instagram 测试员并接受邀请后,若仍读不到它的评论 → 判断错误,另查。
+- **内部测试**:发评论的账号必须是该 App 的 Instagram 测试员(Meta 后台 → 应用角色 → Instagram 测试员;
+  对方在 Instagram → 设置 → 网站权限/应用和网站 → 测试员邀请 里接受)。
+- **给真实顾客用**:需要为 `instagram_business_manage_comments`(私信若被拦,还有 `instagram_business_manage_messages`)
+  申请 **Advanced Access(App Review)**。审核通过前,本功能只能回复测试员的评论。

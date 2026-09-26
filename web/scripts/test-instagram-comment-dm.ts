@@ -29,6 +29,7 @@ import {
   hasInstagramCommentDmScopes,
   INSTAGRAM_COMMENT_DM_SCOPES,
 } from "../src/lib/server/instagram/config";
+import { decideExtraScopes, type OwnedConnectionScopes } from "../src/lib/server/instagram/connectScopes";
 import {
   classifyMetaError,
   evaluateComment,
@@ -308,6 +309,139 @@ async function main(): Promise<void> {
     // A base scope passed as "extra" is not duplicated.
     const dup = new URL(buildAuthorizeUrl(env, "S", ["instagram_business_basic"]));
     assert.equal(dup.searchParams.get("scope"), "instagram_business_basic,instagram_business_content_publish");
+  });
+
+  // ── connect route: which extra scopes to request ──────────────────────────
+
+  const ADMIN_UID = "33333333-3333-4333-8333-333333333333";
+  const OTHER_UID = "44444444-4444-4444-8444-444444444444";
+  const TARGET_ID = "55555555-5555-4555-8555-555555555555";
+
+  function scopeDeps(opts: {
+    adminId: string | null;
+    adminThrows?: boolean;
+    connection?: OwnedConnectionScopes | null;
+    connectionThrows?: boolean;
+  }) {
+    let ownConnectionCalls = 0;
+    const deps = {
+      superAdminId: async () => {
+        if (opts.adminThrows) throw new Error("boom");
+        return opts.adminId;
+      },
+      ownConnection: async (_u: string, _id: string) => {
+        ownConnectionCalls++;
+        if (opts.connectionThrows) throw new Error("db down");
+        return opts.connection ?? null;
+      },
+    };
+    return { deps, calls: () => ownConnectionCalls };
+  }
+
+  await test("reconnect (no features): super admin + target already has comment scopes → appended", async () => {
+    const { deps, calls } = scopeDeps({
+      adminId: ADMIN_UID,
+      connection: { user_id: ADMIN_UID, scopes: [...INSTAGRAM_COMMENT_DM_SCOPES, "instagram_business_basic"] },
+    });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, INSTAGRAM_COMMENT_DM_SCOPES);
+    assert.equal(r.reason, "reconnect_preserved");
+    assert.equal(calls(), 1);
+  });
+
+  await test("reconnect (no features): target lacks comment scopes → not appended", async () => {
+    const { deps } = scopeDeps({
+      adminId: ADMIN_UID,
+      connection: { user_id: ADMIN_UID, scopes: ["instagram_business_basic"] },
+    });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "target_lacks_scopes");
+  });
+
+  await test("reconnect (no features): non-super-admin → not appended, no connection read", async () => {
+    const { deps, calls } = scopeDeps({
+      adminId: null,
+      connection: { user_id: OTHER_UID, scopes: [...INSTAGRAM_COMMENT_DM_SCOPES] },
+    });
+    const r = await decideExtraScopes({ uid: OTHER_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "not_super_admin");
+    assert.equal(calls(), 0, "ordinary users never trigger the extra DB read");
+  });
+
+  await test("reconnect (no features): target connection belongs to a different user → not appended", async () => {
+    const { deps } = scopeDeps({
+      adminId: ADMIN_UID,
+      connection: { user_id: OTHER_UID, scopes: [...INSTAGRAM_COMMENT_DM_SCOPES] },
+    });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "target_missing_or_foreign");
+  });
+
+  await test("reconnect (no features): missing/foreign target id → not appended", async () => {
+    const { deps } = scopeDeps({ adminId: ADMIN_UID, connection: null });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "target_missing_or_foreign");
+  });
+
+  await test("reconnect (no features): no reconnectId at all → not requested, no admin lookup needed to matter", async () => {
+    const { deps } = scopeDeps({ adminId: ADMIN_UID, connection: null });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: null }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "not_requested");
+  });
+
+  await test("reconnect (no features): connection read throws → fail closed", async () => {
+    const { deps } = scopeDeps({ adminId: ADMIN_UID, connectionThrows: true });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: [], reconnectId: TARGET_ID }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "check_threw");
+  });
+
+  await test("features=comment_dm: super admin connecting as self → appended (unchanged behaviour)", async () => {
+    const { deps, calls } = scopeDeps({ adminId: ADMIN_UID, connection: { user_id: ADMIN_UID, scopes: [] } });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: ["comment_dm"], reconnectId: null }, deps);
+    assert.deepEqual(r.scopes, INSTAGRAM_COMMENT_DM_SCOPES);
+    assert.equal(r.reason, "feature_honored");
+    assert.equal(calls(), 0, "features=comment_dm never needs the connection read");
+  });
+
+  await test("features=comment_dm: even with a target lacking scopes, the explicit opt-in still wins", async () => {
+    const { deps, calls } = scopeDeps({
+      adminId: ADMIN_UID,
+      connection: { user_id: ADMIN_UID, scopes: ["instagram_business_basic"] },
+    });
+    const r = await decideExtraScopes(
+      { uid: ADMIN_UID, features: ["comment_dm"], reconnectId: TARGET_ID },
+      deps,
+    );
+    assert.deepEqual(r.scopes, INSTAGRAM_COMMENT_DM_SCOPES);
+    assert.equal(r.reason, "feature_honored");
+    assert.equal(calls(), 0);
+  });
+
+  await test("features=comment_dm: id mismatch → not appended", async () => {
+    const { deps } = scopeDeps({ adminId: ADMIN_UID });
+    const r = await decideExtraScopes({ uid: OTHER_UID, features: ["comment_dm"], reconnectId: null }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "id_mismatch");
+  });
+
+  await test("features=comment_dm: non-super-admin → not appended", async () => {
+    const { deps } = scopeDeps({ adminId: null });
+    const r = await decideExtraScopes({ uid: OTHER_UID, features: ["comment_dm"], reconnectId: null }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "not_super_admin");
+  });
+
+  await test("features=comment_dm: admin check throws → fail closed", async () => {
+    const { deps } = scopeDeps({ adminId: ADMIN_UID, adminThrows: true });
+    const r = await decideExtraScopes({ uid: ADMIN_UID, features: ["comment_dm"], reconnectId: null }, deps);
+    assert.deepEqual(r.scopes, []);
+    assert.equal(r.reason, "check_threw");
   });
 
   await test("hasInstagramCommentDmScopes requires only manage_comments (the documented scope)", () => {
