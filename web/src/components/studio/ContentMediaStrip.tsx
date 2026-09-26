@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Check, GripVertical, ImagePlus, Loader2, Trash2 } from "lucide-react";
+import { Check, GripVertical, Image as ImageIcon, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { addMedia, copyMedia, removeMedia, reorderMedia, setCoverMedia } from "@/lib/pinDraftStore";
 import { contentMedia, coverMedia, type ContentMedia } from "@/lib/contentDraftModel";
@@ -37,18 +37,26 @@ function MediaThumbnail({ media, alt }: { media: ContentMedia; alt: string }) {
     style={{ width: "100%", height: "100%", display: "block", objectFit: "cover", borderRadius: 6 }} />;
 }
 
-/** Native video controls cannot live inside the cover-selection button. */
-function VideoMediaItem({ media, index, disabled, selected, onSelect }: {
-  media: ContentMedia; index: number; disabled?: boolean; selected: boolean; onSelect: () => void;
+/**
+ * Native video controls cannot live inside the cover-selection button, so the button
+ * is a sibling overlay: hidden until the tile is hovered or focused, always shown on
+ * touch devices (no hover there).
+ */
+function VideoMediaItem({ media, index, disabled, onSelect }: {
+  media: ContentMedia; index: number; disabled?: boolean; onSelect: () => void;
 }) {
-  return <div style={{ width: 96, height: 106, display: "flex", flexDirection: "column", gap: 2 }}>
-    <div style={{ position: "relative", height: 64, borderRadius: 6, overflow: "hidden", background: BUI.surface3 }}>
-      <MediaThumbnail media={media} alt={media.altText || `Video ${index + 1}`} />
-    </div>
-    <button type="button" aria-label="Choose cover frame" disabled={disabled} onClick={event => { event.stopPropagation(); onSelect(); }}
-      style={{ minHeight: 40, padding: "3px 5px", border: 0, borderRadius: 6, background: selected ? BUI.purple : BUI.surface3, color: "#fff", cursor: disabled ? "default" : "pointer", fontSize: 12, fontWeight: 700 }}>
-      Choose cover frame
-    </button>
+  return <div className="group" style={{ position: "relative", width: "100%", height: "100%", borderRadius: 6, overflow: "hidden", background: BUI.surface3 }}>
+    <MediaThumbnail media={media} alt={media.altText || `Video ${index + 1}`} />
+    {!disabled && (
+      <button type="button" aria-label="Choose cover frame" data-testid="video-choose-cover"
+        onClick={event => { event.stopPropagation(); onSelect(); }}
+        className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", display: "inline-flex", alignItems: "center", gap: 4,
+          padding: "4px 8px", border: 0, borderRadius: 999, background: "rgba(15,23,42,.82)", color: "#fff", cursor: "pointer",
+          fontSize: 10.5, fontWeight: 750, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(0,0,0,.35)" }}>
+        <ImageIcon style={{ width: 11, height: 11 }} /> Cover
+      </button>
+    )}
   </div>;
 }
 
@@ -138,13 +146,13 @@ export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
               onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropTargetId(item.id); }}
               onDragLeave={() => setDropTargetId(id => id === item.id ? null : id)}
               onDrop={event => dropBefore(event, item.id)}
-              style={{ position: "relative", flex: `0 0 ${item.kind === "video" ? 100 : 54}px`, height: item.kind === "video" ? 110 : 66, borderRadius: 9, padding: 2,
+              style={{ position: "relative", flex: `0 0 ${item.kind === "video" ? 100 : 54}px`, height: 66, borderRadius: 9, padding: 2,
                 // Amber wins over the cover ring: "this image blocks a platform" is more
                 // urgent than "this image leads the set", and they are rarely both true.
                 border: `2px solid ${offending ? BUI.warning : dropTargetId === item.id ? BUI.purple : selected ? BUI.purple : "transparent"}`,
                 background: BUI.surface, cursor: disabled ? "default" : "grab" }}>
               {item.kind === "video" ? (
-                <VideoMediaItem media={item} index={index} disabled={disabled} selected={selected}
+                <VideoMediaItem media={item} index={index} disabled={disabled}
                   onSelect={() => !disabled && setEditingVideo(item)} />
               ) : (
                 <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
