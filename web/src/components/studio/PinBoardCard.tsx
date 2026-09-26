@@ -302,7 +302,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     ? (scopedBoards.error ? tr("studioBoard.card.boardSource.error") : undefined)
     : props.boardsError;
   const onRetryBoards = boardConnectionId ? scopedBoards.refresh : props.onRetryBoards;
-  const boardAccountLabel = cardBoardAccountLabel(boardConnectionId, props.pinterestAccounts ?? []);
+  // "Boards of @account" only matters when there is more than one account to confuse.
+  const boardAccountLabel = (props.pinterestAccounts?.length ?? 0) > 1
+    ? cardBoardAccountLabel(boardConnectionId, props.pinterestAccounts ?? [])
+    : null;
   const boardState = cardBoardState({
     loading: !!boardsLoading,
     error: !!boardsError,
