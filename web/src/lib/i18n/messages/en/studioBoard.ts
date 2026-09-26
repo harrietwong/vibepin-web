@@ -456,7 +456,7 @@ export const studioBoardMessages = {
   "studioBoard.amazon.claimHint": "The copy mentioned “{value}”. Confirm it in {field} and try again.",
   "studioBoard.amazon.disclosureMissing": "This Pin has no #ad disclosure. Affiliate Pins should disclose the relationship.",
   "studioBoard.amazon.addDisclosure": "Add #ad",
-  // ── Manual-entry marketplace card (FR-04, 2026-09-25; English only — no fetch, no UA) ──
+  // ── Manual-entry marketplace card (FR-04, 2026-09-25; translated in all 18 locales — no fetch, no UA) ──
   "studioBoard.marketplace.sectionTitle.temu": "Temu product",
   "studioBoard.marketplace.sectionTitle.shein": "Shein product",
   "studioBoard.marketplace.sectionTitle.aliexpress": "AliExpress product",
