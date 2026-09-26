@@ -59,6 +59,14 @@ import {
 } from "@/lib/studio/splitMixedVideoDraft";
 import { igFbHidden } from "@/lib/social/visibleProviders";
 import { AmazonCardSection } from "@/components/studio/AmazonCardSection";
+import { usePinterestBoards } from "@/hooks/usePinterestBoards";
+import {
+  cardBoardAccountLabel,
+  cardBoardState,
+  isInternalBoardName,
+  resolveCardBoardConnectionId,
+  type CardBoardAccount,
+} from "@/lib/studio/cardBoardSource";
 import {
   amazonClaimHints,
   canGenerateAmazonCopy,
@@ -266,11 +274,45 @@ export type PinBoardCardProps = {
   /** Failed card primary: retry publish (publish-failed) or reopen AI drawer (generation-failed). */
   onTryAgain: (draft: PinDraft) => void;
   onConnect?: () => void;
+  /**
+   * The user's usable Pinterest accounts (oldest first), read once by the board. Only
+   * used to NAME the account the Board field lists boards for.
+   */
+  pinterestAccounts?: readonly CardBoardAccount[];
 };
 
 function PinBoardCardImpl(props: PinBoardCardProps) {
   const { t: tr } = useLocale();
-  const { draft, lifecycle, active, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards } = props;
+  const { draft, lifecycle, active, disconnected, needsReconnect } = props;
+  /**
+   * Boards belong to ONE Pinterest account. The board passes the DEFAULT account's
+   * boards; a draft whose explicit Pinterest destination names an account lists THAT
+   * account's boards instead (lib/studio/cardBoardSource). With no named account the
+   * scoped hook shares the board's SWR key, so it costs no extra request.
+   */
+  const boardConnectionId = useMemo(() => resolveCardBoardConnectionId(draft), [draft]);
+  const scopedBoards = usePinterestBoards(boardConnectionId ?? undefined);
+  const scopedCustomerBoards = useMemo(
+    () => scopedBoards.boards.filter(board => !isInternalBoardName(board.name)),
+    [scopedBoards.boards],
+  );
+  const boards = boardConnectionId ? scopedCustomerBoards : props.boards;
+  const boardsLoading = boardConnectionId ? scopedBoards.loading : props.boardsLoading;
+  const boardsError = boardConnectionId
+    ? (scopedBoards.error ? tr("studioBoard.card.boardSource.error") : undefined)
+    : props.boardsError;
+  const onRetryBoards = boardConnectionId ? scopedBoards.refresh : props.onRetryBoards;
+  // "Boards of @account" only matters when there is more than one account to confuse.
+  const boardAccountLabel = (props.pinterestAccounts?.length ?? 0) > 1
+    ? cardBoardAccountLabel(boardConnectionId, props.pinterestAccounts ?? [])
+    : null;
+  const boardState = cardBoardState({
+    loading: !!boardsLoading,
+    error: !!boardsError,
+    needsReconnect: boardConnectionId ? scopedBoards.needsReconnect : !!needsReconnect,
+    disconnected: boardConnectionId ? scopedBoards.disconnected : !!disconnected,
+    boardCount: boards.length,
+  });
   const [fields, setFields] = useState<PinFieldsValue>(() => draftToFields(draft));
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -283,8 +325,27 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [editing, setEditing] = useState(false);
   /** "View results" expansion on a Posted card. */
   const [resultsOpen, setResultsOpen] = useState(false);
-  /** The destination picker, anchored to the chips instead of expanding the card. */
+  /** The destination picker, expanded INLINE under the chips (see card-destination-popover). */
   const [destinationsOpen, setDestinationsOpen] = useState(false);
+  const publishToRef = useRef<HTMLDivElement | null>(null);
+  // Closing rules the old full-screen click-catcher provided: a press outside the
+  // "Publish to" block closes the picker, and so does Escape.
+  useEffect(() => {
+    if (!destinationsOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      const root = publishToRef.current;
+      if (root && event.target instanceof Node && !root.contains(event.target)) setDestinationsOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setDestinationsOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [destinationsOpen]);
   const [customTimeOpen, setCustomTimeOpen] = useState(false);
   const [customDate, setCustomDate] = useState(() => draft.scheduledDate ?? "");
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
@@ -1394,9 +1455,36 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 const board = boards.find(item => item.id === event.target.value);
                 handleChange({ boardId: board?.id ?? event.target.value });
               }} style={{ ...fieldStyle, fontSize: 11.5 }}>
-              <option value="">{tr("studioBoard.card.fields.boardPlaceholder")}</option>
+              <option value="">{boardState === "loading" ? tr("studioBoard.card.boardSource.loading") : tr("studioBoard.card.fields.boardPlaceholder")}</option>
               {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
+            {/* Whose boards these are, and why the list is empty when it is: loading,
+                a failed read and an account with no boards used to look identical. */}
+            {(boardAccountLabel || boardState !== "ready") && (
+              <span data-testid="board-card-board-source" data-state={boardState}
+                style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 5, fontSize: 10.5, fontWeight: 600, lineHeight: 1.4,
+                  color: boardState === "ready" || boardState === "loading" ? BUI.textMuted : "#b45309" }}>
+                {boardAccountLabel && (
+                  <span data-testid="board-card-board-account">
+                    {tr("studioBoard.card.boardSource.accountLabel").replace("{account}", boardAccountLabel)}
+                  </span>
+                )}
+                {boardState === "error" && (
+                  <>
+                    <span>{tr("studioBoard.card.boardSource.error")}</span>
+                    {onRetryBoards && (
+                      <button type="button" data-testid="board-card-board-retry" onClick={event => { event.preventDefault(); onRetryBoards(); }}
+                        style={{ border: 0, background: "none", padding: 0, color: BUI.purple, fontSize: 10.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                        {tr("studioBoard.card.boardSource.retry")}
+                      </button>
+                    )}
+                  </>
+                )}
+                {boardState === "needs_reconnect" && <span>{tr("studioBoard.card.boardSource.needsReconnect")}</span>}
+                {boardState === "not_connected" && <span>{tr("studioBoard.card.boardSource.notConnected")}</span>}
+                {boardState === "empty" && <span data-testid="board-card-board-empty">{tr("studioBoard.card.boardSource.empty")}</span>}
+              </span>
+            )}
           </label>
           )}
           {shouldShowStudioMetadataField(lifecycle, "altText") && <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1407,7 +1495,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           </label>}
           </>
           )}
-          <div data-testid="card-publish-to" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div ref={publishToRef} data-testid="card-publish-to" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <span style={labelStyle}>{tr("studioBoard.card.publishTo")}</span>
               <button type="button" data-testid="card-destination-dropdown" aria-label={tr("studioBoard.card.editDestinations")}
@@ -1450,34 +1538,35 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                   {tr("studioBoard.card.noSavedDestination")}
                 </button>
               )}
-              {/* PRD §6: the picker opens ANCHORED TO THE CHIPS. Editing where a
-                  Content publishes must not require expanding the whole card — that
-                  cost the merchant their place on the board for a two-click change.
-                  Mounted per-open so PublishDestinations loads the account summaries
-                  that resolveScheduledAccount needs. */}
-              {destinationsOpen && (
-                <>
-                  <div style={{ position: "fixed", inset: 0, zIndex: 20 }} onClick={() => setDestinationsOpen(false)} />
-                  <div data-testid="card-destination-popover" style={{ position: "absolute", zIndex: 21, top: "calc(100% + 6px)", left: 0, right: 0, minWidth: 220,
-                    padding: 10, borderRadius: 10, border: `1px solid ${BUI.borderHi}`, background: BUI.surface, boxShadow: "0 12px 32px rgba(15,23,42,0.18)" }}>
-                    <PublishDestinations
-                      selected={selectedProviders}
-                      onSelectedChange={changeProviders}
-                      selectedAccountIds={selectedAccountIds}
-                      onSelectedAccountIdsChange={changeAccounts}
-                      onSummariesChange={setConnectionSummaries}
-                      onConnectPinterest={props.onConnect}
-                      pinterestConnected={!disconnected && !needsReconnect}
-                    />
-                    {destinationError && (
-                      <p data-testid="card-destination-error" role="alert" style={{ margin: "8px 0 0", fontSize: 11, fontWeight: 700, color: "#b45309" }}>
-                        {destinationError}
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
             </div>
+            {/* PRD §6: the picker opens RIGHT UNDER THE CHIPS — editing where a Content
+                publishes must not require expanding the whole card. It is laid out
+                INLINE (static, pushing the rest of the card down), never
+                position:absolute: the card root clips (overflow:hidden, for its rounded
+                media corners), and an absolutely positioned picker overhanging the card's
+                bottom edge was cut down to its title + subtitle — the account rows, the
+                per-account ticks and each account's Board select were painted but
+                invisible, so no destination could be chosen. Mounted per-open so
+                PublishDestinations loads the account summaries resolveScheduledAccount needs. */}
+            {destinationsOpen && (
+              <div data-testid="card-destination-popover" data-layout="inline"
+                style={{ padding: 10, borderRadius: 10, border: `1px solid ${BUI.borderHi}`, background: BUI.surface }}>
+                <PublishDestinations
+                  selected={selectedProviders}
+                  onSelectedChange={changeProviders}
+                  selectedAccountIds={selectedAccountIds}
+                  onSelectedAccountIdsChange={changeAccounts}
+                  onSummariesChange={setConnectionSummaries}
+                  onConnectPinterest={props.onConnect}
+                  pinterestConnected={!disconnected && !needsReconnect}
+                />
+                {destinationError && (
+                  <p data-testid="card-destination-error" role="alert" style={{ margin: "8px 0 0", fontSize: 11, fontWeight: 700, color: "#b45309" }}>
+                    {destinationError}
+                  </p>
+                )}
+              </div>
+            )}
             {needsAttention && (
               <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 5, padding: "8px 9px", borderRadius: 8, background: "#fffbeb", border: "1px solid #f59e0b55" }}>
                 <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 10.5, fontWeight: 750, color: "#b45309", display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.4 }}>
