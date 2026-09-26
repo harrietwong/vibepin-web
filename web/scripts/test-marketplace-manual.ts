@@ -375,6 +375,19 @@ async function main() {
     assert.equal(item.imageUrl, "https://cdn.example/a.jpg");
   });
 
+  // Amazon never yields image candidates, so the import panel must route it to the
+  // completable card (before the blocked/failed/success branches), not the empty grid.
+  await test("import panel routes Amazon results to the completable manual card", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const panel = readFileSync(join(process.cwd(), "src/components/studio/ProductUrlImportPanel.tsx"), "utf8").replace(/\r\n/g, "\n");
+    const amazonBranch = panel.indexOf('if (result.provider === "amazon")');
+    const blockedBranch = panel.indexOf('if (result.status === "blocked" || result.status === "unsupported")');
+    assert.ok(amazonBranch > 0, "Amazon branch missing");
+    assert.ok(amazonBranch < blockedBranch, "Amazon branch must come before the blocked/failed/success branches");
+    assert.ok(/<MarketplaceManualCard result=\{result\} initialTitle=\{fetchedTitle\}/.test(panel), "Amazon card must prefill the fetched title");
+  });
+
   console.log(`\nMarketplace manual-entry: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

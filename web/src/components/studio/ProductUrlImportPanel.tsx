@@ -134,13 +134,15 @@ function FallbackActionChips({
  * Temu-derived candidate if there is one, else an upload), and a Save button.
  */
 function MarketplaceManualCard({
-  result, onUploadImage, onSave,
+  result, onUploadImage, onSave, initialTitle,
 }: {
   result: UrlResult;
   onUploadImage?: (file: File) => Promise<string>;
   onSave: (item: MarketplaceManualSaveItem) => void;
+  /** Overrides the URL-slug suggestion (Amazon: the fetched product title). */
+  initialTitle?: string;
 }) {
-  const [title,    setTitle]    = useState(result.suggestedTitle ?? "");
+  const [title,    setTitle]    = useState(initialTitle ?? result.suggestedTitle ?? "");
   const [imageUrl, setImageUrl] = useState<string | null>(result.candidates?.[0]?.imageUrl ?? null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -388,6 +390,34 @@ function ResultGroup({
           {result.sourceDomain || result.sourceUrl}
         </p>
         <PinterestWarningCard sourceUrl={result.sourceUrl} />
+      </div>
+    );
+  }
+
+  // Amazon (text-only channel): never has image candidates by design, so the
+  // candidate grid below would be a dead end whether the fetch worked or not. Same
+  // completable card as the manual marketplaces; the fetched title is prefilled and
+  // the destination stays the pasted link (keeps the creator's affiliate tag).
+  if (result.provider === "amazon") {
+    const fetchedTitle = result.title ?? result.amazon?.extracted?.title;
+    return (
+      <div data-testid="url-import-result-group" style={{ marginBottom: 16 }}>
+        <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 800, color: "#C4B5FD" }}>
+          {result.sourceDomain || result.sourceUrl}
+        </p>
+        <div data-testid="url-import-amazon-manual" style={{
+          padding: 12, borderRadius: 10,
+          border: `1px solid rgba(251,191,36,0.25)`,
+          background: "rgba(251,191,36,0.06)",
+        }}>
+          <p style={{ margin: 0, fontSize: 12, color: "#FDE68A", fontWeight: 700 }}>Amazon — add a product photo</p>
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textSec, lineHeight: 1.5 }}>
+            {fetchedTitle
+              ? "Amazon product images can't be imported. Upload a photo of the product — the link stays as the destination."
+              : (result.message ?? "Amazon did not return the product details. Enter the name and upload a photo — the link stays as the destination.")}
+          </p>
+          <MarketplaceManualCard result={result} initialTitle={fetchedTitle} onUploadImage={onUploadImage} onSave={onSaveMarketplaceManual} />
+        </div>
       </div>
     );
   }
