@@ -17,6 +17,8 @@ import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock a
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { usePinBoardDrafts, type BoardFilter } from "@/hooks/usePinBoardDrafts";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
+import { usePinterestConnections } from "@/hooks/usePinterestConnections";
+import { isInternalBoardName } from "@/lib/studio/cardBoardSource";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
@@ -142,9 +144,8 @@ type AiDrawerState =
 // Never surface local QA/demo fixtures as if they were a customer's Pinterest board.
 // The stored ID is left untouched for diagnostics; customer-facing pickers and labels
 // only use real board names.
-function isInternalBoardName(name: string | null | undefined): boolean {
-  return /^(qa board|vibepin sandbox demo board|sandbox demo board)$/i.test(name?.trim() ?? "");
-}
+// isInternalBoardName lives in lib/studio/cardBoardSource so the card's per-account
+// board list applies the same filter.
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
 // Reuses the SAME "?modal=publish&pinId=…" contract Plan already parses (see the
@@ -304,6 +305,9 @@ export function StudioBoard() {
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   const customerBoards = useMemo(() => boards.filter(board => !isInternalBoardName(board.name)), [boards]);
+  // Read ONCE here (not per card): the card labels its Board field with the account the
+  // boards belong to, and a board of dozens of cards must not fire dozens of reads.
+  const { connections: pinterestAccounts } = usePinterestConnections();
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
   // scheduling/publishing (distinct from a transient boards API failure).
   const noBoardAccess = disconnected || needsReconnect;
@@ -2252,6 +2256,7 @@ export function StudioBoard() {
                 onAiCopyBusyChange={handleAiCopyBusyChange}
                 boards={customerBoards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
+                pinterestAccounts={pinterestAccounts}
                 boardFieldError={scheduleErrors[draft.id] || undefined}
                 titleFieldError={fieldErrors[draft.id]?.title}
                 descriptionFieldError={fieldErrors[draft.id]?.description}

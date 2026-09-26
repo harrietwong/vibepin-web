@@ -265,6 +265,13 @@ export const studioBoardMessages = {
   "studioBoard.card.linkCopy.clear": "Clear link",
   "studioBoard.card.fields.board": "Board",
   "studioBoard.card.fields.boardPlaceholder": "Choose a board",
+  "studioBoard.card.boardSource.accountLabel": "Boards of {account}",
+  "studioBoard.card.boardSource.loading": "Loading boards…",
+  "studioBoard.card.boardSource.error": "Couldn't load this account's boards.",
+  "studioBoard.card.boardSource.retry": "Try again",
+  "studioBoard.card.boardSource.needsReconnect": "Reconnect this Pinterest account to load its boards.",
+  "studioBoard.card.boardSource.notConnected": "Connect Pinterest to load boards.",
+  "studioBoard.card.boardSource.empty": "This Pinterest account has no boards yet. Create one on Pinterest first, or switch accounts.",
   // ── Instagram caption (mixed Pinterest+Instagram single-video split, T3) ──
   // Shown only when a single video is going to BOTH Pinterest and Instagram — the
   // video is split into two posts on Schedule, and this text becomes the
