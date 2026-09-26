@@ -159,9 +159,18 @@ async function requestedExtraScopes(req: NextRequest, uid: string): Promise<read
   if (!features.includes("comment_dm")) return [];
   try {
     const admin = await requireSuperAdminFromRequest(req);
-    if (admin && admin.id === uid) return INSTAGRAM_COMMENT_DM_SCOPES;
+    if (admin && admin.id === uid) {
+      console.info(
+        `[instagram/connect] comment_dm requested and honored, appending extra scopes: ${INSTAGRAM_COMMENT_DM_SCOPES.join(",")}`,
+      );
+      return INSTAGRAM_COMMENT_DM_SCOPES;
+    }
+    console.warn(
+      `[instagram/connect] comment_dm requested but not honored: ${admin ? "id mismatch" : "not super admin"}`,
+    );
   } catch (err) {
     console.error("[instagram/connect] super-admin check failed, ignoring features:", (err as Error).message);
+    console.warn("[instagram/connect] comment_dm requested but not honored: check threw");
   }
   return [];
 }
