@@ -301,6 +301,10 @@ export const STUDIO: string[] = [
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).
   "test-card-lifecycle-view",
+  // Create Pins card destination picker is laid out inline (never clipped by the
+  // card root), and the card Board field lists the boards of the draft's chosen
+  // Pinterest account with account label + loading / error / empty states.
+  "test-card-board-source",
   // Bulk operations on the Create Pins board (WS-F, PRD 0826 §19/§30): the
   // publish partition (fully-published items must never be re-sent), the
   // per-lifecycle delete impact, and the result summary's reason contract.
