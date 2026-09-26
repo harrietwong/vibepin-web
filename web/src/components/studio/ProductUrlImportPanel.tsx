@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { RefreshCw, Upload } from "lucide-react";
 import type { ProductUrlImportApiResponse } from "@/lib/productUrlImportClient";
 import {
   autoSelectTopCandidates,
@@ -14,6 +14,12 @@ import {
 import type { ProductFacts } from "@/lib/productUrlImport/types";
 import { assetFieldsFromImportResult } from "@/lib/studio/importedProductFacts";
 import { isStoreImportUrl, type StoreBatchSaveItem } from "@/lib/studio/storeBatchImport";
+import {
+  canSaveMarketplaceManualDraft,
+  marketplaceManualSaveItem,
+  type MarketplaceManualDraft,
+  type MarketplaceManualSaveItem,
+} from "@/lib/studio/marketplaceManualSave";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { StoreProductsImportPanel } from "@/components/studio/StoreProductsImportPanel";
 
@@ -70,23 +76,179 @@ function CandidateCard({
   );
 }
 
-function FallbackActionChips({ actions }: { actions: string[] }) {
-  const labels: Record<string, string> = {
-    upload_image:           "Upload image",
-    paste_direct_image_url: "Paste direct image URL",
-    manual_entry:           "Enter product details manually",
-  };
+const FALLBACK_ACTION_LABELS: Record<string, string> = {
+  upload_image:           "Upload image",
+  paste_direct_image_url: "Paste direct image URL",
+  manual_entry:           "Enter product details manually",
+};
+
+/**
+ * `upload_image` is clickable (opens the shared file picker via `onUploadImage`);
+ * everything else stays a plain, non-interactive label — `manual_entry` has no
+ * separate action of its own (it IS the inline form below it), and
+ * `paste_direct_image_url` (Etsy) is just a hint, not a control.
+ */
+function FallbackActionChips({
+  actions, onUploadClick,
+}: { actions: string[]; onUploadClick?: () => void }) {
   return (
     <div data-testid="url-import-fallback-actions" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-      {actions.map(a => (
-        <span key={a} style={{
-          padding: "4px 10px", borderRadius: 6,
-          border: `1px solid ${UI.borderStrong}`, background: "rgba(255,255,255,0.04)",
-          color: UI.textSec, fontSize: 11, fontWeight: 600,
-        }}>
-          {labels[a] ?? a}
-        </span>
-      ))}
+      {actions.map(a => {
+        const label = FALLBACK_ACTION_LABELS[a] ?? a;
+        if (a === "upload_image" && onUploadClick) {
+          return (
+            <button
+              key={a}
+              type="button"
+              data-testid="url-import-fallback-upload"
+              onClick={onUploadClick}
+              style={{
+                padding: "4px 10px", borderRadius: 6,
+                border: `1px solid ${UI.borderStrong}`, background: "rgba(255,255,255,0.04)",
+                color: UI.text, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 4,
+              }}
+            >
+              <Upload style={{ width: 11, height: 11 }} /> {label}
+            </button>
+          );
+        }
+        return (
+          <span key={a} style={{
+            padding: "4px 10px", borderRadius: 6,
+            border: `1px solid ${UI.borderStrong}`, background: "rgba(255,255,255,0.04)",
+            color: UI.textSec, fontSize: 11, fontWeight: 600,
+          }}>
+            {label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * FR-04 follow-up (0925 real-user report): the marketplace-manual card used to be a
+ * dead end — two non-clickable labels and no way to actually save the product. This
+ * gives it a completable inline form: a prefilled name, a chosen image (the
+ * Temu-derived candidate if there is one, else an upload), and a Save button.
+ */
+function MarketplaceManualCard({
+  result, onUploadImage, onSave,
+}: {
+  result: UrlResult;
+  onUploadImage?: (file: File) => Promise<string>;
+  onSave: (item: MarketplaceManualSaveItem) => void;
+}) {
+  const [title,    setTitle]    = useState(result.suggestedTitle ?? "");
+  const [imageUrl, setImageUrl] = useState<string | null>(result.candidates?.[0]?.imageUrl ?? null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const draft: MarketplaceManualDraft = { title, imageUrl };
+  const saveEnabled = canSaveMarketplaceManualDraft(draft);
+
+  async function handleFileChosen(files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !onUploadImage) return;
+    setUploading(true);
+    try {
+      setImageUrl(await onUploadImage(file));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleSave() {
+    const item = marketplaceManualSaveItem(draft, {
+      sourceUrl:        result.sourceUrl,
+      sourceDomain:     result.sourceDomain,
+      extractionReason: result.candidates?.[0]?.reason,
+    });
+    if (item) onSave(item);
+  }
+
+  return (
+    <div data-testid="url-import-marketplace-manual-form" style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        {imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            data-testid="url-import-marketplace-manual-thumb"
+            src={imageUrl}
+            alt=""
+            style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: `1px solid ${UI.border}` }}
+          />
+        ) : (
+          <button
+            type="button"
+            data-testid="url-import-marketplace-manual-upload"
+            disabled={uploading}
+            onClick={() => fileRef.current?.click()}
+            style={{
+              width: 56, height: 56, borderRadius: 8, flexShrink: 0,
+              border: `1px dashed ${UI.borderStrong}`, background: "rgba(255,255,255,0.03)",
+              color: UI.textSec, fontSize: 9, fontWeight: 700, cursor: uploading ? "wait" : "pointer",
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+            }}
+          >
+            <Upload style={{ width: 14, height: 14 }} />
+            {uploading ? "Uploading…" : "Upload image"}
+          </button>
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+          <input
+            data-testid="url-import-marketplace-manual-title"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Product name"
+            style={{
+              width: "100%", boxSizing: "border-box", borderRadius: 8,
+              border: `1px solid ${UI.borderStrong}`, background: "var(--app-surface-2, #0D1423)",
+              color: UI.text, padding: "6px 10px", fontSize: 12, outline: "none", fontFamily: "inherit",
+            }}
+          />
+          {imageUrl && (
+            <button
+              type="button"
+              data-testid="url-import-marketplace-manual-change-image"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+              style={{
+                alignSelf: "flex-start", padding: "3px 8px", borderRadius: 6,
+                border: `1px solid ${UI.border}`, background: "transparent",
+                color: UI.textSec, fontSize: 10, fontWeight: 700, cursor: uploading ? "wait" : "pointer",
+              }}
+            >
+              {uploading ? "Uploading…" : "Change image"}
+            </button>
+          )}
+        </div>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={e => { void handleFileChosen(e.target.files); e.target.value = ""; }}
+      />
+      {!imageUrl && (
+        <p style={{ margin: 0, fontSize: 10, color: UI.muted }}>Upload a product photo to save this product.</p>
+      )}
+      <button
+        type="button"
+        data-testid="url-import-marketplace-manual-save"
+        disabled={!saveEnabled}
+        onClick={handleSave}
+        style={{
+          alignSelf: "flex-start", padding: "6px 14px", borderRadius: 8, border: "none",
+          background: saveEnabled ? UI.gradient : "rgba(148,163,184,0.12)",
+          color:      saveEnabled ? "#fff" : UI.muted,
+          fontSize: 11, fontWeight: 800, cursor: saveEnabled ? "pointer" : "not-allowed",
+        }}
+      >
+        Save to My Products
+      </button>
     </div>
   );
 }
@@ -112,6 +274,93 @@ function PinterestWarningCard({ sourceUrl }: { sourceUrl: string }) {
   );
 }
 
+/**
+ * Etsy's blocked card offers `upload_image` alongside a `paste_direct_image_url`
+ * hint. The Etsy adapter never returns a `suggestedTitle` or a candidate image, so
+ * this reuses the same shared upload input as the marketplace-manual card but keeps
+ * its own compact title field — the same save contract (`MarketplaceManualSaveItem`),
+ * just without a prefilled name to show off.
+ */
+function BlockedUploadFallback({
+  result, actions, onUploadImage, onSave,
+}: {
+  result: UrlResult;
+  actions: string[];
+  onUploadImage?: (file: File) => Promise<string>;
+  onSave: (item: MarketplaceManualSaveItem) => void;
+}) {
+  const [title,     setTitle]     = useState("");
+  const [imageUrl,  setImageUrl]  = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const draft: MarketplaceManualDraft = { title, imageUrl };
+  const saveEnabled = canSaveMarketplaceManualDraft(draft);
+
+  async function handleFileChosen(files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !onUploadImage) return;
+    setUploading(true);
+    try {
+      setImageUrl(await onUploadImage(file));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleSave() {
+    const item = marketplaceManualSaveItem(draft, { sourceUrl: result.sourceUrl, sourceDomain: result.sourceDomain });
+    if (item) onSave(item);
+  }
+
+  if (!onUploadImage) return <FallbackActionChips actions={actions} />;
+
+  return (
+    <>
+      <FallbackActionChips actions={actions} onUploadClick={() => fileRef.current?.click()} />
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={e => { void handleFileChosen(e.target.files); e.target.value = ""; }}
+      />
+      {imageUrl && (
+        <div data-testid="url-import-etsy-manual-form" style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+          <input
+            data-testid="url-import-etsy-manual-title"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Product name"
+            style={{
+              flex: 1, minWidth: 0, boxSizing: "border-box", borderRadius: 8,
+              border: `1px solid ${UI.borderStrong}`, background: "var(--app-surface-2, #0D1423)",
+              color: UI.text, padding: "6px 10px", fontSize: 12, outline: "none", fontFamily: "inherit",
+            }}
+          />
+          <button
+            type="button"
+            data-testid="url-import-etsy-manual-save"
+            disabled={!saveEnabled}
+            onClick={handleSave}
+            style={{
+              padding: "6px 12px", borderRadius: 8, border: "none", flexShrink: 0,
+              background: saveEnabled ? UI.gradient : "rgba(148,163,184,0.12)",
+              color:      saveEnabled ? "#fff" : UI.muted,
+              fontSize: 11, fontWeight: 800, cursor: saveEnabled ? "pointer" : "not-allowed",
+            }}
+          >
+            Save
+          </button>
+        </div>
+      )}
+      {uploading && <p style={{ margin: "6px 0 0", fontSize: 10, color: UI.muted }}>Uploading…</p>}
+    </>
+  );
+}
+
 function ResultGroup({
   result,
   role,
@@ -119,6 +368,8 @@ function ResultGroup({
   retryUrl,
   onToggle,
   onRetry,
+  onUploadImage,
+  onSaveMarketplaceManual,
 }: {
   result: UrlResult;
   role: "product" | "reference";
@@ -126,6 +377,8 @@ function ResultGroup({
   retryUrl: string | null;
   onToggle: (sourceUrl: string, candidateId: string) => void;
   onRetry: (sourceUrl: string) => void;
+  onUploadImage?: (file: File) => Promise<string>;
+  onSaveMarketplaceManual: (item: MarketplaceManualSaveItem) => void;
 }) {
   // Pinterest pin pasted into product picker
   if (result.assetType === "reference" && role === "product") {
@@ -148,6 +401,7 @@ function ResultGroup({
     const providerLabel = result.marketplace
       ? MARKETPLACE_NAMES[result.marketplace] ?? "This marketplace"
       : result.provider === "etsy" ? "Etsy" : result.provider === "pinterest" ? "Pinterest" : "Provider";
+    const isMarketplaceManual = result.provider === "marketplace_manual";
     return (
       <div data-testid="url-import-result-group" style={{ marginBottom: 16 }}>
         <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 800, color: "#C4B5FD" }}>
@@ -159,10 +413,21 @@ function ResultGroup({
           background: "rgba(251,191,36,0.06)",
         }}>
           <p style={{ margin: 0, fontSize: 12, color: "#FDE68A", fontWeight: 700 }}>
-            {providerLabel} blocks automatic extraction
+            {isMarketplaceManual ? `${providerLabel} — add the product details` : `${providerLabel} blocks automatic extraction`}
           </p>
           <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textSec, lineHeight: 1.5 }}>{msg}</p>
-          {result.fallbackActions?.length ? <FallbackActionChips actions={result.fallbackActions} /> : null}
+          {isMarketplaceManual ? (
+            <MarketplaceManualCard result={result} onUploadImage={onUploadImage} onSave={onSaveMarketplaceManual} />
+          ) : result.fallbackActions?.includes("upload_image") ? (
+            <BlockedUploadFallback
+              result={result}
+              actions={result.fallbackActions}
+              onUploadImage={onUploadImage}
+              onSave={onSaveMarketplaceManual}
+            />
+          ) : (
+            result.fallbackActions?.length ? <FallbackActionChips actions={result.fallbackActions} /> : null
+          )}
         </div>
       </div>
     );
@@ -245,9 +510,16 @@ export type ProductUrlImportPanelProps = {
    * The caller saves the chosen products to My Products only.
    */
   onSaveStoreProducts?: (items: StoreBatchSaveItem[]) => void;
+  /**
+   * 0925 follow-up: shared local-upload path (externalize to a hosted URL, fall back
+   * to a data URL) for the marketplace-manual card's "Upload image" button and the
+   * Etsy blocked card's "Upload image" chip. When absent, both fall back to a plain
+   * non-interactive label (no new upload flow is invented here).
+   */
+  onUploadImage?: (file: File) => Promise<string>;
 };
 
-export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCancel, onSaveStoreProducts }: ProductUrlImportPanelProps) {
+export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCancel, onSaveStoreProducts, onUploadImage }: ProductUrlImportPanelProps) {
   const { t } = useLocale();
   const storeImportEnabled = role === "product" && !!onSaveStoreProducts;
   const [storeMode,          setStoreMode]          = useState<{ url: string; autoLoad: boolean } | null>(null);
@@ -347,6 +619,17 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
     }
     onSaveSelected(items);
     handleClear();
+  }
+
+  /**
+   * 0925 follow-up: the marketplace-manual card (and the Etsy upload fallback) save
+   * ONE item immediately on its own "Save" click — independent of the footer's
+   * candidate-selection Save, which only ever touches `status === "success"` results.
+   * Both can be on screen at once without double-saving anything.
+   */
+  function handleSaveMarketplaceManual(item: MarketplaceManualSaveItem) {
+    onSaveSelected([item]);
+    setResults(prev => prev.filter(r => r.sourceUrl !== item.sourceUrl));
   }
 
   // Count selectable candidates (exclude blocked/reference results)
@@ -483,6 +766,8 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
                 retryUrl={retryUrl}
                 onToggle={toggleCandidate}
                 onRetry={handleRetryUrl}
+                onUploadImage={onUploadImage}
+                onSaveMarketplaceManual={handleSaveMarketplaceManual}
               />
             ))}
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

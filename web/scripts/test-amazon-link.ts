@@ -65,7 +65,7 @@ async function run() {
   });
 
   console.log("\n-- short links --");
-  for (const host of ["amzn.to", "a.co", "amzn.eu", "amzn.asia"]) {
+  for (const host of ["amzn.to", "a.co", "amzn.eu", "amzn.asia", "link.amazon"]) {
     await test(`${host} → short (needs expansion)`, () => {
       const p = parseAmazonLink(`http://${host}/d/Ab12Cd?x=1`);
       assert(p.ok && p.kind === "short" && p.host === host, JSON.stringify(p));
@@ -305,6 +305,28 @@ async function run() {
       const r = await expandAmazonShortLink(raw, fetchImpl);
       assert(!r.ok && r.reason === "invalid_short_link" && calls.length === 0, `${raw}: ${JSON.stringify(r)}`);
     }
+  });
+
+  console.log("\n-- link.amazon (0925 real-user report: bounces through amzlinks.in, a third party) --");
+  await test("link.amazon → amzlinks.in (302) → amazon.com/dp (302): expanded, hop host never treated as Amazon", async () => {
+    const { fetchImpl, calls } = scripted([
+      redirect("https://amzlinks.in/B0atZf4KJ"),
+      redirect(`https://www.amazon.com/DR-DUDU-Pack-Halloween-Bats-Decor/dp/${ASIN}?tag=cheerishhome-20`),
+    ]);
+    const r = await expandAmazonShortLink("https://link.amazon/B0atZf4KJ", fetchImpl);
+    assert(r.ok && r.hops === 2 && r.retailUrl === `https://www.amazon.com/DR-DUDU-Pack-Halloween-Bats-Decor/dp/${ASIN}?tag=cheerishhome-20`, JSON.stringify(r));
+    assert(calls.length === 2 && calls[1] === "https://amzlinks.in/B0atZf4KJ", "must fetch the hop host, not skip it");
+    const reparsed = retail(r.ok ? r.retailUrl : "");
+    assert(reparsed.asin === ASIN, `asin not recovered: ${reparsed.asin}`);
+  });
+  await test("amzlinks.in redirecting to a non-Amazon host → off_allowlist (hop host grants no extra trust)", async () => {
+    const { fetchImpl } = scripted([redirect("https://amzlinks.in/x"), redirect("https://evil.io/steal")]);
+    const r = await expandAmazonShortLink("https://link.amazon/B0atZf4KJ", fetchImpl);
+    assert(!r.ok && r.reason === "off_allowlist", JSON.stringify(r));
+  });
+  await test("amzlinks.in itself is NOT classified as Amazon", () => {
+    assert(classifyAmazonHost("amzlinks.in") === null, "amzlinks.in must not classify as Amazon");
+    assert(!isAmazonUrl("https://amzlinks.in/B0atZf4KJ"), "amzlinks.in must not be recognised as an Amazon URL");
   });
 
   console.log(`\nAmazon link: ${passed} passed, ${failed} failed`);

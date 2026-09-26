@@ -11,6 +11,7 @@ import { genericProductAdapter } from "./adapters/genericProduct";
 import { DEFAULT_HEADERS } from "./fetchHeaders";
 import { classifyAmazonHost } from "@/lib/affiliate/amazonHosts";
 import { importAmazonUrl, type AmazonImportOptions } from "./amazonImport";
+import { hintsFromMarketplaceUrl, marketplaceImageCandidates } from "./marketplaceHosts";
 
 export const FETCH_TIMEOUT_MS  = 10_000;
 export const MAX_REDIRECTS     = 3;
@@ -117,7 +118,16 @@ export async function importUrl(
     if (validated.marketplace) {
       const trimmed = rawUrl.trim();
       let sourceDomain = "";
-      try { sourceDomain = sourceDomainFromUrl(new URL(trimmed)); } catch { /* unreachable: validateImportUrl already parsed it */ }
+      let hintsUrl: URL | null = null;
+      try {
+        hintsUrl = new URL(trimmed);
+        sourceDomain = sourceDomainFromUrl(hintsUrl);
+      } catch { /* unreachable: validateImportUrl already parsed it */ }
+      // 0925 follow-up: the pasted URL itself may carry a readable product-name slug
+      // and (Temu only) a direct CDN image URL — read back from the URL the user
+      // already had open, never fetched. Still zero network calls.
+      const hints = hintsUrl ? hintsFromMarketplaceUrl(hintsUrl, validated.marketplace) : {};
+      const candidates = hintsUrl ? toProductCandidates(finalizeCandidates(marketplaceImageCandidates(hints), trimmed)) : [];
       return {
         sourceUrl:       trimmed,
         sourceDomain,
@@ -126,10 +136,11 @@ export async function importUrl(
         assetType:       "product",
         status:          "unsupported",
         marketplace:     validated.marketplace,
-        candidates:      [],
+        candidates,
         fallbackActions: ["manual_entry", "upload_image"],
         debugCode:       `marketplace_manual_${validated.marketplace}`,
         message:         "This marketplace does not allow automatic product reads. Upload a product photo and fill in the name and selling points — the link stays as the destination.",
+        ...(hints.suggestedTitle ? { suggestedTitle: hints.suggestedTitle } : {}),
       };
     }
     return {

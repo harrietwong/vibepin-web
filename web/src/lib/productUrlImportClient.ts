@@ -92,6 +92,9 @@ export type ProductUrlImportApiResponse = {
     facts?:           ProductFacts;
     /** `provider: "marketplace_manual"` only (FR-04): which blocked marketplace. */
     marketplace?:     MarketplaceId;
+    /** `provider: "marketplace_manual"` only (0925 follow-up): a product name guessed
+     *  from the pasted URL's slug — a prefill, never the same key as `title`. */
+    suggestedTitle?:  string;
   }>;
 };
 

@@ -38,6 +38,7 @@ const genericBlocked = [
   "https://a.co/d/abc123",
   "https://amzn.eu/d/abc",
   "https://amzn.asia/d/abc",
+  "https://link.amazon/B0atZf4KJ",
   "https://smile.amazon.co.uk/dp/B08N5WRWNW",
   "https://sellercentral.amazon.de/x",
 ];
@@ -76,6 +77,7 @@ const amazonOk: Array<[string, "retail" | "short", string]> = [
   ["https://m.amazon.com/dp/B08N5WRWNW", "retail", "amazon.com"],
   ["https://AMZN.TO/3abc", "short", "amzn.to"],
   ["https://a.co/d/abc123", "short", "a.co"],
+  ["https://link.amazon/B0atZf4KJ", "short", "link.amazon"],
 ];
 for (const [raw, kind, host] of amazonOk) {
   test(`amazon channel accepts ${raw}`, () => {

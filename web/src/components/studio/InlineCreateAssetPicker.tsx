@@ -849,18 +849,24 @@ export function InlineCreateAssetPicker({
       : new Set([...prev, ...ids])));
   }
 
+  /** Externalize to a stable hosted URL; falls back to a data URL on failure. Shared
+   *  with `handleFiles` so the marketplace-manual card's "Upload image" button (0925
+   *  follow-up) reuses the exact same upload path instead of a new flow. */
+  async function uploadImageWithFallback(file: File): Promise<string> {
+    try {
+      return (await uploadPinImage(file)).publicUrl;
+    } catch {
+      return readFileAsDataUrl(file);
+    }
+  }
+
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     const savedIds: string[] = [];
     for (const file of Array.from(files)) {
       // Externalize uploads to stable hosted URLs so they sync across devices; fall
       // back to a data URL on failure (the media-offload sweep fixes it up later).
-      let imageUrl: string;
-      try {
-        imageUrl = (await uploadPinImage(file)).publicUrl;
-      } catch {
-        imageUrl = await readFileAsDataUrl(file);
-      }
+      const imageUrl = await uploadImageWithFallback(file);
       const saved = assets.saveAsset({
         role,
         assetRole: role === "product" ? "product_image" : "pin_reference",
@@ -1202,6 +1208,7 @@ export function InlineCreateAssetPicker({
               role="product"
               onSaveSelected={items => { saveUrlImportedProducts(items); setShowProductUrlImport(false); }}
               onSaveStoreProducts={saveStoreBatchProducts}
+              onUploadImage={uploadImageWithFallback}
               onCancel={() => setShowProductUrlImport(false)}
             />
           )}

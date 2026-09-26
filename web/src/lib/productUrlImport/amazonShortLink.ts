@@ -1,10 +1,17 @@
 /**
- * Server-side expansion of Amazon short links (amzn.to, a.co) to a retail URL.
+ * Server-side expansion of Amazon short links (amzn.to, a.co, link.amazon) to a
+ * retail URL.
  *
  * - GET with `redirect: "manual"`, honest UA, per-hop timeout; only the Location
  *   header is read, the body is discarded.
- * - Every hop target must pass validateAmazonUrl (exact Amazon whitelist). A hop to
- *   any other host aborts with `off_allowlist` — we never follow it.
+ * - Every hop target must pass validateAmazonUrl (exact Amazon whitelist), OR be an
+ *   exact match on the small third-party hop allowlist (`AMAZON_SHORT_LINK_HOP_HOSTS`
+ *   — e.g. `amzlinks.in`, which `link.amazon` is observed to bounce through on its way
+ *   to a real Amazon retail page). A hop-allowed host is never itself treated as
+ *   Amazon (no tag/asin/marketplace is read from it) — it only earns the RIGHT to be
+ *   fetched for one more redirect, which must then land on a real Amazon host to
+ *   count as expanded. A hop to any other host aborts with `off_allowlist` — we never
+ *   follow it.
  * - Stops at the first retail URL (the retail page itself is NOT fetched here).
  * - Never throws: every failure is a typed result so the caller degrades to manual
  *   entry and keeps the user's pasted link unchanged (design §1.6).
@@ -12,6 +19,7 @@
 
 import { validateAmazonUrl } from "./urlSecurity";
 import { DEFAULT_HEADERS } from "./fetchHeaders";
+import { isAmazonShortLinkHopHost } from "@/lib/affiliate/amazonHosts";
 
 export const AMAZON_SHORT_LINK_MAX_HOPS = 3;
 export const AMAZON_SHORT_LINK_TIMEOUT_MS = 5000;
@@ -58,16 +66,27 @@ export async function expandAmazonShortLink(
     const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
     if (!location) return { ok: false, reason: "not_redirect", expandedFrom };
 
-    let target: string;
+    let targetUrl: URL;
     try {
-      target = new URL(location, current).href;
+      targetUrl = new URL(location, current);
     } catch {
       return { ok: false, reason: "off_allowlist", expandedFrom };
     }
-    const next = validateAmazonUrl(target);
-    if (!next.ok) return { ok: false, reason: "off_allowlist", expandedFrom };
-    if (next.kind === "retail") return { ok: true, retailUrl: next.url.href, hops: hop, expandedFrom };
-    current = next.url;
+    const next = validateAmazonUrl(targetUrl.href);
+    if (next.ok) {
+      if (next.kind === "retail") return { ok: true, retailUrl: next.url.href, hops: hop, expandedFrom };
+      current = next.url;
+      continue;
+    }
+    // Not an Amazon host — allow exactly the small third-party hop allowlist to be
+    // followed for one more redirect (never treated as Amazon itself: no tag/asin is
+    // ever read off it, and if it does not lead to a real Amazon host next, expansion
+    // still fails below).
+    if (targetUrl.protocol === "https:" && !targetUrl.username && !targetUrl.password && isAmazonShortLinkHopHost(targetUrl.hostname)) {
+      current = targetUrl;
+      continue;
+    }
+    return { ok: false, reason: "off_allowlist", expandedFrom };
   }
   return { ok: false, reason: "too_many_hops", expandedFrom };
 }

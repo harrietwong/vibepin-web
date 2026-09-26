@@ -158,6 +158,61 @@ async function main() {
     assert.equal(result.sourceUrl, withParams);
   });
 
+  console.log("\n[0925 follow-up: hintsFromMarketplaceUrl — suggestedTitle + Temu kwcdn image, still zero fetch]");
+
+  const TEMU_URL =
+    "https://www.temu.com/6pcs-retro-halloween-wooden-ornaments-ghost-pumpkin-black-cat-skull--owl-shapes-vintage-home-decor-for-family-parties-farmhouse--gift-for--g-606944559527650.html" +
+    "?_oak_mp_inf=abc&top_gallery_url=https%3A%2F%2Fimg.kwcdn.com%2Fproduct%2Ffancy%2Fdb7df003-ae2a-466f-95a2-8282807a8d76.jpg&spec_gallery_id=231683425157&refer_page_sn=30479";
+  const SHEIN_URL =
+    "https://us.shein.com/20pcs-Mini-Chalkboard-Home-Decor-Signs-Mini-Wooden-Message-Board-Display-Stands-Suitable-For-Wedding-Baking-Display-Hotel-Party-Dessert-Table-Cards-Mother-s-Day-Graduation-p-86913712.html" +
+    "?src_module=all";
+
+  await test("Temu real user link: suggestedTitle starts with the readable slug, one kwcdn image candidate", async () => {
+    const result = await importUrl(TEMU_URL, throwingFetcher);
+    assert.equal(result.status, "unsupported");
+    assert.equal(result.provider, "marketplace_manual");
+    assert.ok(result.suggestedTitle?.startsWith("6pcs retro halloween wooden ornaments"), result.suggestedTitle);
+    assert.equal(result.candidates?.length, 1, JSON.stringify(result.candidates));
+    assert.equal(result.candidates?.[0]?.imageUrl, "https://img.kwcdn.com/product/fancy/db7df003-ae2a-466f-95a2-8282807a8d76.jpg");
+    assert.equal(result.candidates?.[0]?.reason, "direct_image_url");
+    assert.equal("title" in result, false, "still no title key — suggestedTitle is a separate field");
+    assert.equal("description" in result, false);
+  });
+
+  await test("Shein real user link: suggestedTitle starts with the readable slug, no image candidates", async () => {
+    const result = await importUrl(SHEIN_URL, throwingFetcher);
+    assert.equal(result.status, "unsupported");
+    assert.ok(result.suggestedTitle?.startsWith("20pcs Mini Chalkboard Home Decor Signs"), result.suggestedTitle);
+    assert.deepEqual(result.candidates, []);
+    assert.equal("title" in result, false);
+    assert.equal("description" in result, false);
+  });
+
+  await test("forged top_gallery_url pointing off kwcdn.com is dropped, no candidate", async () => {
+    const forged = "https://www.temu.com/some-product-g-123.html?top_gallery_url=" + encodeURIComponent("https://evil.example/x.jpg");
+    const result = await importUrl(forged, throwingFetcher);
+    assert.deepEqual(result.candidates, []);
+    assert.ok(result.suggestedTitle?.startsWith("Some product"), result.suggestedTitle);
+  });
+
+  await test("AliExpress item link (no slug) and TikTok Shop pdp link: title only when a slug exists", async () => {
+    const aliexpress = await importUrl("https://www.aliexpress.com/item/1005001234567890.html", throwingFetcher);
+    assert.equal(aliexpress.suggestedTitle, undefined, "no slug to derive a title from");
+    assert.deepEqual(aliexpress.candidates, []);
+
+    const tiktokPdp = await importUrl("https://shop.tiktok.com/pdp/cozy-throw-blanket/1234567890", throwingFetcher);
+    assert.equal(tiktokPdp.suggestedTitle, "Cozy throw blanket");
+
+    const tiktokProduct = await importUrl("https://shop.tiktok.com/product/ceramic-mug-set", throwingFetcher);
+    assert.equal(tiktokProduct.suggestedTitle, "Ceramic mug set");
+  });
+
+  await test("marketplace-manual results never trigger a fetch even when hints are derived (throwingFetcher proves it)", async () => {
+    // Already proven by every await above (throwingFetcher would have rejected the
+    // test on the throw) — this test documents the invariant explicitly.
+    await assert.doesNotReject(() => importUrl(TEMU_URL, throwingFetcher));
+  });
+
   console.log("\n[Etsy — FR-05 dead-button removal]");
 
   await test("ETSY_BLOCKED_RESULT no longer offers connect_etsy_api", () => {
@@ -288,6 +343,7 @@ async function main() {
     const { join } = await import("node:path");
     const clientModules = [
       "src/lib/studio/amazonCardSource.ts",
+      "src/lib/studio/marketplaceManualSave.ts",
       "src/lib/productUrlImport/marketplaceHosts.ts",
       "src/lib/productUrlImportClient.ts",
       "src/lib/studio/importedProductFacts.ts",
@@ -301,6 +357,22 @@ async function main() {
       const hit = src.split("\n").find(line => serverOnly.test(line));
       assert.equal(hit, undefined, `${rel} imports server-only code: ${hit}`);
     }
+  });
+
+  // Inline save form on the import panel's marketplace card (0925 follow-up).
+  await test("manual save: needs a non-blank title AND an image; keeps the pasted link verbatim", async () => {
+    const { canSaveMarketplaceManualDraft, marketplaceManualSaveItem } = await import("../src/lib/studio/marketplaceManualSave");
+    const pasted = "https://us.shein.com/20pcs-Mini-Chalkboard-p-86913712.html?src_module=all&mallCode=1";
+    const res = { sourceUrl: pasted, sourceDomain: "us.shein.com" };
+    assert.equal(canSaveMarketplaceManualDraft({ title: "Chalkboard signs", imageUrl: null }), false);
+    assert.equal(canSaveMarketplaceManualDraft({ title: "   ", imageUrl: "https://cdn.example/a.jpg" }), false);
+    assert.equal(marketplaceManualSaveItem({ title: "", imageUrl: "https://cdn.example/a.jpg" }, res), null);
+    const item = marketplaceManualSaveItem({ title: "  Chalkboard signs  ", imageUrl: "https://cdn.example/a.jpg" }, res)!;
+    assert.equal(item.title, "Chalkboard signs");
+    assert.equal(item.productUrl, pasted, "destination must be the user's pasted link, unchanged (FR-04-4)");
+    assert.equal(item.sourceUrl, pasted);
+    assert.equal(item.sourceDomain, "us.shein.com");
+    assert.equal(item.imageUrl, "https://cdn.example/a.jpg");
   });
 
   console.log(`\nMarketplace manual-entry: ${passed} passed, ${failed} failed`);

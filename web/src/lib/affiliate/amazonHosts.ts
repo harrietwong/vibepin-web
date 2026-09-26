@@ -26,21 +26,45 @@ export const AMAZON_RETAIL_HOSTS: Readonly<Record<string, AmazonMarketplace | nu
 };
 
 /** Amazon-owned short-link hosts (exact host only, no subdomains). */
-export const AMAZON_SHORT_HOSTS: ReadonlySet<string> = new Set(["amzn.to", "a.co", "amzn.eu", "amzn.asia"]);
+export const AMAZON_SHORT_HOSTS: ReadonlySet<string> = new Set(["amzn.to", "a.co", "amzn.eu", "amzn.asia", "link.amazon"]);
 
 /** Retail subdomains we accept; everything else (sellercentral., aws., …) is rejected. */
 const RETAIL_SUBDOMAIN_PREFIXES = ["", "www.", "smile.", "m."] as const;
 
 /**
  * Hosts the dedicated Amazon fetch channel may contact (text only, never images).
- * Deliberately narrower than recognition: the nine supported marketplaces plus the two
- * share-button short links (Fable ruling 1: a.co included).
+ * Deliberately narrower than recognition: the nine supported marketplaces plus the
+ * share-button short links (Fable ruling 1: a.co included; 0925 real-user report:
+ * `link.amazon` added — Amazon's own gTLD short-link host, confirmed by live redirect
+ * trace to a `www.amazon.com/dp/<ASIN>` retail page, see amazonShortLink.ts).
  */
 export const AMAZON_FETCHABLE_RETAIL_HOSTS: ReadonlySet<string> = new Set([
   "amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.ca",
   "amazon.com.au", "amazon.it", "amazon.es", "amazon.co.jp",
 ]);
-export const AMAZON_FETCHABLE_SHORT_HOSTS: ReadonlySet<string> = new Set(["amzn.to", "a.co"]);
+export const AMAZON_FETCHABLE_SHORT_HOSTS: ReadonlySet<string> = new Set(["amzn.to", "a.co", "link.amazon"]);
+
+/**
+ * Third-party intermediary hosts a `link.amazon` short link is observed to bounce
+ * through on its way to a real Amazon retail page (0925 live trace:
+ * `link.amazon` → `amzlinks.in` → `www.amazon.com/dp/<ASIN>`). NOT Amazon — never
+ * added to `AMAZON_SHORT_HOSTS` / `AMAZON_FETCHABLE_SHORT_HOSTS`, never classified as
+ * Amazon by `classifyAmazonHost`/`isAmazonLink`. Consumed ONLY by
+ * `expandAmazonShortLink`'s hop loop: a redirect landing on one of these hosts is
+ * allowed to continue one more hop, but that next hop still must resolve to a real
+ * Amazon retail host via `validateAmazonUrl` — this set never itself satisfies the
+ * "is this Amazon" check.
+ */
+export const AMAZON_SHORT_LINK_HOP_HOSTS: ReadonlySet<string> = new Set(["amzlinks.in"]);
+
+function normalizeHopHost(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/\.$/, "");
+}
+
+/** Exact-match only (no subdomains) — same discipline as classifyAmazonHost. */
+export function isAmazonShortLinkHopHost(hostname: string): boolean {
+  return AMAZON_SHORT_LINK_HOP_HOSTS.has(normalizeHopHost(hostname));
+}
 
 /** Every bare Amazon domain we know (retail + short). Used to derive blocklists. */
 export function allKnownAmazonHosts(): string[] {

@@ -67,6 +67,14 @@ export type ProductUrlImportResult = {
   /** Present only for `provider: "marketplace_manual"` (FR-04): which blocked
    *  marketplace the pasted URL belongs to. Zero network calls are ever made for it. */
   marketplace?:      MarketplaceId;
+  /**
+   * `provider: "marketplace_manual"` only (0925 follow-up): a product name guessed
+   * from the pasted URL's own slug. Deliberately a SEPARATE field from `title` — the
+   * marketplace-manual contract promises no `title`/`description` keys at all (so a
+   * client merge never overwrites user-typed fields with scraped text); this is only
+   * ever offered as a prefill the user can accept or overwrite, never the same key.
+   */
+  suggestedTitle?:   string;
 };
 
 /**
@@ -126,7 +134,7 @@ export type AmazonImportMeta = {
   host:          string;
   marketplace:   string | null;
   asin:          string | null;
-  /** The original short link, when the pasted URL was amzn.to / a.co. */
+  /** The original short link, when the pasted URL was amzn.to / a.co / link.amazon. */
   expandedFrom?: string;
   fetch: {
     status:      "ok" | "blocked" | "failed";
