@@ -4,29 +4,31 @@ import { useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import type { ContentVideoMedia } from "@/lib/contentDraftModel";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { BUI } from "./boardUI";
 import { VideoCoverFrameDialog } from "./VideoCoverFrameDialog";
 
 /**
- * Full-width "Edit cover image" bar directly under a single-video card's preview
- * (Pinterest's own pattern). It sits below the video rather than over it so it
- * never covers the native playback controls.
+ * "Edit cover image" inside the bottom of a single-video card's preview (Pinterest's
+ * own pattern). Hidden until the preview is hovered or focused — the parent media box
+ * carries the `group` class — and always shown on touch devices. It sits just above
+ * the native playback bar, which appears on hover in the same place.
  */
 export function VideoCoverEditButton({ draftId, media, disabled }: {
   draftId: string; media: ContentVideoMedia; disabled?: boolean;
 }) {
   const { t: tr } = useLocale();
   const [open, setOpen] = useState(false);
+  if (disabled) return null;
   return (
-    <div style={{ padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
-      <button type="button" data-testid="video-edit-cover" disabled={disabled}
-        onClick={event => { event.stopPropagation(); if (!disabled) setOpen(true); }}
-        style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "7px 10px",
-          borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text,
-          fontSize: 12, fontWeight: 700, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.55 : 1, fontFamily: "inherit" }}>
+    <>
+      <button type="button" data-testid="video-edit-cover"
+        onClick={event => { event.stopPropagation(); setOpen(true); }}
+        className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        style={{ position: "absolute", left: 10, right: 10, bottom: 48, zIndex: 3, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          padding: "8px 10px", borderRadius: 10, border: 0, background: "rgba(255,255,255,.94)", color: "#1F2937",
+          fontSize: 12, fontWeight: 750, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.25)", fontFamily: "inherit" }}>
         <ImageIcon style={{ width: 13, height: 13 }} /> {tr("studioBoard.videoCover.edit")}
       </button>
       {open && <VideoCoverFrameDialog draftId={draftId} media={media} onClose={() => setOpen(false)} />}
-    </div>
+    </>
   );
 }

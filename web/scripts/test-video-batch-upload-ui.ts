@@ -78,11 +78,15 @@ test("placeholders show in-flight and undismissed failed items, never cancelled 
   assert.match(source, /placeholderVideoItems\.map\(/);
   assert.doesNotMatch(source, /filter\(item => item\.state !== "succeeded"\)\.slice\(0, 8\)/);
 });
-test("a single-video card shows the Edit cover bar instead of the media strip; the dialog is a filmstrip picker", () => {
+test("a single-video card shows Edit cover inside the preview on hover, with no media strip; the dialog is a filmstrip picker", () => {
   const card = readFileSync("src/components/studio/PinBoardCard.tsx", "utf8");
   assert.match(card, /const singleVideo = cover\?\.kind === "video" && contentMedia\(draft\)\.length === 1 \? cover : null;/);
-  assert.match(card, /singleVideo\s*\n?\s*\/\/[^\n]*\n\s*\? <VideoCoverEditButton/);
-  assert.match(card, /: <ContentMediaStrip /);
+  assert.match(card, /data-testid="card-media" className="group"/);
+  assert.match(card, /\{!generating && singleVideo && \(\s*<VideoCoverEditButton/);
+  assert.match(card, /\{!generating && !singleVideo && <ContentMediaStrip /);
+  const button = readFileSync("src/components/studio/VideoCoverEditButton.tsx", "utf8");
+  assert.match(button, /group-hover:opacity-100/);
+  assert.match(button, /position: "absolute"/);
   const dialog = readFileSync("src/components/studio/VideoCoverFrameDialog.tsx", "utf8");
   assert.match(dialog, /data-testid="video-cover-filmstrip"/);
   assert.match(dialog, /buildFilmstrip\(media\.url, durationMs, lifetime\.signal\)/);

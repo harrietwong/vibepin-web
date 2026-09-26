@@ -1170,7 +1170,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           </div>
         )}
-        <div data-testid="card-media" style={{ position: "relative", width: "100%", minHeight: 180, aspectRatio: intrinsicAspectRatio, background: BUI.surface3 }}>
+        <div data-testid="card-media" className="group" style={{ position: "relative", width: "100%", minHeight: 180, aspectRatio: intrinsicAspectRatio, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
             // (generated → source → parent) instead of the raw draft.imageUrl, which
@@ -1231,11 +1231,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               <Star style={{ width: 10, height: 10, fill: "#fff" }} /> {tr("studioBoard.card.topPick")}
             </span>
           )}
+          {/* A lone video: "Edit cover image" appears inside the preview on hover. */}
+          {!generating && singleVideo && (
+            <VideoCoverEditButton draftId={draft.id} media={singleVideo} disabled={publishing || !cardFieldsEditable} />
+          )}
         </div>
-        {!generating && (singleVideo
-          // A lone video has nothing to reorder or add: show only the cover action.
-          ? <VideoCoverEditButton draftId={draft.id} media={singleVideo} disabled={publishing || !cardFieldsEditable} />
-          : <ContentMediaStrip draft={draft} disabled={publishing || !cardFieldsEditable} offendingMediaIds={offendingIds} />)}
+        {/* A lone video has nothing to reorder or add, so it gets no media strip. */}
+        {!generating && !singleVideo && <ContentMediaStrip draft={draft} disabled={publishing || !cardFieldsEditable} offendingMediaIds={offendingIds} />}
         {/* Media compatibility (PRD §9/§13): ONE compact amber line per platform that
             refuses this set, directly under the images it is about. It reports and
             offers a way out — it never removes an image and never unticks a platform,
