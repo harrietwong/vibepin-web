@@ -129,7 +129,14 @@ test("Billing UI does not present inferred plan or upgrade while sync is unavail
   assert(text.includes('billingState: "loading" | "available" | "unavailable"'), "billing tri-state");
   assert(text.includes('usageState: "loading" | "metered" | "unmetered" | "unavailable"'), "usage tri-state");
   assert(text.includes('billingState !== "available" ? null : hasBillingAccount'), "actions hidden without billing truth");
-  assert(text.includes('state === "metered" && used !== null'), "unmetered cannot render a fake zero");
+  // 2026-09-26 product decision: a user with no ledger row is shown as 0 used
+  // (billingUsageView). What must still hold: only a metered payload counts as
+  // "measured", the unmetered footnote is rendered, and a failed usage sync never
+  // names a plan (the card shows "—" rather than an inferred Free/paid).
+  const view = source("src/lib/billingUsageView.ts");
+  assert(view.includes('state === "metered" ? nonNegative(bucket.used) : null'), "only a metered payload is measured");
+  assert(text.includes('usageState === "unmetered" && (') && text.includes('t("billing.usageNotMetered")'), "unmetered footnote still rendered");
+  assert(text.includes('usageState === "unavailable" ? "—"'), "no inferred plan name while usage sync is unavailable");
   assert(text.includes("isCreemBillingStatus(json)"), "malformed billing success is unavailable");
   assert(text.includes("isBillingUsage(json)"), "malformed usage success is unavailable");
 });
