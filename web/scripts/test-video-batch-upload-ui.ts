@@ -78,6 +78,16 @@ test("placeholders show in-flight and undismissed failed items, never cancelled 
   assert.match(source, /placeholderVideoItems\.map\(/);
   assert.doesNotMatch(source, /filter\(item => item\.state !== "succeeded"\)\.slice\(0, 8\)/);
 });
+test("a single-video card shows the Edit cover bar instead of the media strip; the dialog is a filmstrip picker", () => {
+  const card = readFileSync("src/components/studio/PinBoardCard.tsx", "utf8");
+  assert.match(card, /const singleVideo = cover\?\.kind === "video" && contentMedia\(draft\)\.length === 1 \? cover : null;/);
+  assert.match(card, /singleVideo\s*\n?\s*\/\/[^\n]*\n\s*\? <VideoCoverEditButton/);
+  assert.match(card, /: <ContentMediaStrip /);
+  const dialog = readFileSync("src/components/studio/VideoCoverFrameDialog.tsx", "utf8");
+  assert.match(dialog, /data-testid="video-cover-filmstrip"/);
+  assert.match(dialog, /buildFilmstrip\(media\.url, durationMs, lifetime\.signal\)/);
+  assert.match(dialog, /confirmVideoCoverFrame\(draftId, media, videoRef\.current, timeMs, undefined, signal\)/);
+});
 test("queue ownership disposes on replacement and unmount and gates state by queue identity", () => {
   assert.match(source, /existing\?\.queue\.dispose\(\)/);
   assert.match(source, /holder\?\.queue\.dispose\(\)/);

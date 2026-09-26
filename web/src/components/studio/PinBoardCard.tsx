@@ -24,9 +24,10 @@ import { toast } from "sonner";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { buildCardViewModel, relativePublishedParts, type CardResultRow } from "@/lib/studio/cardView";
-import { coverMedia } from "@/lib/contentDraftModel";
+import { contentMedia, coverMedia } from "@/lib/contentDraftModel";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
+import { VideoCoverEditButton } from "@/components/studio/VideoCoverEditButton";
 import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, type PublishProvider } from "@/lib/contentDraftModel";
@@ -863,6 +864,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // source (upload/ai/product) and only falls back to the draft-level source for the
   // legacy single-image drafts that have no media[].
   const cover = coverMedia(draft);
+  const singleVideo = cover?.kind === "video" && contentMedia(draft).length === 1 ? cover : null;
   const isAiSourced = cover?.source === "ai" || (!cover?.source && draft.source === "ai_generated_from_upload");
 
   const nextStep = nextStepFor(
@@ -1217,7 +1219,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           )}
         </div>
-        {!generating && <ContentMediaStrip draft={draft} disabled={publishing || !cardFieldsEditable} offendingMediaIds={offendingIds} />}
+        {!generating && (singleVideo
+          // A lone video has nothing to reorder or add: show only the cover action.
+          ? <VideoCoverEditButton draftId={draft.id} media={singleVideo} disabled={publishing || !cardFieldsEditable} />
+          : <ContentMediaStrip draft={draft} disabled={publishing || !cardFieldsEditable} offendingMediaIds={offendingIds} />)}
         {/* Media compatibility (PRD §9/§13): ONE compact amber line per platform that
             refuses this set, directly under the images it is about. It reports and
             offers a way out — it never removes an image and never unticks a platform,

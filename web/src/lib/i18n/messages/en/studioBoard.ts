@@ -18,6 +18,18 @@ export const studioBoardMessages = {
   "studioBoard.videoUpload.cancelAll": "Cancel all",
   "studioBoard.videoUpload.dismiss": "Dismiss",
 
+  // ── Video cover: edit bar under a single-video card + frame picker dialog ──
+  "studioBoard.videoCover.edit": "Edit cover image",
+  "studioBoard.videoCover.title": "Select video cover image",
+  "studioBoard.videoCover.subtitle": "Drag along the frames to choose the cover for this Pin.",
+  "studioBoard.videoCover.previewAria": "Video cover preview",
+  "studioBoard.videoCover.frameTime": "Cover frame time",
+  "studioBoard.videoCover.cancel": "Cancel",
+  "studioBoard.videoCover.done": "Done",
+  "studioBoard.videoCover.saving": "Saving cover…",
+  "studioBoard.videoCover.saveFailed": "Could not save this cover. Your previous cover is unchanged. Please retry.",
+  "studioBoard.videoCover.loadFailed": "Could not load the video. Close and reopen to retry.",
+
   // ── Status navigation and quiet exception notice ──
   "studioBoard.filters.drafts": "Drafts",
   "studioBoard.filters.scheduled": "Scheduled",

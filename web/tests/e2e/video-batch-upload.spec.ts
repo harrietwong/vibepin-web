@@ -243,9 +243,9 @@ test.describe("video batch upload (fully mocked)", () => {
       const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fselected.jpg`;
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/selected.jpg` }) });
     });
-    const choose = card.getByRole("button", { name: "Choose cover frame", exact: true });
+    const choose = card.getByRole("button", { name: "Edit cover image", exact: true });
     await choose.click();
-    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    const dialog = page.getByRole("dialog", { name: "Select video cover image", exact: true });
     await expect(dialog).toBeVisible();
     const preview = dialog.locator("video");
     await expect(preview).toBeVisible();
@@ -279,11 +279,11 @@ test.describe("video batch upload (fully mocked)", () => {
     expect(await readCover()).toEqual(before);
     await choose.click();
     await slider.fill("1250");
-    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(dialog.getByRole("alert")).toContainText("retry");
     expect(await readCover()).toEqual(before);
     failUpload = false;
-    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(dialog).not.toBeVisible();
     expect((await readCover())!.media[0].coverFrameTimeMs).toBe(1250);
     expect((await readCover())!.imageUrl).toContain("selected.jpg");
@@ -314,10 +314,10 @@ test.describe("video batch upload (fully mocked)", () => {
       const proxyUrl = `/api/storage-image?path=studio%2Fuploads%2F${TEST_USER_ID}%2Fabandoned.jpg`;
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ proxyUrl, publicUrl: proxyUrl, path: `studio/uploads/${TEST_USER_ID}/abandoned.jpg` }) });
     });
-    await card.getByRole("button", { name: "Choose cover frame", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Choose cover frame", exact: true });
+    await card.getByRole("button", { name: "Edit cover image", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Select video cover image", exact: true });
     await dialog.getByRole("slider", { name: "Cover frame time" }).fill("1250");
-    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect.poll(() => uploadStarted).toBe(true);
     // Programmatic navigation simulates a parent route unmount while the modal
     // blocks ordinary outside clicks. Keep the same JS runtime and pending request.

@@ -3,7 +3,11 @@ import * as browserMedia from "../src/lib/studio/videoBrowserMedia";
 import * as store from "../src/lib/pinDraftStore";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ContentMediaStrip } from "../src/components/studio/ContentMediaStrip";
+
+// The strip pulls in the locale provider (via the cover dialog), which builds a
+// Supabase browser client at import time; stub its env and import the strip lazily.
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
 
 const mem = new Map<string, string>();
 Object.assign(globalThis, {
@@ -14,6 +18,7 @@ const media = { id: "clip", kind: "video" as const, url: "/api/storage-media?pat
 const draft = { id: "cover", media: [media], imageUrl: media.posterUrl, coverMediaId: media.id, createdAt: "2026-09-17T00:00:00Z", updatedAt: "2026-09-17T00:00:00Z" };
 function reset() { mem.clear(); mem.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { cover: draft } })); store.__resetMemoryCacheForTests(); }
 async function main() {
+  const { ContentMediaStrip } = await import("../src/components/studio/ContentMediaStrip");
   const html = renderToStaticMarkup(createElement(ContentMediaStrip, { draft: draft as never }));
   assert.match(html, /aria-label="Choose cover frame"/, "single-video cover must expose a meaningful frame selection action");
   assert.equal(typeof browserMedia.confirmVideoCoverFrame, "function", "confirmation must own capture/upload/atomic replace");
