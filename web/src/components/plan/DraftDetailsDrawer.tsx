@@ -26,6 +26,7 @@ import { PinPlannedDateTimeSection } from "@/components/pin-details/PinPlannedDa
 import { CustomTimeModal } from "@/components/plan/CustomTimeModal";
 import { PinProductLinksSection } from "@/components/pin-details/PinProductLinksSection";
 import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
+import { copyInputTitle } from "@/lib/studio/uploadPlaceholderTitle";
 import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
@@ -1768,7 +1769,7 @@ export function PinDetailsModal({
           <div style={fieldBlock}>
             <PinAICopyPanel
               draftId={draft.id} imageUrl={draft.imageUrl}
-              title={title} description={description} altText={altText}
+              title={copyInputTitle(draft, title)} description={description} altText={altText}
               boardId={boardId || draft.boardId} boardName={draft.boardName}
               category={draft.category} keyword={draft.keyword} destinationUrl={destinationUrl}
               // The drawer edits the URL locally until Save: an Amazon link typed here
@@ -1784,7 +1785,8 @@ export function PinDetailsModal({
                 // full replace OR the field was empty before this run; alt text only ever
                 // fills when empty. Keeps Plan drawer and Studio card AI Copy behavior
                 // consistent — never a silent, unconditional overwrite of manual edits.
-                setTitle(prev => (r.confirmedReplace || !prev.trim() ? r.title : prev));
+                // A title that is still the upload file name counts as empty.
+                setTitle(prev => (r.confirmedReplace || !copyInputTitle(draft, prev).trim() ? r.title : prev));
                 setDescription(prev => (r.confirmedReplace || !prev.trim() ? r.description : prev));
                 setAltText(prev => (prev.trim() ? prev : r.altText));
                 markDirty();

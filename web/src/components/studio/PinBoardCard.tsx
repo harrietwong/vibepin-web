@@ -70,6 +70,7 @@ import {
   type AmazonClaimHint,
 } from "@/lib/studio/amazonCardSource";
 import { manualCopyTouched } from "@/lib/studio/bulkCopyDrafts";
+import { copyInputTitle } from "@/lib/studio/uploadPlaceholderTitle";
 import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
 import { runAmazonCardImport } from "@/lib/studio/amazonCardImport";
 import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
@@ -813,7 +814,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // `draft`, so this agrees with what the panel used for its own fill-state check.
   const applyCopy = useCallback((r: PinAICopyResult) => {
     setAmazonHints([]);
-    const prevTitle = fields.title;
+    // A title that is still the upload file name counts as empty (same as bulk).
+    const prevTitle = copyInputTitle(draft, fields.title);
     const prevDescription = fields.description;
     const prevAltText = fields.altText;
     const nextTitle = r.confirmedReplace || !prevTitle.trim() ? r.title : prevTitle;
@@ -827,7 +829,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       tags: r.tags.length ? r.tags : draft.tags,
       metadataDraft: r.metadataDraft,
     });
-  }, [props, draft.id, draft.destinationUrl, draft.tags, fields.title, fields.description, fields.altText]);
+  }, [props, draft, fields.title, fields.description, fields.altText]);
   // A "failed" card is either a PUBLISH failure (had a real schedule attempt) or a
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
@@ -903,7 +905,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       ref={aiRef}
       compact
       draftId={draft.id} imageUrl={draft.imageUrl}
-      title={fields.title} description={fields.description} altText={fields.altText}
+      title={copyInputTitle(draft, fields.title)} description={fields.description} altText={fields.altText}
       boardId={draft.boardId} boardName={draft.boardName}
       category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
       setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
