@@ -409,9 +409,12 @@ async function main() {
     await page.evaluate(() => {
       Storage.prototype.setItem = (window as unknown as { __realSetItem: typeof localStorage.setItem }).__realSetItem;
     });
+    // Header no longer shows a persistent "Saved on this device" indicator — on
+    // successful retry the error button just unmounts (per-card footers carry
+    // the ongoing saved/saving state instead).
     await page.getByTestId("board-save-state").click();
     await page.waitForFunction(
-      () => document.querySelector('[data-testid="board-save-state"]')?.textContent?.includes("Saved on this device"),
+      () => document.querySelector('[data-testid="board-save-state"]') === null,
       undefined, { timeout: 10_000 },
     );
     // Durable copy contains the edit

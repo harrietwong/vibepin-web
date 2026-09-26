@@ -1966,16 +1966,16 @@ export function StudioBoard() {
     else toast.error(tr("studioBoard.toast.stillCouldNotSave"));
   }, [tr]);
 
+  // Header only surfaces this when a save has actually failed — the retry
+  // affordance is a real error signal. Normal saved/saving state is not shown
+  // at the top of the page (each card's footer already carries its own
+  // per-card save status), so there is nothing to render in the happy path.
   const savedIndicator = persistFailed ? (
     <button type="button" data-testid="board-save-state" onClick={handleRetryPersist}
       style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: BUI.error, background: "none", border: `1px solid ${BUI.error}55`, borderRadius: 8, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}>
       {tr("studioBoard.failedToSaveRetry")}
     </button>
-  ) : (
-    <span data-testid="board-save-state" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: BUI.textSec }}>
-      {saving ? <><Loader2 style={{ width: 12, height: 12 }} className="animate-spin" /> {tr("studioBoard.saving")}</> : <><Check style={{ width: 12, height: 12, color: BUI.success }} /> {tr("studioBoard.savedOnDevice")}</>}
-    </span>
-  );
+  ) : null;
   const videoQueueSummary = videoBatch ? summarizeVideoUploadQueue(videoBatch) : null;
   const visibleVideoQueueItems = videoBatch ? selectVisibleVideoQueueItems(videoBatch) : [];
   // Grid placeholders: in-flight items plus failed ones the user has not closed.
@@ -2023,17 +2023,67 @@ export function StudioBoard() {
         </section>
       )}
 
-      {/* Header */}
+      {/* Header — single action row (PRD §8.1): Upload images primary + Create with
+          AI + Select product, side by side. Only shown once the board has cards —
+          the empty state has its own upload-first zone with a "Create from your
+          store?" product entry. No page title/subtitle here; the row of actions
+          is the header. */}
       <div style={{ padding: "16px 22px 10px", display: "flex", flexDirection: "column", gap: 12, background: BUI.surface, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div>
-              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.title")}</h1>
-              <p style={{ margin: "2px 0 0", fontSize: 12.5, color: BUI.textSec }}>{tr("studioBoard.subtitle")}</p>
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            {savedIndicator}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {hasCards && (
+            <>
+              <button type="button" data-testid="board-upload-more" onClick={openFilePicker}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                {uploading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Upload style={{ width: 13, height: 13 }} />}
+                {uploading && uploadProgress ? ` ${tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total))}` : ` ${tr("studioBoard.uploadMore")}`}
+              </button>
+              <button type="button" data-testid="board-create-ai" onClick={handleCreateWithAi}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: "none", color: BUI.text, fontSize: 12, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
+                <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.aiDrawer.createWithAi")}
+              </button>
+              {shopifyEnabled && (
+                <button type="button" data-testid="board-select-product" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: BUI.textSec, background: "none", border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("studioBoard.selectProduct")}
+                </button>
+              )}
+              {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. It is a
+                  multi-select workspace, so it appears only after at least two Pins are
+                  selected. "Select all" spans the current visible filter result. */}
+              {selectedIds.size >= 2 && (
+                <div data-testid="bulk-bar" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <span data-testid="bulk-selected-count" style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>
+                    {tr("studioBoard.bulk.selectedCount").replace("{n}", String(selectedIds.size))}
+                  </span>
+                  <button type="button" data-testid="bulk-select-all" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
+                    style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                    {tr("studioBoard.bulk.selectAll")}
+                  </button>
+                  <button type="button" data-testid="bulk-edit" onClick={() => setBatchEditOpen(true)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                    <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
+                  </button>
+                  <button type="button" ref={bulkCopyTriggerRef} data-testid="bulk-generate-copy" onClick={openBulkCopy} disabled={bulkCopyOpen}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: bulkCopyOpen ? "default" : "pointer", fontFamily: "inherit", opacity: bulkCopyOpen ? 0.7 : 1, minHeight: 44 }}>
+                    <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulkCopy.button")}
+                  </button>
+                  <button type="button" data-testid="bulk-publish" onClick={openBulkPublish}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                    {tr("studioBoard.bulk.publish")}
+                  </button>
+                  <button type="button" data-testid="bulk-delete" onClick={() => setPendingDeleteIds(Array.from(selectedIds))}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: "#dc2626", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                    {tr("studioBoard.bulk.delete")}
+                  </button>
+                  <button type="button" data-testid="bulk-clear" onClick={() => setSelectedIds(new Set())}
+                    style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                    {tr("studioBoard.bulk.clearSelection")}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginLeft: "auto" }}>
             {videoBatch && (videoQueueSummary?.active || videoQueueSummary?.queued || placeholderFailedCount) ? (
               <div data-testid="video-upload-batch" role="status" aria-live="polite"
                 style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px" }}>
@@ -2058,67 +2108,12 @@ export function StudioBoard() {
                 ) : null}
               </div>
             ) : null}
+            {savedIndicator}
             <Link href="/app/history" data-testid="board-history" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, textDecoration: "none", border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px" }}>
               <Clock style={{ width: 12, height: 12 }} /> {tr("studioBoard.history")}
             </Link>
           </div>
         </div>
-        {/* Primary action row (PRD §8.1): Upload images primary + Select product secondary,
-            side by side. Only shown once the board has cards — the empty state has its own
-            upload-first zone with a "Create from your store?" product entry. */}
-        {hasCards && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <button type="button" data-testid="board-create-ai" onClick={handleCreateWithAi}
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
-              <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.aiDrawer.createWithAi")}
-            </button>
-            <button type="button" data-testid="board-upload-more" onClick={openFilePicker}
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.textSec, fontSize: 12, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
-              {uploading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Upload style={{ width: 13, height: 13 }} />}
-              {uploading && uploadProgress ? ` ${tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total))}` : ` ${tr("studioBoard.uploadMore")}`}
-            </button>
-            {shopifyEnabled && (
-              <button type="button" data-testid="board-select-product" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: BUI.textSec, background: "none", border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
-                {tr("studioBoard.selectProduct")}
-              </button>
-            )}
-            {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. It is a
-                multi-select workspace, so it appears only after at least two Pins are
-                selected. "Select all" spans the current visible filter result. */}
-            {selectedIds.size >= 2 && (
-              <div data-testid="bulk-bar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <span data-testid="bulk-selected-count" style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>
-                  {tr("studioBoard.bulk.selectedCount").replace("{n}", String(selectedIds.size))}
-                </span>
-                <button type="button" data-testid="bulk-select-all" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
-                  style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
-                  {tr("studioBoard.bulk.selectAll")}
-                </button>
-                <button type="button" data-testid="bulk-edit" onClick={() => setBatchEditOpen(true)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
-                  <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
-                </button>
-                <button type="button" ref={bulkCopyTriggerRef} data-testid="bulk-generate-copy" onClick={openBulkCopy} disabled={bulkCopyOpen}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: bulkCopyOpen ? "default" : "pointer", fontFamily: "inherit", opacity: bulkCopyOpen ? 0.7 : 1, minHeight: 44 }}>
-                  <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulkCopy.button")}
-                </button>
-                <button type="button" data-testid="bulk-publish" onClick={openBulkPublish}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
-                  {tr("studioBoard.bulk.publish")}
-                </button>
-                <button type="button" data-testid="bulk-delete" onClick={() => setPendingDeleteIds(Array.from(selectedIds))}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: "#dc2626", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
-                  {tr("studioBoard.bulk.delete")}
-                </button>
-                <button type="button" data-testid="bulk-clear" onClick={() => setSelectedIds(new Set())}
-                  style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
-                  {tr("studioBoard.bulk.clearSelection")}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
         <StudioBoardFilters value={filter} counts={counts} onChange={setFilter}
           attentionCount={publishFailureCount} onReviewAttention={() => setFilter("failed", "publish")} />
       </div>
