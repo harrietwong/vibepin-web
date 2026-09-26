@@ -3254,6 +3254,30 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   // ── Mixed Pinterest+Instagram single-video split — split-and-schedule action (T3) ──
   "studioBoard.card.instagramCaption.splitAction": "拆分并排期",
 
+  // ── Core UI backfill (2026-09-25, batch B) ──
+  "pinDetails.customTime.selectButton": "选择自定义时间",
+  "pinDetails.customTime.modalTitle": "自定义时间",
+  "pinDetails.customTime.close": "关闭",
+  "pinDetails.customTime.prevMonth": "上个月",
+  "pinDetails.customTime.nextMonth": "下个月",
+  "pinDetails.customTime.hour": "时",
+  "pinDetails.customTime.minute": "分",
+  "pinDetails.customTime.am": "上午",
+  "pinDetails.customTime.pm": "下午",
+  "pinDetails.customTime.saveButton": "保存时间",
+  "pinDetails.customTime.timezoneNote": "时间以 {timezone} 显示。",
+  "pinDetails.customTime.pastTimeError": "请选择一个未来的时间。",
+  "pinDetails.customTime.boardChangedNotice": "看板选择已更改，请重新选择时间。",
+  "pinForm.v2FactBasis": "事实依据",
+  "pinForm.v2NoClaimsAuthorized": "未授权任何产品宣称。",
+  "pinForm.v2PrimaryKeyword": "主关键词",
+  "pinForm.v2DataUnknown": "数据未知",
+  "pinForm.v2NoKeywordDemand": "没有可靠的关键词需求数据。",
+  "pinForm.v2DemandUnavailable": "仅根据产品和图片含义生成；关键词需求数据不可用。",
+  "pinForm.v2ValidationPassed": "校验通过",
+  "pinForm.v2ValidationFailed": "校验未通过",
+  "planViews.list.headerChannels": "渠道",
+
 };
 
 export default zhCN;
