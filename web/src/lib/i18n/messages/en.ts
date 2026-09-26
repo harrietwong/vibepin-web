@@ -267,7 +267,7 @@ const en = {
   "billing.internalBadge": "Internal",
   "billing.internalPlanNote": "Internal whitelist account",
   "billing.internalNoBilling": "This internal account gets Pro-level allowances without a subscription. You can still subscribe on the Pricing page.",
-  "billing.planIncludes": "{connections} connected account per platform, {images} AI images and {posts} scheduled posts per month.",
+  "billing.planIncludes": "Connected accounts per platform: {connections}. Each month: {images} AI images and {posts} scheduled posts.",
   "billing.usageUsedCount": "Used {used}",
   "billing.usageLimitReached": "Limit reached",
   "billing.bonusImages": "Bonus AI images: {count} (never expire)",
