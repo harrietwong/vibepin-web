@@ -208,6 +208,10 @@ const originalLoad = (Module as any)._load;
       deriveRequestKey: () => "a".repeat(48),
       deriveDurableGenerationIntentKey: () => "a".repeat(48),
       readImagesAvailableAfterReservation: async () => null,
+      // 2026-09-25 enforce hardening: the route now calls these per request.
+      warnIfEnforceDisabledInProduction: () => false,
+      decideWhenLedgerUnavailable: async () => ({ block: false, plan: "pro" }),
+      usageUnavailableResponseBody: () => ({ error: "usage_unavailable" }),
     };
   }
   return originalLoad.call(this, request, parent, isMain);

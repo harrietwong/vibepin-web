@@ -84,8 +84,12 @@ type LedgerMode =
   | "reserve_conflict"
   | "reserve_insufficient"
   | "reserve_insufficient_no_availability"
-  | "reserve_error";
+  | "reserve_error"
+  | "ensure_error";
 let ledgerMode: LedgerMode = "reserve_ok";
+// Users whose fake auth record carries app_metadata.plan = "pro" (resolvePlan's trusted
+// cache path), so the REAL resolvePlan resolves them as a paid plan.
+const proUsers = new Set<string>();
 
 function ledgerResult(fn: string, args: Record<string, unknown>): { data: unknown; error: { message: string; code?: string } | null } {
   const intentMapKey = `${String(args.p_user_id)}:${String(args.p_intent_key)}`;
@@ -128,6 +132,7 @@ function ledgerResult(fn: string, args: Record<string, unknown>): { data: unknow
     return { data: { ok: true, replayed: false, job_id: stored.id, job_status: "queued", job_results: results }, error: null };
   }
   if (fn === "usage_ensure_account") {
+    if (ledgerMode === "ensure_error") return { data: null, error: { message: "ensure down" } };
     return { data: { ok: true, action: "created", account_id: "acct-1" }, error: null };
   }
   if (fn === "usage_reserve_generation_job_v2") {
@@ -187,7 +192,7 @@ function fakeServerClient() {
       admin: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         getUserById: async (id: string) => ({
-          data: { user: { id, email: "u@example.com", created_at: new Date().toISOString(), app_metadata: {} } },
+          data: { user: { id, email: "u@example.com", created_at: new Date().toISOString(), app_metadata: proUsers.has(id) ? { plan: "pro" } : {} } },
           error: null,
         }),
       },
@@ -406,6 +411,30 @@ async function main() {
     assertEq(meter.usageMeteringMode(), "enforce", "case-insensitive enforce");
     process.env.USAGE_METERING_MODE = "garbage";
     assertEq(meter.usageMeteringMode(), "off", "unknown value → off (safe default)");
+    delete process.env.USAGE_METERING_MODE;
+  });
+
+  await test("UNIT: a THROWING reserve RPC resolves to kind:error (worker + inline), never rejects", async () => {
+    process.env.USAGE_METERING_MODE = "enforce";
+    const throwingRpc = async () => { throw new Error("socket hang up"); };
+    const ensure = async () => ({}) as never;
+    const worker = await meter.reserveGenerationJobViaLedger({
+      userId: "u-throw",
+      count: 1,
+      generationRequestId: "req-throw",
+      intentKey: "a".repeat(48),
+      intentFingerprint: "b".repeat(64),
+      params: {},
+      deps: { rpc: throwingRpc, ensure },
+    });
+    assertEq(worker.kind, "error", "worker reserve transport throw → error (caller policy applies, not a 500)");
+    const inline = await meter.reserveInline({
+      userId: "u-throw",
+      count: 1,
+      generationRequestId: "req-throw",
+      deps: { rpc: throwingRpc, ensure },
+    });
+    assertEq(inline.kind, "error", "inline reserve transport throw → error");
     delete process.env.USAGE_METERING_MODE;
   });
 
@@ -786,6 +815,92 @@ async function main() {
   await test("OFF worker: the plain enqueue response has NO usage field (unmetered path unchanged)", async () => {
     const { json } = await run(fullBody(), { meterMode: "off", genMode: "worker" });
     assertEq(json.usage, undefined, "off mode: byte-for-byte unchanged, no usage field");
+  });
+
+  // ── ENFORCE + LEDGER CANNOT ANSWER (decision 2026-09-25) ─────────────────────
+  // enforce + USAGE_ENFORCE_AI_IMAGES on, reserve returns error/skipped:
+  // free (or unresolvable) plan → 503 usage_unavailable, nothing dispatched;
+  // paid plan → proceeds unmetered.
+  const FREE_USER = "00000000-0000-4000-8000-0000000000f1";
+  const PRO_USER = "00000000-0000-4000-8000-0000000000f2";
+  proUsers.add(PRO_USER);
+
+  await test("ENFORCE-UNAVAILABLE worker: RPC error + free plan → 503 usage_unavailable, ZERO enqueue", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_error", userId: FREE_USER });
+    assertEq(status, 503, "free user refused when the ledger cannot answer");
+    assertEq(json.code, "usage_unavailable", "code");
+    assertEq(json.error_type, "usage_unavailable", "error_type");
+    assertEq(json.ok, false, "ok:false");
+    assert(Array.isArray(json.urls) && (json.urls as unknown[]).length === 0, "urls: [] (image envelope)");
+    assert(typeof json.generation_request_id === "string", "request id echoed");
+    assert(typeof json.error === "string" && (json.error as string).length > 0, "prose in error");
+    assertEq(enqueueInsertCount, 0, "no plain enqueue fallback");
+    assertEq(jobsByIntent.size, 0, "no job row written");
+  });
+
+  await test("ENFORCE-UNAVAILABLE worker: RPC error + pro plan → proceeds via the plain (unmetered) enqueue", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_error", userId: PRO_USER });
+    assertEq(status, 200, "paid plan keeps generating");
+    assertEq(json.jobId, "job_plain", "plain enqueue");
+    assertEq(enqueueInsertCount, 1, "exactly one plain enqueue");
+    assertEq(json.usage, undefined, "unmetered response carries no usage block");
+  });
+
+  await test("ENFORCE-UNAVAILABLE worker: ensure failure + free plan → 503, ZERO enqueue", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "ensure_error", userId: FREE_USER });
+    assertEq(status, 503, "ensure failure is 'ledger cannot answer'");
+    assertEq(json.code, "usage_unavailable", "code");
+    assertEq(enqueueInsertCount, 0, "no enqueue");
+    assertEq(reserveCalls().length, 0, "reserve RPC never reached after ensure failed");
+  });
+
+  await test("ENFORCE-UNAVAILABLE worker: plan lookup THROWS → treated as free → 503 (even for a paid user)", async () => {
+    meter.__setLedgerUnavailableResolvePlanForTests(async () => { throw new Error("plan lookup down"); });
+    try {
+      const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_error", userId: PRO_USER });
+      assertEq(status, 503, "unresolvable plan is refused");
+      assertEq(json.code, "usage_unavailable", "code");
+      assertEq(enqueueInsertCount, 0, "no enqueue");
+    } finally {
+      meter.__setLedgerUnavailableResolvePlanForTests(null);
+    }
+  });
+
+  await test("ENFORCE-UNAVAILABLE inline: RPC error + free plan → 503, generator NOT spawned, lock released", async () => {
+    const first = await run(fullBody(), { meterMode: "enforce", genMode: "inline", ledger: "reserve_error", userId: FREE_USER });
+    assertEq(first.status, 503, "free user refused");
+    assertEq(first.json.code, "usage_unavailable", "code");
+    assertEq(spawnCount, 0, "generator never dispatched");
+    // Same user again: a leaked per-user lock would surface as 429 user_generation_limit.
+    const second = await run(fullBody(), { meterMode: "enforce", genMode: "inline", ledger: "reserve_error", userId: FREE_USER });
+    assertEq(second.status, 503, "second request reaches the same decision — the lock was released");
+    assert(second.json.error_type !== "user_generation_limit", "no leaked generation lock");
+  });
+
+  await test("ENFORCE-UNAVAILABLE inline: RPC error + pro plan → generates unmetered, no settle", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "inline", ledger: "reserve_error", userId: PRO_USER });
+    assertEq(status, 200, "paid plan keeps generating");
+    assertEq(json.ok, true, "ok");
+    assertEq(spawnCount, 1, "dispatched once");
+    assertEq(rpcCalls.filter(c => c.fn === "usage_settle_reservation_item").length, 0, "nothing reserved → nothing settled");
+  });
+
+  await test("ENFORCE-UNAVAILABLE: enforce WITHOUT USAGE_ENFORCE_AI_IMAGES + RPC error + free → still generates (switch off never blocks)", async () => {
+    const w = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_error", userId: FREE_USER, enforceAiImages: false });
+    assertEq(w.status, 200, "worker proceeds");
+    assertEq(w.json.jobId, "job_plain", "plain enqueue");
+    const i = await run(fullBody(), { meterMode: "enforce", genMode: "inline", ledger: "reserve_error", userId: FREE_USER, enforceAiImages: false });
+    assertEq(i.status, 200, "inline proceeds");
+    assertEq(spawnCount, 1, "dispatched");
+  });
+
+  await test("SOURCE: /api/generate no longer uses the legacy usage_events quota (checkAllowance/recordUsage)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(path.join(process.cwd(), "src/app/api/generate/route.ts"), "utf8");
+    assert(!/from\s+["']@\/lib\/server\/usage["']/.test(src), "no import from @/lib/server/usage");
+    assert(!/\bcheckAllowance\s*\(/.test(src), "no checkAllowance( call");
+    assert(!/\brecordUsage\s*\(/.test(src), "no recordUsage( call");
+    assert(!/quota_exceeded/.test(src), "no legacy 429 quota_exceeded response");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

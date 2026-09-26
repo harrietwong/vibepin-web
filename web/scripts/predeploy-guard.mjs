@@ -29,6 +29,25 @@
  *   8. AI_COPY_TEXT_MODEL is set (non-blank) whenever an AI-copy provider
  *      credential (LINAPI_KEY or OPENAI_API_KEY) is configured — production must
  *      not run copy generation on an implicit, credential-dependent default.
+ *   9. For a production target: usage-quota enforcement is actually wired on —
+ *      USAGE_METERING_MODE=enforce, USAGE_ENFORCE_AI_IMAGES and
+ *      USAGE_ENFORCE_AI_TEXT are truthy (runtime semantics: only "1"/"true"
+ *      count — see usageEnforceFor in src/lib/server/usage/meterGeneration.ts),
+ *      and GENERATION_INTENT_KEY_SALT is non-empty. Without all four, the "free
+ *      10 AI images" launch would ship with no real cap on generation cost.
+ *      USAGE_ENFORCE_SCHEDULED_POSTS is NOT required here (still printed as
+ *      informational only).
+ *  10. For a production target: the Supabase project actually has the usage RPCs
+ *      the metering code calls (usage_ensure_account, usage_reserve,
+ *      usage_reserve_generation_job_v2, usage_settle_reservation_item,
+ *      usage_release_reservation, usage_expire_reservations). Verified live via
+ *      PostgREST's OpenAPI listing — a missing RPC means every reservation call
+ *      errors at runtime even though the switches above are all correctly set.
+ *
+ * Checks 9-10 are gated on "is this a production target?" using the same
+ * VERCEL_ENV rule as the billing contract (check 6): VERCEL_ENV === "preview"
+ * is exempt; anything else (including unset, e.g. a manual local run of
+ * `npm run predeploy:guard`) is treated as production and fails closed.
  *
  * --override requires OVERRIDE_REASON to be set to a non-empty string. When
  * present, an override bypasses failed checks, appends an audit line to
@@ -223,6 +242,194 @@ export function isTruthyEnv(value) {
 }
 
 /**
+ * Truthy exactly the way the RUNTIME reads a per-type usage-enforce flag (see
+ * isTruthyFlag / usageEnforceFor in src/lib/server/usage/meterGeneration.ts):
+ * ONLY "1" or "true" (case-insensitive) count. This is deliberately narrower
+ * than isTruthyEnv() above — a value like "yes" would look "on" to isTruthyEnv
+ * but is silently OFF at runtime, which is exactly the gap this guard exists
+ * to catch. Exported so the informational print (below) and the blocking
+ * check share one definition instead of drifting apart.
+ */
+export function isTruthyUsageEnforceFlag(value) {
+  if (!value) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true";
+}
+
+/**
+ * Whether the current invocation targets a production deploy. Mirrors check 6's
+ * (checkDeploymentBillingContract) VERCEL_ENV rule exactly: VERCEL_ENV=preview is
+ * exempt, everything else — including unset, e.g. a manual local run of
+ * `npm run predeploy:guard` — is treated as production and fails closed.
+ */
+export function isProductionDeployTarget(env) {
+  return String(env.VERCEL_ENV ?? "").trim().toLowerCase() !== "preview";
+}
+
+/**
+ * Free-tier launch guard (2026-09-25): the site is about to open a free "10 AI
+ * images" tier. Quota enforcement only actually blocks a request when ALL of the
+ * following are true at once (see usageEnforceFor in
+ * src/lib/server/usage/meterGeneration.ts):
+ *   - USAGE_METERING_MODE=enforce (shadow only records; it blocks nothing)
+ *   - the per-type flag for that usage type is truthy (runtime semantics: only
+ *     "1"/"true" — see isTruthyUsageEnforceFlag above)
+ * The worker (durable Create Pin intent) path additionally requires
+ * GENERATION_INTENT_KEY_SALT to be non-empty, or every reservation throws
+ * GenerationIntentSaltUnavailableError and generation fails with 503 — which is a
+ * different, equally bad, failure to ship on launch day (outage, not cost blowout).
+ *
+ * Scoped to AI images and AI text only, because those are the two costed
+ * generation types opening to a free tier. USAGE_ENFORCE_SCHEDULED_POSTS is
+ * deliberately NOT required — it stays informational-only (an operator may
+ * legitimately ship without it).
+ *
+ * Pure (env in → problems out), gated on isProductionDeployTarget so a Preview
+ * deploy is never blocked by this. Exported before any side effects so a unit
+ * test can drive it with fake env.
+ */
+export function checkUsageEnforceForProd(env) {
+  if (!isProductionDeployTarget(env)) return [];
+  const problems = [];
+
+  const mode = String(env.USAGE_METERING_MODE ?? "off").trim().toLowerCase();
+  if (mode !== "enforce") {
+    problems.push(
+      `USAGE_METERING_MODE is "${mode || "off"}", not "enforce" — refusing a production deploy of the free-tier launch with usage quota NOT enforced ` +
+        "(shadow mode only records usage, it blocks nothing; a free account could generate unlimited paid AI images/text). Set USAGE_METERING_MODE=enforce.",
+    );
+  }
+
+  if (!isTruthyUsageEnforceFlag(env.USAGE_ENFORCE_AI_IMAGES)) {
+    problems.push(
+      `USAGE_ENFORCE_AI_IMAGES is not enabled (runtime requires exactly "1" or "true"; got ${JSON.stringify(env.USAGE_ENFORCE_AI_IMAGES ?? "<unset>")}) — ` +
+        "refusing a production deploy that would let free-tier AI image generation run with no quota cap (unbounded generation cost). Set USAGE_ENFORCE_AI_IMAGES=1.",
+    );
+  }
+
+  if (!isTruthyUsageEnforceFlag(env.USAGE_ENFORCE_AI_TEXT)) {
+    problems.push(
+      `USAGE_ENFORCE_AI_TEXT is not enabled (runtime requires exactly "1" or "true"; got ${JSON.stringify(env.USAGE_ENFORCE_AI_TEXT ?? "<unset>")}) — ` +
+        "refusing a production deploy that would let free-tier AI text generation run with no quota cap (unbounded generation cost). Set USAGE_ENFORCE_AI_TEXT=1.",
+    );
+  }
+
+  const salt = String(env.GENERATION_INTENT_KEY_SALT ?? "").trim();
+  if (!salt) {
+    problems.push(
+      "GENERATION_INTENT_KEY_SALT is unset/blank — refusing a production deploy: the durable Create Pin intent path throws " +
+        "GenerationIntentSaltUnavailableError on every reservation without it, so generation would fail with 503 for every user, " +
+        "not just free-tier ones. Set GENERATION_INTENT_KEY_SALT to a non-empty secret.",
+    );
+  }
+
+  return problems;
+}
+
+/**
+ * The exact set of usage RPCs the metering code calls at runtime, and the
+ * migration that introduces each — surfaced in the failure message so whoever
+ * is unblocking a deploy knows which migration to apply, not just which name
+ * is missing. `_v2` is the newest (idempotent generation-intent) primitive; the
+ * plain `usage_reserve` name is intentionally kept in the required set even
+ * though `_v2` is what the durable Create Pin intent path actually calls,
+ * because `usage_reserve` is still used by the legacy metering call sites.
+ */
+const REQUIRED_USAGE_RPCS = [
+  { name: "usage_ensure_account", migration: "v56 (backend/db/migrate_v56_usage_account_lifecycle.sql)" },
+  { name: "usage_reserve", migration: "v55 (backend/db/migrate_v55_usage_primitives.sql)" },
+  { name: "usage_reserve_generation_job_v2", migration: "v71 (backend/db/migrate_v71_generation_intent_idempotency.sql)" },
+  { name: "usage_settle_reservation_item", migration: "v55 (backend/db/migrate_v55_usage_primitives.sql)" },
+  { name: "usage_release_reservation", migration: "v55 (backend/db/migrate_v55_usage_primitives.sql)" },
+  { name: "usage_expire_reservations", migration: "v55 (backend/db/migrate_v55_usage_primitives.sql)" },
+];
+
+/**
+ * Verifies the target Supabase project actually exposes the usage RPCs the
+ * metering code calls, by reading PostgREST's OpenAPI root (`/rest/v1/`) and
+ * checking its `paths` object for each `/rpc/<name>` key. A missing RPC means
+ * every reservation call errors at runtime even when checkUsageEnforceForProd
+ * above is fully green — the enforce switches and the database schema are two
+ * independent things that must both be true.
+ *
+ * Exact-key membership only (never startsWith/includes): `/rpc/usage_reserve`
+ * must NOT be considered present merely because `/rpc/usage_reserve_generation_job_v2`
+ * exists in the same paths object.
+ *
+ * Any inability to positively confirm an RPC is present — network failure, non-2xx
+ * response, unparseable body, missing/malformed `paths` — is itself a problem
+ * ("could not verify"), never treated as a silent pass.
+ *
+ * Never logs or includes the service key in any problem message; only the
+ * target host is surfaced, so a deploy log stays safe to paste.
+ *
+ * `fetchImpl` is injectable so a unit test never performs a real network call.
+ *
+ * @param opts {{ supabaseUrl?: string, serviceKey?: string, fetchImpl?: typeof fetch }}
+ * @returns {Promise<string[]>}
+ */
+export async function checkUsageRpcsPresent({ supabaseUrl, serviceKey, fetchImpl } = {}) {
+  const problems = [];
+  const url = String(supabaseUrl ?? "").trim();
+  const key = String(serviceKey ?? "").trim();
+
+  if (!url || !key) {
+    const missingNames = [!url && "NEXT_PUBLIC_SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean);
+    problems.push(
+      `cannot verify usage RPCs are present: ${missingNames.join(" and ")} not provided to the deploy session — ` +
+        "the deploy session must export the production Supabase URL and service-role key before running the guard.",
+    );
+    return problems;
+  }
+
+  let host;
+  try {
+    host = new URL(url).host;
+  } catch {
+    problems.push(`cannot verify usage RPCs are present: NEXT_PUBLIC_SUPABASE_URL (${JSON.stringify(url)}) is not a valid URL.`);
+    return problems;
+  }
+
+  const doFetch = fetchImpl ?? fetch;
+  const restRoot = `${url.replace(/\/+$/, "")}/rest/v1/`;
+
+  let spec;
+  try {
+    const res = await doFetch(restRoot, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Accept: "application/openapi+json",
+      },
+    });
+    if (!res.ok) {
+      problems.push(`could not verify usage RPCs are present on ${host}: PostgREST returned HTTP ${res.status}.`);
+      return problems;
+    }
+    spec = await res.json();
+  } catch (err) {
+    problems.push(`could not verify usage RPCs are present on ${host}: request failed (${err?.message ?? "unknown error"}).`);
+    return problems;
+  }
+
+  const paths = spec && typeof spec === "object" ? spec.paths : undefined;
+  if (!paths || typeof paths !== "object") {
+    problems.push(`could not verify usage RPCs are present on ${host}: PostgREST's OpenAPI response has no usable "paths" object.`);
+    return problems;
+  }
+
+  const missing = REQUIRED_USAGE_RPCS.filter((rpc) => !Object.prototype.hasOwnProperty.call(paths, `/rpc/${rpc.name}`));
+  if (missing.length > 0) {
+    problems.push(
+      `${host} is missing ${missing.length} required usage RPC(s) — reservation calls will error at runtime even with quota enforcement switches on:\n` +
+        missing.map((rpc) => `      /rpc/${rpc.name} (apply migration ${rpc.migration})`).join("\n"),
+    );
+  }
+
+  return problems;
+}
+
+/**
  * Auth bypasses must never reach a production deploy.
  *
  * Both flags hand out privileged access without authentication:
@@ -258,10 +465,13 @@ const isMainModule =
 if (!isMainModule) {
   // Imported (e.g. by the unit test) — expose the pure check and stop here.
 } else {
-  runGuard();
+  runGuard().catch((err) => {
+    console.error(`predeploy-guard: unexpected error: ${err?.stack ?? err}`);
+    process.exit(1);
+  });
 }
 
-function runGuard() {
+async function runGuard() {
 
 const args = process.argv.slice(2);
 const overrideRequested = args.includes("--override");
@@ -443,22 +653,44 @@ for (const problem of checkAiCopyTextModelForProd(process.env)) {
   failures.push(problem);
 }
 
+// --- Check 9: usage-quota enforcement must actually be wired on for production ---
+// See checkUsageEnforceForProd (top of file) — the free "10 AI images" launch
+// must not ship with a metering mode/flag combination that blocks nothing.
+for (const problem of checkUsageEnforceForProd(process.env)) {
+  failures.push(problem);
+}
+
+// --- Check 10: the target Supabase project must actually expose the usage RPCs ---
+// See checkUsageRpcsPresent (top of file). Only meaningful for a production
+// target — Preview/local databases are not policed here.
+if (isProductionDeployTarget(process.env)) {
+  try {
+    const rpcProblems = await checkUsageRpcsPresent({
+      supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    });
+    if (rpcProblems.length === 0) {
+      infoLines.push("usage RPCs: present on target Supabase project");
+    }
+    for (const problem of rpcProblems) failures.push(problem);
+  } catch (err) {
+    failures.push(`usage RPC presence check threw unexpectedly: ${err?.message ?? err}`);
+  }
+}
+
 // --- Informational only: per-type usage enforce switches (decision #8, 2026-08-28) ---
 // USAGE_METERING_MODE=enforce alone blocks nothing — each usage type only actually
 // enforces when its own flag is also truthy (see usageEnforceFor in
-// src/lib/server/usage/meterGeneration.ts). This is NOT a blocking check: an operator
-// may deliberately ship enforce mode with zero/some/all type flags on. Print the
-// current combination so a deploy log always shows what will actually block.
+// src/lib/server/usage/meterGeneration.ts). This is NOT a blocking check for
+// USAGE_ENFORCE_SCHEDULED_POSTS: an operator may deliberately ship enforce mode
+// without that one type flag on. (AI images/text ARE blocking as of check 9 above;
+// this line still prints all three so a deploy log always shows the full picture.)
 {
   const enforceFlagNames = ["USAGE_ENFORCE_AI_IMAGES", "USAGE_ENFORCE_AI_TEXT", "USAGE_ENFORCE_SCHEDULED_POSTS"];
-  const isTruthyFlag = (raw) => {
-    if (!raw) return false;
-    const v = String(raw).trim().toLowerCase();
-    return v === "1" || v === "true";
-  };
   const meteringMode = String(process.env.USAGE_METERING_MODE ?? "off").trim().toLowerCase();
-  const flagStates = enforceFlagNames.map((name) => `${name}=${isTruthyFlag(process.env[name]) ? "on" : "off"}`);
-  infoLines.push(`usage metering mode: ${meteringMode || "off"} | enforce switches: ${flagStates.join(", ")}`);
+  const flagStates = enforceFlagNames.map((name) => `${name}=${isTruthyUsageEnforceFlag(process.env[name]) ? "on" : "off"}`);
+  const saltState = String(process.env.GENERATION_INTENT_KEY_SALT ?? "").trim() ? "set" : "unset";
+  infoLines.push(`usage metering mode: ${meteringMode || "off"} | enforce switches: ${flagStates.join(", ")} | GENERATION_INTENT_KEY_SALT: ${saltState}`);
 }
 
 // --- Resolve outcome ---

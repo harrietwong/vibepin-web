@@ -27,6 +27,8 @@ type MeterHarness = {
   reserve: (args: { userId: string; generationRequestId: string }) => Promise<Record<string, unknown>>;
   settle: (args: { reservation: Record<string, unknown> }) => Promise<void>;
   release: (args: { reservation: Record<string, unknown>; reason?: string }) => Promise<void>;
+  /** Plan fed to the REAL decideWhenLedgerUnavailable (defaults to "free"). */
+  plan?: () => Promise<"free" | "starter" | "pro" | "business">;
 };
 let meterHarness: MeterHarness = {
   mode: () => "off", enforce: () => false,
@@ -46,6 +48,16 @@ const originalLoad = (Module as any)._load;
     usageMeteringMode: () => meterHarness.mode(),
     usageEnforceFor: () => meterHarness.enforce(),
     aiTextLimitResponseBody: (requestId: string) => ({ ok: false, requestId, error: "ai_text_limit_reached", code: "ai_text_limit_reached" }),
+    // 2026-09-25 enforce hardening: the REAL decision rule + 503 body, with only the plan
+    // lookup driven by the harness; the misconfiguration alarm is a no-op here.
+    decideWhenLedgerUnavailable: async (args: { userId: string; type: "ai_text_generation"; reason: string }) => {
+      const real = await import("../src/lib/server/usage/meterGeneration");
+      return real.decideWhenLedgerUnavailable({ ...args, deps: { resolvePlan: meterHarness.plan ?? (async () => "free" as const) } });
+    },
+    usageUnavailableResponseBody: (shape: "image" | "text", requestId: string) => ({
+      ok: false, requestId, error: "usage_unavailable", code: "usage_unavailable", error_type: "usage_unavailable", shape,
+    }),
+    warnIfEnforceDisabledInProduction: () => false,
   };
   if (request.includes("aiCostLog")) return {
     estimateCost: () => null,
@@ -486,6 +498,35 @@ async function main() {
     const response = await generate(generateReq(session.id, "no-credit")); const json = await response.json();
     eq(response.status, 402, "enforced insufficient status"); eq(json.code, "ai_text_limit_reached", "existing limit envelope");
     eq(providerCalls, 0, "provider is never called without allowance"); eq(store.generations.size, 0, "new claim is released");
+  });
+
+  await test("enforced text + ledger cannot answer + FREE plan → 503 before provider work and releases the new claim", async () => {
+    const store = reset(); let providerCalls = 0, releases = 0;
+    meterHarness = {
+      mode: () => "enforce", enforce: () => true,
+      reserve: async () => ({ kind: "error", message: "ledger down" }), settle: async () => {}, release: async () => { releases++; },
+      plan: async () => "free",
+    };
+    setProvider({ async generate() { providerCalls++; return validOutput(); } });
+    const session = await seed(store);
+    const response = await generate(generateReq(session.id, "ledger-down-free")); const json = await response.json();
+    eq(response.status, 503, "free user refused"); eq(json.code, "usage_unavailable", "usage_unavailable envelope");
+    eq(json.shape, "text", "text envelope"); assert(typeof json.requestId === "string", "claim id echoed");
+    eq(providerCalls, 0, "provider is never called"); eq(store.generations.size, 0, "new claim is released");
+    eq(releases, 0, "nothing was reserved, so no reservation release");
+  });
+
+  await test("enforced text + ledger cannot answer + PRO plan → generates unmetered", async () => {
+    const store = reset(); let providerCalls = 0;
+    meterHarness = {
+      mode: () => "enforce", enforce: () => true,
+      reserve: async () => ({ kind: "error", message: "ledger down" }), settle: async () => {}, release: async () => {},
+      plan: async () => "pro",
+    };
+    setProvider({ async generate() { providerCalls++; return validOutput(); } });
+    const session = await seed(store);
+    const response = await generate(generateReq(session.id, "ledger-down-pro"));
+    eq(response.status, 200, "paid plan proceeds"); assert(providerCalls >= 1, "provider called");
   });
 
   await test("one successful v2 generation reserves and settles exactly one text unit despite multiple provider calls", async () => {

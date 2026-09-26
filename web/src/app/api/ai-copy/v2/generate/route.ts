@@ -5,7 +5,7 @@ import { getSessionStore } from "@/lib/ai-copy/v2/sessionStore";
 import { orchestrateCopyGeneration, ValidationErrorV2 } from "@/lib/ai-copy/v2/orchestrator";
 import { CopyError, PROVIDER_MESSAGE } from "@/lib/ai-copy/visionServer";
 import { isAffiliateDisclosureKind, type AffiliateDisclosureKind } from "@/lib/ai-copy/affiliateDisclosure";
-import { aiTextLimitResponseBody, releaseTextGeneration, reserveTextGeneration, settleTextGeneration, usageEnforceFor } from "@/lib/server/usage/meterTextGeneration";
+import { aiTextLimitResponseBody, decideWhenLedgerUnavailable, releaseTextGeneration, reserveTextGeneration, settleTextGeneration, usageEnforceFor, usageUnavailableResponseBody, warnIfEnforceDisabledInProduction } from "@/lib/server/usage/meterTextGeneration";
 
 export const runtime = "nodejs";
 interface Body { sessionId: string; idempotencyKey: string; lengthPreference?: "short" | "standard" | "seo-rich"; angleId?: string; angleRequest?: string; affiliateDisclosure?: AffiliateDisclosureKind; }
@@ -15,6 +15,8 @@ export async function POST(req: Request) {
   if (process.env.AI_COPY_V2_ENABLED !== "true") return NextResponse.json({ error: "not_found" }, { status: 404 });
   const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!userId) return NextResponse.json({ ok: false, error: "unauthorized", message: "Authentication required" }, { status: 401 });
+  // Production misconfiguration alarm (throttled; never blocks).
+  warnIfEnforceDisabledInProduction("ai_text_generation");
   const limit = await consumeRateLimit(userId, "ai_copy_v2_generate");
   if (!limit.allowed) return NextResponse.json({ ok: false, error: RATE_LIMITED_ERROR, message: RATE_LIMITED_MESSAGE }, { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } });
   let body: Body;
@@ -46,6 +48,17 @@ export async function POST(req: Request) {
   if (reservation.kind === "insufficient" && usageEnforceFor("ai_text_generation")) {
     await store.releaseGenerationClaim(claim.row.id, session.id, userId, claim.row.claim_token).catch(() => undefined);
     return NextResponse.json(aiTextLimitResponseBody(claim.row.id), { status: 402 });
+  }
+  if (usageEnforceFor("ai_text_generation") && reservation.kind !== "reserved" && reservation.kind !== "insufficient" && reservation.kind !== "off") {
+    // ENFORCE but the ledger could not answer (error / skipped): free plan (or
+    // unresolvable plan) → 503 before provider work, releasing the new claim exactly
+    // like the 402 branch (nothing was reserved, so no reservation to release);
+    // paid plan → proceed unmetered (decision 2026-09-25).
+    const decision = await decideWhenLedgerUnavailable({ userId, type: "ai_text_generation", reason: reservation.kind });
+    if (decision.block) {
+      await store.releaseGenerationClaim(claim.row.id, session.id, userId, claim.row.claim_token).catch(() => undefined);
+      return NextResponse.json(usageUnavailableResponseBody("text", claim.row.id), { status: 503 });
+    }
   }
 
   try {

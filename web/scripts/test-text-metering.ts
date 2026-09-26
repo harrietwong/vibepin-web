@@ -67,6 +67,9 @@ let rpcCalls: RpcCall[] = [];
 // Controls what the reserve RPC returns, plus whether rpc() THROWS (unreachable DB).
 type LedgerMode = "reserve_ok" | "reserve_insufficient" | "reserve_error" | "reserve_throws";
 let ledgerMode: LedgerMode = "reserve_ok";
+// When true, the fake auth record carries app_metadata.plan = "pro", so the REAL
+// resolvePlan resolves the caller as a paid plan.
+let textUserIsPro = false;
 
 function ledgerResult(fn: string): { data: unknown; error: { message: string; code?: string } | null } {
   if (fn === "usage_ensure_account") {
@@ -92,7 +95,7 @@ function fakeServerClient() {
     auth: {
       admin: {
         getUserById: async (id: string) => ({
-          data: { user: { id, email: "u@example.com", created_at: new Date().toISOString(), app_metadata: {} } },
+          data: { user: { id, email: "u@example.com", created_at: new Date().toISOString(), app_metadata: textUserIsPro ? { plan: "pro" } : {} } },
           error: null,
         }),
       },
@@ -415,6 +418,48 @@ async function main() {
     assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
     assertHappyOutput(json);
     assertEq(calls.generateCopyFromAnalysis, 1, "the model call DID happen (fail-open, same as shadow)");
+  });
+
+  // ── ENFORCE + LEDGER CANNOT ANSWER (decision 2026-09-25) ─────────────────────
+  await test("ENFORCE-UNAVAILABLE: ledger error + free plan → 503 usage_unavailable, NO model call", async () => {
+    textUserIsPro = false;
+    const { status, json } = await run({ meterMode: "enforce", ledger: "reserve_error" });
+    assertEq(status, 503, "free user refused when the ledger cannot answer");
+    assertEq(json.code, "usage_unavailable", "code");
+    assertEq(json.error_type, "usage_unavailable", "error_type");
+    assertEq(json.ok, false, "ok:false");
+    assert(typeof json.requestId === "string", "requestId echoed");
+    assert(typeof json.userMessage === "string" && (json.userMessage as string).length > 0, "user-safe message");
+    assertEq(calls.generateCopyFromAnalysis, 0, "no provider call");
+    assertEq(settleCalls().length + releaseCalls().length, 0, "nothing reserved → nothing settled/released");
+  });
+
+  await test("ENFORCE-UNAVAILABLE: ledger THROWS + free plan → 503, NO model call", async () => {
+    textUserIsPro = false;
+    const { status, json } = await run({ meterMode: "enforce", ledger: "reserve_throws" });
+    assertEq(status, 503, "unreachable ledger refuses a free user");
+    assertEq(json.code, "usage_unavailable", "code");
+    assertEq(calls.generateCopyFromAnalysis, 0, "no provider call");
+  });
+
+  await test("ENFORCE-UNAVAILABLE: ledger error + pro plan → generates unmetered", async () => {
+    textUserIsPro = true;
+    try {
+      const { status, json } = await run({ meterMode: "enforce", ledger: "reserve_error" });
+      assertEq(status, 200, "paid plan keeps generating");
+      assertHappyOutput(json);
+      assertEq(calls.generateCopyFromAnalysis, 1, "model called once");
+      assertEq(settleCalls().length, 0, "nothing reserved → no settle");
+    } finally {
+      textUserIsPro = false;
+    }
+  });
+
+  await test("ENFORCE-UNAVAILABLE: enforce WITHOUT USAGE_ENFORCE_AI_TEXT + ledger error + free → still generates", async () => {
+    textUserIsPro = false;
+    const { status, json } = await run({ meterMode: "enforce", ledger: "reserve_error", enforceAiText: false });
+    assertEq(status, 200, "switch off never blocks");
+    assertHappyOutput(json);
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

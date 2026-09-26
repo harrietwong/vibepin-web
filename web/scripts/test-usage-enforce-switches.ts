@@ -40,6 +40,9 @@ async function test(name: string, fn: () => void | Promise<void>) {
 function assertEq(a: unknown, b: unknown, msg: string) {
   if (a !== b) throw new Error(`${msg} (expected ${JSON.stringify(b)}, got ${JSON.stringify(a)})`);
 }
+function assert(cond: unknown, msg: string) {
+  if (!cond) throw new Error(msg);
+}
 
 const MODE_KEY = "USAGE_METERING_MODE";
 const FLAG_KEYS = ["USAGE_ENFORCE_AI_IMAGES", "USAGE_ENFORCE_AI_TEXT", "USAGE_ENFORCE_SCHEDULED_POSTS"] as const;
@@ -166,6 +169,124 @@ async function main() {
     // USAGE_ENFORCE_AI_TEXT intentionally never set.
     assertEq(usageEnforceFor("ai_text_generation"), false, "unset defaults to false");
     clearEnv();
+  });
+
+  // ── decideWhenLedgerUnavailable (decision 2026-09-25) ─────────────────────────
+  // enforce on, ledger cannot answer: free / unknown / lookup-throws → block; paid → allow.
+  const { decideWhenLedgerUnavailable, usageUnavailableResponseBody } = meter;
+  for (const plan of ["free"] as const) {
+    await test(`decideWhenLedgerUnavailable: plan=${plan} → block`, async () => {
+      const d = await decideWhenLedgerUnavailable({ userId: "u1", type: "ai_image", reason: "error", deps: { resolvePlan: async () => plan } });
+      assertEq(d.block, true, "free is refused");
+      assertEq(d.plan, "free", "plan echoed");
+    });
+  }
+  for (const plan of ["starter", "pro", "business"] as const) {
+    await test(`decideWhenLedgerUnavailable: plan=${plan} → allow (unmetered)`, async () => {
+      const d = await decideWhenLedgerUnavailable({ userId: "u1", type: "ai_text_generation", reason: "error", deps: { resolvePlan: async () => plan } });
+      assertEq(d.block, false, `${plan} proceeds`);
+      assertEq(d.plan, plan, "plan echoed");
+    });
+  }
+  await test("decideWhenLedgerUnavailable: plan lookup THROWS → plan 'unknown', block", async () => {
+    const d = await decideWhenLedgerUnavailable({
+      userId: "u1", type: "ai_image", reason: "skipped",
+      deps: { resolvePlan: async () => { throw new Error("down"); } },
+    });
+    assertEq(d.block, true, "unknown is treated as free");
+    assertEq(d.plan, "unknown", "plan reported as unknown");
+  });
+  await test("decideWhenLedgerUnavailable: decision log carries type/reason/plan/decision and NO user id", async () => {
+    const seen: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => { seen.push(a.map(String).join(" ")); };
+    try {
+      await decideWhenLedgerUnavailable({ userId: "user-secret-123", type: "ai_image", reason: "error", deps: { resolvePlan: async () => "free" } });
+    } finally {
+      console.warn = orig;
+    }
+    const line = seen.find(l => l.includes("usage_meter_unavailable_decision"));
+    assert(!!line, "decision event logged");
+    const parsed = JSON.parse(line!) as Record<string, unknown>;
+    assertEq(parsed.type, "ai_image", "type");
+    assertEq(parsed.reason, "error", "reason");
+    assertEq(parsed.plan, "free", "plan");
+    assertEq(parsed.decision, "block", "decision");
+    assert(!line!.includes("user-secret-123"), "no user id in the log");
+  });
+  await test("usageUnavailableResponseBody: image + text envelopes", () => {
+    const img = usageUnavailableResponseBody("image", "gen_1");
+    assertEq(img.code, "usage_unavailable", "image code");
+    assertEq(img.generation_request_id, "gen_1", "image request id");
+    assertEq((img.urls as unknown[]).length, 0, "image urls empty");
+    const txt = usageUnavailableResponseBody("text", "req_1");
+    assertEq(txt.code, "usage_unavailable", "text code");
+    assertEq(txt.requestId, "req_1", "text request id");
+    assert(typeof txt.userMessage === "string" && (txt.userMessage as string).length > 0, "text prose");
+  });
+
+  // ── warnIfEnforceDisabledInProduction (misconfiguration alarm, throttled) ─────
+  const { warnIfEnforceDisabledInProduction, __resetEnforceDisabledWarningsForTests, ENFORCE_DISABLED_WARN_INTERVAL_MS } = meter;
+  async function captureErrors(fn: () => void): Promise<string[]> {
+    const seen: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => { seen.push(a.map(String).join(" ")); };
+    try { fn(); } finally { console.error = orig; }
+    return seen.filter(l => l.includes("usage_enforce_disabled_in_production"));
+  }
+  const savedVercelEnv = process.env.VERCEL_ENV;
+  await test("warnIfEnforceDisabledInProduction: production + switch off → logs once with type/mode", async () => {
+    clearEnv(); __resetEnforceDisabledWarningsForTests();
+    process.env.VERCEL_ENV = "production";
+    process.env.USAGE_METERING_MODE = "shadow";
+    try {
+      let ret = false;
+      const lines = await captureErrors(() => { ret = warnIfEnforceDisabledInProduction("ai_image", { now: () => 1_000 }); });
+      assertEq(ret, true, "reported logging");
+      assertEq(lines.length, 1, "exactly one alarm line");
+      const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+      assertEq(parsed.type, "ai_image", "type");
+      assertEq(parsed.mode, "shadow", "mode");
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      clearEnv();
+    }
+  });
+  await test("warnIfEnforceDisabledInProduction: second call inside the window is silent; after the window it logs again; other types are independent", async () => {
+    clearEnv(); __resetEnforceDisabledWarningsForTests();
+    process.env.VERCEL_ENV = "production";
+    try {
+      const first = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_text_generation", { now: () => 10_000 }); });
+      const within = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_text_generation", { now: () => 10_000 + ENFORCE_DISABLED_WARN_INTERVAL_MS - 1 }); });
+      const otherType = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_image", { now: () => 10_001 }); });
+      const after = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_text_generation", { now: () => 10_000 + ENFORCE_DISABLED_WARN_INTERVAL_MS }); });
+      assertEq(first.length, 1, "first call logs");
+      assertEq(within.length, 0, "throttled inside the 10-minute window");
+      assertEq(otherType.length, 1, "per-type throttle");
+      assertEq(after.length, 1, "logs again once the window elapsed");
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      clearEnv();
+    }
+  });
+  await test("warnIfEnforceDisabledInProduction: non-production never logs; production with the switch ON never logs", async () => {
+    clearEnv(); __resetEnforceDisabledWarningsForTests();
+    try {
+      process.env.VERCEL_ENV = "preview";
+      const preview = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_image", { now: () => 1 }); });
+      delete process.env.VERCEL_ENV;
+      const unset = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_image", { now: () => 2 }); });
+      process.env.VERCEL_ENV = "production";
+      process.env.USAGE_METERING_MODE = "enforce";
+      process.env.USAGE_ENFORCE_AI_IMAGES = "true";
+      const enforced = await captureErrors(() => { warnIfEnforceDisabledInProduction("ai_image", { now: () => 3 }); });
+      assertEq(preview.length, 0, "preview silent");
+      assertEq(unset.length, 0, "local/unset silent");
+      assertEq(enforced.length, 0, "production with enforce on is silent");
+    } finally {
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+      clearEnv(); __resetEnforceDisabledWarningsForTests();
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

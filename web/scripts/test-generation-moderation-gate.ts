@@ -250,6 +250,10 @@ const originalResolve = (Module as any)._resolveFilename;
       deriveRequestKey: () => "a".repeat(48),
       deriveDurableGenerationIntentKey: () => "a".repeat(48),
       readImagesAvailableAfterReservation: async () => null,
+      // 2026-09-25 enforce hardening: the route now calls these per request.
+      warnIfEnforceDisabledInProduction: () => false,
+      decideWhenLedgerUnavailable: async () => ({ block: false, plan: "free" }),
+      usageUnavailableResponseBody: () => ({ error: "usage_unavailable" }),
     };
   }
   if (/[\\/]creem[\\/]moderatePrompt(\.ts)?$/.test(request) || request === "@/lib/server/creem/moderatePrompt") {

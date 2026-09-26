@@ -11,6 +11,9 @@ import {
   settleTextGeneration,
   releaseTextGeneration,
   aiTextLimitResponseBody,
+  decideWhenLedgerUnavailable,
+  usageUnavailableResponseBody,
+  warnIfEnforceDisabledInProduction,
   type TextReservation,
 } from "@/lib/server/usage/meterTextGeneration";
 import {
@@ -321,16 +324,35 @@ export async function POST(req: Request) {
   // matter how many model calls fire. `off` (default) touches the ledger not at all;
   // `shadow` never blocks (fail-open); `enforce` refuses when the account is out of
   // text capacity AND the per-type USAGE_ENFORCE_AI_TEXT flag is on (decision #8,
-  // 2026-08-28 — the global mode alone blocks nothing). userId is already resolved
-  // (401'd otherwise).
+  // 2026-08-28 — the global mode alone blocks nothing), and — with the same flag on —
+  // refuses FREE plans when the ledger cannot answer (decision 2026-09-25). userId is
+  // already resolved (401'd otherwise).
+  // Production misconfiguration alarm (throttled; never blocks).
+  warnIfEnforceDisabledInProduction("ai_text_generation");
   let textReservation: TextReservation = { kind: "off" };
   if (usageMeteringMode() !== "off") {
     textReservation = await reserveTextGeneration({ userId, generationRequestId: requestId });
     if (textReservation.kind === "insufficient" && usageEnforceFor("ai_text_generation")) {
       return NextResponse.json(aiTextLimitResponseBody(requestId), { status: 402 });
     }
-    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
-    // the moderation gate). enforce with a live reservation continues below.
+    if (
+      usageEnforceFor("ai_text_generation")
+      && textReservation.kind !== "reserved"
+      && textReservation.kind !== "insufficient"
+      && textReservation.kind !== "off"
+    ) {
+      // ENFORCE but the ledger could not answer (error / skipped): free plan (or
+      // unresolvable plan) → 503 before any provider call; paid → proceed unmetered.
+      // Nothing was reserved, so there is nothing to release.
+      const decision = await decideWhenLedgerUnavailable({
+        userId, type: "ai_text_generation", reason: textReservation.kind,
+      });
+      if (decision.block) {
+        return NextResponse.json(usageUnavailableResponseBody("text", requestId), { status: 503 });
+      }
+    }
+    // shadow (or enforce switch off, or a paid plan above): insufficient/error/skipped
+    // → proceed unmetered. enforce with a live reservation continues below.
   }
 
   try {

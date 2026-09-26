@@ -42,6 +42,14 @@ async function main() {
       env: Record<string, string | undefined>,
       stableOrigins: readonly string[],
     ) => string[];
+    isProductionDeployTarget: (env: Record<string, string | undefined>) => boolean;
+    isTruthyUsageEnforceFlag: (value: string | undefined) => boolean;
+    checkUsageEnforceForProd: (env: Record<string, string | undefined>) => string[];
+    checkUsageRpcsPresent: (opts: {
+      supabaseUrl?: string;
+      serviceKey?: string;
+      fetchImpl?: (url: string, init?: unknown) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+    }) => Promise<string[]>;
   };
   const check = guard.checkBillingModeForProd;
   const checkPreview = guard.checkCreemPreviewTestConfig;
@@ -358,6 +366,239 @@ async function main() {
     // The billing guard must not react to AI-copy env, and vice versa.
     assertEq(check({ LINAPI_KEY: "lin-abc" }).length, 0, "billing check ignores provider credentials");
     assertEq(checkModel({ CREEM_MODE: "test" }).length, 0, "AI-copy check ignores billing mode");
+  });
+
+  // ── Usage-quota enforcement must actually be wired on (free "10 AI images" launch) ──
+  const checkEnforce = guard.checkUsageEnforceForProd;
+  const isTruthyUsageFlag = guard.isTruthyUsageEnforceFlag;
+  const isProdTarget = guard.isProductionDeployTarget;
+
+  console.log("\npredeploy-guard usage-enforce tests\n");
+
+  await test("exports the pure usage-enforce check and its helpers", () => {
+    assert(typeof checkEnforce === "function", "checkUsageEnforceForProd exported");
+    assert(typeof isTruthyUsageFlag === "function", "isTruthyUsageEnforceFlag exported");
+    assert(typeof isProdTarget === "function", "isProductionDeployTarget exported");
+  });
+
+  const FULLY_ENFORCED_ENV = {
+    USAGE_METERING_MODE: "enforce",
+    USAGE_ENFORCE_AI_IMAGES: "1",
+    USAGE_ENFORCE_AI_TEXT: "1",
+    GENERATION_INTENT_KEY_SALT: "a-real-secret",
+  };
+
+  await test("all four requirements met on a production target → no problem", () => {
+    assertEq(checkEnforce(FULLY_ENFORCED_ENV).length, 0, "clean");
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, VERCEL_ENV: "production" }).length, 0, "explicit production is also clean");
+  });
+
+  await test("USAGE_METERING_MODE missing/off → refused", () => {
+    const { USAGE_METERING_MODE, ...rest } = FULLY_ENFORCED_ENV;
+    const problems = checkEnforce(rest);
+    assertEq(problems.length, 1, "one problem");
+    assert(/USAGE_METERING_MODE/.test(problems[0]), "names the variable");
+    assert(/enforce/.test(problems[0]), "mentions the required value");
+  });
+
+  await test("USAGE_METERING_MODE=shadow → refused with a message distinguishing shadow from off", () => {
+    const problems = checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_METERING_MODE: "shadow" });
+    assertEq(problems.length, 1, "one problem");
+    assert(/shadow/.test(problems[0]), "names shadow specifically");
+    assert(/records|blocks nothing/.test(problems[0]), "explains shadow only records");
+  });
+
+  await test("USAGE_ENFORCE_AI_IMAGES missing → refused", () => {
+    const { USAGE_ENFORCE_AI_IMAGES, ...rest } = FULLY_ENFORCED_ENV;
+    const problems = checkEnforce(rest);
+    assertEq(problems.length, 1, "one problem");
+    assert(/USAGE_ENFORCE_AI_IMAGES/.test(problems[0]), "names the variable");
+  });
+
+  await test("USAGE_ENFORCE_AI_TEXT missing → refused", () => {
+    const { USAGE_ENFORCE_AI_TEXT, ...rest } = FULLY_ENFORCED_ENV;
+    const problems = checkEnforce(rest);
+    assertEq(problems.length, 1, "one problem");
+    assert(/USAGE_ENFORCE_AI_TEXT/.test(problems[0]), "names the variable");
+  });
+
+  await test("GENERATION_INTENT_KEY_SALT missing/blank → refused", () => {
+    const { GENERATION_INTENT_KEY_SALT, ...rest } = FULLY_ENFORCED_ENV;
+    assertEq(checkEnforce(rest).length, 1, "unset refused");
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, GENERATION_INTENT_KEY_SALT: "   " }).length, 1, "whitespace-only refused");
+  });
+
+  await test("runtime truthiness is mirrored exactly: only \"1\"/\"true\" count, not \"yes\"", () => {
+    // meterGeneration.isTruthyFlag (runtime) accepts ONLY "1"/"true". A value like
+    // "yes" must still be refused here even though it would look "on" to the
+    // guard's OTHER (looser) isTruthyEnv helper used elsewhere in this file.
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_ENFORCE_AI_IMAGES: "yes" }).length, 1, "\"yes\" is not truthy at runtime");
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_ENFORCE_AI_TEXT: "on" }).length, 1, "\"on\" is not truthy at runtime");
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_ENFORCE_AI_IMAGES: "TRUE" }).length, 0, "case-insensitive true is accepted");
+    assertEq(checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_ENFORCE_AI_TEXT: "1" }).length, 0, "\"1\" is accepted");
+  });
+
+  await test("USAGE_ENFORCE_SCHEDULED_POSTS is never required by this check", () => {
+    assertEq(checkEnforce(FULLY_ENFORCED_ENV).length, 0, "absent scheduled-posts flag does not block");
+    assertEq(
+      checkEnforce({ ...FULLY_ENFORCED_ENV, USAGE_ENFORCE_SCHEDULED_POSTS: "0" }).length,
+      0,
+      "explicitly-off scheduled-posts flag does not block",
+    );
+  });
+
+  await test("non-production target (Preview) → not checked at all, even with everything missing", () => {
+    assertEq(checkEnforce({ VERCEL_ENV: "preview" }).length, 0, "Preview is exempt");
+    assertEq(isProdTarget({ VERCEL_ENV: "preview" }), false, "isProductionDeployTarget agrees");
+  });
+
+  await test("unset VERCEL_ENV is treated as production (fail closed), same as check 6's billing rule", () => {
+    assertEq(isProdTarget({}), true, "unset target is production");
+    const { USAGE_METERING_MODE, ...rest } = FULLY_ENFORCED_ENV;
+    assertEq(checkEnforce(rest).length, 1, "unset VERCEL_ENV still enforces the check");
+  });
+
+  await test("multiple missing requirements are all reported, not just the first", () => {
+    assertEq(checkEnforce({}).length, 4, "all four problems reported");
+  });
+
+  // ── Usage RPC presence (PostgREST OpenAPI probe) ─────────────────────────────
+  const checkRpcs = guard.checkUsageRpcsPresent;
+  const FAKE_URL = "https://fake-project.supabase.co";
+  const FAKE_KEY = "FAKE-SERVICE-ROLE-KEY-8f3a";
+  const ALL_RPC_NAMES = [
+    "usage_ensure_account",
+    "usage_reserve",
+    "usage_reserve_generation_job_v2",
+    "usage_settle_reservation_item",
+    "usage_release_reservation",
+    "usage_expire_reservations",
+  ];
+  function specWith(names: string[]): { paths: Record<string, unknown> } {
+    const paths: Record<string, unknown> = {};
+    for (const n of names) paths[`/rpc/${n}`] = {};
+    return { paths };
+  }
+  function neverCalledFetch() {
+    return async () => {
+      throw new Error("fetchImpl must not be called");
+    };
+  }
+
+  console.log("\npredeploy-guard usage-RPC-presence tests\n");
+
+  await test("exports the async RPC-presence check", () => {
+    assert(typeof checkRpcs === "function", "checkUsageRpcsPresent exported");
+  });
+
+  await test("missing supabaseUrl/serviceKey → problem, fetch never called", async () => {
+    const problems = await checkRpcs({ fetchImpl: neverCalledFetch() as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/NEXT_PUBLIC_SUPABASE_URL/.test(problems[0]), "names missing URL var");
+    assert(/SUPABASE_SERVICE_ROLE_KEY/.test(problems[0]), "names missing key var");
+  });
+
+  await test("missing only the service key → problem, fetch never called", async () => {
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, fetchImpl: neverCalledFetch() as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/SUPABASE_SERVICE_ROLE_KEY/.test(problems[0]), "names missing key var");
+  });
+
+  await test("all RPCs present → no problem, and the request contract is correct", async () => {
+    let seenUrl = "";
+    let seenHeaders: Record<string, string> = {};
+    const fetchImpl = async (url: string, init?: { headers?: Record<string, string> }) => {
+      seenUrl = url;
+      seenHeaders = init?.headers ?? {};
+      return { ok: true, status: 200, json: async () => specWith(ALL_RPC_NAMES) };
+    };
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 0, "clean");
+    assertEq(seenUrl, `${FAKE_URL}/rest/v1/`, "hits the PostgREST OpenAPI root");
+    assertEq(seenHeaders.apikey, FAKE_KEY, "sends apikey header");
+    assertEq(seenHeaders.Authorization, `Bearer ${FAKE_KEY}`, "sends Bearer auth header");
+  });
+
+  await test("missing usage_reserve_generation_job_v2 → problem naming it and migration v71", async () => {
+    const names = ALL_RPC_NAMES.filter((n) => n !== "usage_reserve_generation_job_v2");
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => specWith(names) });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/usage_reserve_generation_job_v2/.test(problems[0]), "names the missing RPC");
+    assert(/v71/.test(problems[0]), "names migration v71");
+  });
+
+  await test("exact-key membership: having ONLY _v2 does not satisfy plain usage_reserve", async () => {
+    // Regression guard for a substring-matching bug: /rpc/usage_reserve must not be
+    // considered present merely because /rpc/usage_reserve_generation_job_v2 exists.
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => specWith(ALL_RPC_NAMES.filter((n) => n !== "usage_reserve")),
+    });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/\/rpc\/usage_reserve(?!_)/.test(problems[0].replace(/usage_reserve_generation_job_v2/g, "")), "still flags plain usage_reserve as missing");
+  });
+
+  await test("multiple missing RPCs are all listed in one problem", async () => {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => specWith([]) });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "single aggregated problem");
+    for (const name of ALL_RPC_NAMES) {
+      assert(problems[0].includes(name), `mentions ${name}`);
+    }
+  });
+
+  await test("non-2xx response → problem, not a silent pass", async () => {
+    const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({}) });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/500/.test(problems[0]), "mentions the status code");
+  });
+
+  await test("fetch throws (network failure) → problem, not a silent pass", async () => {
+    const fetchImpl = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+    assert(/ECONNREFUSED|could not verify/.test(problems[0]), "surfaces the failure");
+  });
+
+  await test("malformed body (no usable paths object) → problem, not a silent pass", async () => {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ notPaths: true }) });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+  });
+
+  await test("json() itself throwing (unparseable body) → problem, not a silent pass", async () => {
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("Unexpected token in JSON");
+      },
+    });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    assertEq(problems.length, 1, "one problem");
+  });
+
+  await test("invalid supabaseUrl → problem, fetch never called", async () => {
+    const problems = await checkRpcs({
+      supabaseUrl: "not a url",
+      serviceKey: FAKE_KEY,
+      fetchImpl: neverCalledFetch() as never,
+    });
+    assertEq(problems.length, 1, "one problem");
+  });
+
+  await test("the service key is never leaked into any problem message or the target host", async () => {
+    const fetchImpl = async () => ({ ok: false, status: 401, json: async () => ({}) });
+    const problems = await checkRpcs({ supabaseUrl: FAKE_URL, serviceKey: FAKE_KEY, fetchImpl: fetchImpl as never });
+    const joined = problems.join("\n");
+    assert(!joined.includes(FAKE_KEY), "problem text excludes the raw key");
+    assert(joined.includes("fake-project.supabase.co"), "problem text includes only the host");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

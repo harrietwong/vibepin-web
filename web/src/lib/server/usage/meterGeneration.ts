@@ -15,8 +15,11 @@
  * production behaviour is byte-for-byte unchanged until USAGE_METERING_MODE is set.
  * `shadow` records to the ledger but NEVER blocks generation — any ledger failure
  * (insufficient balance, RPC error, unreachable Supabase) is logged and generation
- * PROCEEDS. `enforce` (reserved for a later phase, not enabled in prod here) turns an
- * insufficient-balance refusal into a 402-style limit response.
+ * PROCEEDS. `enforce` (only for types whose per-type switch is also on — see
+ * usageEnforceFor) turns an insufficient-balance refusal into a 402 limit response,
+ * and a ledger that cannot answer (error/skipped) into decideWhenLedgerUnavailable:
+ * free plan → 503 usage_unavailable, paid plan → proceed unmetered. Enforce does NOT
+ * fail open for free users.
  *
  * ── WHY SHADOW FAILS OPEN — the inverse of the moderation gate ─────────────────
  * /api/generate's moderation gate fails CLOSED: a compliance control must refuse when
@@ -48,6 +51,7 @@
 import crypto from "crypto";
 import { createServerClient } from "@/lib/supabase";
 import { ensureUsageAccount } from "./ensureAccount";
+import { resolvePlan, type PlanKey } from "../entitlements";
 
 /** off | shadow | enforce. Defaults to `off` — production is unchanged until set. */
 export type UsageMeteringMode = "off" | "shadow" | "enforce";
@@ -97,6 +101,121 @@ function isTruthyFlag(raw: string | undefined): boolean {
 export function usageEnforceFor(type: UsageEnforceType): boolean {
   if (usageMeteringMode() !== "enforce") return false;
   return isTruthyFlag(process.env[USAGE_ENFORCE_ENV_VAR[type]]);
+}
+
+// ── MISCONFIGURATION ALARM (product decision, 2026-09-25) ───────────────────────
+// A production deployment whose enforce switch for `type` is off (global mode not
+// "enforce", or the per-type flag unset) meters nothing and blocks nothing. That is
+// NOT made a refusal — users keep generating — but it must be loud in the logs so a
+// forgotten env var cannot silently hand out unlimited usage. Throttled per instance
+// per type so a busy route does not flood the log.
+export const ENFORCE_DISABLED_WARN_INTERVAL_MS = 10 * 60 * 1000;
+const enforceDisabledLastWarnAt: Partial<Record<UsageEnforceType, number>> = {};
+
+/** Returns true when it logged (for tests); never throws, never blocks. */
+export function warnIfEnforceDisabledInProduction(
+  type: UsageEnforceType,
+  deps?: { now?: () => number },
+): boolean {
+  try {
+    if (process.env.VERCEL_ENV !== "production") return false;
+    if (usageEnforceFor(type)) return false;
+    const now = deps?.now ? deps.now() : Date.now();
+    const last = enforceDisabledLastWarnAt[type];
+    if (last !== undefined && now - last < ENFORCE_DISABLED_WARN_INTERVAL_MS) return false;
+    enforceDisabledLastWarnAt[type] = now;
+    console.error(JSON.stringify({
+      event: "usage_enforce_disabled_in_production",
+      type,
+      mode: usageMeteringMode(),
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Test-only: forget the per-type throttle timestamps. */
+export function __resetEnforceDisabledWarningsForTests(): void {
+  for (const key of Object.keys(enforceDisabledLastWarnAt)) {
+    delete enforceDisabledLastWarnAt[key as UsageEnforceType];
+  }
+}
+
+// ── LEDGER UNAVAILABLE UNDER ENFORCE (product decision, 2026-09-25) ─────────────
+// When enforcement is ON for a type but the ledger cannot give an answer (reserve
+// returned `error` — ensure failed, RPC missing/erroring, incomplete payload — or
+// `skipped`), the request is neither known-allowed nor known-over-limit. Rule:
+//   - free plan (or plan cannot be resolved)  → refuse (503 usage_unavailable)
+//   - any paid plan                            → proceed UNMETERED (logged)
+// This replaces the old shadow-style fall-through, which in enforce mode meant a
+// missing RPC gave every user unlimited free generations.
+export type LedgerUnavailableDecision = { block: boolean; plan: PlanKey | "unknown" };
+
+type ResolvePlanFn = (userId: string) => Promise<PlanKey>;
+let resolvePlanOverrideForTests: ResolvePlanFn | null = null;
+
+/** Test-only: override the plan lookup used by decideWhenLedgerUnavailable. */
+export function __setLedgerUnavailableResolvePlanForTests(fn: ResolvePlanFn | null): void {
+  resolvePlanOverrideForTests = fn;
+}
+
+export async function decideWhenLedgerUnavailable(args: {
+  userId: string;
+  type: UsageEnforceType;
+  reason: string;
+  deps?: { resolvePlan?: ResolvePlanFn };
+}): Promise<LedgerUnavailableDecision> {
+  const lookup = args.deps?.resolvePlan ?? resolvePlanOverrideForTests ?? resolvePlan;
+  let plan: PlanKey | "unknown";
+  try {
+    plan = await lookup(args.userId);
+  } catch {
+    plan = "unknown";
+  }
+  // Unknown is treated as free: we cannot prove the caller has paid.
+  const block = plan === "free" || plan === "unknown";
+  logEvent("usage_meter_unavailable_decision", {
+    type: args.type,
+    reason: String(args.reason ?? "").slice(0, 100),
+    plan,
+    decision: block ? "block" : "allow_unmetered",
+  });
+  return { block, plan };
+}
+
+export const USAGE_UNAVAILABLE_MESSAGE =
+  "We couldn't check your plan's usage right now. Please try again in a few minutes.";
+
+/**
+ * 503 body for a refused request under decideWhenLedgerUnavailable. Each shape mirrors
+ * the matching 402 limit body so clients read it from the same fields:
+ *   "image" → aiImageLimitResponseBody's envelope (prose in `error`, urls:[], request id)
+ *   "text"  → aiTextLimitResponseBody's envelope (prose in `userMessage`, requestId)
+ */
+export function usageUnavailableResponseBody(
+  shape: "image" | "text",
+  requestId: string,
+): Record<string, unknown> {
+  if (shape === "image") {
+    return {
+      ok: false,
+      error_type: "usage_unavailable",
+      code: "usage_unavailable",
+      error: USAGE_UNAVAILABLE_MESSAGE,
+      userMessage: USAGE_UNAVAILABLE_MESSAGE,
+      urls: [],
+      generation_request_id: requestId,
+    };
+  }
+  return {
+    ok: false,
+    requestId,
+    error_type: "usage_unavailable",
+    error: "usage_unavailable",
+    code: "usage_unavailable",
+    userMessage: USAGE_UNAVAILABLE_MESSAGE,
+  };
 }
 
 /**
@@ -208,7 +327,8 @@ export type WorkerReserveOutcome =
  * Only ever called in shadow|enforce for a `user:<id>` caller (the route gates on that
  * before calling). In shadow, an `insufficient` or `error` outcome is NOT terminal —
  * the caller falls back to the plain insert so the user still generates. In enforce,
- * the caller turns `insufficient` into a limit response.
+ * the caller turns `insufficient` into a limit response and `error`/`skipped` into
+ * decideWhenLedgerUnavailable (free → refuse, paid → plain insert, unmetered).
  */
 export async function reserveGenerationJobViaLedger(args: {
   userId: string;
@@ -241,19 +361,35 @@ export async function reserveGenerationJobViaLedger(args: {
       error: (err as Error)?.message?.slice(0, 200),
     });
     // In shadow, a failed ensure must not block — the account simply is not metered.
+    // In enforce the caller routes this through decideWhenLedgerUnavailable.
     return { kind: "error", message: "ensure_failed" };
   }
 
-  const { data, error } = await rpc("usage_reserve_generation_job_v2", {
-    p_user_id: args.userId,
-    p_slot_keys: slotKeys,
-    p_request_key: requestKey,
-    p_intent_key: requestKey,
-    p_intent_fingerprint: args.intentFingerprint,
-    p_params: args.params,
-    p_operation: "image_generation",
-    p_metadata: {},
-  });
+  // A transport failure can THROW rather than return {error} (the text meter already
+  // guards this). Treat it as a non-terminal reserve error so the caller's policy —
+  // shadow: proceed; enforce: decideWhenLedgerUnavailable — applies instead of a 500.
+  let data: unknown;
+  let error: { message: string; code?: string } | null;
+  try {
+    ({ data, error } = await rpc("usage_reserve_generation_job_v2", {
+      p_user_id: args.userId,
+      p_slot_keys: slotKeys,
+      p_request_key: requestKey,
+      p_intent_key: requestKey,
+      p_intent_fingerprint: args.intentFingerprint,
+      p_params: args.params,
+      p_operation: "image_generation",
+      p_metadata: {},
+    }));
+  } catch (err) {
+    logEvent("usage_meter_reserve_threw", {
+      path: "worker",
+      mode,
+      slots: slotKeys.length,
+      error: (err as Error)?.message?.slice(0, 200),
+    });
+    return { kind: "error", message: (err as Error)?.message ?? "reserve_threw" };
+  }
 
   if (error) {
     logEvent("usage_meter_reserve_error", {
@@ -350,13 +486,28 @@ export async function reserveInline(args: {
     return { kind: "error", message: "ensure_failed" };
   }
 
-  const { data, error } = await rpc("usage_reserve", {
-    p_user_id: args.userId,
-    p_usage_type: "ai_image",
-    p_slot_keys: slotKeys,
-    p_request_key: requestKey,
-    p_operation: "image_generation",
-  });
+  // A transport failure can THROW rather than return {error} (the text meter already
+  // guards this). Treat it as a non-terminal reserve error so the caller's policy —
+  // shadow: proceed; enforce: decideWhenLedgerUnavailable — applies instead of a 500.
+  let data: unknown;
+  let error: { message: string; code?: string } | null;
+  try {
+    ({ data, error } = await rpc("usage_reserve", {
+      p_user_id: args.userId,
+      p_usage_type: "ai_image",
+      p_slot_keys: slotKeys,
+      p_request_key: requestKey,
+      p_operation: "image_generation",
+    }));
+  } catch (err) {
+    logEvent("usage_meter_reserve_threw", {
+      path: "inline",
+      mode,
+      slots: slotKeys.length,
+      error: (err as Error)?.message?.slice(0, 200),
+    });
+    return { kind: "error", message: (err as Error)?.message ?? "reserve_threw" };
+  }
 
   if (error) {
     logEvent("usage_meter_reserve_error", {

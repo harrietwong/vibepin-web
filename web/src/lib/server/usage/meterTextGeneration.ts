@@ -64,6 +64,14 @@ import {
 // Re-export the shared mode surface so callers can import the whole meter contract
 // from one place if they prefer (the route imports usageMeteringMode from here).
 export { usageMeteringMode, type UsageMeteringMode, usageEnforceFor, type UsageEnforceType } from "./meterGeneration";
+// The enforce-mode "ledger could not answer" policy + misconfiguration alarm are shared
+// with the image meter (one decision rule for every usage type).
+export {
+  decideWhenLedgerUnavailable,
+  usageUnavailableResponseBody,
+  warnIfEnforceDisabledInProduction,
+  type LedgerUnavailableDecision,
+} from "./meterGeneration";
 
 /** The single canonical slot key for a text reservation. One request = one unit. */
 export const TEXT_SLOT_KEYS = ["s0"] as const;
@@ -85,7 +93,8 @@ export type TextReservation =
  * Only ever called in shadow|enforce for an authenticated caller (the route gates on
  * mode !== "off" and a resolved userId). In shadow, an `insufficient` or `error`
  * outcome is NOT terminal — the caller proceeds unmetered. In enforce, the caller turns
- * `insufficient` into the ai_text_limit_reached response.
+ * `insufficient` into the ai_text_limit_reached response and `error`/`skipped` into
+ * decideWhenLedgerUnavailable (free → 503 usage_unavailable, paid → proceed unmetered).
  */
 export async function reserveTextGeneration(args: {
   userId: string;
