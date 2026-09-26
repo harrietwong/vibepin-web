@@ -171,6 +171,8 @@ export const CORE: string[] = [
   "test-pricing-auth-p0p1",
   "test-usage-period-math",
   "test-billing-usage-api",
+  // Settings → Billing: plan card + meters share one source; used/limit/remaining + colour thresholds.
+  "test-billing-usage-view",
   "test-entitlements-security",
   "test-usage-metering",
   "test-build-identity",
