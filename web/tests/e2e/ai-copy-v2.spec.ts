@@ -65,15 +65,15 @@ test("AI Copy v2 keeps evidence honest and legacy discovery routes reachable", a
 
   const card = page.getByTestId("pin-board-card").first();
   await expect(card).toBeVisible({ timeout: 20_000 });
-  const shortcut = card.getByTestId("title-ai-copy-generate");
+  // A draft card's only AI copy trigger is the action inside its link field.
+  const shortcut = card.getByTestId("ai-copy-link-action");
   await expect(shortcut).toHaveAccessibleName("Generate copy");
-  await expect(card.getByTestId("ai-copy-generate")).toBeVisible();
+  await expect(card.getByTestId("ai-copy-generate")).toHaveCount(0);
   await shortcut.click();
   await expect(page.getByTestId("ai-copy-replace-confirm")).toBeVisible();
   await page.getByTestId("ai-copy-replace-confirm-btn").click();
   await expect.poll(() => generateCount).toBe(1);
-  await expect(card.getByTestId("ai-copy-generate")).toBeDisabled();
-  // The shortcut delegates to the panel's existing busy guard. Rapid extra
+  // The link action delegates to the panel's existing busy guard. Rapid extra
   // activations while the shared request is in flight must not start new calls.
   await expect(shortcut).toBeDisabled();
   await expect.poll(() => generateCount).toBe(1);

@@ -168,6 +168,15 @@ export function PinFieldsForm({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+      {/* Link first, like Pinterest's own composer. */}
+      {!hidden("websiteUrl") && (
+      <div>
+        <FieldLabel text={tr("pinForm.websiteUrl")} hint={tr("pinForm.optional")} />
+        <input data-testid="board-field-url" value={value.websiteUrl} disabled={disabled}
+          onChange={e => onChange({ websiteUrl: e.target.value })} placeholder={tr("pinForm.websiteUrlPlaceholder")} style={fieldStyle} />
+      </div>
+      )}
+
       {!hidden("title") && (
       <div>
         <FieldLabel text={tr("pinForm.pinTitle")} onGenerateCopy={onGenerateCopy} onRegen={regen("title")} disabled={disabled} aiBusyKey={aiBusyKey} />
@@ -192,14 +201,6 @@ export function PinFieldsForm({
           </p>
         )}
       </div>
-
-      {!hidden("websiteUrl") && (
-      <div>
-        <FieldLabel text={tr("pinForm.websiteUrl")} hint={tr("pinForm.optional")} />
-        <input data-testid="board-field-url" value={value.websiteUrl} disabled={disabled}
-          onChange={e => onChange({ websiteUrl: e.target.value })} placeholder={tr("pinForm.websiteUrlPlaceholder")} style={fieldStyle} />
-      </div>
-      )}
 
       {!hidden("board") && (
       <div>

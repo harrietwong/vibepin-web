@@ -103,6 +103,9 @@ export type PinAICopyPanelProps = {
    * both buttons compact and on one line, wrapping only when the card is narrow.
    */
   actionsSlot?: React.ReactNode;
+  /** The trigger lives elsewhere (the card's link field) and calls the imperative
+   *  `generate()`; this panel then renders only the confirm dialog and run status. */
+  hideTrigger?: boolean;
 };
 
 /** Imperative handle so a host (e.g. per-field regen buttons) can trigger a run. */
@@ -262,13 +265,13 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
 
   useImperativeHandle(ref, () => ({ generate, isBusy: () => busyRef.current || busy }), [generate, busy]);
 
-  const showPreStrip = (stage === "idle") && (props.analysisStatus === "pending" || props.analysisStatus === "ready");
+  const showPreStrip = !props.hideTrigger && (stage === "idle") && (props.analysisStatus === "pending" || props.analysisStatus === "ready");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
       {/* Single primary action — length/language pickers removed from this surface
           (PRD WP-D). The API still accepts both; only the UI was collapsed. */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {!props.hideTrigger && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {/* Content-width when a sibling action shares the row (Create Pins), full-width
             when it is the only action (other surfaces keep their existing look). */}
         <button type="button" data-testid="ai-copy-generate" onClick={generate} disabled={busy || props.disabled}
@@ -282,7 +285,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
           {busy ? visibleProgressLabel : tr("pinForm.generateCopy")}
         </button>
         {props.actionsSlot}
-      </div>
+      </div>}
 
       {/* PRD 7.3 fill-in-the-blank confirm — only shown when both title and
           description already have text, so a click can't silently wipe them. */}

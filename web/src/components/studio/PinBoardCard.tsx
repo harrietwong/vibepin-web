@@ -28,11 +28,12 @@ import { contentMedia, coverMedia } from "@/lib/contentDraftModel";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
 import { VideoCoverEditButton } from "@/components/studio/VideoCoverEditButton";
+import { LinkCopyField, type LinkCopyState } from "@/components/studio/LinkCopyField";
 import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 import { contentDestinationResults, destinationNeedsAttention, findDestinationResult, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
-import { PinFieldsForm, TitleAICopyButton, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
+import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
@@ -343,6 +344,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [copiedKw, setCopiedKw] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiRef = useRef<PinAICopyPanelHandle>(null);
+  // Link-field AI action state: a run in flight, and the link the last applied copy
+  // was generated for (session only — a reload with prior copy shows "Regenerate").
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyGeneratedForUrl, setCopyGeneratedForUrl] = useState<string | null>(null);
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
@@ -830,7 +835,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       tags: r.tags.length ? r.tags : draft.tags,
       metadataDraft: r.metadataDraft,
     });
-  }, [props, draft, fields.title, fields.description, fields.altText]);
+    setCopyGeneratedForUrl((fields.websiteUrl || draft.destinationUrl || r.destinationUrl || "").trim());
+  }, [props, draft, fields.title, fields.description, fields.altText, fields.websiteUrl]);
   // A "failed" card is either a PUBLISH failure (had a real schedule attempt) or a
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
@@ -902,10 +908,17 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // Associates policy) — it does not apply to the manual-entry marketplaces, so this
   // stays gated on isAmazonLink specifically, not the broader marketplace predicate.
   const amazonDisclosureMissing = !!amazonSectionSource && isAmazonLink(fields.websiteUrl) && !!fields.description.trim() && !hasAffiliateDisclosure(fields.description);
-  const aiCopyPanel = (
+  const copyState: LinkCopyState = copyBusy ? "busy"
+    : copyGeneratedForUrl !== null && copyGeneratedForUrl === fields.websiteUrl.trim() ? "generated"
+    : copyGeneratedForUrl !== null || !!draft.metadataDraft?.copyGenerationMeta ? "stale"
+    : "idle";
+  // hideTrigger: the compact card triggers copy from its link field; the expanded
+  // editor keeps the panel's own button.
+  const aiCopyPanel = (hideTrigger = false) => (
     <PinAICopyPanel
       ref={aiRef}
       compact
+      hideTrigger={hideTrigger}
       draftId={draft.id} imageUrl={draft.imageUrl}
       title={copyInputTitle(draft, fields.title)} description={fields.description} altText={fields.altText}
       boardId={draft.boardId} boardName={draft.boardName}
@@ -917,7 +930,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
       disabled={publishing || !cardFieldsEditable || amazonNeedsName}
       onBeforeGenerate={flush}
-      onBusyChange={(busy) => props.onAiCopyBusyChange(draft.id, busy)}
+      onBusyChange={(busy) => { setCopyBusy(busy); props.onAiCopyBusyChange(draft.id, busy); }}
       onApplyCopy={applyCopy}
       onGenerateError={(error) => setAmazonHints(amazonClaimHints((error as { validationReport?: Parameters<typeof amazonClaimHints>[0] })?.validationReport))}
     />
@@ -1247,7 +1260,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             Never regenerates the whole set. */}
         {!generating && !posted && (
           <div data-testid="card-ai-tools" style={{ padding: "6px 12px 0", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            {aiCopyPanel}
+            {/* With inline fields the trigger sits in the link field; a collapsed
+                (scheduled) card has no fields, so it keeps the panel's own button. */}
+            {!compactFields && aiCopyPanel()}
             <button type="button" data-testid="card-regenerate-image" onClick={doGenerateAiImage} disabled={publishing}
               style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
@@ -1284,11 +1299,35 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
           <>
+          {/* Link first (Pinterest's order); the AI copy action lives in the link field. */}
+          {shouldShowFieldOnInstagramChild(draft, "websiteUrl") ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label htmlFor={`board-card-url-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.websiteUrl")}</label>
+              <LinkCopyField id={`board-card-url-${draft.id}`} value={fields.websiteUrl}
+                disabled={!cardFieldsEditable || publishing || generating} actionDisabled={amazonNeedsName} state={copyState}
+                onChange={value => handleChange({ websiteUrl: value })} onBlur={handleUrlBlur}
+                onClear={() => handleChange({ websiteUrl: "" })} onGenerate={() => aiRef.current?.generate()} />
+              {aiCopyPanel(true)}
+            </div>
+          ) : aiCopyPanel()}
+          {amazonSectionSource && (
+            <AmazonCardSection
+              draftId={draft.id}
+              source={amazonSectionSource}
+              disabled={!cardFieldsEditable || publishing || generating}
+              fetching={amazonFetching}
+              lastFetchAt={amazonLastFetchAt}
+              claimHints={amazonHints}
+              onFetch={startAmazonFetch}
+              onManualChange={onAmazonManualChange}
+              onUseLink={acceptAmazonLink}
+              marketplace={cardMarketplace ?? undefined}
+            />
+          )}
           {shouldShowFieldOnInstagramChild(draft, "title") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
               <label htmlFor={`board-card-title-${draft.id}`} style={{ ...labelStyle, margin: 0 }}>{tr("studioBoard.card.fields.title")}</label>
-              <TitleAICopyButton onClick={() => aiRef.current?.generate()} disabled={!cardFieldsEditable || publishing || generating} busyKey={draft.id} />
             </div>
             <input id={`board-card-title-${draft.id}`} data-testid="board-card-title" value={fields.title} disabled={!cardFieldsEditable || publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
@@ -1344,28 +1383,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {tr("studioBoard.amazon.addDisclosure")}
               </button>
             </div>
-          )}
-          {shouldShowFieldOnInstagramChild(draft, "websiteUrl") && (
-          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
-            {tr("studioBoard.card.fields.websiteUrl")}
-            <input data-testid="board-card-url" value={fields.websiteUrl} disabled={!cardFieldsEditable || publishing || generating}
-              onChange={event => handleChange({ websiteUrl: event.target.value })} onBlur={handleUrlBlur} placeholder="https://"
-              style={{ ...fieldStyle, fontSize: 11.5 }} />
-          </label>
-          )}
-          {amazonSectionSource && (
-            <AmazonCardSection
-              draftId={draft.id}
-              source={amazonSectionSource}
-              disabled={!cardFieldsEditable || publishing || generating}
-              fetching={amazonFetching}
-              lastFetchAt={amazonLastFetchAt}
-              claimHints={amazonHints}
-              onFetch={startAmazonFetch}
-              onManualChange={onAmazonManualChange}
-              onUseLink={acceptAmazonLink}
-              marketplace={cardMarketplace ?? undefined}
-            />
           )}
           {shouldShowFieldOnInstagramChild(draft, "boardId") && (
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1646,7 +1663,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </button>
           </div>
           <div data-testid="card-ai-tools" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            {aiCopyPanel}
+            {aiCopyPanel()}
             <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage} disabled={!cardFieldsEditable}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}

@@ -258,6 +258,11 @@ export const studioBoardMessages = {
   "studioBoard.card.fields.description": "Description",
   "studioBoard.card.fields.descriptionPlaceholder": "Tell people what this content is about",
   "studioBoard.card.fields.websiteUrl": "Website URL",
+  "studioBoard.card.linkCopy.placeholder": "Paste a product link",
+  "studioBoard.card.linkCopy.generating": "Generating…",
+  "studioBoard.card.linkCopy.generated": "Generated",
+  "studioBoard.card.linkCopy.regenerate": "Regenerate",
+  "studioBoard.card.linkCopy.clear": "Clear link",
   "studioBoard.card.fields.board": "Board",
   "studioBoard.card.fields.boardPlaceholder": "Choose a board",
   // ── Instagram caption (mixed Pinterest+Instagram single-video split, T3) ──

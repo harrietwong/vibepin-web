@@ -363,6 +363,7 @@ export const STUDIO: string[] = [
   "test-video-batch-upload-ui",
   "test-image-upload-batch-state",
   "test-upload-placeholder-title",
+  "test-card-link-copy-field",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */
