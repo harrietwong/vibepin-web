@@ -280,6 +280,29 @@ async function main() {
     assert.equal(gen.resolveAmazonCopyContext({ destinationUrl: "https://myshop.example/lamp", destinationUrlIsCurrent: true }, d), null);
   });
 
+  // Regression guard (0925 preview build failure): amazonCardSource.ts ships in the
+  // browser bundle; importing urlSecurity.ts dragged node:net + node:dns/promises into
+  // a client chunk and broke `next build` ("does not support external modules").
+  await test("client-bundle modules never import server-only URL-import code", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const clientModules = [
+      "src/lib/studio/amazonCardSource.ts",
+      "src/lib/productUrlImport/marketplaceHosts.ts",
+      "src/lib/productUrlImportClient.ts",
+      "src/lib/studio/importedProductFacts.ts",
+      "src/lib/studio/storeBatchImport.ts",
+      "src/lib/productUrlImport/storeBatchShared.ts",
+    ];
+    const serverOnly = /from\s+"(?:node:[^"]+|[^"]*productUrlImport\/(?:urlSecurity|urlImportService|storeProductsImport|amazonFetcher|amazonImport|amazonShortLink|extractProductUrls|index)|[^"]*fetch-og\/[^"]+|@\/lib\/productUrlImport)"/;
+    for (const rel of clientModules) {
+      const src = readFileSync(join(process.cwd(), rel), "utf8").replace(/\r\n/g, "\n");
+      // Line-based on `from "…"` so multi-line `import {\n…\n} from "x"` is covered too.
+      const hit = src.split("\n").find(line => serverOnly.test(line));
+      assert.equal(hit, undefined, `${rel} imports server-only code: ${hit}`);
+    }
+  });
+
   console.log(`\nMarketplace manual-entry: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

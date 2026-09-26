@@ -17,7 +17,8 @@
 import type { AmazonMarketplace } from "@/lib/affiliate/amazon";
 import { parseAmazonLink } from "@/lib/affiliate/amazonLink";
 import type { AmazonImportMeta, MarketplaceId } from "@/lib/productUrlImport/types";
-import { classifyManualMarketplace } from "@/lib/productUrlImport/urlSecurity";
+// Client bundle: must not import urlSecurity.ts (node:net + node:dns via fetch-og).
+import { classifyManualMarketplace } from "@/lib/productUrlImport/marketplaceHosts";
 import type { ProductContext } from "@/lib/ai-copy/types";
 
 export type AmazonCardLinkStatus = "ok" | "no_asin" | "short_unexpanded" | "not_amazon" | "marketplace";
