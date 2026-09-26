@@ -219,7 +219,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "page.studio.addOpportunity": "Tambahkan peluang",
   "page.studio.numberOfPins": "Jumlah Pin:",
   "page.studio.aspectRatio": "Rasio aspek",
-  "page.studio.generatePins": "Teks antarmuka {n}",
+  "page.studio.generatePins": "Buat {n} Pin",
   "page.studio.generateOnePin": "Buat 1 Pin",
   "page.plan.title": "Rencana Mingguan",
   "page.plan.emptyTitle": "Belum ada Pin yang direncanakan",
