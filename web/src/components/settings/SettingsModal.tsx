@@ -10,7 +10,6 @@ import { SocialAccountsPanel } from "@/components/social/SocialAccountsPanel";
 import {
   deriveAccountBillingSummary,
   normalizePlanName,
-  isPaidPlan,
   type AccountBillingSummary,
 } from "@/lib/accountSummary";
 import {
@@ -58,6 +57,7 @@ import { AMAZON_MARKETPLACES, type AmazonMarketplace } from "@/lib/affiliate/ama
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyTab } from "@/components/settings/ShopifyTab";
 import { useViewportBucket } from "@/hooks/useViewportBucket";
+import { planSummaryView, type BucketView } from "@/lib/billingUsageView";
 
 const PRICING_PATH = "/pricing";
 
@@ -91,6 +91,7 @@ const UI = {
   textMuted: "#5B6577",
   success:   "#10B981",
   warning:   "#F59E0B",
+  danger:    "#EF4444",
   blue:      "#93C5FD",
   gradient:  "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)",
 };
@@ -320,7 +321,13 @@ type UsageBucket = {
 };
 
 type BillingUsage = {
+  /** resolvePlan — the plan the quotas are computed for. The plan card shows THIS. */
   plan: "free" | "starter" | "pro" | "business";
+  /** Which rung decided `plan`; "whitelist" = internal allowance, not a subscription. */
+  planSource?: "subscription" | "app_metadata" | "whitelist" | "default";
+  /** USAGE_METERING_MODE — whether the ledger is counting at all. */
+  meteringMode?: "off" | "shadow" | "enforce";
+  connectedAccountsPerPlatform?: number | null;
   /** Explicit success state. A non-2xx response is represented as unavailable in UI state. */
   state: "metered" | "unmetered";
   /** false = no usage_accounts row yet (metering is lazy/shadow) → show allowances only. */
@@ -334,61 +341,82 @@ type BillingUsage = {
 };
 
 /**
- * One usage row. Three honest display states, in priority order:
- *
- *  1. NOT MEASURED (`used === null`, i.e. the API said metered:false) — the user
- *     has no usage account yet, so we state the plan's included allowance and say
- *     nothing about consumption. We deliberately do NOT render "0 / 10" here: a
- *     zero would assert we measured and found nothing, which is false.
- *  2. UNLIMITED (`limit === null` with a real `used`) — show the count used and
- *     "Unlimited"/"No monthly limit"; a progress bar has no meaning without a cap.
- *  3. METERED WITH A CAP — used/limit, a bar, and the remainder.
+ * Bar colour for a quota: brand gradient normally, amber at >=80% of the cap,
+ * red once the cap is reached. Thresholds live in billingUsageView.toneFor.
  */
-function UsageRow({ icon: Icon, label, bucket, state, t }: {
+function usageBarColor(tone: BucketView["tone"]): string {
+  if (tone === "danger") return UI.danger;
+  if (tone === "warning") return UI.warning;
+  return UI.gradient;
+}
+
+/** Text colour for a quota figure: red/amber in the danger/warning bands, else `fallback`. */
+function toneTextColor(tone: BucketView["tone"], fallback: string): string {
+  if (tone === "danger") return UI.danger;
+  if (tone === "warning") return UI.warning;
+  return fallback;
+}
+
+function formatUsageCount(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+/** Thin progress bar shared by the summary card and the per-quota rows. */
+function UsageBar({ view }: { view: BucketView }) {
+  return (
+    <div
+      data-tone={view.tone}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={view.pct}
+      style={{ height: 6, borderRadius: 999, background: UI.surface2, overflow: "hidden" }}
+    >
+      <div style={{ height: "100%", width: `${view.pct}%`, borderRadius: 999, background: usageBarColor(view.tone) }} />
+    </div>
+  );
+}
+
+/**
+ * One quota row: name, `used / limit`, a bar and the remainder. Every number comes
+ * from billingUsageView.bucketView (the same view the plan card reads):
+ *
+ *  - capped:     "{used} / {limit} used", bar (amber >=80%, red at the cap), "{remaining} remaining"
+ *  - unlimited:  "{used} used" + "Unlimited" (a bar means nothing without a cap)
+ */
+function UsageRow({ icon: Icon, label, view, testId, t }: {
   icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   label: string;
-  bucket: UsageBucket;
-  state: "metered" | "unmetered";
+  view: BucketView;
+  testId: string;
   t: (key: MessageKey) => string;
 }) {
-  const { used, limit, included } = bucket;
-  // The response-level state wins over bucket values. A malformed/stale payload
-  // can never make an explicitly unmetered account look like a measured zero.
-  const measured = state === "metered" && used !== null;
-  const pct = measured && limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  const remaining = measured && limit !== null ? Math.max(0, limit - used) : null;
-
-  // Right-hand summary text for each of the three states above.
-  let summary: string;
-  if (!measured) {
-    summary = included === null
-      ? t("billing.usageUnlimited")
-      : t("billing.usageIncluded").replace("{included}", String(included));
-  } else if (limit !== null) {
-    summary = t("billing.usageUsedOfLimit").replace("{used}", String(used)).replace("{limit}", String(limit));
-  } else {
-    summary = t("billing.usageUsedNoLimit").replace("{used}", String(used));
-  }
+  const summary = view.limit !== null
+    ? t("billing.usageUsedOfLimit")
+        .replace("{used}", formatUsageCount(view.used))
+        .replace("{limit}", formatUsageCount(view.limit))
+    : t("billing.usageUsedNoLimit").replace("{used}", formatUsageCount(view.used));
+  const alerting = view.tone === "danger" || view.tone === "warning";
 
   return (
-    <div>
+    <div data-testid={testId} data-tone={view.tone}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <Icon size={13} style={{ color: UI.textSec }} />
         <span style={{ fontSize: 12.5, fontWeight: 700, color: UI.text, flex: 1 }}>{label}</span>
-        <span style={{ fontSize: 12, color: UI.textSec }}>{summary}</span>
+        <span style={{ fontSize: 12, color: toneTextColor(view.tone, UI.textSec), fontWeight: alerting ? 700 : 400 }}>{summary}</span>
       </div>
-      {measured && limit !== null ? (
+      {view.limit !== null ? (
         <>
-          <div style={{ height: 6, borderRadius: 999, background: UI.surface2, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${pct}%`, borderRadius: 999, background: UI.gradient }} />
-          </div>
-          <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted }}>
-            {t("billing.usageRemaining").replace("{remaining}", String(remaining))}
+          <UsageBar view={view} />
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: view.tone === "danger" ? UI.danger : UI.textMuted }}>
+            {view.tone === "danger"
+              ? t("billing.usageLimitReached")
+              : t("billing.usageRemaining").replace("{remaining}", formatUsageCount(view.remaining ?? 0))}
           </p>
         </>
-      ) : measured ? (
-        <p style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>{t("billing.usageNoLimit")}</p>
-      ) : null}
+      ) : (
+        <p style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>{t("billing.usageUnlimited")}</p>
+      )}
     </div>
   );
 }
@@ -526,11 +554,16 @@ function BillingTab() {
       ? "loading"
       : usage?.state ?? "unavailable";
 
-  // Only the verified Creem status may name the current plan. Auth metadata is
-  // useful for account identity, but it is not billing truth and must not fill a
-  // sync-error gap with a plausible-looking Free/paid state.
-  const planName = billing ? normalizePlanName(billing.effectivePlan) : null;
-  const paid = planName ? isPaidPlan(planName) : false;
+  // SAME SOURCE: the plan card's name and allowance sentence AND the usage meters
+  // all derive from one GET /api/billing/usage payload (resolvePlan — the plan the
+  // quotas are actually computed for) via planSummaryView. The Creem status below
+  // only drives the badge / renewal / cancel / Manage-billing controls; it never
+  // names the plan, because it ignores the app_metadata cache and the internal
+  // whitelist floor (that mismatch showed "Free · 10 images" next to "800 included").
+  // Auth metadata is never used to fill a sync-error gap.
+  const summaryView = usage && !usageSyncError ? planSummaryView(usage) : null;
+  const planName = summaryView ? normalizePlanName(summaryView.planKey) : null;
+  const internalPlan = summaryView?.internal ?? false;
   const hasBillingAccount = billing?.hasBillingAccount ?? false;
   // accessGranted decides the badge colour — never trust the raw status to be green.
   // Before the live status loads, fall back to "granted" so a paying user isn't
@@ -584,6 +617,13 @@ function BillingTab() {
     badgeColor = UI.success;
     badgeBg = "rgba(16,185,129,0.12)";
     badgeBorder = "rgba(16,185,129,0.3)";
+  } else if (internalPlan) {
+    // Internal (whitelisted) account: no subscription, but the Pro allowance IS in
+    // force — "Inactive" would be false. Blue, never the paid green.
+    badgeLabel = t("billing.internalBadge");
+    badgeColor = UI.blue;
+    badgeBg = "rgba(147,197,253,0.12)";
+    badgeBorder = "rgba(147,197,253,0.3)";
   } else {
     // Lapsed / no access — grey, never green.
     badgeLabel = billing?.status ?? t("billing.statusInactive");
@@ -642,12 +682,17 @@ function BillingTab() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
           <div>
             <p style={{ margin: "0 0 2px", fontSize: 11, color: UI.textSec, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("billing.currentPlan")}</p>
-            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: UI.text }}>
-              {billingState === "unavailable" ? "—" : billingState === "available" ? planName : "…"}
-              {intervalLabel && (
+            <h2 data-testid="billing-plan-name" style={{ margin: 0, fontSize: 24, fontWeight: 800, color: UI.text }}>
+              {usageState === "unavailable" ? "—" : usageState === "loading" ? "…" : planName}
+              {intervalLabel && !internalPlan && (
                 <span style={{ fontSize: 13, fontWeight: 600, color: UI.textSec, marginLeft: 8 }}>{intervalLabel}</span>
               )}
             </h2>
+            {internalPlan && (
+              <p data-testid="billing-internal-plan-note" style={{ margin: "2px 0 0", fontSize: 11, color: UI.blue }}>
+                {t("billing.internalPlanNote")}
+              </p>
+            )}
           </div>
           <span data-testid="billing-status-badge" style={{
             display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
@@ -658,65 +703,103 @@ function BillingTab() {
             {badgeLabel}
           </span>
         </div>
-        {previousPlanName && !accessGranted && (
-          <p data-testid="billing-previous-plan" style={{ margin: "0 0 6px", fontSize: 12, color: UI.textMuted }}>
-            {t("billing.previousPlan")}: <strong>{previousPlanName}</strong>
-          </p>
-        )}
-        <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
-          {billingState === "unavailable"
-            ? t("billing.usageSyncErrorDesc")
-            : billingState === "available"
-              ? paid ? t("billing.paidDesc") : t("billing.freeDesc")
-              : ""}
-        </p>
-        {periodEnd && (
-          <p style={{ margin: "0 0 4px", fontSize: 12, color: UI.textSec }}>
-            {scheduledCancel ? t("billing.accessUntil") : t("billing.renews")}: <strong>{periodEnd}</strong>
-          </p>
-        )}
-        {scheduledCancel && (
-          <p data-testid="billing-scheduled-cancel" style={{ margin: "0 0 12px", fontSize: 12, color: UI.warning, lineHeight: 1.5 }}>
-            {t("billing.scheduledCancelNotice")}
-          </p>
-        )}
-        {billingState !== "available" ? null : hasBillingAccount ? (
-          <button
-            type="button"
-            data-testid="billing-manage-button"
-            onClick={handleManageBilling}
-            disabled={portalPending}
-            style={{
-              padding: "9px 15px", borderRadius: 9, background: UI.surface2, border: `1px solid ${UI.border}`,
-              color: UI.text, fontSize: 12, fontWeight: 700, cursor: portalPending ? "wait" : "pointer",
-              opacity: portalPending ? 0.6 : 1,
-            }}
-          >
-            {portalPending ? t("common.loading") : t("billing.manageBilling")}
-          </button>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
-            <p data-testid="billing-no-account" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
-              {t("billing.noBillingAccount")}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+          <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+            {previousPlanName && !accessGranted && !internalPlan && (
+              <p data-testid="billing-previous-plan" style={{ margin: "0 0 6px", fontSize: 12, color: UI.textMuted }}>
+                {t("billing.previousPlan")}: <strong>{previousPlanName}</strong>
+              </p>
+            )}
+            <p data-testid="billing-plan-includes" style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
+              {usageState === "unavailable"
+                ? t("billing.usageSyncErrorDesc")
+                : summaryView
+                  ? t("billing.planIncludes")
+                      .replace("{connections}", summaryView.connectedAccountsPerPlatform === null ? t("billing.usageUnlimited") : formatUsageCount(summaryView.connectedAccountsPerPlatform))
+                      .replace("{images}", summaryView.images.limit === null ? t("billing.usageUnlimited") : formatUsageCount(summaryView.images.limit))
+                      .replace("{posts}", summaryView.posts.limit === null ? t("billing.usageUnlimited") : formatUsageCount(summaryView.posts.limit))
+                  : ""}
             </p>
-            <Link href={PRICING_PATH} data-testid="billing-upgrade-button" style={{
-              display: "inline-flex", alignItems: "center", gap: 7,
-              padding: "9px 16px", borderRadius: 9, background: UI.gradient,
-              color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800,
-            }}>
-              {t("billing.upgradePlan")} <ArrowUpRight size={13} />
-            </Link>
+            {periodEnd && (
+              <p style={{ margin: "0 0 4px", fontSize: 12, color: UI.textSec }}>
+                {scheduledCancel ? t("billing.accessUntil") : t("billing.renews")}: <strong>{periodEnd}</strong>
+              </p>
+            )}
+            {scheduledCancel && (
+              <p data-testid="billing-scheduled-cancel" style={{ margin: "0 0 12px", fontSize: 12, color: UI.warning, lineHeight: 1.5 }}>
+                {t("billing.scheduledCancelNotice")}
+              </p>
+            )}
+            {billingState !== "available" ? null : hasBillingAccount ? (
+              <button
+                type="button"
+                data-testid="billing-manage-button"
+                onClick={handleManageBilling}
+                disabled={portalPending}
+                style={{
+                  padding: "9px 15px", borderRadius: 9, background: UI.surface2, border: `1px solid ${UI.border}`,
+                  color: UI.text, fontSize: 12, fontWeight: 700, cursor: portalPending ? "wait" : "pointer",
+                  opacity: portalPending ? 0.6 : 1,
+                }}
+              >
+                {portalPending ? t("common.loading") : t("billing.manageBilling")}
+              </button>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                <p data-testid="billing-no-account" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
+                  {internalPlan ? t("billing.internalNoBilling") : t("billing.noBillingAccount")}
+                </p>
+                <Link href={PRICING_PATH} data-testid="billing-upgrade-button" style={{
+                  display: "inline-flex", alignItems: "center", gap: 7,
+                  padding: "9px 16px", borderRadius: 9, background: UI.gradient,
+                  color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800,
+                }}>
+                  {t("billing.upgradePlan")} <ArrowUpRight size={13} />
+                </Link>
+              </div>
+            )}
           </div>
-        )}
+          {summaryView && (
+            // Headline meter: AI images, the plan's primary quota. It is the SAME
+            // BucketView object the "AI images" row below renders (one source).
+            <div data-testid="billing-summary-meter" data-tone={summaryView.images.tone} style={{
+              flex: "0 1 240px", minWidth: 200, padding: "12px 14px", borderRadius: 12,
+              background: UI.surface2, border: `1px solid ${UI.border}`,
+            }}>
+              <p style={{ margin: "0 0 8px", fontSize: 11, color: UI.textSec, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                {t("billing.usageAiImages")}
+              </p>
+              {summaryView.images.limit !== null ? (
+                <>
+                  <UsageBar view={summaryView.images} />
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 8 }}>
+                    <span style={{ fontSize: 12, color: UI.textSec }}>
+                      {t("billing.usageUsedCount").replace("{used}", formatUsageCount(summaryView.images.used))}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: toneTextColor(summaryView.images.tone, UI.text) }}>
+                      {summaryView.images.tone === "danger"
+                        ? t("billing.usageLimitReached")
+                        : t("billing.usageRemaining").replace("{remaining}", formatUsageCount(summaryView.images.remaining ?? 0))}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
+                  {t("billing.usageUsedCount").replace("{used}", formatUsageCount(summaryView.images.used))} · {t("billing.usageUnlimited")}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </SectionCard>
 
       {/*
-        Three independent quota meters, replacing the former fabricated
-        "token balance" card. Every number here comes from GET /api/billing/usage,
-        which reads the v55/v56 usage_accounts ledger. Nothing is invented: when
-        the user has no usage account yet the API says metered:false and each row
-        states only the plan's included allowance (see UsageRow), and when the
-        fetch fails we show an explicit sync error instead of zeros.
+        Three independent quota meters. Every number comes from GET
+        /api/billing/usage (the v55/v56 usage_accounts ledger, the one the
+        metering reserve/settle path writes) through planSummaryView, the same
+        view the plan card above reads. A user with no ledger row yet shows 0 used
+        against the plan allowance plus the "No usage recorded yet" footnote; a
+        failed fetch shows an explicit sync error instead of zeros.
       */}
       <SectionCard testId="billing-usage-period">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -745,11 +828,16 @@ function BillingTab() {
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec, display: "flex", alignItems: "center", gap: 7 }}>
             <Loader2 size={13} className="animate-spin" /> {t("billing.usageLoading")}
           </p>
-        ) : usage ? (
+        ) : summaryView ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} state={usageState} t={t} />
-            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} state={usageState} t={t} />
-            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} state={usageState} t={t} />
+            <UsageRow icon={Zap} label={t("billing.usageAiImages")} view={summaryView.images} testId="billing-usage-row-images" t={t} />
+            {usage?.metered && typeof usage.bonusImages === "number" && usage.bonusImages > 0 && (
+              <p data-testid="billing-bonus-images" style={{ margin: "-4px 0 0", fontSize: 11, color: UI.textSec }}>
+                {t("billing.bonusImages").replace("{count}", formatUsageCount(usage.bonusImages))}
+              </p>
+            )}
+            <UsageRow icon={Zap} label={t("billing.usageAiText")} view={summaryView.text} testId="billing-usage-row-text" t={t} />
+            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} view={summaryView.posts} testId="billing-usage-row-posts" t={t} />
             {usageState === "unmetered" && (
               <p data-testid="billing-usage-not-metered" style={{ margin: 0, fontSize: 11, color: UI.textMuted, lineHeight: 1.5 }}>
                 {t("billing.usageNotMetered")}
